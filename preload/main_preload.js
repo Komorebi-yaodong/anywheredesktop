@@ -5,7 +5,13 @@ const api = {
   appWindowType: 'main',
   openWindow: (type) => electronAPI.ipcRenderer.invoke('window:open', type),
   showMainWindow: () => electronAPI.ipcRenderer.invoke('window:showMain'),
-  hideMainWindow: () => electronAPI.ipcRenderer.invoke('window:hideMain')
+  hideMainWindow: () => electronAPI.ipcRenderer.invoke('window:hideMain'),
+  listWindows: (type = '') => electronAPI.ipcRenderer.invoke('window:list', type),
+  emitWindowEvent: (input) => electronAPI.ipcRenderer.invoke('window:event:emit', input),
+  onWindowEvent: (callback) => {
+    if (typeof callback !== 'function') return
+    electronAPI.ipcRenderer.on('window:event-bus', (_event, data) => callback(data))
+  }
 }
 
 if (process.contextIsolated) {

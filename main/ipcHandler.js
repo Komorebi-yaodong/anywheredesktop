@@ -15,7 +15,15 @@ function handleInvoke(channel, handler, options = {}) {
   })
 }
 
-export function registerIpcHandlers({ openWindow, showMainWindow, hideMainWindow }) {
+export function registerIpcHandlers({
+  openWindow,
+  showMainWindow,
+  hideMainWindow,
+  listWindows,
+  getWindowByRef,
+  getWindowRefByWebContentsId,
+  dispatchWindowEvent
+}) {
   ipcMain.on('ping', () => console.log('pong'))
 
   handleInvoke('window:open', async (_event, type = 'main') => {
@@ -29,5 +37,27 @@ export function registerIpcHandlers({ openWindow, showMainWindow, hideMainWindow
 
   handleInvoke('window:hideMain', async () => {
     return hideMainWindow()
+  })
+
+
+  handleInvoke('window:list', async (_event, type = '') => {
+    return {
+      ok: true,
+      windows: listWindows(type)
+    }
+  })
+
+  handleInvoke('window:event:emit', async (event, input = {}) => {
+    const sourceId = getWindowRefByWebContentsId(event.sender.id)
+
+    return dispatchWindowEvent(
+      {
+        sourceId,
+        target: input?.target,
+        event: input?.event,
+        payload: input?.payload
+      },
+      { getWindowByRef, listWindows }
+    )
   })
 }

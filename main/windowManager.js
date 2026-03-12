@@ -55,6 +55,26 @@ const multiStore = new Map()
 /** @type {Map<string, Set<string>>} */
 const multiTypeIndex = new Map()
 
+
+/** @type {Map<number, string>} */
+const webContentsToWindowRef = new Map()
+
+function bindWindowRef(win, ref) {
+  if (!win || win.isDestroyed()) return
+  if (!win.webContents || win.webContents.isDestroyed()) return
+
+  webContentsToWindowRef.set(win.webContents.id, ref)
+}
+
+function unbindWindowRef(win) {
+  if (!win) return
+  const webContentsId = win.webContents?.id
+  if (typeof webContentsId !== 'number') return
+
+  webContentsToWindowRef.delete(webContentsId)
+}
+
+
 function getSingletonWindow(type) {
   const win = singletonStore.get(type)
   if (!win) return null
@@ -131,32 +151,35 @@ export function openWindow(type = 'main') {
   }
 
   if (SINGLETON_TYPES.has(targetType)) {
-    const existing = singletonStore.get(targetType)
-    if (existing && !existing.isDestroyed()) {
-      existing.show()
-      existing.focus()
-      return { ok: true, type: targetType, reused: true }
+    const existing = getSingletonWindow(targetType)
+    if (existing) {
+      activateWindow(existing)
+      return { ok: true, type: targetType, id: targetType, reused: true }
     }
 
     const win = createBrowserWindow(targetType, config)
     singletonStore.set(targetType, win)
+    bindWindowRef(win, targetType)
 
     win.on('closed', () => {
+      unbindWindowRef(win)
       singletonStore.delete(targetType)
     })
 
-    return { ok: true, type: targetType, reused: false }
+    return { ok: true, type: targetType, id: targetType, reused: false }
   }
 
   const id = `${targetType}-${randomUUID()}`
   const win = createBrowserWindow(targetType, config, id)
 
   multiStore.set(id, win)
+  bindWindowRef(win, id)
   const set = multiTypeIndex.get(targetType) || new Set()
   set.add(id)
   multiTypeIndex.set(targetType, set)
 
   win.on('closed', () => {
+    unbindWindowRef(win)
     multiStore.delete(id)
     const indexSet = multiTypeIndex.get(targetType)
     if (indexSet) {
@@ -179,6 +202,64 @@ export function getWindowById(id) {
   if (!id || typeof id !== 'string') return null
   return multiStore.get(id) || null
 }
+
+
+export function getWindowByRef(ref) {
+  if (!ref || typeof ref !== 'string') return null
+
+  if (SINGLETON_TYPES.has(ref)) {
+    return getSingletonWindow(ref)
+  }
+
+  return getWindowById(ref)
+}
+
+export function listWindows(type = '') {
+  const targetType = typeof type === 'string' ? type : ''
+  const items = []
+
+  for (const singletonType of SINGLETON_TYPES.values()) {
+    if (targetType && singletonType !== targetType) continue
+
+    const win = getSingletonWindow(singletonType)
+    if (!win) continue
+
+    items.push({
+      id: singletonType,
+      type: singletonType,
+      singleton: true,
+      visible: win.isVisible(),
+      destroyed: false
+    })
+  }
+
+  for (const [multiType, idSet] of multiTypeIndex.entries()) {
+    if (targetType && multiType !== targetType) continue
+
+    for (const id of idSet.values()) {
+      const win = multiStore.get(id)
+      if (!win || win.isDestroyed()) continue
+
+      items.push({
+        id,
+        type: multiType,
+        singleton: false,
+        visible: win.isVisible(),
+        destroyed: false
+      })
+    }
+  }
+
+  return items
+}
+
+
+export function getWindowRefByWebContentsId(webContentsId) {
+  if (typeof webContentsId !== 'number') return null
+  return webContentsToWindowRef.get(webContentsId) || null
+}
+
+
 
 
 export function showMainWindow() {

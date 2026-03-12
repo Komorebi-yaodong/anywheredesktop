@@ -1,7 +1,15 @@
 import { app, BrowserWindow } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
-import { openWindow, showMainWindow, hideMainWindow } from './windowManager.js'
+import {
+  openWindow,
+  showMainWindow,
+  hideMainWindow,
+  listWindows,
+  getWindowByRef,
+  getWindowRefByWebContentsId
+} from './windowManager.js'
+import { dispatchWindowEvent } from './eventBus.js'
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.anywhere.desktop')
@@ -10,7 +18,15 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  registerIpcHandlers({ openWindow, showMainWindow, hideMainWindow })
+  registerIpcHandlers({
+    openWindow,
+    showMainWindow,
+    hideMainWindow,
+    listWindows,
+    getWindowByRef,
+    getWindowRefByWebContentsId,
+    dispatchWindowEvent
+  })
   openWindow('main')
 
   app.on('activate', () => {

@@ -27,7 +27,9 @@
     "element-plus": "^2.13.5",
     "lowdb": "^7.0.1",
     "openai": "6.18.0",
-    "vue-i18n": "^11.3.0"
+    "vue-i18n": "^11.3.0",
+    "vuedraggable": "^2.24.3",
+    "webdav": "^5.9.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config": "^2.1.0",

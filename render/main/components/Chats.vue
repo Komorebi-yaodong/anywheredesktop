@@ -109,6 +109,55 @@ const formatBytes = (bytes, decimals = 2) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
 
+const getSafeString = (value) => (typeof value === 'string' ? value : '');
+
+const resolveFileBasename = (file) => {
+    if (!file || typeof file !== 'object') return '';
+
+    if (typeof file.basename === 'string' && file.basename.trim()) {
+        return file.basename.trim();
+    }
+
+    if (typeof file.name === 'string' && file.name.trim()) {
+        return file.name.trim();
+    }
+
+    if (typeof file.path === 'string' && file.path.trim()) {
+        const normalizedPath = file.path.replace(/\\/g, '/');
+        const segments = normalizedPath.split('/').filter(Boolean);
+        return segments.length > 0 ? segments[segments.length - 1] : '';
+    }
+
+    return '';
+};
+
+const resolveWebdavDataPath = () => {
+    const rawPath = webdavConfig.value?.data_path ?? webdavConfig.value?.path ?? '';
+    const normalized = String(rawPath || '').trim();
+    if (!normalized) return '';
+    return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+};
+
+const normalizeChatFile = (file, source = 'local') => {
+    const basename = resolveFileBasename(file);
+    const size = Number(file?.size);
+
+    const normalized = {
+        ...file,
+        basename,
+        size: Number.isFinite(size) ? size : 0,
+        lastmod: typeof file?.lastmod === 'string' && file.lastmod ? file.lastmod : new Date(0).toISOString(),
+        type: typeof file?.type === 'string' && file.type ? file.type : 'file'
+    };
+
+    if (source === 'local' && !normalized.path && localChatPath.value && basename) {
+        normalized.path = `${localChatPath.value}/${basename}`;
+    }
+
+    return normalized;
+};
+
+
 const handleWindowFocus = () => {
     refreshData(true);
 };
@@ -327,7 +376,9 @@ async function fetchLocalFiles(silent = false) {
     if (!localChatPath.value) return;
     if (!silent) isTableLoading.value = true;
     try {
-        localChatFiles.value = await window.api.listJsonFiles(localChatPath.value);
+        const result = await window.api.listJsonFiles(localChatPath.value);
+        const files = Array.isArray(result) ? result : [];
+        localChatFiles.value = files.map((item) => normalizeChatFile(item, 'local'));
     } catch (error) {
         ElMessage.error(`读取本地文件列表失败: ${error.message}`);
         localChatFiles.value = [];
@@ -340,12 +391,28 @@ async function fetchCloudFiles(silent = false) {
     if (!isWebdavConfigValid.value) return;
     if (!silent) isTableLoading.value = true;
     try {
-        const { url, username, password, data_path } = webdavConfig.value;
+        const { url, username, password } = webdavConfig.value;
         const client = createClient(url, { username, password });
-        const remoteDir = data_path.endsWith('/') ? data_path.slice(0, -1) : data_path;
+        const remoteDir = resolveWebdavDataPath();
+
+        if (!remoteDir) {
+            cloudChatFiles.value = [];
+            return;
+        }
+
         if (!(await client.exists(remoteDir))) await client.createDirectory(remoteDir, { recursive: true });
         const response = await client.getDirectoryContents(remoteDir, { details: true });
-        cloudChatFiles.value = response.data.filter(item => item.type === 'file' && item.basename.endsWith('.json')).sort((a, b) => new Date(b.lastmod) - new Date(a.lastmod));
+
+        const rawItems = Array.isArray(response?.data)
+            ? response.data
+            : Array.isArray(response)
+                ? response
+                : [];
+
+        cloudChatFiles.value = rawItems
+            .map((item) => normalizeChatFile(item, 'cloud'))
+            .filter((item) => item.type === 'file' && item.basename && item.basename.endsWith('.json'))
+            .sort((a, b) => new Date(b.lastmod).getTime() - new Date(a.lastmod).getTime());
     } catch (error) {
         ElMessage.error(`${t('chats.alerts.fetchFailed')}: ${error.message}`);
         cloudChatFiles.value = [];
@@ -353,6 +420,8 @@ async function fetchCloudFiles(silent = false) {
         isTableLoading.value = false;
     }
 }
+
+
 
 async function refreshData(silent = false) {
     if (activeView.value === 'local') {
@@ -370,29 +439,51 @@ async function refreshData(silent = false) {
 async function startChat(file) {
     ElMessage.info(t('chats.alerts.loadingChat'));
     try {
+        const basename = resolveFileBasename(file);
+        if (!basename) {
+            throw new Error(t('common.operationFailed'));
+        }
+
         let jsonString;
         if (activeView.value === 'local') {
-            jsonString = await window.api.readLocalFile(file.path);
+            const filePath = getSafeString(file?.path) || (localChatPath.value ? `${localChatPath.value}/${basename}` : '');
+            if (!filePath) {
+                throw new Error(t('chats.alerts.localPathRequired'));
+            }
+            jsonString = await window.api.readLocalFile(filePath);
         } else {
-            const { url, username, password, data_path } = webdavConfig.value;
+            const { url, username, password } = webdavConfig.value;
             const client = createClient(url, { username, password });
-            jsonString = await client.getFileContents(`${data_path.endsWith('/') ? data_path.slice(0, -1) : data_path}/${file.basename}`, { format: "text" });
+            const remoteDir = resolveWebdavDataPath();
+            if (!remoteDir) {
+                throw new Error(t('chats.alerts.webdavRequired'));
+            }
+            jsonString = await client.getFileContents(`${remoteDir}/${basename}`, { format: "text" });
         }
-        await window.api.coderedirect(t('chats.alerts.restoreChat'), JSON.stringify({ sessionData: jsonString, filename: file.basename }));
+        await window.api.coderedirect(t('chats.alerts.restoreChat'), JSON.stringify({ sessionData: jsonString, filename: basename }));
         ElMessage.success(t('chats.alerts.restoreInitiated'));
     } catch (error) { ElMessage.error(`${t('chats.alerts.restoreFailed')}: ${error.message}`); }
 }
 async function renameFile(file) {
-    const defaultInputValue = file.basename.endsWith('.json') ? file.basename.slice(0, -5) : file.basename;
+    const basename = resolveFileBasename(file);
+    if (!basename) {
+        ElMessage.error(t('chats.alerts.renameFailed'));
+        return;
+    }
+
+    const defaultInputValue = basename.endsWith('.json') ? basename.slice(0, -5) : basename;
     try {
         const { value: userInput } = await ElMessageBox.prompt(t('chats.rename.promptMessage'), t('chats.rename.promptTitle'), { inputValue: defaultInputValue });
         let finalFilename = (userInput || "").trim();
         if (!finalFilename.toLowerCase().endsWith('.json')) finalFilename += '.json';
-        if (finalFilename === file.basename || finalFilename === '.json') return;
+        if (finalFilename === basename || finalFilename === '.json') return;
+
+        const remoteDir = resolveWebdavDataPath();
 
         if (activeView.value === 'local') {
-            await window.api.renameLocalFile(file.path, `${localChatPath.value}/${finalFilename}`);
-            if (isWebdavConfigValid.value && cloudChatFiles.value.some(f => f.basename === file.basename)) {
+            const sourcePath = getSafeString(file?.path) || `${localChatPath.value}/${basename}`;
+            await window.api.renameLocalFile(sourcePath, `${localChatPath.value}/${finalFilename}`);
+            if (isWebdavConfigValid.value && cloudChatFiles.value.some(f => f.basename === basename) && remoteDir) {
                 const confirm = await ElMessageBox.confirm(
                     t('chats.rename.syncCloudConfirm'),
                     t('chats.rename.syncTitle'),
@@ -400,19 +491,22 @@ async function renameFile(file) {
                 ).catch(() => false);
                 if (confirm) {
                     const client = createClient(webdavConfig.value.url, { username: webdavConfig.value.username, password: webdavConfig.value.password });
-                    await client.moveFile(`${webdavConfig.value.data_path}/${file.basename}`, `${webdavConfig.value.data_path}/${finalFilename}`);
+                    await client.moveFile(`${remoteDir}/${basename}`, `${remoteDir}/${finalFilename}`);
                 }
             }
         } else { // cloud
+            if (!remoteDir) {
+                throw new Error(t('chats.alerts.webdavRequired'));
+            }
             const client = createClient(webdavConfig.value.url, { username: webdavConfig.value.username, password: webdavConfig.value.password });
-            await client.moveFile(`${webdavConfig.value.data_path}/${file.basename}`, `${webdavConfig.value.data_path}/${finalFilename}`);
-            if (localChatFiles.value.some(f => f.basename === file.basename)) {
+            await client.moveFile(`${remoteDir}/${basename}`, `${remoteDir}/${finalFilename}`);
+            if (localChatFiles.value.some(f => f.basename === basename)) {
                 const confirm = await ElMessageBox.confirm(
                     t('chats.rename.syncLocalConfirm'),
                     t('chats.rename.syncTitle'),
                     { type: 'info' }
                 ).catch(() => false);
-                if (confirm) await window.api.renameLocalFile(`${localChatPath.value}/${file.basename}`, `${localChatPath.value}/${finalFilename}`);
+                if (confirm) await window.api.renameLocalFile(`${localChatPath.value}/${basename}`, `${localChatPath.value}/${finalFilename}`);
             }
         }
         ElMessage.success(t('chats.alerts.renameSuccess'));
@@ -717,7 +811,8 @@ const toggleFileSelection = (file, isChecked) => {
 };
 
 const formatFilenameDisplay = (basename) => {
-    return basename.endsWith('.json') ? basename.slice(0, -5) : basename;
+    const safeBasename = getSafeString(basename);
+    return safeBasename.endsWith('.json') ? safeBasename.slice(0, -5) : safeBasename;
 };
 
 const isAllSelected = computed(() => {

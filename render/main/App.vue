@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import Setting from './components/Setting.vue'
 import Providers from './components/Providers.vue'
+import Mcp from './components/Mcp.vue'
 
 const appWindowType = ref('main')
 const config = ref(null)
@@ -201,6 +202,9 @@ onBeforeUnmount(() => {
         <el-button :type="activePage === 'providers' ? 'primary' : 'default'" @click="activePage = 'providers'">
           服务商
         </el-button>
+        <el-button :type="activePage === 'mcp' ? 'primary' : 'default'" @click="activePage = 'mcp'">
+          MCP
+        </el-button>
       </el-button-group>
     </section>
 
@@ -214,6 +218,7 @@ onBeforeUnmount(() => {
     <template v-else-if="config">
       <Setting v-if="activePage === 'setting'" />
       <Providers v-else-if="activePage === 'providers'" />
+      <Mcp v-else-if="activePage === 'mcp'" />
     </template>
   </div>
 </template>

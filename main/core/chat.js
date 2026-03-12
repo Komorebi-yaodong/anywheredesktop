@@ -28,6 +28,64 @@ export function getRandomItem(list) {
   return list
 }
 
+
+function buildModelsEndpoint(baseUrl = '') {
+  const normalized = String(baseUrl || '').trim().replace(/\/+$/, '')
+  if (!normalized) {
+    throw new Error('[Chat] baseUrl is required')
+  }
+  return `${normalized}/models`
+}
+
+export async function listProviderModels(params = {}) {
+  const baseUrl = typeof params?.baseUrl === 'string' ? params.baseUrl : ''
+  const apiKey = getRandomItem(params?.apiKey)
+  const endpoint = buildModelsEndpoint(baseUrl)
+
+  const headers = {
+    'Content-Type': 'application/json'
+  }
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'GET',
+    headers
+  })
+
+  const rawText = await response.text()
+  let payload = {}
+
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText)
+    } catch {
+      payload = { message: rawText }
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(payload?.message || response.statusText || 'fetch_models_failed')
+  }
+
+  const models = Array.isArray(payload?.data)
+    ? payload.data
+        .map((item) => ({
+          id: typeof item?.id === 'string' ? item.id : '',
+          owned_by: typeof item?.owned_by === 'string' ? item.owned_by : ''
+        }))
+        .filter((item) => item.id)
+    : []
+
+  return {
+    success: true,
+    models
+  }
+}
+
+
 /**
  * 适配 Chat Completions 的 tools 格式到 Responses API 格式
  * Responses API 的 function 定义是扁平的，不需要外层的 type: 'function' 包裹

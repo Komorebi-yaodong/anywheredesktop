@@ -350,6 +350,12 @@ export function registerIpcHandlers({
   })
 
 
+  handleInvoke('chat:listProviderModels', async (_event, input = {}) => {
+    return chatApi.listProviderModels(input)
+  })
+
+
+
   handleInvoke('chat:createCompletion', async (_event, params = {}) => {
     const normalizedParams = {
       ...params,

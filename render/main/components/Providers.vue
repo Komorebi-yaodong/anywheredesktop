@@ -114,7 +114,8 @@ async function atomicSave(updateFunction) {
 
     updateFunction(latestConfig);
 
-    await window.api.updateConfigWithoutFeatures({ config: latestConfig });
+    const configToSave = { config: JSON.parse(JSON.stringify(latestConfig)) };
+    await window.api.updateConfigWithoutFeatures(configToSave);
 
     currentConfig.value = latestConfig;
 
@@ -366,36 +367,17 @@ async function activate_get_model_function() {
   getModel_form.modelList = [];
   searchQuery.value = '';
 
-  const url = selectedProvider.value.url;
-  const apiKey = selectedProvider.value.api_key;
-  let apiKeyToUse = apiKey;
-  if (window.api && typeof window.api.getRandomItem === 'function' && apiKey) {
-    const picked = window.api.getRandomItem(apiKey);
-    apiKeyToUse = picked && typeof picked.then === 'function' ? await picked : picked;
-  }
-
-
-  const options = {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' }
-  };
-  if (apiKeyToUse) {
-    options.headers['Authorization'] = `Bearer ${apiKeyToUse}`;
-  }
-
   try {
-    const response = await fetch(`${url}/models`, options);
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ message: response.statusText }));
-      const errorMessage = t('providers.alerts.fetchModelsError', { status: response.status, message: errorData.message || t('providers.alerts.fetchModelsFailedDefault') });
-      throw new Error(errorMessage);
+    const result = await window.api.listProviderModels({
+      baseUrl: selectedProvider.value.url,
+      apiKey: selectedProvider.value.api_key
+    });
+
+    if (!result || result.success === false) {
+      throw new Error(result?.message || result?.error || t('providers.alerts.fetchModelsFailedDefault'));
     }
-    const data = await response.json();
-    if (data?.data && Array.isArray(data.data)) {
-      getModel_form.modelList = data.data.map(m => ({ id: m.id, owned_by: m.owned_by }));
-    } else {
-      getModel_form.modelList = [];
-    }
+
+    getModel_form.modelList = Array.isArray(result.models) ? result.models : [];
   } catch (error) {
     console.error(error);
     getModel_form.error = error.message;

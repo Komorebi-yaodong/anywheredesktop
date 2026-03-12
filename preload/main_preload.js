@@ -75,6 +75,8 @@ const api = {
 
   getRandomItem: (list = '') => electronAPI.ipcRenderer.invoke('chat:getRandomItem', list),
 
+  listProviderModels: (input = {}) => electronAPI.ipcRenderer.invoke('chat:listProviderModels', input),
+
   getMcpToolCache: () => electronAPI.ipcRenderer.invoke('mcp:getToolCache'),
   saveMcpToolCache: (serverId, tools = []) =>
     electronAPI.ipcRenderer.invoke('mcp:saveToolCache', serverId, tools),

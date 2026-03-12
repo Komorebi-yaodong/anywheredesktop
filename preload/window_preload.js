@@ -66,8 +66,14 @@ const api = {
   exportMemoryData: () => electronAPI.ipcRenderer.invoke('data:exportMemoryData'),
   importMemoryData: (memories) => electronAPI.ipcRenderer.invoke('data:importMemoryData', memories),
 
+  coderedirect: (label = '', payload = null) =>
+    electronAPI.ipcRenderer.invoke('data:coderedirect', label, payload),
+  runTaskNow: (taskId = '') => electronAPI.ipcRenderer.invoke('data:runTaskNow', taskId),
+
   createChatCompletion: (params = {}) =>
     electronAPI.ipcRenderer.invoke('chat:createCompletion', params),
+
+  getRandomItem: (list = '') => electronAPI.ipcRenderer.invoke('chat:getRandomItem', list),
 
   getMcpToolCache: () => electronAPI.ipcRenderer.invoke('mcp:getToolCache'),
   saveMcpToolCache: (serverId, tools = []) =>

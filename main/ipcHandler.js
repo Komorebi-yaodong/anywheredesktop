@@ -246,6 +246,110 @@ export function registerIpcHandlers({
   })
 
 
+  handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
+    const sourceId = getWindowRefByWebContentsId(event.sender.id)
+    const openResult = openWindow('window')
+    const target = typeof openResult?.id === 'string' && openResult.id ? openResult.id : 'type:window'
+
+    const dispatchResult = dispatchWindowEvent(
+      {
+        sourceId,
+        target,
+        event: 'coderedirect',
+        payload: {
+          label,
+          payload
+        }
+      },
+      { getWindowByRef, listWindows }
+    )
+
+    return {
+      success: Boolean(dispatchResult?.ok),
+      target,
+      event: 'coderedirect',
+      result: dispatchResult
+    }
+  })
+
+  handleInvoke('data:runTaskNow', async (event, taskId = '') => {
+    const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : ''
+    if (!normalizedTaskId) {
+      return {
+        success: false,
+        reason: 'task_id_required'
+      }
+    }
+
+    const configResult = await dataApi.getConfig()
+    const fullConfig =
+      configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
+    const tasks = fullConfig?.tasks && typeof fullConfig.tasks === 'object' ? fullConfig.tasks : {}
+    const task = tasks[normalizedTaskId]
+
+    if (!task || typeof task !== 'object') {
+      return {
+        success: false,
+        reason: 'task_not_found',
+        taskId: normalizedTaskId
+      }
+    }
+
+    const promptKey = typeof task.promptKey === 'string' && task.promptKey ? task.promptKey : '__DEFAULT__'
+    const tempPromptConfig =
+      promptKey === '__DEFAULT__'
+        ? {
+            type: 'general',
+            prompt: '',
+            showMode: 'window',
+            model: fullConfig.defaultTaskModel || '',
+            stream: true,
+            isAlwaysOnTop: fullConfig.isAlwaysOnTop_global ?? true,
+            autoCloseOnBlur: fullConfig.autoCloseOnBlur_global ?? true,
+            window_width: 580,
+            window_height: 740,
+            icon: ''
+          }
+        : null
+
+    const openResult = openWindow('window')
+    const target = typeof openResult?.id === 'string' && openResult.id ? openResult.id : 'type:window'
+    const sourceId = getWindowRefByWebContentsId(event.sender.id)
+
+    const dispatchResult = dispatchWindowEvent(
+      {
+        sourceId,
+        target,
+        event: 'task:run-now',
+        payload: {
+          os: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'win' : 'linux',
+          code: promptKey,
+          type: 'task',
+          payload: typeof task.description === 'string' ? task.description : '',
+          taskConfig: {
+            id: normalizedTaskId,
+            ...task
+          },
+          tempPromptConfig
+        }
+      },
+      { getWindowByRef, listWindows }
+    )
+
+    return {
+      success: Boolean(dispatchResult?.ok),
+      taskId: normalizedTaskId,
+      target,
+      event: 'task:run-now',
+      result: dispatchResult
+    }
+  })
+
+  handleInvoke('chat:getRandomItem', async (_event, list = '') => {
+    return chatApi.getRandomItem(list)
+  })
+
+
   handleInvoke('chat:createCompletion', async (_event, params = {}) => {
     const normalizedParams = {
       ...params,

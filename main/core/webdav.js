@@ -76,6 +76,18 @@ function normalizeDirectoryContents(contents) {
   return []
 }
 
+
+function isWebdavNotFoundError(error) {
+  const message = toErrorMessage(error, '').toLowerCase()
+  return message.includes('404') || message.includes('not found') || message.includes('does not exist')
+}
+
+function isWebdavMethodNotAllowed(error) {
+  const message = toErrorMessage(error, '').toLowerCase()
+  return message.includes('405') || message.includes('method not allowed')
+}
+
+
 function normalizeWebdavLastmod(item = {}) {
   const candidates = [
     item.lastmod,
@@ -139,16 +151,20 @@ export async function listBackups(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig)
   const remoteDir = config.path
 
-  const exists = await client.exists(remoteDir)
-  if (!exists) {
-    return {
-      ok: true,
-      exists: false,
-      files: []
+  let contents
+  try {
+    contents = await client.getDirectoryContents(remoteDir, { details: true })
+  } catch (error) {
+    if (isWebdavNotFoundError(error)) {
+      return {
+        ok: true,
+        exists: false,
+        files: []
+      }
     }
+    throw new Error(toErrorMessage(error, 'webdav_list_failed'))
   }
 
-  const contents = await client.getDirectoryContents(remoteDir, { details: true })
   const normalizedContents = normalizeDirectoryContents(contents)
   const files = normalizedContents
     .filter((item) => item?.type === 'file')
@@ -170,8 +186,14 @@ export async function writeBackup(input = {}) {
   const remoteFilePath = `${remoteDir}/${filename}`
 
   const ensureDirectory = input?.ensureDirectory !== false
-  if (ensureDirectory && !(await client.exists(remoteDir))) {
-    await client.createDirectory(remoteDir, { recursive: true })
+  if (ensureDirectory) {
+    try {
+      await client.createDirectory(remoteDir, { recursive: true })
+    } catch (error) {
+      if (!isWebdavMethodNotAllowed(error) && !toErrorMessage(error, '').toLowerCase().includes('already exists')) {
+        throw new Error(toErrorMessage(error, 'webdav_create_directory_failed'))
+      }
+    }
   }
 
   let content = input?.content
@@ -185,10 +207,11 @@ export async function writeBackup(input = {}) {
 
   const lastModified = normalizeText(input?.lastModified).trim()
   if (lastModified) {
-    await client.customRequest(remoteFilePath, {
-      method: 'PROPPATCH',
-      headers: { 'Content-Type': 'application/xml' },
-      data: `<?xml version="1.0"?>
+    try {
+      await client.customRequest(remoteFilePath, {
+        method: 'PROPPATCH',
+        headers: { 'Content-Type': 'application/xml' },
+        data: `<?xml version="1.0"?>
 <d:propertyupdate xmlns:d="DAV:">
   <d:set>
     <d:prop>
@@ -196,7 +219,10 @@ export async function writeBackup(input = {}) {
     </d:prop>
   </d:set>
 </d:propertyupdate>`
-    })
+      })
+    } catch {
+      // ignore servers that do not support setting mtime via PROPPATCH
+    }
   }
 
   return {
@@ -211,22 +237,24 @@ export async function readBackup(input = {}) {
   const filename = normalizeFileName(input?.filename)
   const remoteFilePath = `${config.path}/${filename}`
 
-  const exists = await client.exists(remoteFilePath)
-  if (!exists) {
+  try {
+    const content = await client.getFileContents(remoteFilePath, { format: 'text' })
+
     return {
-      ok: false,
-      reason: 'webdav_file_not_found',
-      filename
+      ok: true,
+      filename,
+      path: remoteFilePath,
+      content: typeof content === 'string' ? content : normalizeText(content)
     }
-  }
-
-  const content = await client.getFileContents(remoteFilePath, { format: 'text' })
-
-  return {
-    ok: true,
-    filename,
-    path: remoteFilePath,
-    content: typeof content === 'string' ? content : normalizeText(content)
+  } catch (error) {
+    if (isWebdavNotFoundError(error)) {
+      return {
+        ok: false,
+        reason: 'webdav_file_not_found',
+        filename
+      }
+    }
+    throw new Error(toErrorMessage(error, 'webdav_read_failed'))
   }
 }
 
@@ -237,16 +265,18 @@ export async function moveFile(input = {}) {
   const fromPath = `${config.path}/${fromFilename}`
   const toPath = `${config.path}/${toFilename}`
 
-  const exists = await client.exists(fromPath)
-  if (!exists) {
-    return {
-      ok: false,
-      reason: 'webdav_file_not_found',
-      filename: fromFilename
+  try {
+    await client.moveFile(fromPath, toPath)
+  } catch (error) {
+    if (isWebdavNotFoundError(error)) {
+      return {
+        ok: false,
+        reason: 'webdav_file_not_found',
+        filename: fromFilename
+      }
     }
+    throw new Error(toErrorMessage(error, 'webdav_move_failed'))
   }
-
-  await client.moveFile(fromPath, toPath)
 
   return {
     ok: true,
@@ -263,16 +293,18 @@ export async function deleteBackup(input = {}) {
   const filename = normalizeFileName(input?.filename)
   const remoteFilePath = `${config.path}/${filename}`
 
-  const exists = await client.exists(remoteFilePath)
-  if (!exists) {
-    return {
-      ok: true,
-      deleted: false,
-      filename
+  try {
+    await client.deleteFile(remoteFilePath)
+  } catch (error) {
+    if (isWebdavNotFoundError(error)) {
+      return {
+        ok: true,
+        deleted: false,
+        filename
+      }
     }
+    throw new Error(toErrorMessage(error, 'webdav_delete_failed'))
   }
-
-  await client.deleteFile(remoteFilePath)
 
   return {
     ok: true,

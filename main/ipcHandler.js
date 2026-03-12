@@ -404,11 +404,17 @@ export function registerIpcHandlers({
     }
 
     const rawTools = await mcpApi.connectAndFetchTools(serverConfig.id, normalizedConfig)
-    await dataApi.saveMcpToolCache(serverConfig.id, rawTools)
+    const sanitizedTools = (Array.isArray(rawTools) ? rawTools : []).map((tool) => ({
+      name: tool?.name || '',
+      description: tool?.description || '',
+      inputSchema: tool?.inputSchema || tool?.schema || {},
+      enabled: tool?.enabled !== false
+    }))
+    await dataApi.saveMcpToolCache(serverConfig.id, sanitizedTools)
 
     return {
       success: true,
-      tools: rawTools
+      tools: sanitizedTools
     }
   })
 

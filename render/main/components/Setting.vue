@@ -98,6 +98,33 @@ const formatBytes = (bytes, decimals = 2) => {
 };
 
 
+function getErrorMessage(error, fallback = 'unknown_error') {
+  if (!error) return fallback;
+  if (typeof error === 'string') return error;
+  if (typeof error?.message === 'string' && error.message) return error.message;
+  if (typeof error?.reason === 'string' && error.reason) return error.reason;
+  if (typeof error?.error === 'string' && error.error) return error.error;
+  if (error?.error && typeof error.error === 'object') {
+    return getErrorMessage(error.error, fallback);
+  }
+  return fallback;
+}
+
+
+function resolveWebdavBackupConfig() {
+  const webdav = currentConfig.value?.webdav || {};
+  const path = String(webdav.path || '/anywhere').trim();
+  return {
+    url: String(webdav.url || '').trim(),
+    username: String(webdav.username || ''),
+    password: String(webdav.password || ''),
+    path: path || '/anywhere'
+  };
+}
+
+
+
+
 function getWebdavConfig() {
   const webdav = currentConfig.value?.webdav || {}
   return {
@@ -110,7 +137,7 @@ function getWebdavConfig() {
 
 function buildWebdavInput(extra = {}) {
   return {
-    webdavConfig: getWebdavConfig(),
+    webdavConfig: resolveWebdavBackupConfig(),
     ...extra
   }
 }
@@ -221,7 +248,7 @@ async function exportConfig() {
     });
 
     if (writeResult?.ok === false) {
-      throw new Error(writeResult?.reason || writeResult?.error || 'write config file failed');
+      throw new Error(getErrorMessage(writeResult, 'write config file failed'));
     }
 
     ElMessage.success(t('setting.alerts.exportSuccess'));
@@ -246,11 +273,15 @@ async function importConfig() {
     const filePath = openResult.filePaths[0];
     const readResult = await window.api?.readLocalFile?.(filePath, { encoding: 'utf8' });
 
-    if (!readResult || readResult.ok === false) {
-      throw new Error(readResult?.reason || readResult?.error || 'read config file failed');
+    if (readResult && readResult.ok === false) {
+      throw new Error(getErrorMessage(readResult, 'read config file failed'));
     }
 
-    const rawContent = typeof readResult.content === 'string' ? readResult.content : '';
+    const rawContent = typeof readResult === 'string'
+      ? readResult
+      : typeof readResult?.content === 'string'
+        ? readResult.content
+        : '';
     const importedData = JSON.parse(rawContent);
 
     if (typeof importedData !== 'object' || importedData === null) {
@@ -272,12 +303,18 @@ async function importConfig() {
     }
 
     if (importedData.memories && window.api && window.api.importMemoryData) {
-      await window.api.importMemoryData(importedData.memories);
+      const memoryResult = await window.api.importMemoryData(importedData.memories);
+      if (memoryResult && memoryResult.ok === false) {
+        throw new Error(getErrorMessage(memoryResult, 'import memory failed'));
+      }
       delete importedData.memories;
     }
 
     if (window.api && window.api.updateConfig) {
-      await window.api.updateConfig({ config: importedData });
+      const configResult = await window.api.updateConfig({ config: importedData });
+      if (configResult && configResult.ok === false) {
+        throw new Error(getErrorMessage(configResult, 'update config failed'));
+      }
       const result = await window.api.getConfig();
       if (result && result.config) {
         currentConfig.value = result.config;
@@ -447,7 +484,7 @@ async function backupToWebdav() {
             )
 
             if (!writeResult || writeResult.ok === false) {
-              throw new Error(writeResult?.reason || writeResult?.error || 'webdav_write_failed')
+              throw new Error(getErrorMessage(writeResult, 'webdav_write_failed'))
             }
 
             ElMessage.success(t('setting.webdav.alerts.backupSuccess'));
@@ -490,7 +527,7 @@ async function fetchBackupFiles() {
     const result = await window.api?.listWebdavBackups?.(buildWebdavInput())
 
     if (!result || result.ok === false) {
-      throw new Error(result?.reason || result?.error || 'webdav_list_failed')
+      throw new Error(getErrorMessage(result, 'webdav_list_failed'))
     }
 
     if (!result.exists) {
@@ -531,7 +568,7 @@ async function restoreFromWebdav(file) {
     )
 
     if (!readResult || readResult.ok === false) {
-      throw new Error(readResult?.reason || readResult?.error || 'webdav_read_failed')
+      throw new Error(getErrorMessage(readResult, 'webdav_read_failed'))
     }
 
     const importedData = JSON.parse(readResult.content || '{}');
@@ -552,12 +589,18 @@ async function restoreFromWebdav(file) {
     }
 
     if (importedData.memories && window.api && window.api.importMemoryData) {
-      await window.api.importMemoryData(importedData.memories);
+      const memoryResult = await window.api.importMemoryData(importedData.memories);
+      if (memoryResult && memoryResult.ok === false) {
+        throw new Error(getErrorMessage(memoryResult, 'import memory failed'));
+      }
       delete importedData.memories;
     }
 
     if (window.api && window.api.updateConfig) {
-      await window.api.updateConfig({ config: importedData });
+      const configResult = await window.api.updateConfig({ config: importedData });
+      if (configResult && configResult.ok === false) {
+        throw new Error(getErrorMessage(configResult, 'update config failed'));
+      }
       const result = await window.api.getConfig();
       if (result && result.config) {
         currentConfig.value = result.config;
@@ -589,7 +632,7 @@ async function deleteFile(file) {
     )
 
     if (!deleteResult || deleteResult.ok === false) {
-      throw new Error(deleteResult?.reason || deleteResult?.error || 'webdav_delete_failed')
+      throw new Error(getErrorMessage(deleteResult, 'webdav_delete_failed'))
     }
 
     ElMessage.success(t('setting.webdav.manager.deleteSuccess'));
@@ -624,7 +667,7 @@ async function deleteSelectedFiles() {
     )
 
     if (!deleteResult || deleteResult.ok === false) {
-      throw new Error(deleteResult?.reason || deleteResult?.error || 'webdav_delete_multiple_failed')
+      throw new Error(getErrorMessage(deleteResult, 'webdav_delete_multiple_failed'))
     }
 
     if (Array.isArray(deleteResult.failed) && deleteResult.failed.length > 0) {

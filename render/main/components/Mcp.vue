@@ -16,6 +16,19 @@ const advancedCollapse = ref([]);
 // 测试相关状态
 const activeTestTab = ref('list');
 const showTestResultDialog = ref(false);
+
+
+function getMcpErrorMessage(error, fallback = 'unknown_error') {
+    if (!error) return fallback;
+    if (typeof error === 'string') return error;
+    if (typeof error?.message === 'string' && error.message) return error.message;
+    if (typeof error?.error === 'string' && error.error) return error.error;
+    if (error?.error && typeof error.error === 'object') {
+        return getMcpErrorMessage(error.error, fallback);
+    }
+    return fallback;
+}
+
 const currentTestingServer = ref(null); // 保存当前正在查看/测试的服务器引用
 const testResult = reactive({
     loading: false,
@@ -397,7 +410,7 @@ async function runToolTest() {
         }
 
         const server = currentTestingServer.value;
-        const configToTest = {
+        const configToTest = JSON.parse(JSON.stringify({
             id: server.id,
             name: server.name,
             type: server.type,
@@ -406,7 +419,7 @@ async function runToolTest() {
             env: typeof server.env === 'string' ? convertTextToObject(server.env) : server.env,
             headers: typeof server.headers === 'string' ? convertTextToObject(server.headers) : server.headers,
             args: Array.isArray(server.args) ? server.args : convertTextToLines(server.args)
-        };
+        }));
 
         const response = await window.api.testInvokeMcpTool(configToTest, currentTestToolName.value, args);
 
@@ -428,12 +441,12 @@ async function runToolTest() {
             }
             if (!testOutput.value) testOutput.value = t('mcp.test.successNoContent');
         } else {
-            testOutput.value = t('mcp.test.executionError') + response.error;
+            testOutput.value = t('mcp.test.executionError') + getMcpErrorMessage(response, 'unknown_error');
         }
 
     } catch (err) {
         if (!testRunning.value) return; // 忽略取消后的错误
-        testOutput.value = t('mcp.test.systemError') + err.message;
+        testOutput.value = t('mcp.test.systemError') + getMcpErrorMessage(err, 'unknown_error');
     } finally {
         if (testRunning.value) {
             testRunning.value = false;
@@ -477,11 +490,12 @@ async function handleTestClick(server) {
     showTestResultDialog.value = true;
 
     try {
-        const cache = await window.api.getMcpToolCache();
+        const cacheResult = await window.api.getMcpToolCache();
+        const cache = cacheResult && cacheResult.ok === false ? {} : (cacheResult?.cache || cacheResult || {});
         if (cache && cache[server.id] && Array.isArray(cache[server.id]) && cache[server.id].length > 0) {
             testResult.tools = cache[server.id].map(tool => ({
                 ...tool,
-                enabled: tool.enabled ?? true
+                enabled: tool?.enabled !== false
             }));
 
             testResult.success = true;
@@ -518,7 +532,7 @@ async function triggerConnectionTest(server) {
     testResult.tools = [];
     currentTestToolName.value = '';
 
-    const configToTest = { /* ... 构造配置 ... */
+    const configToTest = JSON.parse(JSON.stringify({
         id: server.id,
         name: server.name,
         type: server.type,
@@ -527,14 +541,21 @@ async function triggerConnectionTest(server) {
         env: typeof server.env === 'string' ? convertTextToObject(server.env) : server.env,
         headers: typeof server.headers === 'string' ? convertTextToObject(server.headers) : server.headers,
         args: Array.isArray(server.args) ? server.args : convertTextToLines(server.args)
-    };
+    }));
 
     try {
         const result = await window.api.testMcpConnection(configToTest);
 
-        if (result.success) {
+        if (result && result.ok === false) {
+            testResult.success = false;
+            testResult.message = getMcpErrorMessage(result, t('mcp.alerts.testFailed'));
+            ElMessage.error(testResult.message);
+        } else if (result.success) {
             testResult.success = true;
-            testResult.tools = result.tools || [];
+            testResult.tools = (result.tools || []).map(tool => ({
+                ...tool,
+                enabled: tool?.enabled !== false
+            }));
             ElMessage.success(t('mcp.alerts.testSuccess'));
             if (testResult.tools.length > 0) {
                 currentTestToolName.value = testResult.tools[0].name;
@@ -542,8 +563,8 @@ async function triggerConnectionTest(server) {
             }
         } else {
             testResult.success = false;
-            testResult.message = result.error;
-            ElMessage.error(t('mcp.alerts.testFailed'));
+            testResult.message = getMcpErrorMessage(result, t('mcp.alerts.testFailed'));
+            ElMessage.error(testResult.message);
         }
     } catch (e) {
         testResult.success = false;

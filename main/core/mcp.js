@@ -1,7 +1,7 @@
 import { MultiServerMCPClient } from '@langchain/mcp-adapters'
 import { getBuiltinTools, invokeBuiltinTool } from './mcp_builtin.js'
 
-const PERSISTENT_CONNECTION_LIMIT = 5
+const PERSISTENT_CONNECTION_LIMIT = Number.POSITIVE_INFINITY
 const ON_DEMAND_CONCURRENCY_LIMIT = 5
 
 const persistentClients = new Map()
@@ -17,10 +17,11 @@ function normalizeTransportType(transport = '') {
 }
 
 function buildServerConfig(id, config = {}) {
+  const resolvedTransport = config.transport || config.type || ''
   return {
     id,
     ...config,
-    transport: normalizeTransportType(config.transport)
+    transport: normalizeTransportType(resolvedTransport)
   }
 }
 

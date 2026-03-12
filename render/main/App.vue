@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import Setting from './components/Setting.vue'
 import Providers from './components/Providers.vue'
 import Mcp from './components/Mcp.vue'
+import Skills from './components/Skills.vue'
 
 const appWindowType = ref('main')
 const config = ref(null)
@@ -205,6 +206,10 @@ onBeforeUnmount(() => {
         <el-button :type="activePage === 'mcp' ? 'primary' : 'default'" @click="activePage = 'mcp'">
           MCP
         </el-button>
+        <el-button :type="activePage === 'skills' ? 'primary' : 'default'" @click="activePage = 'skills'">
+          技能
+        </el-button>
+
       </el-button-group>
     </section>
 
@@ -219,6 +224,8 @@ onBeforeUnmount(() => {
       <Setting v-if="activePage === 'setting'" />
       <Providers v-else-if="activePage === 'providers'" />
       <Mcp v-else-if="activePage === 'mcp'" />
+      <Skills v-else-if="activePage === 'skills'" />
+
     </template>
   </div>
 </template>

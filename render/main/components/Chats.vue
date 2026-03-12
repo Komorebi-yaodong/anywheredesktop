@@ -158,6 +158,24 @@ const normalizeChatFile = (file, source = 'local') => {
 };
 
 
+const buildWebdavInput = (extra = {}) => ({
+    webdavConfig: {
+        url: getSafeString(webdavConfig.value?.url),
+        username: getSafeString(webdavConfig.value?.username),
+        password: getSafeString(webdavConfig.value?.password),
+        path: resolveWebdavDataPath() || getSafeString(webdavConfig.value?.path) || '/anywhere_data'
+    },
+    ...extra
+});
+
+const ensureWebdavResult = (result, fallbackReason = 'webdav_operation_failed') => {
+    if (!result || result.ok === false) {
+        throw new Error(result?.reason || result?.error || fallbackReason);
+    }
+    return result;
+};
+
+
 const handleWindowFocus = () => {
     refreshData(true);
 };
@@ -391,25 +409,18 @@ async function fetchCloudFiles(silent = false) {
     if (!isWebdavConfigValid.value) return;
     if (!silent) isTableLoading.value = true;
     try {
-        const { url, username, password } = webdavConfig.value;
-        const client = createClient(url, { username, password });
-        const remoteDir = resolveWebdavDataPath();
+        const result = ensureWebdavResult(
+            await window.api.listWebdavBackups(buildWebdavInput()),
+            'webdav_list_failed'
+        );
 
-        if (!remoteDir) {
+        if (!result.exists) {
             cloudChatFiles.value = [];
             return;
         }
 
-        if (!(await client.exists(remoteDir))) await client.createDirectory(remoteDir, { recursive: true });
-        const response = await client.getDirectoryContents(remoteDir, { details: true });
-
-        const rawItems = Array.isArray(response?.data)
-            ? response.data
-            : Array.isArray(response)
-                ? response
-                : [];
-
-        cloudChatFiles.value = rawItems
+        const files = Array.isArray(result.files) ? result.files : [];
+        cloudChatFiles.value = files
             .map((item) => normalizeChatFile(item, 'cloud'))
             .filter((item) => item.type === 'file' && item.basename && item.basename.endsWith('.json'))
             .sort((a, b) => new Date(b.lastmod).getTime() - new Date(a.lastmod).getTime());
@@ -452,13 +463,11 @@ async function startChat(file) {
             }
             jsonString = await window.api.readLocalFile(filePath);
         } else {
-            const { url, username, password } = webdavConfig.value;
-            const client = createClient(url, { username, password });
-            const remoteDir = resolveWebdavDataPath();
-            if (!remoteDir) {
-                throw new Error(t('chats.alerts.webdavRequired'));
-            }
-            jsonString = await client.getFileContents(`${remoteDir}/${basename}`, { format: "text" });
+            const result = ensureWebdavResult(
+                await window.api.readWebdavBackup(buildWebdavInput({ filename: basename })),
+                'webdav_read_failed'
+            );
+            jsonString = getSafeString(result.content);
         }
         await window.api.coderedirect(t('chats.alerts.restoreChat'), JSON.stringify({ sessionData: jsonString, filename: basename }));
         ElMessage.success(t('chats.alerts.restoreInitiated'));

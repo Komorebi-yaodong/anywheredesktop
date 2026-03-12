@@ -26,6 +26,7 @@
     "electron-updater": "^6.3.9",
     "element-plus": "^2.13.5",
     "lowdb": "^7.0.1",
+    "marked": "^17.0.4",
     "openai": "6.18.0",
     "vue-i18n": "^11.3.0",
     "vuedraggable": "^4.1.0",

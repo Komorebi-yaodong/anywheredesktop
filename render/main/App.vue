@@ -19,6 +19,91 @@ const header_text = ref(t('app.header.chats'));
 
 const config = ref(null);
 
+
+const fallbackDefaultConfig = {
+  defaultTaskModel: '',
+  tasks: {},
+  providers: {
+    '0': {
+      name: 'default',
+      url: 'https://api.openai.com/v1',
+      api_key: '',
+      apiType: 'chat_completions',
+      modelList: [],
+      enable: true
+    }
+  },
+  providerOrder: ['0'],
+  providerFolders: {},
+  prompts: {
+    AI: {
+      type: 'over',
+      prompt: '你是一个AI助手',
+      showMode: 'window',
+      model: '0|gpt-4o',
+      enable: true,
+      icon: '',
+      stream: true,
+      temperature: 0.7,
+      isTemperature: false,
+      isDirectSend_file: false,
+      isDirectSend_normal: true,
+      isDirectSend_image: true,
+      ifTextNecessary: false,
+      voice: null,
+      reasoning_effort: 'default',
+      defaultMcpServers: [],
+      defaultSkills: [],
+      window_width: 580,
+      window_height: 740,
+      position_x: 0,
+      position_y: 0,
+      autoCloseOnBlur: true,
+      isAlwaysOnTop: true,
+      autoSaveChat: false
+    }
+  },
+  settingsCardOrder: ['general', 'voice', 'data', 'webdav'],
+  settingsCardCollapsed: {
+    general: false,
+    voice: false,
+    data: false,
+    webdav: false
+  },
+  fastWindowPosition: null,
+  mcpServers: {},
+  skillPath: '',
+  language: 'zh',
+  tags: {},
+  skipLineBreak: false,
+  CtrlEnterToSend: false,
+  isDarkMode: false,
+  themeMode: 'system',
+  fix_position: false,
+  isAlwaysOnTop_global: true,
+  autoCloseOnBlur_global: true,
+  autoSaveChat_global: false,
+  zoom: 1,
+  webdav: {
+    url: '',
+    username: '',
+    password: '',
+    path: '/anywhere',
+    data_path: '/anywhere_data',
+    localChatPath: ''
+  },
+  voiceList: []
+};
+
+function normalizeConfigPayload(result) {
+  const base = JSON.parse(JSON.stringify(fallbackDefaultConfig));
+  const fromResult = result && typeof result === 'object' && result.config && typeof result.config === 'object'
+    ? result.config
+    : null;
+  return fromResult ? Object.assign(base, fromResult) : base;
+}
+
+
 //将 config provide 给所有子组件
 provide('config', config);
 
@@ -341,24 +426,19 @@ onMounted(async () => {
   mediaQuery.addEventListener('change', handleSystemThemeChange);
   try {
     const result = await window.api.getConfig();
-    if (result && result.config) {
-      const baseConfig = JSON.parse(JSON.stringify(window.api.defaultConfig.config));
-      config.value = Object.assign({}, baseConfig, result.config);
-      if (config.value.themeMode === 'system') {
-        const systemDark = mediaQuery.matches;
-        if (config.value.isDarkMode !== systemDark) {
-          config.value.isDarkMode = systemDark;
-          window.api.saveSetting('isDarkMode', systemDark);
-        }
+    config.value = normalizeConfigPayload(result);
+
+    if (config.value.themeMode === 'system') {
+      const systemDark = mediaQuery.matches;
+      if (config.value.isDarkMode !== systemDark) {
+        config.value.isDarkMode = systemDark;
+        window.api.saveSetting('isDarkMode', systemDark);
       }
-    } else {
-      config.value = JSON.parse(JSON.stringify(window.api.defaultConfig.config));
     }
   } catch (error) {
     console.error("Error fetching config in App.vue:", error);
-    config.value = JSON.parse(JSON.stringify(window.api.defaultConfig.config));
+    config.value = normalizeConfigPayload(null);
   }
-
   // Immediately apply dark mode on mount
   if (config.value?.isDarkMode) {
     document.documentElement.classList.add('dark');

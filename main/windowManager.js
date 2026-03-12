@@ -59,6 +59,8 @@ const multiTypeIndex = new Map()
 /** @type {Map<number, string>} */
 const webContentsToWindowRef = new Map()
 
+const WINDOW_INIT_CHANNEL = 'window:init'
+
 function bindWindowRef(win, ref) {
   if (!win || win.isDestroyed()) return
   if (!win.webContents || win.webContents.isDestroyed()) return
@@ -99,7 +101,7 @@ function resolvePreloadFile(fileName) {
   return path.join(__dirname, `../preload/${fileName}`)
 }
 
-function createBrowserWindow(type, config, titleSuffix = '') {
+function createBrowserWindow(type, config, titleSuffix = '', windowRef = '') {
   const title = titleSuffix ? `${config.title} (${titleSuffix})` : config.title
 
   const win = new BrowserWindow({
@@ -139,6 +141,18 @@ function createBrowserWindow(type, config, titleSuffix = '') {
     win.loadFile(path.join(__dirname, `../renderer/${config.html}`))
   }
 
+
+  win.webContents.once('did-finish-load', () => {
+    try {
+      win.webContents.send(WINDOW_INIT_CHANNEL, {
+        senderId: windowRef || null,
+        windowType: type
+      })
+    } catch {
+      // ignore init signal send errors during teardown
+    }
+  })
+
   return win
 }
 
@@ -157,7 +171,7 @@ export function openWindow(type = 'main') {
       return { ok: true, type: targetType, id: targetType, reused: true }
     }
 
-    const win = createBrowserWindow(targetType, config)
+    const win = createBrowserWindow(targetType, config, '', targetType)
     singletonStore.set(targetType, win)
     bindWindowRef(win, targetType)
 
@@ -170,7 +184,7 @@ export function openWindow(type = 'main') {
   }
 
   const id = `${targetType}-${randomUUID()}`
-  const win = createBrowserWindow(targetType, config, id)
+  const win = createBrowserWindow(targetType, config, id, id)
 
   multiStore.set(id, win)
   bindWindowRef(win, id)
@@ -258,6 +272,10 @@ export function getWindowRefByWebContentsId(webContentsId) {
   if (typeof webContentsId !== 'number') return null
   return webContentsToWindowRef.get(webContentsId) || null
 }
+
+
+export { WINDOW_INIT_CHANNEL }
+
 
 
 

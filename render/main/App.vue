@@ -1,7 +1,9 @@
 <script setup>
 import { ref } from 'vue'
 
-const appWindowType = window.api?.appWindowType || 'main'
+const initialContext = window.api?.getWindowContext ? window.api.getWindowContext() : {}
+const appWindowType = ref(initialContext.appWindowType || 'main')
+const senderId = ref(initialContext.senderId || 'main')
 const lastIncomingEvent = ref('（暂无）')
 
 const openWindow = async (type) => {
@@ -32,7 +34,7 @@ const emitToAllWindows = async () => {
         event: 'append-message',
         payload: {
           from: 'main',
-          message: 'hello from main'
+          message: `hello from main (${senderId.value})`
         }
       })
     }
@@ -57,12 +59,25 @@ if (window.api?.onWindowEvent) {
     lastIncomingEvent.value = JSON.stringify(event)
   })
 }
+
+if (window.api?.onWindowInit) {
+  window.api.onWindowInit((payload = {}) => {
+    if (typeof payload.windowType === 'string' && payload.windowType) {
+      appWindowType.value = payload.windowType
+    }
+
+    if (typeof payload.senderId === 'string' && payload.senderId) {
+      senderId.value = payload.senderId
+    }
+  })
+}
 </script>
 
 <template>
   <div class="page">
     <h1>Anywhere Main (Desktop)</h1>
     <p>当前窗口：{{ appWindowType }}</p>
+    <p>senderId：{{ senderId }}</p>
     <div class="actions">
       <button @click="openWindow('window')">打开对话窗口</button>
       <button @click="openWindow('fast')">打开快捷窗口</button>

@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { BrowserWindow, ipcMain } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
 
@@ -29,6 +30,7 @@ export function registerIpcHandlers({
   fileApi,
   chatApi,
   mcpApi,
+  skillApi,
   minimizeWindow,
   maximizeOrRestoreWindow,
   closeWindow,
@@ -323,6 +325,92 @@ export function registerIpcHandlers({
 
   handleInvoke('mcp:closeClient', async () => {
     return mcpApi.closeMcpClient()
+  })
+
+
+  handleInvoke('skill:list', async (_event, skillRootPath = '') => {
+    return skillApi.listSkills(skillRootPath)
+  })
+
+  handleInvoke('skill:getDetails', async (_event, skillRootPath = '', skillId = '') => {
+    return skillApi.getSkillDetails(skillRootPath, skillId)
+  })
+
+  handleInvoke('skill:save', async (_event, skillRootPath = '', skillId = '', content = '') => {
+    const success = skillApi.saveSkill(skillRootPath, skillId, content)
+    return { success }
+  })
+
+  handleInvoke('skill:delete', async (_event, skillRootPath = '', skillId = '') => {
+    const success = skillApi.deleteSkill(skillRootPath, skillId)
+    return { success }
+  })
+
+  handleInvoke('skill:exportPackage', async (_event, skillRootPath = '', skillId = '', outputDir = '') => {
+    const outputPath = await skillApi.exportSkillToPackage(skillRootPath, skillId, outputDir)
+    return {
+      success: true,
+      outputPath
+    }
+  })
+
+  handleInvoke('skill:extractPackage', async (_event, filePath = '') => {
+    const extractedPath = await skillApi.extractSkillPackage(filePath)
+    return {
+      success: true,
+      extractedPath
+    }
+  })
+
+  handleInvoke('skill:getToolDefinition', async (_event, skillRootPath = '', enabledSkillNames = []) => {
+    const allSkills = skillApi.listSkills(skillRootPath)
+    const activeSkills = allSkills.filter((skill) => enabledSkillNames.includes(skill.name))
+
+    if (activeSkills.length === 0) {
+      return null
+    }
+
+    return skillApi.generateSkillToolDefinition(activeSkills, skillRootPath)
+  })
+
+  handleInvoke(
+    'skill:resolveInvocation',
+    async (_event, skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null) => {
+      const result = skillApi.resolveSkillInvocation(skillRootPath, skillName, toolArgsObj)
+
+      if (result && typeof result === 'object' && result.__isForkRequest && result.subAgentArgs) {
+        if (!globalContext) {
+          return JSON.stringify(
+            [
+              {
+                type: 'text',
+                text: 'Error: Sub-Agent skill requires execution context (API Key, etc).'
+              }
+            ],
+            null,
+            2
+          )
+        }
+
+        const subAgentResult = await mcpApi.invokeMcpTool('sub_agent', result.subAgentArgs, null, globalContext)
+        return subAgentResult
+      }
+
+      return JSON.stringify(
+        [
+          {
+            type: 'text',
+            text: result
+          }
+        ],
+        null,
+        2
+      )
+    }
+  )
+
+  handleInvoke('skill:pathJoin', async (_event, ...args) => {
+    return path.join(...args)
   })
 
   handleInvoke('file:handleFilePath', async (_event, filePath = '') => {

@@ -81,6 +81,29 @@ const api = {
   invokeMcpTool: (toolName = '', toolArgs = {}, context = null) =>
     electronAPI.ipcRenderer.invoke('mcp:invokeTool', toolName, toolArgs, context),
   closeMcpClient: () => electronAPI.ipcRenderer.invoke('mcp:closeClient'),
+
+  listSkills: (skillRootPath = '') => electronAPI.ipcRenderer.invoke('skill:list', skillRootPath),
+  getSkillDetails: (skillRootPath = '', skillId = '') =>
+    electronAPI.ipcRenderer.invoke('skill:getDetails', skillRootPath, skillId),
+  saveSkill: (skillRootPath = '', skillId = '', content = '') =>
+    electronAPI.ipcRenderer.invoke('skill:save', skillRootPath, skillId, content),
+  deleteSkill: (skillRootPath = '', skillId = '') =>
+    electronAPI.ipcRenderer.invoke('skill:delete', skillRootPath, skillId),
+  exportSkillToPackage: (skillRootPath = '', skillId = '', outputDir = '') =>
+    electronAPI.ipcRenderer.invoke('skill:exportPackage', skillRootPath, skillId, outputDir),
+  extractSkillPackage: (filePath = '') =>
+    electronAPI.ipcRenderer.invoke('skill:extractPackage', filePath),
+  getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) =>
+    electronAPI.ipcRenderer.invoke('skill:getToolDefinition', skillRootPath, enabledSkillNames),
+  resolveSkillInvocation: (skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null) =>
+    electronAPI.ipcRenderer.invoke(
+      'skill:resolveInvocation',
+      skillRootPath,
+      skillName,
+      toolArgsObj,
+      globalContext
+    ),
+  pathJoin: (...args) => electronAPI.ipcRenderer.invoke('skill:pathJoin', ...args),
   handleFilePath: (filePath) => electronAPI.ipcRenderer.invoke('file:handleFilePath', filePath),
   sendfileDirect: (filePathList) => electronAPI.ipcRenderer.invoke('file:sendfileDirect', filePathList),
   saveFile: (options) => electronAPI.ipcRenderer.invoke('file:saveFile', options),

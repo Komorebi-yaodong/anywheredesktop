@@ -17,6 +17,9 @@ importers:
       '@langchain/mcp-adapters':
         specifier: 1.0.0
         version: 1.0.0(@cfworker/json-schema@4.1.1)(@langchain/core@1.1.32(openai@6.18.0(zod@4.3.6)))(@langchain/langgraph@1.2.2(@langchain/core@1.1.32(openai@6.18.0(zod@4.3.6)))(vue@3.5.30)(zod-to-json-schema@3.25.1(zod@4.3.6))(zod@4.3.6))
+      adm-zip:
+        specifier: 0.5.16
+        version: 0.5.16
       electron-updater:
         specifier: ^6.3.9
         version: 6.8.3
@@ -939,6 +942,10 @@ packages:
     resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
     engines: {node: '>=0.4.0'}
     hasBin: true
+
+  adm-zip@0.5.16:
+    resolution: {integrity: sha512-TGw5yVi4saajsSEgz25grObGHEUaDrniwvA2qwSC060KfqGPdglhvPMA2lPIoxs3PQIItj2iag35fONcQqgUaQ==}
+    engines: {node: '>=12.0'}
 
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
@@ -3617,6 +3624,8 @@ snapshots:
       acorn: 8.16.0
 
   acorn@8.16.0: {}
+
+  adm-zip@0.5.16: {}
 
   agent-base@7.1.4: {}
 

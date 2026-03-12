@@ -81,7 +81,7 @@ if (window.api?.onWindowInit) {
     <div class="actions">
       <button @click="openWindow('window')">打开对话窗口</button>
       <button @click="openWindow('fast')">打开快捷窗口</button>
-      <button @click="hideMainWindow">隐藏主窗口</button>
+      <button @click="hideMainWindow">最小化主窗口</button>
       <button @click="emitToAllWindows">广播到对话窗口</button>
       <button @click="refreshWindows">查询窗口列表</button>
     </div>

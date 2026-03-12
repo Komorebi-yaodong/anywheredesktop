@@ -306,13 +306,13 @@ export function showMainWindow() {
 export function hideMainWindow() {
   const mainWindow = getSingletonWindow('main')
   if (!mainWindow) {
-    return { ok: true, action: 'hide', existed: false }
+    return { ok: true, action: 'minimize', existed: false }
   }
 
-  if (mainWindow.isVisible()) {
-    mainWindow.hide()
+  if (!mainWindow.isMinimized()) {
+    mainWindow.minimize()
   }
 
-  return { ok: true, action: 'hide', existed: true }
+  return { ok: true, action: 'minimize', existed: true }
 }
 

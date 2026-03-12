@@ -187,73 +187,91 @@ async function exportConfig() {
       }
     }
 
+    const saveResult = await window.api?.showSaveDialog?.({
+      title: t('setting.dataManagement.exportButton'),
+      defaultPath: 'Anywhere_config.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    });
+
+    if (!saveResult || saveResult.canceled || !saveResult.filePath) {
+      return;
+    }
+
     const jsonString = JSON.stringify(configToExport, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'Anywhere_config.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const writeResult = await window.api?.writeLocalFile?.(saveResult.filePath, jsonString, {
+      encoding: 'utf8'
+    });
+
+    if (writeResult?.ok === false) {
+      throw new Error(writeResult?.reason || writeResult?.error || 'write config file failed');
+    }
+
+    ElMessage.success(t('setting.alerts.exportSuccess'));
   } catch (error) {
     console.error("Error exporting config:", error);
+    ElMessage.error(t('setting.alerts.exportFailed'));
   }
 }
 
-function importConfig() {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.json';
-  input.onchange = async (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const currentLocalChatPath = currentConfig.value.webdav?.localChatPath;
-          const currentSkillPath = currentConfig.value.skillPath;
+async function importConfig() {
+  try {
+    const openResult = await window.api?.showOpenDialog?.({
+      title: t('setting.dataManagement.importButton'),
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    });
 
-          const importedData = JSON.parse(e.target.result);
-          if (typeof importedData !== 'object' || importedData === null) {
-            throw new Error("Imported file is not a valid configuration object.");
-          }
-
-          if (currentLocalChatPath) {
-            if (!importedData.webdav) {
-              importedData.webdav = {};
-            }
-            importedData.webdav.localChatPath = currentLocalChatPath;
-          }
-
-          if (currentSkillPath) {
-            importedData.skillPath = currentSkillPath;
-          }
-
-          if (importedData.memories && window.api && window.api.importMemoryData) {
-            await window.api.importMemoryData(importedData.memories);
-            delete importedData.memories;
-          }
-
-          if (window.api && window.api.updateConfig) {
-            await window.api.updateConfig({ config: importedData });
-            const result = await window.api.getConfig();
-            if (result && result.config) {
-              currentConfig.value = result.config;
-              initCardOrder();
-            }
-          }
-          ElMessage.success(t('setting.alerts.importSuccess'));
-        } catch (err) {
-          console.error("Error importing configuration:", err);
-          ElMessage.error(t('setting.alerts.importFailed'));
-        }
-      };
-      reader.readAsText(file);
+    if (!openResult || openResult.canceled || !Array.isArray(openResult.filePaths) || openResult.filePaths.length === 0) {
+      return;
     }
-  };
-  input.click();
+
+    const filePath = openResult.filePaths[0];
+    const readResult = await window.api?.readLocalFile?.(filePath, { encoding: 'utf8' });
+
+    if (!readResult || readResult.ok === false) {
+      throw new Error(readResult?.reason || readResult?.error || 'read config file failed');
+    }
+
+    const rawContent = typeof readResult.content === 'string' ? readResult.content : '';
+    const importedData = JSON.parse(rawContent);
+
+    if (typeof importedData !== 'object' || importedData === null) {
+      throw new Error("Imported file is not a valid configuration object.");
+    }
+
+    const currentLocalChatPath = currentConfig.value.webdav?.localChatPath;
+    const currentSkillPath = currentConfig.value.skillPath;
+
+    if (currentLocalChatPath) {
+      if (!importedData.webdav) {
+        importedData.webdav = {};
+      }
+      importedData.webdav.localChatPath = currentLocalChatPath;
+    }
+
+    if (currentSkillPath) {
+      importedData.skillPath = currentSkillPath;
+    }
+
+    if (importedData.memories && window.api && window.api.importMemoryData) {
+      await window.api.importMemoryData(importedData.memories);
+      delete importedData.memories;
+    }
+
+    if (window.api && window.api.updateConfig) {
+      await window.api.updateConfig({ config: importedData });
+      const result = await window.api.getConfig();
+      if (result && result.config) {
+        currentConfig.value = result.config;
+        initCardOrder();
+      }
+    }
+
+    ElMessage.success(t('setting.alerts.importSuccess'));
+  } catch (err) {
+    console.error("Error importing configuration:", err);
+    ElMessage.error(t('setting.alerts.importFailed'));
+  }
 }
 
 async function handleThemeChange(mode) {

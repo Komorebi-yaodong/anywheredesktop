@@ -23,7 +23,8 @@ export function registerIpcHandlers({
   getWindowByRef,
   getWindowRefByWebContentsId,
   dispatchWindowEvent,
-  systemApi
+  systemApi,
+  dbApi
 }) {
   ipcMain.on('ping', () => console.log('pong'))
 
@@ -99,5 +100,58 @@ export function registerIpcHandlers({
 
   handleInvoke('system:desktop:getSources', async (_event, options = {}) => {
     return systemApi.getDesktopSources(options)
+  })
+
+
+  handleInvoke('db:isReady', async () => {
+    return dbApi.isDbReady()
+  })
+
+  handleInvoke('db:stats', async () => {
+    return dbApi.getDbStats()
+  })
+
+  handleInvoke('db:get', async (_event, id) => {
+    return dbApi.get(id)
+  })
+
+  handleInvoke('db:put', async (_event, doc = {}) => {
+    return dbApi.put(doc)
+  })
+
+  handleInvoke('db:remove', async (_event, id, rev = '') => {
+    return dbApi.remove(id, rev)
+  })
+
+  handleInvoke('db:allDocs', async (_event, options = {}) => {
+    return dbApi.allDocs(options)
+  })
+
+  handleInvoke('db:bulkDocs', async (_event, docs = []) => {
+    return dbApi.bulkDocs(docs)
+  })
+
+  handleInvoke('db:postAttachment', async (_event, input = {}) => {
+    return dbApi.postAttachment(input)
+  })
+
+  handleInvoke('db:getAttachment', async (_event, input = {}) => {
+    return dbApi.getAttachment(input)
+  })
+
+  handleInvoke('dbStorage:setItem', async (_event, key, value) => {
+    return dbApi.dbStorageSetItem(key, value)
+  })
+
+  handleInvoke('dbStorage:getItem', async (_event, key, fallback = null) => {
+    return dbApi.dbStorageGetItem(key, fallback)
+  })
+
+  handleInvoke('dbStorage:removeItem', async (_event, key) => {
+    return dbApi.dbStorageRemoveItem(key)
+  })
+
+  handleInvoke('dbStorage:listKeys', async () => {
+    return dbApi.dbStorageListKeys()
   })
 }

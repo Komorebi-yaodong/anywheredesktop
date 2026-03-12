@@ -13,6 +13,8 @@ import { dispatchWindowEvent } from './eventBus.js'
 
 import * as systemApi from './core/system.js'
 
+import * as dbApi from './core/db.js'
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.anywhere.desktop')
 
@@ -28,7 +30,8 @@ app.whenReady().then(() => {
     getWindowByRef,
     getWindowRefByWebContentsId,
     dispatchWindowEvent,
-    systemApi
+    systemApi,
+    dbApi
   })
   openWindow('main')
 

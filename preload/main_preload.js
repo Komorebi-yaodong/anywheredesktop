@@ -43,7 +43,21 @@ const api = {
   shellShowItemInFolder: (targetPath) =>
     electronAPI.ipcRenderer.invoke('system:shell:showItemInFolder', targetPath),
   shellOpenExternal: (url) => electronAPI.ipcRenderer.invoke('system:shell:openExternal', url),
-  getDesktopSources: (options) => electronAPI.ipcRenderer.invoke('system:desktop:getSources', options)
+  getDesktopSources: (options) => electronAPI.ipcRenderer.invoke('system:desktop:getSources', options),
+  dbIsReady: () => electronAPI.ipcRenderer.invoke('db:isReady'),
+  dbStats: () => electronAPI.ipcRenderer.invoke('db:stats'),
+  dbGet: (id) => electronAPI.ipcRenderer.invoke('db:get', id),
+  dbPut: (doc) => electronAPI.ipcRenderer.invoke('db:put', doc),
+  dbRemove: (id, rev = '') => electronAPI.ipcRenderer.invoke('db:remove', id, rev),
+  dbAllDocs: (options) => electronAPI.ipcRenderer.invoke('db:allDocs', options),
+  dbBulkDocs: (docs) => electronAPI.ipcRenderer.invoke('db:bulkDocs', docs),
+  dbPostAttachment: (input) => electronAPI.ipcRenderer.invoke('db:postAttachment', input),
+  dbGetAttachment: (input) => electronAPI.ipcRenderer.invoke('db:getAttachment', input),
+  dbStorageSetItem: (key, value) => electronAPI.ipcRenderer.invoke('dbStorage:setItem', key, value),
+  dbStorageGetItem: (key, fallback = null) =>
+    electronAPI.ipcRenderer.invoke('dbStorage:getItem', key, fallback),
+  dbStorageRemoveItem: (key) => electronAPI.ipcRenderer.invoke('dbStorage:removeItem', key),
+  dbStorageListKeys: () => electronAPI.ipcRenderer.invoke('dbStorage:listKeys')
 }
 
 if (process.contextIsolated) {

@@ -176,6 +176,14 @@ const ensureWebdavResult = (result, fallbackReason = 'webdav_operation_failed') 
 };
 
 
+const toUtcString = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? '' : date.toUTCString();
+};
+
+
+
 const handleWindowFocus = () => {
     refreshData(true);
 };
@@ -487,28 +495,27 @@ async function renameFile(file) {
         if (!finalFilename.toLowerCase().endsWith('.json')) finalFilename += '.json';
         if (finalFilename === basename || finalFilename === '.json') return;
 
-        const remoteDir = resolveWebdavDataPath();
-
         if (activeView.value === 'local') {
             const sourcePath = getSafeString(file?.path) || `${localChatPath.value}/${basename}`;
             await window.api.renameLocalFile(sourcePath, `${localChatPath.value}/${finalFilename}`);
-            if (isWebdavConfigValid.value && cloudChatFiles.value.some(f => f.basename === basename) && remoteDir) {
+            if (isWebdavConfigValid.value && cloudChatFiles.value.some(f => f.basename === basename)) {
                 const confirm = await ElMessageBox.confirm(
                     t('chats.rename.syncCloudConfirm'),
                     t('chats.rename.syncTitle'),
                     { type: 'info' }
                 ).catch(() => false);
                 if (confirm) {
-                    const client = createClient(webdavConfig.value.url, { username: webdavConfig.value.username, password: webdavConfig.value.password });
-                    await client.moveFile(`${remoteDir}/${basename}`, `${remoteDir}/${finalFilename}`);
+                    ensureWebdavResult(
+                        await window.api.moveWebdavFile(buildWebdavInput({ fromFilename: basename, toFilename: finalFilename })),
+                        'webdav_move_failed'
+                    );
                 }
             }
         } else { // cloud
-            if (!remoteDir) {
-                throw new Error(t('chats.alerts.webdavRequired'));
-            }
-            const client = createClient(webdavConfig.value.url, { username: webdavConfig.value.username, password: webdavConfig.value.password });
-            await client.moveFile(`${remoteDir}/${basename}`, `${remoteDir}/${finalFilename}`);
+            ensureWebdavResult(
+                await window.api.moveWebdavFile(buildWebdavInput({ fromFilename: basename, toFilename: finalFilename })),
+                'webdav_move_failed'
+            );
             if (localChatFiles.value.some(f => f.basename === basename)) {
                 const confirm = await ElMessageBox.confirm(
                     t('chats.rename.syncLocalConfirm'),
@@ -525,16 +532,21 @@ async function renameFile(file) {
     }
 }
 async function deleteFiles(filesToDelete) {
+
+    const normalizedFiles = filesToDelete
+        .map((file) => normalizeChatFile(file, activeView.value === 'local' ? 'local' : 'cloud'))
+        .filter((file) => file.basename);
+
     if (isDeletingFiles.value) return; // 拦截正在进行中的删除操作
 
-    if (filesToDelete.length === 0) {
+    if (normalizedFiles.length === 0) {
         ElMessage.warning(t('common.noFileSelected'));
         return;
     }
 
     isDeletingFiles.value = true; // 上锁
     try {
-        await ElMessageBox.confirm(t('common.confirmDeleteMultiple', { count: filesToDelete.length }), t('common.warningTitle'), { type: 'warning' });
+        await ElMessageBox.confirm(t('common.confirmDeleteMultiple', { count: normalizedFiles.length }), t('common.warningTitle'), { type: 'warning' });
 
         let syncDeletions = false;
 
@@ -542,7 +554,7 @@ async function deleteFiles(filesToDelete) {
             const localMap = new Map(localChatFiles.value.map(f => [f.basename, f]));
             const cloudMap = new Map(cloudChatFiles.value.map(f => [f.basename, f]));
 
-            const counterpartFiles = filesToDelete.filter(file => {
+            const counterpartFiles = normalizedFiles.filter(file => {
                 return activeView.value === 'local' ? cloudMap.has(file.basename) : localMap.has(file.basename);
             });
 
@@ -562,20 +574,26 @@ async function deleteFiles(filesToDelete) {
         }
 
         isTableLoading.value = true;
-        const client = isWebdavConfigValid.value ? createClient(webdavConfig.value.url, { username: webdavConfig.value.username, password: webdavConfig.value.password }) : null;
 
-        for (const file of filesToDelete) {
+        for (const file of normalizedFiles) {
+            const basename = file.basename;
+
             if (activeView.value === 'local') {
-                await window.api.deleteLocalFile(file.path);
-                if (syncDeletions && client && cloudChatFiles.value.some(f => f.basename === file.basename)) {
-                    await client.deleteFile(`${webdavConfig.value.data_path}/${file.basename}`);
+                const localPath = getSafeString(file?.path) || `${localChatPath.value}/${basename}`;
+                await window.api.deleteLocalFile(localPath);
+                if (syncDeletions && isWebdavConfigValid.value && cloudChatFiles.value.some(f => f.basename === basename)) {
+                    ensureWebdavResult(
+                        await window.api.deleteWebdavBackup(buildWebdavInput({ filename: basename })),
+                        'webdav_delete_failed'
+                    );
                 }
             } else { // cloud view
-                if (client) {
-                    await client.deleteFile(`${webdavConfig.value.data_path}/${file.basename}`);
-                    if (syncDeletions && localChatFiles.value.some(f => f.basename === file.basename)) {
-                        await window.api.deleteLocalFile(`${localChatPath.value}/${file.basename}`);
-                    }
+                ensureWebdavResult(
+                    await window.api.deleteWebdavBackup(buildWebdavInput({ filename: basename })),
+                    'webdav_delete_failed'
+                );
+                if (syncDeletions && localChatFiles.value.some(f => f.basename === basename)) {
+                    await window.api.deleteLocalFile(`${localChatPath.value}/${basename}`);
                 }
             }
         }
@@ -704,38 +722,35 @@ async function executeSync(tasks, title) {
 async function forceSyncFile(basename, direction, signal) {
     singleFileSyncing.value[basename] = true;
     try {
-        const client = createClient(webdavConfig.value.url, { username: webdavConfig.value.username, password: webdavConfig.value.password });
-        const remotePath = `${webdavConfig.value.data_path}/${basename}`;
-        const localPath = `${localChatPath.value}/${basename}`;
+        const normalizedBasename = getSafeString(basename);
+        const localPath = `${localChatPath.value}/${normalizedBasename}`;
 
         if (direction === 'upload') {
-            const localFile = localChatFiles.value.find(f => f.basename === basename);
-            if (!localFile) throw new Error(`本地文件 "${basename}" 未找到`);
+            const localFile = localChatFiles.value.find(f => f.basename === normalizedBasename);
+            if (!localFile) throw new Error(`本地文件 "${normalizedBasename}" 未找到`);
 
             const content = await window.api.readLocalFile(localPath, signal);
-            await client.putFileContents(remotePath, content, { overwrite: true, signal });
-
-            await client.customRequest(remotePath, {
-                method: "PROPPATCH",
-                headers: { "Content-Type": "application/xml" },
-                data: `<?xml version="1.0"?>
-                       <d:propertyupdate xmlns:d="DAV:">
-                         <d:set>
-                           <d:prop>
-                             <lastmodified xmlns="DAV:">${new Date(localFile.lastmod).toUTCString()}</lastmodified>
-                           </d:prop>
-                         </d:set>
-                       </d:propertyupdate>`,
-                signal
-            });
-
+            ensureWebdavResult(
+                await window.api.writeWebdavBackup(
+                    buildWebdavInput({
+                        filename: normalizedBasename,
+                        content,
+                        overwrite: true,
+                        ensureDirectory: true,
+                        lastModified: toUtcString(localFile.lastmod)
+                    })
+                ),
+                'webdav_write_failed'
+            );
         } else { // download
-            const cloudFile = cloudChatFiles.value.find(f => f.basename === basename);
-            if (!cloudFile) throw new Error(`云端文件 "${basename}" 未找到`);
+            const cloudFile = cloudChatFiles.value.find(f => f.basename === normalizedBasename);
+            if (!cloudFile) throw new Error(`云端文件 "${normalizedBasename}" 未找到`);
 
-            const content = await client.getFileContents(remotePath, { format: 'text', signal });
-            await window.api.writeLocalFile(localPath, content, signal);
-
+            const result = ensureWebdavResult(
+                await window.api.readWebdavBackup(buildWebdavInput({ filename: normalizedBasename })),
+                'webdav_read_failed'
+            );
+            await window.api.writeLocalFile(localPath, getSafeString(result.content), signal);
             await window.api.setFileMtime(localPath, cloudFile.lastmod);
         }
     } catch (error) {
@@ -775,15 +790,19 @@ async function executeAutoClean() {
 
     isCleaning.value = true;
     try {
-        const client = isWebdavConfigValid.value ? createClient(webdavConfig.value.url, { username: webdavConfig.value.username, password: webdavConfig.value.password }) : null;
-
         const tasks = filesToDelete.map(file => async () => {
+            const normalizedFile = normalizeChatFile(file, activeView.value === 'local' ? 'local' : 'cloud');
+            const basename = normalizedFile.basename;
+            if (!basename) return;
+
             if (activeView.value === 'local') {
-                await window.api.deleteLocalFile(file.path);
+                const localPath = getSafeString(normalizedFile?.path) || `${localChatPath.value}/${basename}`;
+                await window.api.deleteLocalFile(localPath);
             } else {
-                if (client) {
-                    await client.deleteFile(`${webdavConfig.value.data_path}/${file.basename}`);
-                }
+                ensureWebdavResult(
+                    await window.api.deleteWebdavBackup(buildWebdavInput({ filename: basename })),
+                    'webdav_delete_failed'
+                );
             }
         });
 

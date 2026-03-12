@@ -583,6 +583,11 @@ export function registerIpcHandlers({
     return webdavApi.readBackup(input)
   })
 
+
+  handleInvoke('webdav:moveFile', async (_event, input = {}) => {
+    return webdavApi.moveFile(input)
+  })
+
   handleInvoke('webdav:deleteBackup', async (_event, input = {}) => {
     return webdavApi.deleteBackup(input)
   })

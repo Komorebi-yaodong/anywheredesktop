@@ -135,6 +135,22 @@ export async function writeBackup(input = {}) {
     overwrite: input?.overwrite !== false
   })
 
+  const lastModified = normalizeText(input?.lastModified).trim()
+  if (lastModified) {
+    await client.customRequest(remoteFilePath, {
+      method: 'PROPPATCH',
+      headers: { 'Content-Type': 'application/xml' },
+      data: `<?xml version="1.0"?>
+<d:propertyupdate xmlns:d="DAV:">
+  <d:set>
+    <d:prop>
+      <lastmodified xmlns="DAV:">${lastModified}</lastmodified>
+    </d:prop>
+  </d:set>
+</d:propertyupdate>`
+    })
+  }
+
   return {
     ok: true,
     path: remoteFilePath,
@@ -165,6 +181,34 @@ export async function readBackup(input = {}) {
     content: typeof content === 'string' ? content : normalizeText(content)
   }
 }
+
+export async function moveFile(input = {}) {
+  const { client, config } = createWebdavClient(input?.webdavConfig)
+  const fromFilename = normalizeFileName(input?.fromFilename || input?.filename)
+  const toFilename = normalizeFileName(input?.toFilename)
+  const fromPath = `${config.path}/${fromFilename}`
+  const toPath = `${config.path}/${toFilename}`
+
+  const exists = await client.exists(fromPath)
+  if (!exists) {
+    return {
+      ok: false,
+      reason: 'webdav_file_not_found',
+      filename: fromFilename
+    }
+  }
+
+  await client.moveFile(fromPath, toPath)
+
+  return {
+    ok: true,
+    fromFilename,
+    toFilename,
+    fromPath,
+    toPath
+  }
+}
+
 
 export async function deleteBackup(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig)

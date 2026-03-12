@@ -4,6 +4,7 @@ import Setting from './components/Setting.vue'
 import Providers from './components/Providers.vue'
 import Mcp from './components/Mcp.vue'
 import Skills from './components/Skills.vue'
+import Prompts from './components/Prompts.vue'
 
 const appWindowType = ref('main')
 const config = ref(null)
@@ -209,6 +210,10 @@ onBeforeUnmount(() => {
         <el-button :type="activePage === 'skills' ? 'primary' : 'default'" @click="activePage = 'skills'">
           技能
         </el-button>
+        <el-button :type="activePage === 'prompts' ? 'primary' : 'default'" @click="activePage = 'prompts'">
+          快捷助手
+        </el-button>
+
 
       </el-button-group>
     </section>
@@ -225,6 +230,8 @@ onBeforeUnmount(() => {
       <Providers v-else-if="activePage === 'providers'" />
       <Mcp v-else-if="activePage === 'mcp'" />
       <Skills v-else-if="activePage === 'skills'" />
+      <Prompts v-else-if="activePage === 'prompts'" />
+
 
     </template>
   </div>

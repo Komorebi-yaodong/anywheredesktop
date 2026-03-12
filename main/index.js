@@ -21,6 +21,7 @@ import * as dbApi from './core/db.js'
 import * as dataApi from './core/data.js'
 import * as fileApi from './core/file.js'
 import * as chatApi from './core/chat.js'
+import * as mcpApi from './core/mcp.js'
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.anywhere.desktop')
@@ -42,6 +43,7 @@ app.whenReady().then(() => {
     dataApi,
     fileApi,
     chatApi,
+    mcpApi,
     minimizeWindow,
     maximizeOrRestoreWindow,
     closeWindow,

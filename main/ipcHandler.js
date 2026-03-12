@@ -28,6 +28,7 @@ export function registerIpcHandlers({
   dataApi,
   fileApi,
   chatApi,
+  mcpApi,
   minimizeWindow,
   maximizeOrRestoreWindow,
   closeWindow,
@@ -250,6 +251,78 @@ export function registerIpcHandlers({
     }
 
     return chatApi.createChatCompletion(normalizedParams)
+  })
+
+
+  handleInvoke('mcp:getToolCache', async () => {
+    const cache = await dataApi.getMcpToolCache()
+    return {
+      success: true,
+      cache
+    }
+  })
+
+  handleInvoke('mcp:saveToolCache', async (_event, serverId, tools = []) => {
+    return dataApi.saveMcpToolCache(serverId, tools)
+  })
+
+  handleInvoke('mcp:initializeClient', async (_event, activeServerConfigs = {}) => {
+    let cache = {}
+
+    try {
+      cache = await dataApi.getMcpToolCache()
+    } catch (error) {
+      console.error('[IPC] Failed to read MCP cache, fallback to empty cache:', error)
+    }
+
+    return mcpApi.initializeMcpClient(activeServerConfigs, cache, dataApi.saveMcpToolCache)
+  })
+
+  handleInvoke('mcp:testConnection', async (_event, serverConfig = {}) => {
+    const normalizedConfig = {
+      transport: serverConfig.type,
+      command: serverConfig.command,
+      args: serverConfig.args,
+      url: serverConfig.baseUrl,
+      env: serverConfig.env,
+      headers: serverConfig.headers,
+      type: serverConfig.type,
+      isPersistent: Boolean(serverConfig.isPersistent)
+    }
+
+    const rawTools = await mcpApi.connectAndFetchTools(serverConfig.id, normalizedConfig)
+    await dataApi.saveMcpToolCache(serverConfig.id, rawTools)
+
+    return {
+      success: true,
+      tools: rawTools
+    }
+  })
+
+  handleInvoke('mcp:testInvokeTool', async (_event, serverConfig = {}, toolName = '', args = {}) => {
+    const normalizedConfig = {
+      transport: serverConfig.type,
+      command: serverConfig.command,
+      args: serverConfig.args,
+      url: serverConfig.baseUrl,
+      env: serverConfig.env,
+      headers: serverConfig.headers,
+      type: serverConfig.type
+    }
+
+    const result = await mcpApi.connectAndInvokeTool(serverConfig.id, normalizedConfig, toolName, args)
+    return {
+      success: true,
+      result
+    }
+  })
+
+  handleInvoke('mcp:invokeTool', async (_event, toolName = '', toolArgs = {}, context = null) => {
+    return mcpApi.invokeMcpTool(toolName, toolArgs, null, context)
+  })
+
+  handleInvoke('mcp:closeClient', async () => {
+    return mcpApi.closeMcpClient()
   })
 
   handleInvoke('file:handleFilePath', async (_event, filePath = '') => {

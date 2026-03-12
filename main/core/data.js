@@ -1,4 +1,5 @@
 import { safeClone } from '../dataConverter.js'
+import { getBuiltinServers as getBuiltinMcpServers } from './mcp_builtin.js'
 import {
   get as dbGet,
   put as dbPut,
@@ -173,7 +174,7 @@ function splitConfigForStorage(fullConfig) {
 }
 
 function getBuiltinServers() {
-  return {}
+  return getBuiltinMcpServers()
 }
 
 function checkConfig(inputConfig) {
@@ -567,6 +568,49 @@ export async function exportMemoryData() {
     .filter((doc) => doc && typeof doc._id === 'string' && doc._id.startsWith('anywhere_mem_'))
     .map((doc) => deepClone(doc))
 }
+
+export async function getMcpToolCache() {
+  const result = await dbGet('mcp_tools_cache')
+  if (!result?.ok || !result.doc) {
+    return {}
+  }
+
+  const cache = result.doc?.data
+  if (!cache || typeof cache !== 'object') {
+    return {}
+  }
+
+  return deepClone(cache)
+}
+
+export async function saveMcpToolCache(serverId, tools = []) {
+  if (typeof serverId !== 'string' || !serverId.trim()) {
+    throw new Error('[data] serverId is required')
+  }
+
+  const normalizedId = serverId.trim()
+  const currentCache = await getMcpToolCache()
+  currentCache[normalizedId] = Array.isArray(tools) ? deepClone(tools) : []
+
+  const existing = await dbGet('mcp_tools_cache')
+  const doc = {
+    _id: 'mcp_tools_cache',
+    data: currentCache
+  }
+
+  if (existing?.ok && existing.doc?._rev) {
+    doc._rev = existing.doc._rev
+  }
+
+  const putResult = await dbPut(doc)
+
+  return {
+    success: Boolean(putResult?.ok),
+    id: normalizedId,
+    tools: currentCache[normalizedId]
+  }
+}
+
 
 export async function importMemoryData(memories) {
   if (!Array.isArray(memories) || memories.length === 0) {

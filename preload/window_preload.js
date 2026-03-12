@@ -68,6 +68,19 @@ const api = {
 
   createChatCompletion: (params = {}) =>
     electronAPI.ipcRenderer.invoke('chat:createCompletion', params),
+
+  getMcpToolCache: () => electronAPI.ipcRenderer.invoke('mcp:getToolCache'),
+  saveMcpToolCache: (serverId, tools = []) =>
+    electronAPI.ipcRenderer.invoke('mcp:saveToolCache', serverId, tools),
+  initializeMcpClient: (activeServerConfigs = {}) =>
+    electronAPI.ipcRenderer.invoke('mcp:initializeClient', activeServerConfigs),
+  testMcpConnection: (serverConfig = {}) =>
+    electronAPI.ipcRenderer.invoke('mcp:testConnection', serverConfig),
+  testInvokeMcpTool: (serverConfig = {}, toolName = '', args = {}) =>
+    electronAPI.ipcRenderer.invoke('mcp:testInvokeTool', serverConfig, toolName, args),
+  invokeMcpTool: (toolName = '', toolArgs = {}, context = null) =>
+    electronAPI.ipcRenderer.invoke('mcp:invokeTool', toolName, toolArgs, context),
+  closeMcpClient: () => electronAPI.ipcRenderer.invoke('mcp:closeClient'),
   handleFilePath: (filePath) => electronAPI.ipcRenderer.invoke('file:handleFilePath', filePath),
   sendfileDirect: (filePathList) => electronAPI.ipcRenderer.invoke('file:sendfileDirect', filePathList),
   saveFile: (options) => electronAPI.ipcRenderer.invoke('file:saveFile', options),

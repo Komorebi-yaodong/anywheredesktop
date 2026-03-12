@@ -7,7 +7,11 @@ import {
   hideMainWindow,
   listWindows,
   getWindowByRef,
-  getWindowRefByWebContentsId
+  getWindowRefByWebContentsId,
+  minimizeWindow,
+  maximizeOrRestoreWindow,
+  closeWindow,
+  toggleAlwaysOnTop
 } from './windowManager.js'
 import { dispatchWindowEvent } from './eventBus.js'
 
@@ -35,7 +39,11 @@ app.whenReady().then(() => {
     systemApi,
     dbApi,
     dataApi,
-    fileApi
+    fileApi,
+    minimizeWindow,
+    maximizeOrRestoreWindow,
+    closeWindow,
+    toggleAlwaysOnTop
   })
   openWindow('main')
 

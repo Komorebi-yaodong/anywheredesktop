@@ -26,7 +26,11 @@ export function registerIpcHandlers({
   systemApi,
   dbApi,
   dataApi,
-  fileApi
+  fileApi,
+  minimizeWindow,
+  maximizeOrRestoreWindow,
+  closeWindow,
+  toggleAlwaysOnTop
 }) {
   ipcMain.on('ping', () => console.log('pong'))
 
@@ -63,6 +67,60 @@ export function registerIpcHandlers({
       },
       { getWindowByRef, listWindows }
     )
+  })
+
+
+  handleInvoke('window:minimize', async (event, input = {}) => {
+    const fallbackRef = getWindowRefByWebContentsId(event.sender.id)
+    const windowRef =
+      typeof input === 'string'
+        ? input
+        : typeof input?.windowRef === 'string' && input.windowRef
+          ? input.windowRef
+          : fallbackRef
+
+    return minimizeWindow(windowRef)
+  })
+
+  handleInvoke('window:maximizeOrRestore', async (event, input = {}) => {
+    const fallbackRef = getWindowRefByWebContentsId(event.sender.id)
+    const windowRef =
+      typeof input === 'string'
+        ? input
+        : typeof input?.windowRef === 'string' && input.windowRef
+          ? input.windowRef
+          : fallbackRef
+
+    return maximizeOrRestoreWindow(windowRef)
+  })
+
+  handleInvoke('window:close', async (event, input = {}) => {
+    const fallbackRef = getWindowRefByWebContentsId(event.sender.id)
+    const windowRef =
+      typeof input === 'string'
+        ? input
+        : typeof input?.windowRef === 'string' && input.windowRef
+          ? input.windowRef
+          : fallbackRef
+
+    return closeWindow(windowRef)
+  })
+
+  handleInvoke('window:toggleAlwaysOnTop', async (event, input = {}) => {
+    const fallbackRef = getWindowRefByWebContentsId(event.sender.id)
+    const windowRef =
+      typeof input === 'string'
+        ? input
+        : typeof input?.windowRef === 'string' && input.windowRef
+          ? input.windowRef
+          : fallbackRef
+
+    const nextState =
+      typeof input === 'object' && input !== null && typeof input.alwaysOnTop === 'boolean'
+        ? input.alwaysOnTop
+        : undefined
+
+    return toggleAlwaysOnTop(windowRef, nextState)
   })
 
 

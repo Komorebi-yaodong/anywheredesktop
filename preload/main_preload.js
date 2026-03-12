@@ -81,7 +81,43 @@ const api = {
   isFileTypeSupported: (fileName) => electronAPI.ipcRenderer.invoke('file:isFileTypeSupported', fileName),
   parseFileObject: (fileObj) => electronAPI.ipcRenderer.invoke('file:parseFileObject', fileObj),
   copyLocalPath: (srcPath, destPath) =>
-    electronAPI.ipcRenderer.invoke('file:copyLocalPath', srcPath, destPath)
+    electronAPI.ipcRenderer.invoke('file:copyLocalPath', srcPath, destPath),
+  minimizeWindow: (windowRef = '') =>
+    electronAPI.ipcRenderer.invoke('window:minimize', { windowRef }),
+  maximizeOrRestoreWindow: (windowRef = '') =>
+    electronAPI.ipcRenderer.invoke('window:maximizeOrRestore', { windowRef }),
+  closeWindow: (windowRef = '') => electronAPI.ipcRenderer.invoke('window:close', { windowRef }),
+  toggleAlwaysOnTop: (payload = {}) => {
+    const input =
+      typeof payload === 'boolean'
+        ? { alwaysOnTop: payload }
+        : payload && typeof payload === 'object'
+          ? payload
+          : {}
+
+    return electronAPI.ipcRenderer.invoke('window:toggleAlwaysOnTop', input)
+  },
+  windowControl: (action, windowRef = '') => {
+    const actionMap = {
+      'minimize-window': 'window:minimize',
+      minimize: 'window:minimize',
+      'maximize-window': 'window:maximizeOrRestore',
+      maximize: 'window:maximizeOrRestore',
+      'close-window': 'window:close',
+      close: 'window:close'
+    }
+
+    const channel = actionMap[action]
+    if (!channel) {
+      return Promise.resolve({ ok: false, error: 'unsupported_window_action', action })
+    }
+
+    return electronAPI.ipcRenderer.invoke(channel, { windowRef })
+  },
+  onAlwaysOnTopChanged: (callback) => {
+    if (typeof callback !== 'function') return
+    electronAPI.ipcRenderer.on('window:alwaysOnTopChanged', (_event, payload) => callback(payload))
+  }
 }
 
 if (process.contextIsolated) {

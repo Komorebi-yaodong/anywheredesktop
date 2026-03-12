@@ -240,6 +240,124 @@ export function getWindowByRef(ref) {
   return getWindowById(ref)
 }
 
+function resolveActionWindow(windowRef = '') {
+  const targetRef = typeof windowRef === 'string' ? windowRef.trim() : ''
+  if (!targetRef) {
+    return { ok: false, windowRef: null, win: null, error: 'window_ref_required' }
+  }
+
+  const win = getWindowByRef(targetRef)
+  if (!win || win.isDestroyed()) {
+    return { ok: false, windowRef: targetRef, win: null, error: 'window_not_found' }
+  }
+
+  return { ok: true, windowRef: targetRef, win }
+}
+
+export function minimizeWindow(windowRef = '') {
+  const resolved = resolveActionWindow(windowRef)
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      error: resolved.error,
+      windowRef: resolved.windowRef
+    }
+  }
+
+  const { win } = resolved
+  if (!win.isMinimized()) {
+    win.minimize()
+  }
+
+  return {
+    ok: true,
+    action: 'minimize',
+    windowRef: resolved.windowRef,
+    minimized: win.isMinimized()
+  }
+}
+
+export function maximizeOrRestoreWindow(windowRef = '') {
+  const resolved = resolveActionWindow(windowRef)
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      error: resolved.error,
+      windowRef: resolved.windowRef
+    }
+  }
+
+  const { win } = resolved
+  const wasMaximized = win.isMaximized()
+
+  if (wasMaximized) {
+    win.unmaximize()
+  } else {
+    win.maximize()
+  }
+
+  return {
+    ok: true,
+    action: wasMaximized ? 'restore' : 'maximize',
+    windowRef: resolved.windowRef,
+    maximized: win.isMaximized()
+  }
+}
+
+export function closeWindow(windowRef = '') {
+  const resolved = resolveActionWindow(windowRef)
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      error: resolved.error,
+      windowRef: resolved.windowRef
+    }
+  }
+
+  const { win } = resolved
+  win.close()
+
+  return {
+    ok: true,
+    action: 'close',
+    windowRef: resolved.windowRef
+  }
+}
+
+export function toggleAlwaysOnTop(windowRef = '', nextState) {
+  const resolved = resolveActionWindow(windowRef)
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      error: resolved.error,
+      windowRef: resolved.windowRef
+    }
+  }
+
+  const { win } = resolved
+  const willSetAlwaysOnTop =
+    typeof nextState === 'boolean' ? nextState : !Boolean(win.isAlwaysOnTop())
+
+  win.setAlwaysOnTop(willSetAlwaysOnTop)
+
+  try {
+    win.webContents.send('window:alwaysOnTopChanged', {
+      windowRef: resolved.windowRef,
+      alwaysOnTop: willSetAlwaysOnTop
+    })
+  } catch {
+    // ignore notify error during teardown
+  }
+
+  return {
+    ok: true,
+    action: 'toggle-always-on-top',
+    windowRef: resolved.windowRef,
+    alwaysOnTop: willSetAlwaysOnTop
+  }
+}
+
+
 export function listWindows(type = '') {
   const targetType = typeof type === 'string' ? type : ''
   const items = []

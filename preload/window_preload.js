@@ -65,6 +65,9 @@ const api = {
     electronAPI.ipcRenderer.invoke('data:updateConfigWithoutFeatures', nextConfig),
   exportMemoryData: () => electronAPI.ipcRenderer.invoke('data:exportMemoryData'),
   importMemoryData: (memories) => electronAPI.ipcRenderer.invoke('data:importMemoryData', memories),
+
+  createChatCompletion: (params = {}) =>
+    electronAPI.ipcRenderer.invoke('chat:createCompletion', params),
   handleFilePath: (filePath) => electronAPI.ipcRenderer.invoke('file:handleFilePath', filePath),
   sendfileDirect: (filePathList) => electronAPI.ipcRenderer.invoke('file:sendfileDirect', filePathList),
   saveFile: (options) => electronAPI.ipcRenderer.invoke('file:saveFile', options),

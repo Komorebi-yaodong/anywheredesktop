@@ -27,6 +27,7 @@ export function registerIpcHandlers({
   dbApi,
   dataApi,
   fileApi,
+  chatApi,
   minimizeWindow,
   maximizeOrRestoreWindow,
   closeWindow,
@@ -238,6 +239,17 @@ export function registerIpcHandlers({
 
   handleInvoke('data:importMemoryData', async (_event, memories = []) => {
     return dataApi.importMemoryData(memories)
+  })
+
+
+  handleInvoke('chat:createCompletion', async (_event, params = {}) => {
+    const normalizedParams = {
+      ...params,
+      // 先走非流式最小闭环，避免将 Stream 对象跨 IPC 传输
+      stream: params?.stream === undefined ? false : Boolean(params.stream)
+    }
+
+    return chatApi.createChatCompletion(normalizedParams)
   })
 
   handleInvoke('file:handleFilePath', async (_event, filePath = '') => {

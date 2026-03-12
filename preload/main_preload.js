@@ -5,6 +5,12 @@ const defaultWindowType = 'main'
 let windowType = defaultWindowType
 let windowSenderId = 'main'
 
+
+function toPlainPayload(value) {
+  if (value === undefined) return undefined
+  return JSON.parse(JSON.stringify(value))
+}
+
 electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
   if (typeof data.windowType === 'string' && data.windowType) {
     windowType = data.windowType
@@ -79,15 +85,25 @@ const api = {
 
   getMcpToolCache: () => electronAPI.ipcRenderer.invoke('mcp:getToolCache'),
   saveMcpToolCache: (serverId, tools = []) =>
-    electronAPI.ipcRenderer.invoke('mcp:saveToolCache', serverId, tools),
+    electronAPI.ipcRenderer.invoke('mcp:saveToolCache', serverId, toPlainPayload(tools) || []),
   initializeMcpClient: (activeServerConfigs = {}) =>
-    electronAPI.ipcRenderer.invoke('mcp:initializeClient', activeServerConfigs),
+    electronAPI.ipcRenderer.invoke('mcp:initializeClient', toPlainPayload(activeServerConfigs) || {}),
   testMcpConnection: (serverConfig = {}) =>
-    electronAPI.ipcRenderer.invoke('mcp:testConnection', serverConfig),
+    electronAPI.ipcRenderer.invoke('mcp:testConnection', toPlainPayload(serverConfig) || {}),
   testInvokeMcpTool: (serverConfig = {}, toolName = '', args = {}) =>
-    electronAPI.ipcRenderer.invoke('mcp:testInvokeTool', serverConfig, toolName, args),
+    electronAPI.ipcRenderer.invoke(
+      'mcp:testInvokeTool',
+      toPlainPayload(serverConfig) || {},
+      toolName,
+      toPlainPayload(args) || {}
+    ),
   invokeMcpTool: (toolName = '', toolArgs = {}, context = null) =>
-    electronAPI.ipcRenderer.invoke('mcp:invokeTool', toolName, toolArgs, context),
+    electronAPI.ipcRenderer.invoke(
+      'mcp:invokeTool',
+      toolName,
+      toPlainPayload(toolArgs) || {},
+      toPlainPayload(context)
+    ),
   closeMcpClient: () => electronAPI.ipcRenderer.invoke('mcp:closeClient'),
 
   listSkills: (skillRootPath = '') => electronAPI.ipcRenderer.invoke('skill:list', skillRootPath),

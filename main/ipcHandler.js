@@ -24,7 +24,9 @@ export function registerIpcHandlers({
   getWindowRefByWebContentsId,
   dispatchWindowEvent,
   systemApi,
-  dbApi
+  dbApi,
+  dataApi,
+  fileApi
 }) {
   ipcMain.on('ping', () => console.log('pong'))
 
@@ -153,5 +155,82 @@ export function registerIpcHandlers({
 
   handleInvoke('dbStorage:listKeys', async () => {
     return dbApi.dbStorageListKeys()
+  })
+
+
+  handleInvoke('data:getConfig', async () => {
+    return dataApi.getConfig()
+  })
+
+  handleInvoke('data:saveSetting', async (_event, keyPath, value) => {
+    return dataApi.saveSetting(keyPath, value)
+  })
+
+  handleInvoke('data:updateConfig', async (_event, nextConfig = {}) => {
+    return dataApi.updateConfig(nextConfig)
+  })
+
+  handleInvoke('data:updateConfigWithoutFeatures', async (_event, nextConfig = {}) => {
+    return dataApi.updateConfigWithoutFeatures(nextConfig)
+  })
+
+  handleInvoke('data:exportMemoryData', async () => {
+    return dataApi.exportMemoryData()
+  })
+
+  handleInvoke('data:importMemoryData', async (_event, memories = []) => {
+    return dataApi.importMemoryData(memories)
+  })
+
+  handleInvoke('file:handleFilePath', async (_event, filePath = '') => {
+    return fileApi.handleFilePath(filePath)
+  })
+
+  handleInvoke('file:sendfileDirect', async (_event, filePathList = []) => {
+    return fileApi.sendfileDirect(filePathList)
+  })
+
+  handleInvoke('file:saveFile', async (_event, options = {}) => {
+    return fileApi.saveFile(options)
+  })
+
+  handleInvoke('file:selectDirectory', async () => {
+    return fileApi.selectDirectory()
+  })
+
+  handleInvoke('file:listJsonFiles', async (_event, dirPath = '') => {
+    return fileApi.listJsonFiles(dirPath)
+  })
+
+  handleInvoke('file:readLocalFile', async (_event, filePath = '', options = {}) => {
+    return fileApi.readLocalFile(filePath, options)
+  })
+
+  handleInvoke('file:renameLocalFile', async (_event, oldPath = '', newPath = '') => {
+    return fileApi.renameLocalFile(oldPath, newPath)
+  })
+
+  handleInvoke('file:deleteLocalFile', async (_event, filePath = '') => {
+    return fileApi.deleteLocalFile(filePath)
+  })
+
+  handleInvoke('file:writeLocalFile', async (_event, filePath = '', content = '', options = {}) => {
+    return fileApi.writeLocalFile(filePath, content, options)
+  })
+
+  handleInvoke('file:setFileMtime', async (_event, filePath = '', mtime) => {
+    return fileApi.setFileMtime(filePath, mtime)
+  })
+
+  handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
+    return fileApi.isFileTypeSupported(fileName)
+  })
+
+  handleInvoke('file:parseFileObject', async (_event, fileObj = {}) => {
+    return fileApi.parseFileObject(fileObj)
+  })
+
+  handleInvoke('file:copyLocalPath', async (_event, srcPath = '', destPath = '') => {
+    return fileApi.copyLocalPath(srcPath, destPath)
   })
 }

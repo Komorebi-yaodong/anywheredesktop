@@ -57,7 +57,31 @@ const api = {
   dbStorageGetItem: (key, fallback = null) =>
     electronAPI.ipcRenderer.invoke('dbStorage:getItem', key, fallback),
   dbStorageRemoveItem: (key) => electronAPI.ipcRenderer.invoke('dbStorage:removeItem', key),
-  dbStorageListKeys: () => electronAPI.ipcRenderer.invoke('dbStorage:listKeys')
+  dbStorageListKeys: () => electronAPI.ipcRenderer.invoke('dbStorage:listKeys'),
+  getConfig: () => electronAPI.ipcRenderer.invoke('data:getConfig'),
+  saveSetting: (keyPath, value) => electronAPI.ipcRenderer.invoke('data:saveSetting', keyPath, value),
+  updateConfig: (nextConfig) => electronAPI.ipcRenderer.invoke('data:updateConfig', nextConfig),
+  updateConfigWithoutFeatures: (nextConfig) =>
+    electronAPI.ipcRenderer.invoke('data:updateConfigWithoutFeatures', nextConfig),
+  exportMemoryData: () => electronAPI.ipcRenderer.invoke('data:exportMemoryData'),
+  importMemoryData: (memories) => electronAPI.ipcRenderer.invoke('data:importMemoryData', memories),
+  handleFilePath: (filePath) => electronAPI.ipcRenderer.invoke('file:handleFilePath', filePath),
+  sendfileDirect: (filePathList) => electronAPI.ipcRenderer.invoke('file:sendfileDirect', filePathList),
+  saveFile: (options) => electronAPI.ipcRenderer.invoke('file:saveFile', options),
+  selectDirectory: () => electronAPI.ipcRenderer.invoke('file:selectDirectory'),
+  listJsonFiles: (dirPath) => electronAPI.ipcRenderer.invoke('file:listJsonFiles', dirPath),
+  readLocalFile: (filePath, options = {}) =>
+    electronAPI.ipcRenderer.invoke('file:readLocalFile', filePath, options),
+  renameLocalFile: (oldPath, newPath) =>
+    electronAPI.ipcRenderer.invoke('file:renameLocalFile', oldPath, newPath),
+  deleteLocalFile: (filePath) => electronAPI.ipcRenderer.invoke('file:deleteLocalFile', filePath),
+  writeLocalFile: (filePath, content, options = {}) =>
+    electronAPI.ipcRenderer.invoke('file:writeLocalFile', filePath, content, options),
+  setFileMtime: (filePath, mtime) => electronAPI.ipcRenderer.invoke('file:setFileMtime', filePath, mtime),
+  isFileTypeSupported: (fileName) => electronAPI.ipcRenderer.invoke('file:isFileTypeSupported', fileName),
+  parseFileObject: (fileObj) => electronAPI.ipcRenderer.invoke('file:parseFileObject', fileObj),
+  copyLocalPath: (srcPath, destPath) =>
+    electronAPI.ipcRenderer.invoke('file:copyLocalPath', srcPath, destPath)
 }
 
 if (process.contextIsolated) {

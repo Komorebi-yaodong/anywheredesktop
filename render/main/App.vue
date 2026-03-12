@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const initialContext = window.api?.getWindowContext ? window.api.getWindowContext() : {}
 const appWindowType = ref(initialContext.appWindowType || 'main')
@@ -17,6 +17,51 @@ const localChatPath = ref('')
 
 const memoryPayload = ref('[]')
 const operationLog = ref([])
+
+let systemThemeMediaQuery = null
+let removeSystemThemeListener = null
+
+function applyThemeClass(targetMode = themeMode.value, targetDark = isDarkMode.value) {
+  const html = document.documentElement
+  const systemPrefersDark = systemThemeMediaQuery?.matches ?? false
+
+  const shouldUseDark = targetMode === 'dark' || (targetMode === 'system' && systemPrefersDark) || targetDark
+
+  if (shouldUseDark) {
+    html.classList.add('dark')
+  } else {
+    html.classList.remove('dark')
+  }
+}
+
+function bindSystemThemeListener() {
+  if (typeof window?.matchMedia !== 'function') return
+
+  systemThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+
+  const handleSystemThemeChange = (event) => {
+    if (themeMode.value === 'system') {
+      isDarkMode.value = Boolean(event?.matches)
+      applyThemeClass('system', isDarkMode.value)
+    }
+  }
+
+  if (typeof systemThemeMediaQuery.addEventListener === 'function') {
+    systemThemeMediaQuery.addEventListener('change', handleSystemThemeChange)
+    removeSystemThemeListener = () => {
+      systemThemeMediaQuery?.removeEventListener('change', handleSystemThemeChange)
+    }
+    return
+  }
+
+  if (typeof systemThemeMediaQuery.addListener === 'function') {
+    systemThemeMediaQuery.addListener(handleSystemThemeChange)
+    removeSystemThemeListener = () => {
+      systemThemeMediaQuery?.removeListener(handleSystemThemeChange)
+    }
+  }
+}
+
 
 function appendLog(message, payload = null) {
   const timestamp = new Date().toLocaleTimeString()
@@ -178,8 +223,25 @@ if (window.api?.onWindowInit) {
   })
 }
 
+watch(
+  [themeMode, isDarkMode],
+  ([nextMode, nextDark]) => {
+    applyThemeClass(nextMode, nextDark)
+  },
+  { immediate: true }
+)
+
+
 onMounted(async () => {
+  bindSystemThemeListener()
   await loadConfig()
+  applyThemeClass()
+})
+
+onBeforeUnmount(() => {
+  if (typeof removeSystemThemeListener === 'function') {
+    removeSystemThemeListener()
+  }
 })
 </script>
 

@@ -10,6 +10,17 @@ const openWindow = async (type) => {
     console.error('[render:window] openWindow failed', error)
   }
 }
+
+
+const showMainWindow = async () => {
+  try {
+    if (window.api?.showMainWindow) {
+      await window.api.showMainWindow()
+    }
+  } catch (error) {
+    console.error('[render:window] showMainWindow failed', error)
+  }
+}
 </script>
 
 <template>
@@ -18,6 +29,8 @@ const openWindow = async (type) => {
     <p>当前窗口：{{ appWindowType }}</p>
     <div class="actions">
       <button @click="openWindow('main')">打开主窗口</button>
+
+      <button @click="showMainWindow">显示主窗口</button>
       <button @click="openWindow('fast')">打开快捷窗口</button>
     </div>
   </div>

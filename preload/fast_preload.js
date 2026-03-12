@@ -3,7 +3,9 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 const api = {
   appWindowType: 'fast_window',
-  openWindow: (type) => electronAPI.ipcRenderer.invoke('window:open', type)
+  openWindow: (type) => electronAPI.ipcRenderer.invoke('window:open', type),
+  showMainWindow: () => electronAPI.ipcRenderer.invoke('window:showMain'),
+  hideMainWindow: () => electronAPI.ipcRenderer.invoke('window:hideMain')
 }
 
 if (process.contextIsolated) {

@@ -83,12 +83,35 @@ function normalizeWebdavLastmod(item = {}) {
     item.mtime,
     item.updatedAt,
     item.modified,
+    item.getlastmodified,
+    item.props?.getlastmodified,
+    item.data?.lastmod,
+    item.data?.lastModified,
     item.etag && item.etag.mtime
   ]
 
   for (const candidate of candidates) {
+    if (candidate == null || candidate === '') continue
+
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0) {
+      const numericDate = new Date(candidate < 1e12 ? candidate * 1000 : candidate)
+      if (!Number.isNaN(numericDate.getTime()) && numericDate.getTime() > 0) {
+        return numericDate.toISOString()
+      }
+    }
+
     const value = normalizeText(candidate).trim()
     if (!value) continue
+
+    if (/^\d+$/.test(value)) {
+      const numericValue = Number(value)
+      if (Number.isFinite(numericValue) && numericValue > 0) {
+        const numericDate = new Date(value.length <= 10 ? numericValue * 1000 : numericValue)
+        if (!Number.isNaN(numericDate.getTime()) && numericDate.getTime() > 0) {
+          return numericDate.toISOString()
+        }
+      }
+    }
 
     const date = new Date(value)
     if (!Number.isNaN(date.getTime()) && date.getTime() > 0) {
@@ -126,7 +149,8 @@ export async function listBackups(input = {}) {
   }
 
   const contents = await client.getDirectoryContents(remoteDir, { details: true })
-  const files = normalizeDirectoryContents(contents)
+  const normalizedContents = normalizeDirectoryContents(contents)
+  const files = normalizedContents
     .filter((item) => item?.type === 'file')
     .map(toSerializableFileInfo)
     .filter((item) => item.basename.toLowerCase().endsWith('.json'))

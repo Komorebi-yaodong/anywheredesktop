@@ -61,11 +61,16 @@ export function isFileLike(value) {
   if (!value || typeof value !== 'object') return false
   if (value.__type === 'File') return true
 
-  const filePath = getFilePath(value)
-  if (filePath) return true
-
-  if (typeof value.name === 'string' && typeof value.size === 'number') return true
+  if (typeof value.arrayBuffer === 'function') return true
+  if (typeof value.base64 === 'string' && value.base64.trim()) return true
+  if (typeof value.dataUrl === 'string' && value.dataUrl.startsWith('data:')) return true
   if (typeof value.url === 'string' && value.url.startsWith('data:')) return true
+
+  if (Buffer.isBuffer(value.buffer)) return true
+
+  if (value.buffer && typeof value.buffer === 'object' && Array.isArray(value.buffer.data)) {
+    return true
+  }
 
   return false
 }

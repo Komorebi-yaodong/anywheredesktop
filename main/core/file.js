@@ -478,9 +478,11 @@ export async function listJsonFiles(dirPath) {
     })
   )
 
-  return fileDetails
+  const normalizedDetails = fileDetails
     .filter(Boolean)
     .sort((a, b) => new Date(b.lastmod).getTime() - new Date(a.lastmod).getTime())
+
+  return normalizedDetails
 }
 
 export async function readLocalFile(filePath, options = {}) {

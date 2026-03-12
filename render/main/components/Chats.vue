@@ -97,11 +97,37 @@ const paginatedFiles = computed(() => {
 });
 
 // --- Helper Functions ---
+const normalizeDateValue = (value) => {
+    if (value == null || value === '') return '';
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) || date.getTime() <= 0 ? '' : date.toISOString();
+    }
+
+    const raw = String(value).trim();
+    if (!raw) return '';
+
+    if (/^\d+$/.test(raw)) {
+        const numericValue = Number(raw);
+        if (Number.isFinite(numericValue) && numericValue > 0) {
+            const normalizedNumber = raw.length <= 10 ? numericValue * 1000 : numericValue;
+            const numericDate = new Date(normalizedNumber);
+            if (!Number.isNaN(numericDate.getTime()) && numericDate.getTime() > 0) {
+                return numericDate.toISOString();
+            }
+        }
+    }
+
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime()) || date.getTime() <= 0) return '';
+    return date.toISOString();
+};
+
 const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    const date = new Date(dateString);
-    if (Number.isNaN(date.getTime()) || date.getTime() <= 0) return 'N/A';
-    return date.toLocaleString();
+    const normalized = normalizeDateValue(dateString);
+    if (!normalized) return 'N/A';
+    return new Date(normalized).toLocaleString();
 };
 const formatBytes = (bytes, decimals = 2) => {
     if (!bytes || bytes === 0) return '0 Bytes';
@@ -111,6 +137,7 @@ const formatBytes = (bytes, decimals = 2) => {
 };
 
 const getSafeString = (value) => (typeof value === 'string' ? value : '');
+
 
 const resolveFileBasename = (file) => {
     if (!file || typeof file !== 'object') return '';
@@ -147,7 +174,7 @@ const normalizeChatFile = (file, source = 'local') => {
         ...file,
         basename,
         size: Number.isFinite(size) ? size : 0,
-        lastmod: typeof file?.lastmod === 'string' && file.lastmod ? file.lastmod : '',
+        lastmod: normalizeDateValue(file?.lastmod ?? file?.lastModified ?? file?.mtime ?? file?.updatedAt ?? ''),
         type: typeof file?.type === 'string' && file.type ? file.type : 'file'
     };
 
@@ -178,9 +205,9 @@ const ensureWebdavResult = (result, fallbackReason = 'webdav_operation_failed') 
 
 
 const toUtcString = (value) => {
-    if (!value) return '';
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? '' : date.toUTCString();
+    const normalized = normalizeDateValue(value);
+    if (!normalized) return '';
+    return new Date(normalized).toUTCString();
 };
 
 
@@ -405,7 +432,8 @@ async function fetchLocalFiles(silent = false) {
     try {
         const result = await window.api.listJsonFiles(localChatPath.value);
         const files = Array.isArray(result) ? result : [];
-        localChatFiles.value = files.map((item) => normalizeChatFile(item, 'local'));
+        const normalizedFiles = files.map((item) => normalizeChatFile(item, 'local'));
+        localChatFiles.value = normalizedFiles;
     } catch (error) {
         ElMessage.error(`读取本地文件列表失败: ${error.message}`);
         localChatFiles.value = [];
@@ -429,10 +457,11 @@ async function fetchCloudFiles(silent = false) {
         }
 
         const files = Array.isArray(result.files) ? result.files : [];
-        cloudChatFiles.value = files
+        const normalizedFiles = files
             .map((item) => normalizeChatFile(item, 'cloud'))
             .filter((item) => item.type === 'file' && item.basename && item.basename.endsWith('.json'))
             .sort((a, b) => new Date(b.lastmod).getTime() - new Date(a.lastmod).getTime());
+        cloudChatFiles.value = normalizedFiles;
     } catch (error) {
         ElMessage.error(`${t('chats.alerts.fetchFailed')}: ${error.message}`);
         cloudChatFiles.value = [];

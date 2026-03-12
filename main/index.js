@@ -20,6 +20,7 @@ import * as systemApi from './core/system.js'
 import * as dbApi from './core/db.js'
 import * as dataApi from './core/data.js'
 import * as fileApi from './core/file.js'
+import * as webdavApi from './core/webdav.js'
 import * as chatApi from './core/chat.js'
 import * as mcpApi from './core/mcp.js'
 import * as skillApi from './core/skill.js'
@@ -43,6 +44,7 @@ app.whenReady().then(() => {
     dbApi,
     dataApi,
     fileApi,
+    webdavApi,
     chatApi,
     mcpApi,
     skillApi,

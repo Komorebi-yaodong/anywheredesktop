@@ -28,6 +28,7 @@ export function registerIpcHandlers({
   dbApi,
   dataApi,
   fileApi,
+  webdavApi,
   chatApi,
   mcpApi,
   skillApi,
@@ -463,5 +464,26 @@ export function registerIpcHandlers({
 
   handleInvoke('file:copyLocalPath', async (_event, srcPath = '', destPath = '') => {
     return fileApi.copyLocalPath(srcPath, destPath)
+  })
+
+
+  handleInvoke('webdav:listBackups', async (_event, input = {}) => {
+    return webdavApi.listBackups(input)
+  })
+
+  handleInvoke('webdav:writeBackup', async (_event, input = {}) => {
+    return webdavApi.writeBackup(input)
+  })
+
+  handleInvoke('webdav:readBackup', async (_event, input = {}) => {
+    return webdavApi.readBackup(input)
+  })
+
+  handleInvoke('webdav:deleteBackup', async (_event, input = {}) => {
+    return webdavApi.deleteBackup(input)
+  })
+
+  handleInvoke('webdav:deleteBackups', async (_event, input = {}) => {
+    return webdavApi.deleteBackups(input)
   })
 }

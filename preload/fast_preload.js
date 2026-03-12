@@ -121,6 +121,12 @@ const api = {
   parseFileObject: (fileObj) => electronAPI.ipcRenderer.invoke('file:parseFileObject', fileObj),
   copyLocalPath: (srcPath, destPath) =>
     electronAPI.ipcRenderer.invoke('file:copyLocalPath', srcPath, destPath),
+
+  listWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listBackups', input),
+  writeWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackup', input),
+  readWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:readBackup', input),
+  deleteWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteBackup', input),
+  deleteWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteBackups', input),
   minimizeWindow: (windowRef = '') =>
     electronAPI.ipcRenderer.invoke('window:minimize', { windowRef }),
   maximizeOrRestoreWindow: (windowRef = '') =>

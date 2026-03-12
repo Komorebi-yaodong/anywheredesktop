@@ -1,7 +1,6 @@
 <script setup>
 import { ref, onMounted, computed, inject, h, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { createClient } from "webdav/web";
 import { Upload, FolderOpened, Refresh, Delete as DeleteIcon, Download, Plus, ArrowRight, Check } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
 import draggable from 'vuedraggable'
@@ -97,6 +96,25 @@ const formatBytes = (bytes, decimals = 2) => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
+
+
+function getWebdavConfig() {
+  const webdav = currentConfig.value?.webdav || {}
+  return {
+    url: String(webdav.url || '').trim(),
+    username: String(webdav.username || ''),
+    password: String(webdav.password || ''),
+    path: String(webdav.path || '/anywhere').trim()
+  }
+}
+
+function buildWebdavInput(extra = {}) {
+  return {
+    webdavConfig: getWebdavConfig(),
+    ...extra
+  }
+}
+
 
 onMounted(() => {
   if (['ja', 'ru'].includes(locale.value)) {
@@ -358,7 +376,7 @@ const deleteVoice = (voiceToDelete) => {
 
 async function backupToWebdav() {
   if (!currentConfig.value) return;
-  const { url, username, password, path } = currentConfig.value.webdav;
+  const { url } = getWebdavConfig();
   if (!url) {
     ElMessage.error(t('setting.webdav.alerts.urlRequired'));
     return;
@@ -397,20 +415,13 @@ async function backupToWebdav() {
             ElMessage.error(t('setting.webdav.backup.emptyFilenameError'));
             return;
           }
-          const filename = finalBasename + '.json';
+
+          const filename = `${finalBasename}.json`;
 
           instance.confirmButtonLoading = true;
           ElMessage.info(t('setting.webdav.alerts.backupInProgress'));
 
           try {
-            const client = createClient(url, { username, password });
-            const remoteDir = path.endsWith('/') ? path.slice(0, -1) : path;
-            const remoteFilePath = `${remoteDir}/${filename}`;
-
-            if (!(await client.exists(remoteDir))) {
-              await client.createDirectory(remoteDir, { recursive: true });
-            }
-
             const configToBackup = JSON.parse(JSON.stringify(currentConfig.value));
             if (configToBackup.webdav && configToBackup.webdav.localChatPath) {
               delete configToBackup.webdav.localChatPath;
@@ -426,8 +437,18 @@ async function backupToWebdav() {
               }
             }
 
-            const jsonString = JSON.stringify(configToBackup, null, 2);
-            await client.putFileContents(remoteFilePath, jsonString, { overwrite: true });
+            const writeResult = await window.api?.writeWebdavBackup?.(
+              buildWebdavInput({
+                filename,
+                content: JSON.stringify(configToBackup, null, 2),
+                overwrite: true,
+                ensureDirectory: true
+              })
+            )
+
+            if (!writeResult || writeResult.ok === false) {
+              throw new Error(writeResult?.reason || writeResult?.error || 'webdav_write_failed')
+            }
 
             ElMessage.success(t('setting.webdav.alerts.backupSuccess'));
             done();
@@ -453,7 +474,7 @@ async function backupToWebdav() {
 
 async function openBackupManager() {
   if (!currentConfig.value) return;
-  const { url } = currentConfig.value.webdav;
+  const { url } = getWebdavConfig();
   if (!url) {
     ElMessage.error(t('setting.webdav.alerts.urlRequired'));
     return;
@@ -464,37 +485,24 @@ async function openBackupManager() {
 
 async function fetchBackupFiles() {
   isTableLoading.value = true;
-  const { url, username, password, path } = currentConfig.value.webdav;
-  try {
-    const client = createClient(url, { username, password });
-    const remoteDir = path.endsWith('/') ? path.slice(0, -1) : path;
 
-    if (!(await client.exists(remoteDir))) {
+  try {
+    const result = await window.api?.listWebdavBackups?.(buildWebdavInput())
+
+    if (!result || result.ok === false) {
+      throw new Error(result?.reason || result?.error || 'webdav_list_failed')
+    }
+
+    if (!result.exists) {
       backupFiles.value = [];
       ElMessage.warning(t('setting.webdav.manager.pathNotFound'));
       return;
     }
 
-    const response = await client.getDirectoryContents(remoteDir, { details: true });
-    const contents = response.data;
-
-    if (!Array.isArray(contents)) {
-      ElMessage.error(t('setting.webdav.manager.fetchFailed') + ': Invalid response structure from server');
-      backupFiles.value = [];
-      return;
-    }
-
-    backupFiles.value = contents
-      .filter(item => item.type === 'file' && item.basename.endsWith('.json'))
-      .sort((a, b) => new Date(b.lastmod) - new Date(a.lastmod));
-
+    backupFiles.value = Array.isArray(result.files) ? result.files : []
   } catch (error) {
     console.error("Failed to fetch backup files:", error);
-    let errorMessage = error.message;
-    if (error.response && error.response.statusText) {
-      errorMessage = `${error.response.status} ${error.response.statusText}`;
-    }
-    ElMessage.error(`${t('setting.webdav.manager.fetchFailed')}: ${errorMessage}`);
+    ElMessage.error(`${t('setting.webdav.manager.fetchFailed')}: ${error.message}`);
     backupFiles.value = [];
   } finally {
     isTableLoading.value = false;
@@ -518,13 +526,15 @@ async function restoreFromWebdav(file) {
     const currentLocalChatPath = currentConfig.value.webdav?.localChatPath;
     const currentSkillPath = currentConfig.value.skillPath;
 
-    const { url, username, password, path } = currentConfig.value.webdav;
-    const client = createClient(url, { username, password });
-    const remoteDir = path.endsWith('/') ? path.slice(0, -1) : path;
-    const remoteFilePath = `${remoteDir}/${file.basename}`;
+    const readResult = await window.api?.readWebdavBackup?.(
+      buildWebdavInput({ filename: file.basename })
+    )
 
-    const jsonString = await client.getFileContents(remoteFilePath, { format: "text" });
-    const importedData = JSON.parse(jsonString);
+    if (!readResult || readResult.ok === false) {
+      throw new Error(readResult?.reason || readResult?.error || 'webdav_read_failed')
+    }
+
+    const importedData = JSON.parse(readResult.content || '{}');
 
     if (typeof importedData !== 'object' || importedData === null) {
       throw new Error("Downloaded file is not a valid configuration object.");
@@ -574,12 +584,14 @@ async function deleteFile(file) {
       { type: 'warning' }
     );
 
-    const { url, username, password, path } = currentConfig.value.webdav;
-    const client = createClient(url, { username, password });
-    const remoteDir = path.endsWith('/') ? path.slice(0, -1) : path;
-    const remoteFilePath = `${remoteDir}/${file.basename}`;
+    const deleteResult = await window.api?.deleteWebdavBackup?.(
+      buildWebdavInput({ filename: file.basename })
+    )
 
-    await client.deleteFile(remoteFilePath);
+    if (!deleteResult || deleteResult.ok === false) {
+      throw new Error(deleteResult?.reason || deleteResult?.error || 'webdav_delete_failed')
+    }
+
     ElMessage.success(t('setting.webdav.manager.deleteSuccess'));
     await fetchBackupFiles();
   } catch (error) {
@@ -603,16 +615,25 @@ async function deleteSelectedFiles() {
       { type: 'warning' }
     );
 
-    const { url, username, password, path } = currentConfig.value.webdav;
-    const client = createClient(url, { username, password });
-    const remoteDir = path.endsWith('/') ? path.slice(0, -1) : path;
+    const filenames = selectedFiles.value
+      .map((item) => item?.basename)
+      .filter((name) => typeof name === 'string' && name.trim())
 
-    const deletePromises = selectedFiles.value.map(file =>
-      client.deleteFile(`${remoteDir}/${file.basename}`)
-    );
+    const deleteResult = await window.api?.deleteWebdavBackups?.(
+      buildWebdavInput({ filenames })
+    )
 
-    await Promise.all(deletePromises);
-    ElMessage.success(t('setting.webdav.manager.deleteSuccessMultiple'));
+    if (!deleteResult || deleteResult.ok === false) {
+      throw new Error(deleteResult?.reason || deleteResult?.error || 'webdav_delete_multiple_failed')
+    }
+
+    if (Array.isArray(deleteResult.failed) && deleteResult.failed.length > 0) {
+      const firstError = deleteResult.failed[0]
+      ElMessage.warning(`${t('setting.webdav.manager.deleteFailedMultiple')}: ${firstError?.message || 'unknown_error'}`)
+    } else {
+      ElMessage.success(t('setting.webdav.manager.deleteSuccessMultiple'));
+    }
+
     await fetchBackupFiles();
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') {

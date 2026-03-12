@@ -129,7 +129,8 @@ async function atomicSave(updateFunction) {
         const latestConfig = latestConfigData.config;
         if (!latestConfig.tasks) latestConfig.tasks = {};
         updateFunction(latestConfig);
-        await window.api.updateConfigWithoutFeatures({ config: latestConfig });
+        const configToSave = { config: JSON.parse(JSON.stringify(latestConfig)) };
+        await window.api.updateConfigWithoutFeatures(configToSave);
         currentConfig.value = latestConfig;
     } catch (error) {
         ElMessage.error(t('common.saveFailed'));

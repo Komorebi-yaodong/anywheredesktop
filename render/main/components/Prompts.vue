@@ -443,7 +443,7 @@ async function atomicSave(updateFunction, syncFeatures = false) {
 
     updateFunction(latestConfig);
 
-    const configToSave = { config: latestConfig };
+    const configToSave = { config: JSON.parse(JSON.stringify(latestConfig)) };
 
     if (syncFeatures) {
       await window.api.updateConfig(configToSave);

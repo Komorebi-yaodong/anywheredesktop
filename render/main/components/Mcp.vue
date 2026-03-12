@@ -160,7 +160,8 @@ async function atomicSave(updateFunction) {
         const latestConfigData = await window.api.getConfig();
         const latestConfig = latestConfigData.config;
         updateFunction(latestConfig);
-        await window.api.updateConfigWithoutFeatures({ config: latestConfig });
+        const configToSave = { config: JSON.parse(JSON.stringify(latestConfig)) };
+        await window.api.updateConfigWithoutFeatures(configToSave);
         currentConfig.value = latestConfig;
     } catch (error) {
         console.error("Atomic save failed:", error);

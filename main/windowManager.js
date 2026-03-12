@@ -68,12 +68,22 @@ function bindWindowRef(win, ref) {
   webContentsToWindowRef.set(win.webContents.id, ref)
 }
 
+function unbindWindowRefByWebContentsId(webContentsId) {
+  if (typeof webContentsId !== 'number') return
+  webContentsToWindowRef.delete(webContentsId)
+}
+
 function unbindWindowRef(win) {
   if (!win) return
-  const webContentsId = win.webContents?.id
-  if (typeof webContentsId !== 'number') return
 
-  webContentsToWindowRef.delete(webContentsId)
+  let webContentsId = null
+  try {
+    webContentsId = win.webContents?.id
+  } catch {
+    webContentsId = null
+  }
+
+  unbindWindowRefByWebContentsId(webContentsId)
 }
 
 
@@ -174,9 +184,10 @@ export function openWindow(type = 'main') {
     const win = createBrowserWindow(targetType, config, '', targetType)
     singletonStore.set(targetType, win)
     bindWindowRef(win, targetType)
+    const webContentsId = win.webContents?.id
 
     win.on('closed', () => {
-      unbindWindowRef(win)
+      unbindWindowRefByWebContentsId(webContentsId)
       singletonStore.delete(targetType)
     })
 
@@ -188,12 +199,13 @@ export function openWindow(type = 'main') {
 
   multiStore.set(id, win)
   bindWindowRef(win, id)
+  const webContentsId = win.webContents?.id
   const set = multiTypeIndex.get(targetType) || new Set()
   set.add(id)
   multiTypeIndex.set(targetType, set)
 
   win.on('closed', () => {
-    unbindWindowRef(win)
+    unbindWindowRefByWebContentsId(webContentsId)
     multiStore.delete(id)
     const indexSet = multiTypeIndex.get(targetType)
     if (indexSet) {

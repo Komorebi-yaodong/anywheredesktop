@@ -6,6 +6,7 @@ import Mcp from './components/Mcp.vue'
 import Skills from './components/Skills.vue'
 import Prompts from './components/Prompts.vue'
 import Tasks from './components/Tasks.vue'
+import Chats from './components/Chats.vue'
 
 const appWindowType = ref('main')
 const config = ref(null)
@@ -217,6 +218,10 @@ onBeforeUnmount(() => {
         <el-button :type="activePage === 'tasks' ? 'primary' : 'default'" @click="activePage = 'tasks'">
           定时任务
         </el-button>
+        <el-button :type="activePage === 'chats' ? 'primary' : 'default'" @click="activePage = 'chats'">
+          历史对话
+        </el-button>
+
 
 
 
@@ -237,6 +242,8 @@ onBeforeUnmount(() => {
       <Skills v-else-if="activePage === 'skills'" />
       <Prompts v-else-if="activePage === 'prompts'" />
       <Tasks v-else-if="activePage === 'tasks'" />
+      <Chats v-else-if="activePage === 'chats'" />
+
 
 
 

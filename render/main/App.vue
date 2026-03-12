@@ -1,11 +1,13 @@
 <script setup>
 import { onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import Setting from './components/Setting.vue'
+import Providers from './components/Providers.vue'
 
 const appWindowType = ref('main')
 const config = ref(null)
 const loading = ref(false)
 const loadError = ref('')
+const activePage = ref('setting')
 
 provide('config', config)
 
@@ -190,6 +192,18 @@ onBeforeUnmount(() => {
       <span class="sub">窗口类型：{{ appWindowType }}</span>
     </header>
 
+
+    <section v-if="!loading && !loadError" class="main-nav">
+      <el-button-group>
+        <el-button :type="activePage === 'setting' ? 'primary' : 'default'" @click="activePage = 'setting'">
+          设置
+        </el-button>
+        <el-button :type="activePage === 'providers' ? 'primary' : 'default'" @click="activePage = 'providers'">
+          服务商
+        </el-button>
+      </el-button-group>
+    </section>
+
     <section v-if="loading" class="state-card">正在加载配置...</section>
 
     <section v-else-if="loadError" class="state-card error">
@@ -197,7 +211,10 @@ onBeforeUnmount(() => {
       <button @click="loadConfig">重试</button>
     </section>
 
-    <Setting v-else-if="config" />
+    <template v-else-if="config">
+      <Setting v-if="activePage === 'setting'" />
+      <Providers v-else-if="activePage === 'providers'" />
+    </template>
   </div>
 </template>
 
@@ -237,6 +254,11 @@ onBeforeUnmount(() => {
 .state-card.error {
   border-color: var(--el-color-danger-light-5);
   color: var(--el-color-danger);
+}
+
+
+.main-nav {
+  margin: 10px 16px 0;
 }
 
 button {

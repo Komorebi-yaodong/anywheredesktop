@@ -33,7 +33,17 @@ const api = {
   getWindowContext: () => ({
     appWindowType: windowType,
     senderId: windowSenderId
-  })
+  }),
+  copyText: (text) => electronAPI.ipcRenderer.invoke('system:clipboard:copyText', text),
+  copyImage: (input) => electronAPI.ipcRenderer.invoke('system:clipboard:copyImage', input),
+  readClipboardText: () => electronAPI.ipcRenderer.invoke('system:clipboard:readText'),
+  showOpenDialog: (options) => electronAPI.ipcRenderer.invoke('system:dialog:open', options),
+  showSaveDialog: (options) => electronAPI.ipcRenderer.invoke('system:dialog:save', options),
+  shellOpenPath: (targetPath) => electronAPI.ipcRenderer.invoke('system:shell:openPath', targetPath),
+  shellShowItemInFolder: (targetPath) =>
+    electronAPI.ipcRenderer.invoke('system:shell:showItemInFolder', targetPath),
+  shellOpenExternal: (url) => electronAPI.ipcRenderer.invoke('system:shell:openExternal', url),
+  getDesktopSources: (options) => electronAPI.ipcRenderer.invoke('system:desktop:getSources', options)
 }
 
 if (process.contextIsolated) {

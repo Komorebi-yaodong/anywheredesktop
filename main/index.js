@@ -11,6 +11,8 @@ import {
 } from './windowManager.js'
 import { dispatchWindowEvent } from './eventBus.js'
 
+import * as systemApi from './core/system.js'
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.anywhere.desktop')
 
@@ -25,7 +27,8 @@ app.whenReady().then(() => {
     listWindows,
     getWindowByRef,
     getWindowRefByWebContentsId,
-    dispatchWindowEvent
+    dispatchWindowEvent,
+    systemApi
   })
   openWindow('main')
 

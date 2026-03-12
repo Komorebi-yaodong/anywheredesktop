@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
 
 function handleInvoke(channel, handler, options = {}) {
@@ -22,7 +22,8 @@ export function registerIpcHandlers({
   listWindows,
   getWindowByRef,
   getWindowRefByWebContentsId,
-  dispatchWindowEvent
+  dispatchWindowEvent,
+  systemApi
 }) {
   ipcMain.on('ping', () => console.log('pong'))
 
@@ -59,5 +60,44 @@ export function registerIpcHandlers({
       },
       { getWindowByRef, listWindows }
     )
+  })
+
+
+  const getSenderWindow = (event) => BrowserWindow.fromWebContents(event.sender) || undefined
+
+  handleInvoke('system:clipboard:copyText', async (_event, text = '') => {
+    return systemApi.copyText(text)
+  })
+
+  handleInvoke('system:clipboard:copyImage', async (_event, input = {}) => {
+    return systemApi.copyImage(input)
+  })
+
+  handleInvoke('system:clipboard:readText', async () => {
+    return systemApi.readClipboardText()
+  })
+
+  handleInvoke('system:dialog:open', async (event, options = {}) => {
+    return systemApi.showOpenDialog(options, getSenderWindow(event))
+  })
+
+  handleInvoke('system:dialog:save', async (event, options = {}) => {
+    return systemApi.showSaveDialog(options, getSenderWindow(event))
+  })
+
+  handleInvoke('system:shell:openPath', async (_event, targetPath = '') => {
+    return systemApi.shellOpenPath(targetPath)
+  })
+
+  handleInvoke('system:shell:showItemInFolder', async (_event, targetPath = '') => {
+    return systemApi.shellShowItemInFolder(targetPath)
+  })
+
+  handleInvoke('system:shell:openExternal', async (_event, url = '') => {
+    return systemApi.shellOpenExternal(url)
+  })
+
+  handleInvoke('system:desktop:getSources', async (_event, options = {}) => {
+    return systemApi.getDesktopSources(options)
   })
 }

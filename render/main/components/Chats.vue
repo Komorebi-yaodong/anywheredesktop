@@ -100,6 +100,7 @@ const paginatedFiles = computed(() => {
 const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
+    if (Number.isNaN(date.getTime()) || date.getTime() <= 0) return 'N/A';
     return date.toLocaleString();
 };
 const formatBytes = (bytes, decimals = 2) => {
@@ -146,7 +147,7 @@ const normalizeChatFile = (file, source = 'local') => {
         ...file,
         basename,
         size: Number.isFinite(size) ? size : 0,
-        lastmod: typeof file?.lastmod === 'string' && file.lastmod ? file.lastmod : new Date(0).toISOString(),
+        lastmod: typeof file?.lastmod === 'string' && file.lastmod ? file.lastmod : '',
         type: typeof file?.type === 'string' && file.type ? file.type : 'file'
     };
 

@@ -76,6 +76,30 @@ function normalizeDirectoryContents(contents) {
   return []
 }
 
+function normalizeWebdavLastmod(item = {}) {
+  const candidates = [
+    item.lastmod,
+    item.lastModified,
+    item.mtime,
+    item.updatedAt,
+    item.modified,
+    item.etag && item.etag.mtime
+  ]
+
+  for (const candidate of candidates) {
+    const value = normalizeText(candidate).trim()
+    if (!value) continue
+
+    const date = new Date(value)
+    if (!Number.isNaN(date.getTime()) && date.getTime() > 0) {
+      return date.toISOString()
+    }
+  }
+
+  return ''
+}
+
+
 function toSerializableFileInfo(item = {}) {
   const basename = normalizeText(item.basename || item.filename || item.name).trim()
   return {
@@ -84,7 +108,7 @@ function toSerializableFileInfo(item = {}) {
     path: normalizeText(item.filename || item.path || ''),
     type: normalizeText(item.type || 'file'),
     size: Number(item.size || 0),
-    lastmod: normalizeText(item.lastmod || item.lastModified || '')
+    lastmod: normalizeWebdavLastmod(item)
   }
 }
 

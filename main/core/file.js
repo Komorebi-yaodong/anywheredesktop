@@ -509,6 +509,9 @@ export async function writeLocalFile(filePath, content, options = {}) {
 export async function setFileMtime(filePath, mtime) {
   const resolvedPath = path.resolve(String(filePath || ''))
   const date = new Date(mtime)
+  if (Number.isNaN(date.getTime()) || date.getTime() <= 0) {
+    throw new Error('invalid_file_mtime')
+  }
   return fs.utimes(resolvedPath, date, date)
 }
 

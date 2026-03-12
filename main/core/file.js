@@ -46,6 +46,37 @@ const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
 const AUDIO_EXTENSIONS = ['.mp3', '.wav']
 const PDF_EXTENSIONS = ['.pdf']
 
+
+const UNSUPPORTED_BINARY_EXTENSIONS = [
+  '.doc',
+  '.pptx',
+  '.ppt',
+  '.odt',
+  '.ods',
+  '.epub',
+  '.mobi',
+  '.bmp',
+  '.ico',
+  '.mp4',
+  '.mov',
+  '.avi',
+  '.mkv',
+  '.zip',
+  '.rar',
+  '.7z',
+  '.tar',
+  '.gz',
+  '.exe',
+  '.dll',
+  '.bin',
+  '.so',
+  '.dmg',
+  '.class',
+  '.jar',
+  '.pyc'
+]
+
+
 const extensionToMimeType = {
   '.txt': 'text/plain',
   '.md': 'text/markdown',
@@ -198,6 +229,27 @@ async function parseTextFileFromDataUrl(dataUrl = '') {
   return Buffer.from(base64, 'base64').toString('utf-8')
 }
 
+function looksLikeBinaryByBase64(base64 = '') {
+  if (typeof base64 !== 'string' || !base64) {
+    return false
+  }
+
+  try {
+    // 截取前 8192 个 base64 字符进行探针，解码后约 6KB
+    const probeBuffer = Buffer.from(base64.slice(0, 8192), 'base64')
+    for (let i = 0; i < probeBuffer.length; i += 1) {
+      if (probeBuffer[i] === 0) {
+        return true
+      }
+    }
+    return false
+  } catch (error) {
+    console.warn('[file] 内容探针检查失败:', error)
+    return false
+  }
+}
+
+
 function getFileCategoryByName(fileName = '') {
   const extension = getExtension(fileName)
 
@@ -212,15 +264,39 @@ function getFileCategoryByName(fileName = '') {
 }
 
 export function isFileTypeSupported(fileName) {
-  return getFileCategoryByName(fileName) !== 'unknown'
+  const extension = getExtension(fileName)
+
+  // 1) 白名单内直接支持
+  if (getFileCategoryByName(fileName) !== 'unknown') {
+    return true
+  }
+
+  // 2) 明确二进制黑名单直接拒绝
+  if (UNSUPPORTED_BINARY_EXTENSIONS.includes(extension)) {
+    return false
+  }
+
+  // 3) 其余未知后缀先放行，后续 parse 阶段做内容探针
+  return true
 }
 
 export async function parseFileObject(fileObj) {
   const normalized = await normalizeFileObject(fileObj)
-  const category = getFileCategoryByName(normalized.name)
+  let category = getFileCategoryByName(normalized.name)
 
   if (category === 'unknown') {
-    throw new Error(`不支持的文件类型: ${normalized.name}`)
+    const extension = getExtension(normalized.name)
+
+    if (UNSUPPORTED_BINARY_EXTENSIONS.includes(extension)) {
+      throw new Error(`不支持的文件类型且疑似为二进制文件: ${normalized.name}`)
+    }
+
+    const isBinary = looksLikeBinaryByBase64(normalized.base64)
+    if (!isBinary) {
+      category = 'text'
+    } else {
+      throw new Error(`不支持的文件类型且疑似为二进制文件: ${normalized.name}`)
+    }
   }
 
   if (category === 'text') {

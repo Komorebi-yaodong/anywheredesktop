@@ -28,7 +28,7 @@
     "lowdb": "^7.0.1",
     "openai": "6.18.0",
     "vue-i18n": "^11.3.0",
-    "vuedraggable": "^2.24.3",
+    "vuedraggable": "^4.1.0",
     "webdav": "^5.9.0"
   },
   "devDependencies": {

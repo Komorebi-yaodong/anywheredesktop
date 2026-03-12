@@ -373,7 +373,15 @@ async function activate_get_model_function() {
       apiKey: selectedProvider.value.api_key
     });
 
-    if (!result || result.success === false) {
+    if (!result) {
+      throw new Error(t('providers.alerts.fetchModelsFailedDefault'));
+    }
+
+    if (result.ok === false) {
+      throw new Error(result?.error?.message || result?.error || t('providers.alerts.fetchModelsFailedDefault'));
+    }
+
+    if (result.success === false) {
       throw new Error(result?.message || result?.error || t('providers.alerts.fetchModelsFailedDefault'));
     }
 

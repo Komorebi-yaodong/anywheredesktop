@@ -4,6 +4,7 @@ import os from 'node:os'
 import AdmZip from 'adm-zip'
 
 import { getBuiltinServers, getBuiltinTools } from './mcp_builtin.js'
+import { get as dbGet } from './db.js'
 
 /**
  * 获取所有内置工具的名称列表
@@ -12,25 +13,58 @@ async function getAllBuiltinToolNames(mcpServers = {}) {
   const servers = getBuiltinServers()
   const allToolNames = []
 
+  // 1) 优先读取主配置中的 MCP 服务状态
+  let effectiveMcpServers = mcpServers
+  try {
+    if (!effectiveMcpServers || typeof effectiveMcpServers !== 'object' || Array.isArray(effectiveMcpServers)) {
+      const mcpServersDoc = await dbGet('mcpServers')
+      if (mcpServersDoc?.ok && mcpServersDoc.doc?.data && typeof mcpServersDoc.doc.data === 'object') {
+        effectiveMcpServers = mcpServersDoc.doc.data
+      }
+    }
+  } catch {
+    // ignore, fallback to input
+  }
+  if (!effectiveMcpServers || typeof effectiveMcpServers !== 'object' || Array.isArray(effectiveMcpServers)) {
+    effectiveMcpServers = {}
+  }
+
+  // 2) 读取工具缓存状态（用于工具级 enabled 过滤）
+  let mcpToolCache = {}
+  try {
+    const cacheDoc = await dbGet('mcp_tools_cache')
+    if (cacheDoc?.ok && cacheDoc.doc?.data && typeof cacheDoc.doc.data === 'object') {
+      mcpToolCache = cacheDoc.doc.data
+    }
+  } catch {
+    // ignore, fallback empty cache
+  }
+
   for (const serverId of Object.keys(servers || {})) {
-    const serverConfig = mcpServers?.[serverId]
+    const serverConfig = effectiveMcpServers?.[serverId]
     if (serverConfig && serverConfig.isActive === false) {
       continue
     }
 
     const tools = await getBuiltinTools(serverId)
+    const cachedTools = Array.isArray(mcpToolCache?.[serverId]) ? mcpToolCache[serverId] : []
+
     if (Array.isArray(tools)) {
       for (const tool of tools) {
-        if (tool?.enabled === false) continue
-        if (typeof tool?.name === 'string' && tool.name) {
-          allToolNames.push(tool.name)
-        }
+        const toolName = tool?.name
+        if (typeof toolName !== 'string' || !toolName) continue
+        if (toolName === 'sub_agent') continue
+
+        const cachedTool = cachedTools.find((item) => item?.name === toolName)
+        const isToolEnabled = cachedTool ? cachedTool.enabled !== false : tool?.enabled !== false
+        if (!isToolEnabled) continue
+
+        allToolNames.push(toolName)
       }
     }
   }
 
-  // 防止子智能体无限递归调用自身
-  return allToolNames.filter((name) => name !== 'sub_agent')
+  return allToolNames
 }
 
 // 解析 Frontmatter（轻量 YAML）

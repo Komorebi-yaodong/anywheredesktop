@@ -14,14 +14,49 @@ function normalizeTransportType(transport = '') {
   return transport
 }
 
+/**
+ * 预处理 stdio 配置：
+ * 1) 兼容 command 写成一整行（含参数）
+ * 2) 保留并扩展 env，避免 Electron 环境 PATH 不完整
+ */
+function preprocessStdioConfig(config = {}) {
+  const result = { ...config }
+  const transport = normalizeTransportType(result.transport || result.type || '')
+
+  if (transport !== 'stdio') {
+    return result
+  }
+
+  // 兼容："npx -y mcp-remote" / "C:\Program Files\nodejs\node.exe" -e ...
+  if (result.command && result.command.includes(' ') && (!result.args || result.args.length === 0)) {
+    const parts = result.command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)
+    if (parts && parts.length > 0) {
+      result.command = parts[0].replace(/^["']|["']$/g, '')
+      result.args = parts.slice(1).map((arg) => arg.replace(/^["']|["']$/g, ''))
+    }
+  }
+
+  if (result.env && typeof result.env === 'object') {
+    if (Object.keys(result.env).length === 0) {
+      delete result.env
+    } else {
+      result.env = { ...process.env, ...result.env }
+    }
+  }
+
+  return result
+}
+
 function buildServerConfig(id, config = {}) {
-  const resolvedTransport = config.transport || config.type || ''
+  const preprocessed = preprocessStdioConfig(config)
+  const resolvedTransport = preprocessed.transport || preprocessed.type || ''
   return {
     id,
-    ...config,
+    ...preprocessed,
     transport: normalizeTransportType(resolvedTransport)
   }
 }
+
 
 function sanitizeToolsForCache(tools = [], oldToolsCache = []) {
   return tools.map((tool) => {

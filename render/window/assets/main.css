@@ -1,54 +1,21 @@
 @import './base.css';
 
-body {
-  margin: 0;
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  background: radial-gradient(circle at top right, #1e1f3a, #12131e 55%, #0b0c14);
-  color: #e8ecff;
-}
-
 #app {
-  width: min(780px, calc(100vw - 40px));
+  width: 100%;
+  height: 100%;
+  font-weight: normal;
 }
 
-.page {
-  border: 1px solid rgba(124, 137, 255, 0.3);
-  background: rgba(24, 27, 46, 0.78);
-  border-radius: 14px;
-  padding: 24px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+a,
+.green {
+  text-decoration: none;
+  color: hsla(160, 100%, 37%, 1);
+  transition: 0.4s;
+  padding: 3px;
 }
 
-.page.fast {
-  padding: 18px;
-}
-
-h1 {
-  margin: 0 0 8px;
-  font-size: 22px;
-}
-
-p {
-  margin: 0 0 16px;
-  color: #b8c1ff;
-}
-
-.actions {
-  display: flex;
-  gap: 12px;
-}
-
-button {
-  border: 1px solid rgba(124, 137, 255, 0.45);
-  background: rgba(124, 137, 255, 0.14);
-  color: #ecf0ff;
-  border-radius: 8px;
-  padding: 8px 12px;
-  cursor: pointer;
-}
-
-button:hover {
-  background: rgba(124, 137, 255, 0.24);
+@media (hover: hover) {
+  a:hover {
+    background-color: hsla(160, 100%, 37%, 0.2);
+  }
 }

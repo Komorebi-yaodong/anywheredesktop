@@ -1,8 +1,6 @@
 import { MultiServerMCPClient } from '@langchain/mcp-adapters'
 import { getBuiltinTools, invokeBuiltinTool } from './mcp_builtin.js'
 
-const PERSISTENT_CONNECTION_LIMIT = Number.POSITIVE_INFINITY
-const ON_DEMAND_CONCURRENCY_LIMIT = 5
 
 const persistentClients = new Map()
 const fullToolInfoMap = new Map()
@@ -79,7 +77,7 @@ function registerToolsToMap({ id, config, tools, isPersistent, isBuiltin, cached
  */
 export async function connectAndFetchTools(id, config = {}) {
   if (config.transport === 'builtin' || config.type === 'builtin') {
-    return getBuiltinTools(id)
+    return await getBuiltinTools(id, { configPrompts: config?.prompts })
   }
 
   let tempClient = null
@@ -175,11 +173,8 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
   }
 
   if (onDemandToConnect.length > 0) {
-    const pool = new Set()
-    const allTasks = []
-
-    for (const { id, config } of onDemandToConnect) {
-      const taskPromise = (async () => {
+    const allTasks = onDemandToConnect.map(({ id, config }) =>
+      (async () => {
         try {
           const tools = await connectAndFetchTools(id, config)
 
@@ -202,17 +197,7 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
           failedServerIds.push(id)
         }
       })()
-
-      allTasks.push(taskPromise)
-      pool.add(taskPromise)
-
-      const cleanup = () => pool.delete(taskPromise)
-      taskPromise.then(cleanup, cleanup)
-
-      if (pool.size >= ON_DEMAND_CONCURRENCY_LIMIT) {
-        await Promise.race(pool)
-      }
-    }
+    )
 
     await Promise.all(allTasks)
   }
@@ -222,7 +207,7 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
     for (const { id, config } of persistentConfigsToAdd) {
       if (config.transport === 'builtin' || config.type === 'builtin') {
         try {
-          const tools = getBuiltinTools(id)
+          const tools = await getBuiltinTools(id, { configPrompts: config?.prompts })
           saveToolCache(saveCacheCallback, id, tools, cachedToolsMap)
 
           registerToolsToMap({
@@ -239,11 +224,6 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
           failedServerIds.push(id)
         }
 
-        continue
-      }
-
-      if (persistentClients.size >= PERSISTENT_CONNECTION_LIMIT) {
-        failedServerIds.push(id)
         continue
       }
 

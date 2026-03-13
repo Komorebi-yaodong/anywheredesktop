@@ -2938,7 +2938,8 @@ Sections:\n`;
     },
 
     get_full_memory: async ({ memory_id }) => {
-        const doc = await utools.db.promises.get(`anywhere_mem_${memory_id}`);
+        const docResult = await dbGet(`anywhere_mem_${memory_id}`);
+        const doc = docResult?.ok ? docResult.doc : null;
         if (!doc) return `Error: Memory ID '${memory_id}' not found.`;
         let full = `# ${doc.name}\nID: ${memory_id}\n\n`;
         for (const [sec, data] of Object.entries(doc.sections || {})) {
@@ -2946,7 +2947,7 @@ Sections:\n`;
             if (Array.isArray(data)) {
                 full += JSON.stringify(data, null, 2) + "\n\n";
             } else {
-                full += data + "\n\n";
+                full += String(data) + "\n\n";
             }
         }
         return full;
@@ -3116,11 +3117,58 @@ function getBuiltinServers() {
     return JSON.parse(JSON.stringify(BUILTIN_SERVERS));
 }
 
-function getBuiltinTools(serverId) {
+function normalizePromptsFromDoc(doc) {
+    if (!doc || typeof doc !== 'object') return {};
+    const raw = doc?.data;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    return {};
+}
+
+async function getBuiltinTools(serverId, options = {}) {
     // 必须深拷贝，避免修改原始常量导致叠加污染
     const tools = JSON.parse(JSON.stringify(BUILTIN_TOOLS[serverId] || []));
-    // 桌面端暂不在此处做同步 Agent 名单动态注入（避免同步 DB 读取依赖）。
-    // 工具定义使用静态 schema，运行态由 list_agents/summon_agent 返回最新数据。
+
+    // [动态注入] Super-Agent 自动枚举所有可用 Agent，降低工具选择幻觉
+    if (serverId === 'builtin_superagent') {
+        try {
+            const promptsDocResult = await dbGet('prompts');
+            const promptsFromDoc = promptsDocResult?.ok ? normalizePromptsFromDoc(promptsDocResult.doc) : {};
+            const promptsFromConfig = options?.configPrompts && typeof options.configPrompts === 'object'
+                ? options.configPrompts
+                : {};
+
+            const prompts = {
+                ...promptsFromDoc,
+                ...promptsFromConfig
+            };
+
+            const agentNames = Object.entries(prompts)
+                .filter(([_, prompt]) => {
+                    if (!prompt || typeof prompt !== 'object') return false;
+                    return prompt.showMode === 'window' && Boolean(prompt.enable);
+                })
+                .map(([name]) => name)
+                .sort();
+
+            const allAgents = ['__DEFAULT__', ...agentNames];
+            const displayAgents = allAgents.slice(0, 100);
+            const agentListStr = displayAgents.map((name) => `"${name}"`).join(', ');
+            const suffix = allAgents.length > 100 ? `...and ${allAgents.length - 100} more` : '';
+            const fullListStr = `${agentListStr}${suffix}`;
+
+            const listTool = tools.find((tool) => tool.name === 'list_agents');
+            if (listTool) {
+                listTool.description += `\n\n[CURRENTLY AVAILABLE AGENTS]: ${fullListStr}`;
+            }
+
+            const summonTool = tools.find((tool) => tool.name === 'summon_agent');
+            if (summonTool) {
+                summonTool.description += `\n\n[VALID TARGET NAMES]: ${fullListStr}`;
+            }
+        } catch {
+            // 注入失败不影响基础功能
+        }
+    }
 
     return tools;
 }

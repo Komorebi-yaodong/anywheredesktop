@@ -493,7 +493,7 @@ export function registerIpcHandlers({
   handleInvoke(
     'skill:resolveInvocation',
     async (_event, skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null) => {
-      const result = skillApi.resolveSkillInvocation(skillRootPath, skillName, toolArgsObj)
+      const result = await skillApi.resolveSkillInvocation(skillRootPath, skillName, toolArgsObj)
 
       if (result && typeof result === 'object' && result.__isForkRequest && result.subAgentArgs) {
         if (!globalContext) {

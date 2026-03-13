@@ -432,7 +432,7 @@ export function registerIpcHandlers({
     const result = await mcpApi.connectAndInvokeTool(serverConfig.id, normalizedConfig, toolName, args)
     return {
       success: true,
-      result
+      result: JSON.parse(JSON.stringify(result))
     }
   })
 
@@ -493,7 +493,14 @@ export function registerIpcHandlers({
   handleInvoke(
     'skill:resolveInvocation',
     async (_event, skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null) => {
-      const result = await skillApi.resolveSkillInvocation(skillRootPath, skillName, toolArgsObj)
+      const configResult = await dataApi.getConfig()
+      const currentConfig = configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
+      const currentMcpServers =
+        currentConfig?.mcpServers && typeof currentConfig.mcpServers === 'object' ? currentConfig.mcpServers : {}
+
+      const result = await skillApi.resolveSkillInvocation(skillRootPath, skillName, toolArgsObj, {
+        mcpServers: currentMcpServers
+      })
 
       if (result && typeof result === 'object' && result.__isForkRequest && result.subAgentArgs) {
         if (!globalContext) {

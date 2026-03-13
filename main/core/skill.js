@@ -8,14 +8,24 @@ import { getBuiltinServers, getBuiltinTools } from './mcp_builtin.js'
 /**
  * 获取所有内置工具的名称列表
  */
-async function getAllBuiltinToolNames() {
+async function getAllBuiltinToolNames(mcpServers = {}) {
   const servers = getBuiltinServers()
   const allToolNames = []
 
   for (const serverId of Object.keys(servers || {})) {
+    const serverConfig = mcpServers?.[serverId]
+    if (serverConfig && serverConfig.isActive === false) {
+      continue
+    }
+
     const tools = await getBuiltinTools(serverId)
     if (Array.isArray(tools)) {
-      allToolNames.push(...tools.map((tool) => tool.name))
+      for (const tool of tools) {
+        if (tool?.enabled === false) continue
+        if (typeof tool?.name === 'string' && tool.name) {
+          allToolNames.push(tool.name)
+        }
+      }
     }
   }
 
@@ -291,7 +301,7 @@ ${availableSkillsText}
 /**
  * 处理 Skill 调用
  */
-export async function resolveSkillInvocation(skillRootPath, skillName, toolArgsObj) {
+export async function resolveSkillInvocation(skillRootPath, skillName, toolArgsObj, options = {}) {
   const skills = listSkills(skillRootPath)
   const targetSkill = skills.find((skill) => skill.name === skillName)
 
@@ -365,8 +375,7 @@ export async function resolveSkillInvocation(skillRootPath, skillName, toolArgsO
             .split(',')
             .map((item) => item.trim())
             .filter(Boolean)
-    } else {
-      toolsToUse = await getAllBuiltinToolNames()
+    } else {      toolsToUse = await getAllBuiltinToolNames(options?.mcpServers || {})
     }
 
     return {

@@ -1,6 +1,7 @@
 import path from 'node:path'
-import { BrowserWindow, ipcMain } from 'electron'
+import { ipcMain, BrowserWindow } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
+import { createDialogWindow, windowMap as dialogWindowMap } from './core/openWindow.js'
 
 function handleInvoke(channel, handler, options = {}) {
   ipcMain.handle(channel, async (event, ...args) => {
@@ -248,27 +249,37 @@ export function registerIpcHandlers({
 
   handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
     const sourceId = getWindowRefByWebContentsId(event.sender.id)
-    const openResult = openWindow('window')
-    const target = typeof openResult?.id === 'string' && openResult.id ? openResult.id : 'type:window'
 
-    const dispatchResult = dispatchWindowEvent(
-      {
-        sourceId,
-        target,
-        event: 'coderedirect',
-        payload: {
-          label,
-          payload
-        }
-      },
-      { getWindowByRef, listWindows }
-    )
+    // 获取配置用于窗口创建
+    const configResult = await dataApi.getConfig()
+    const config = configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
 
-    return {
-      success: Boolean(dispatchResult?.ok),
-      target,
-      event: 'coderedirect',
-      result: dispatchResult
+    // 构建消息对象
+    const msg = {
+      code: label || 'coderedirect',
+      type: 'over',
+      payload: payload || label || '',
+      originalCode: label,
+      // 传递配置用于窗口初始化
+      promptConfig: config?.prompts?.[label] || null
+    }
+
+    try {
+      // 创建独立对话窗口
+      const senderId = await createDialogWindow(config, msg)
+
+      return {
+        success: true,
+        senderId,
+        event: 'coderedirect'
+      }
+    } catch (error) {
+      console.error('[coderedirect] Failed to create dialog window:', error)
+      return {
+        success: false,
+        error: serializeError(error),
+        event: 'coderedirect'
+      }
     }
   })
 

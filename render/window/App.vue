@@ -123,64 +123,7 @@ if (isDarkInit) {
   document.documentElement.classList.add('dark');
 }
 
-const fallbackDefaultConfig = {
-  config: {
-    providers: {
-      '0': {
-        name: 'default',
-        url: 'https://api.openai.com/v1',
-        api_key: '',
-        apiType: 'chat_completions',
-        modelList: [],
-        enable: true
-      }
-    },
-    providerOrder: ['0'],
-    prompts: {
-      AI: {
-        type: 'over',
-        prompt: '你是一个AI助手',
-        showMode: 'window',
-        model: '0|gpt-4o',
-        enable: true,
-        icon: '',
-        stream: true,
-        temperature: 0.7,
-        isTemperature: false,
-        isDirectSend_file: false,
-        isDirectSend_normal: true,
-        isDirectSend_image: true,
-        ifTextNecessary: false,
-        voice: null,
-        reasoning_effort: 'default',
-        defaultMcpServers: [],
-        defaultSkills: [],
-        window_width: 580,
-        window_height: 740,
-        position_x: 0,
-        position_y: 0,
-        autoCloseOnBlur: true,
-        isAlwaysOnTop: true,
-        autoSaveChat: false
-      }
-    },
-    mcpServers: {},
-    skillPath: '',
-    CtrlEnterToSend: false,
-    inputLayout: 'horizontal',
-    isDarkMode: isDarkInit,
-    themeMode: 'system',
-    isAlwaysOnTop_global: true,
-    autoCloseOnBlur_global: true,
-    zoom: 1,
-    webdav: {
-      localChatPath: ''
-    },
-    voiceList: []
-  }
-};
-
-const defaultConfig = window.api?.defaultConfig?.config ? window.api.defaultConfig : fallbackDefaultConfig;
+const defaultConfig = window.api.defaultConfig;
 const UserAvart = ref("user.png");
 const AIAvart = ref("ai.svg");
 const favicon = ref("favicon.png");

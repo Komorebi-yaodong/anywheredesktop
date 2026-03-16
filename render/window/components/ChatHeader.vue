@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { ElHeader, ElIcon, ElTooltip } from 'element-plus';
-import { Edit, Search } from '@element-plus/icons-vue';
+import { Loading, Edit, Search } from '@element-plus/icons-vue'; // 引入 Search
 
 const props = defineProps({
   modelMap: Object,

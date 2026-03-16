@@ -5,12 +5,17 @@ const defaultWindowType = 'window'
 let windowType = defaultWindowType
 let windowSenderId = null
 
+// 兼容原插件的 channel 名称
+const WINDOW_CHANNEL = 'window'
+const APPEND_MSG_CHANNEL = 'window-append-msg'
+
 
 function toPlainPayload(value) {
   if (value === undefined) return undefined
   return JSON.parse(JSON.stringify(value))
 }
 
+// 监听窗口初始化事件（来自 windowManager 的 window:init）
 electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
   if (typeof data.windowType === 'string' && data.windowType) {
     windowType = data.windowType
@@ -20,6 +25,30 @@ electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
     windowSenderId = data.senderId
   }
 })
+
+// 兼容原插件的 window.preload 接口
+const preloadCompat = {
+  // 接收窗口初始化消息（来自 openWindow.js 的 'window' channel）
+  receiveMsg: (callback) => {
+    if (typeof callback !== 'function') return
+    electronAPI.ipcRenderer.on(WINDOW_CHANNEL, (_event, data) => {
+      if (data) {
+        // 捕获并存储 senderId
+        if (data.senderId) {
+          windowSenderId = data.senderId
+        }
+        callback(data)
+      }
+    })
+  },
+  // 接收追加消息（来自其他窗口的追问/投递）
+  onAppendMessage: (callback) => {
+    if (typeof callback !== 'function') return
+    electronAPI.ipcRenderer.on(APPEND_MSG_CHANNEL, (_event, data) => {
+      callback(data)
+    })
+  }
+}
 
 const api = {
   appWindowType: defaultWindowType,
@@ -189,14 +218,18 @@ const api = {
   }
 }
 
+// 暴露兼容原插件的 preload 接口
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
+    // 兼容原插件的 window.preload
+    contextBridge.exposeInMainWorld('preload', preloadCompat)
   } catch (error) {
     console.error('[preload:window]', error)
   }
 } else {
   window.electron = electronAPI
   window.api = api
+  window.preload = preloadCompat
 }

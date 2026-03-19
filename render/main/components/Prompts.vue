@@ -36,7 +36,9 @@ onMounted(() => {
 });
 
 const openPromptWindow = (promptKey) => {
-  window.api.coderedirect(promptKey);
+  if(window.api && window.api.openWindow) {
+    window.api.openWindow('window', { code: promptKey });
+  }
 };
 watch(activeTabName, (newTabName) => {
   nextTick(() => {

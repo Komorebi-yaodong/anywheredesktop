@@ -124,7 +124,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '') {
     webPreferences: {
       preload: resolvePreloadFile(config.preload),
       sandbox: false,
-      contextIsolation: true,
+      contextIsolation: false,
       nodeIntegration: false
     },
     ...config.options

@@ -1,4 +1,5 @@
-import { contextBridge } from 'electron'
+import { contextBridge, webUtils } from 'electron'
+import path from 'node:path'
 import { electronAPI } from '@electron-toolkit/preload'
 
 const defaultWindowType = 'main'
@@ -10,6 +11,20 @@ function toPlainPayload(value) {
   if (value === undefined) return undefined
   return JSON.parse(JSON.stringify(value))
 }
+
+function invokeOrThrow(channel, ...args) {
+  return electronAPI.ipcRenderer.invoke(channel, ...args).then((result) => {
+    if (result && typeof result === 'object' && result.ok === false) {
+      const message =
+        (result.error && typeof result.error === 'object' && result.error.message) ||
+        (typeof result.error === 'string' ? result.error : '') ||
+        `IPC invoke failed: ${channel}`
+      throw new Error(message)
+    }
+    return result
+  })
+}
+
 
 electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
   if (typeof data.windowType === 'string' && data.windowType) {
@@ -40,6 +55,15 @@ const api = {
     appWindowType: windowType,
     senderId: windowSenderId
   }),
+  getDroppedFilePath: (file) => {
+    try {
+      const resolvedPath = webUtils.getPathForFile(file)
+      return resolvedPath || ''
+    } catch {
+      return ''
+    }
+  },
+
   copyText: (text) => electronAPI.ipcRenderer.invoke('system:clipboard:copyText', text),
   copyImage: (input) => electronAPI.ipcRenderer.invoke('system:clipboard:copyImage', input),
   readClipboardText: () => electronAPI.ipcRenderer.invoke('system:clipboard:readText'),
@@ -106,45 +130,45 @@ const api = {
     ),
   closeMcpClient: () => electronAPI.ipcRenderer.invoke('mcp:closeClient'),
 
-  listSkills: (skillRootPath = '') => electronAPI.ipcRenderer.invoke('skill:list', skillRootPath),
+  listSkills: (skillRootPath = '') => invokeOrThrow('skill:list', skillRootPath),
   getSkillDetails: (skillRootPath = '', skillId = '') =>
-    electronAPI.ipcRenderer.invoke('skill:getDetails', skillRootPath, skillId),
+    invokeOrThrow('skill:getDetails', skillRootPath, skillId),
   saveSkill: (skillRootPath = '', skillId = '', content = '') =>
-    electronAPI.ipcRenderer.invoke('skill:save', skillRootPath, skillId, content),
+    invokeOrThrow('skill:save', skillRootPath, skillId, content),
   deleteSkill: (skillRootPath = '', skillId = '') =>
-    electronAPI.ipcRenderer.invoke('skill:delete', skillRootPath, skillId),
+    invokeOrThrow('skill:delete', skillRootPath, skillId),
   exportSkillToPackage: (skillRootPath = '', skillId = '', outputDir = '') =>
-    electronAPI.ipcRenderer.invoke('skill:exportPackage', skillRootPath, skillId, outputDir),
+    invokeOrThrow('skill:exportPackage', skillRootPath, skillId, outputDir),
   extractSkillPackage: (filePath = '') =>
-    electronAPI.ipcRenderer.invoke('skill:extractPackage', filePath),
+    invokeOrThrow('skill:extractPackage', filePath),
   getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) =>
-    electronAPI.ipcRenderer.invoke('skill:getToolDefinition', skillRootPath, enabledSkillNames),
+    invokeOrThrow('skill:getToolDefinition', skillRootPath, enabledSkillNames),
   resolveSkillInvocation: (skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null) =>
-    electronAPI.ipcRenderer.invoke(
+    invokeOrThrow(
       'skill:resolveInvocation',
       skillRootPath,
       skillName,
       toolArgsObj,
       globalContext
     ),
-  pathJoin: (...args) => electronAPI.ipcRenderer.invoke('skill:pathJoin', ...args),
-  handleFilePath: (filePath) => electronAPI.ipcRenderer.invoke('file:handleFilePath', filePath),
-  sendfileDirect: (filePathList) => electronAPI.ipcRenderer.invoke('file:sendfileDirect', filePathList),
-  saveFile: (options) => electronAPI.ipcRenderer.invoke('file:saveFile', options),
-  selectDirectory: () => electronAPI.ipcRenderer.invoke('file:selectDirectory'),
-  listJsonFiles: (dirPath) => electronAPI.ipcRenderer.invoke('file:listJsonFiles', dirPath),
+  pathJoin: (...args) => path.join(...args),
+  handleFilePath: (filePath) => invokeOrThrow('file:handleFilePath', filePath),
+  sendfileDirect: (filePathList) => invokeOrThrow('file:sendfileDirect', filePathList),
+  saveFile: (options) => invokeOrThrow('file:saveFile', options),
+  selectDirectory: () => invokeOrThrow('file:selectDirectory'),
+  listJsonFiles: (dirPath) => invokeOrThrow('file:listJsonFiles', dirPath),
   readLocalFile: (filePath, options = {}) =>
-    electronAPI.ipcRenderer.invoke('file:readLocalFile', filePath, options),
+    invokeOrThrow('file:readLocalFile', filePath, options),
   renameLocalFile: (oldPath, newPath) =>
-    electronAPI.ipcRenderer.invoke('file:renameLocalFile', oldPath, newPath),
-  deleteLocalFile: (filePath) => electronAPI.ipcRenderer.invoke('file:deleteLocalFile', filePath),
+    invokeOrThrow('file:renameLocalFile', oldPath, newPath),
+  deleteLocalFile: (filePath) => invokeOrThrow('file:deleteLocalFile', filePath),
   writeLocalFile: (filePath, content, options = {}) =>
-    electronAPI.ipcRenderer.invoke('file:writeLocalFile', filePath, content, options),
-  setFileMtime: (filePath, mtime) => electronAPI.ipcRenderer.invoke('file:setFileMtime', filePath, mtime),
-  isFileTypeSupported: (fileName) => electronAPI.ipcRenderer.invoke('file:isFileTypeSupported', fileName),
-  parseFileObject: (fileObj) => electronAPI.ipcRenderer.invoke('file:parseFileObject', fileObj),
+    invokeOrThrow('file:writeLocalFile', filePath, content, options),
+  setFileMtime: (filePath, mtime) => invokeOrThrow('file:setFileMtime', filePath, mtime),
+  isFileTypeSupported: (fileName) => invokeOrThrow('file:isFileTypeSupported', fileName),
+  parseFileObject: (fileObj) => invokeOrThrow('file:parseFileObject', fileObj),
   copyLocalPath: (srcPath, destPath) =>
-    electronAPI.ipcRenderer.invoke('file:copyLocalPath', srcPath, destPath),
+    invokeOrThrow('file:copyLocalPath', srcPath, destPath),
 
   listWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listBackups', input),
   writeWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackup', input),

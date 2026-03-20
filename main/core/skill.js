@@ -67,43 +67,134 @@ async function getAllBuiltinToolNames(mcpServers = {}) {
   return allToolNames
 }
 
-// 解析 Frontmatter（轻量 YAML）
+// 解析 Frontmatter（兼容 Claude Code Skill 常见 YAML：多行 |、数组、布尔值、带引号字符串）
+function parseYamlScalar(rawValue) {
+  const value = rawValue.trim()
+
+  if (value === 'true') return true
+  if (value === 'false') return false
+
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1)
+  }
+
+  if (value.startsWith('[') && value.endsWith(']')) {
+    const inner = value.slice(1, -1).trim()
+    if (!inner) return []
+
+    const items = []
+    let current = ''
+    let quote = null
+
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i]
+      if ((ch === '"' || ch === "'") && inner[i - 1] !== '\\') {
+        quote = quote === ch ? null : quote || ch
+        current += ch
+        continue
+      }
+      if (ch === ',' && !quote) {
+        items.push(parseYamlScalar(current))
+        current = ''
+        continue
+      }
+      current += ch
+    }
+
+    if (current.trim()) items.push(parseYamlScalar(current))
+    return items
+  }
+
+  return value
+}
+
 function parseFrontmatter(content = '') {
-  const regex = /^---\s*[\r\n]+([\s\S]*?)[\r\n]+---\s*([\s\S]*)$/
-  const match = content.match(regex)
+  const normalized = content.replace(/\r\n/g, '\n')
+  const regex = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/
+  const match = normalized.match(regex)
 
   if (!match) {
     return {
       metadata: {},
-      body: content
+      body: normalized
     }
   }
 
   const yamlStr = match[1]
   const body = match[2]
   const metadata = {}
+  const lines = yamlStr.split('\n')
 
-  yamlStr.split('\n').forEach((line) => {
-    const parts = line.split(':')
-    if (parts.length < 2) return
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (!line.trim() || line.trim().startsWith('#')) continue
 
-    const key = parts[0].trim()
-    let value = parts.slice(1).join(':').trim()
+    const keyMatch = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/)
+    if (!keyMatch) continue
 
-    if (value === 'true') value = true
-    else if (value === 'false') value = false
-    else if (value.startsWith('[') && value.endsWith(']')) {
-      value = value
-        .slice(1, -1)
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean)
+    const key = keyMatch[1].trim()
+    const rawValue = keyMatch[2] ?? ''
+
+    if (rawValue === '|' || rawValue === '>') {
+      const blockLines = []
+      for (i = i + 1; i < lines.length; i++) {
+        const nextLine = lines[i]
+        if (!nextLine.trim()) {
+          blockLines.push('')
+          continue
+        }
+        if (!/^\s+/.test(nextLine)) {
+          i -= 1
+          break
+        }
+        blockLines.push(nextLine.replace(/^\s{2}/, '').replace(/^\t/, ''))
+      }
+      metadata[key] = blockLines.join(rawValue === '>' ? ' ' : '\n').trim()
+      continue
     }
 
-    metadata[key] = value
-  })
+    if (rawValue === '') {
+      const listItems = []
+      let foundIndentedList = false
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j]
+        if (!nextLine.trim()) {
+          if (foundIndentedList) continue
+          break
+        }
+        const listMatch = nextLine.match(/^\s*-\s+(.*)$/)
+        if (!listMatch) break
+        foundIndentedList = true
+        listItems.push(parseYamlScalar(listMatch[1]))
+        i = j
+      }
+      metadata[key] = foundIndentedList ? listItems : ''
+      continue
+    }
+
+    metadata[key] = parseYamlScalar(rawValue)
+  }
 
   return { metadata, body }
+}
+
+function findSkillEntryDir(rootDir) {
+  const directSkillPath = path.join(rootDir, 'SKILL.md')
+  if (fs.existsSync(directSkillPath)) {
+    return rootDir
+  }
+
+  const items = fs.readdirSync(rootDir, { withFileTypes: true })
+  for (const item of items) {
+    if (!item.isDirectory()) continue
+    if (item.name.startsWith('.') || item.name === '__MACOSX' || item.name === 'node_modules') continue
+
+    const fullPath = path.join(rootDir, item.name)
+    const found = findSkillEntryDir(fullPath)
+    if (found) return found
+  }
+
+  return null
 }
 
 // 递归读取目录结构
@@ -514,21 +605,9 @@ export function extractSkillPackage(filePath) {
 
       zip.extractAllTo(tempDir, true)
 
-      let finalDir = tempDir
-      const rootSkillMd = path.join(tempDir, 'SKILL.md')
-
-      if (!fs.existsSync(rootSkillMd)) {
-        const items = fs.readdirSync(tempDir, { withFileTypes: true })
-        const dirs = items.filter(
-          (item) => item.isDirectory() && !item.name.startsWith('.') && item.name !== '__MACOSX'
-        )
-
-        if (dirs.length === 1) {
-          const subDir = path.join(tempDir, dirs[0].name)
-          if (fs.existsSync(path.join(subDir, 'SKILL.md'))) {
-            finalDir = subDir
-          }
-        }
+      const finalDir = findSkillEntryDir(tempDir)
+      if (!finalDir) {
+        throw new Error('Invalid skill package: SKILL.md not found')
       }
 
       resolve(finalDir)

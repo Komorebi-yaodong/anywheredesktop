@@ -454,29 +454,19 @@ export function registerIpcHandlers({
   })
 
   handleInvoke('skill:save', async (_event, skillRootPath = '', skillId = '', content = '') => {
-    const success = skillApi.saveSkill(skillRootPath, skillId, content)
-    return { success }
+    return skillApi.saveSkill(skillRootPath, skillId, content)
   })
 
   handleInvoke('skill:delete', async (_event, skillRootPath = '', skillId = '') => {
-    const success = skillApi.deleteSkill(skillRootPath, skillId)
-    return { success }
+    return skillApi.deleteSkill(skillRootPath, skillId)
   })
 
   handleInvoke('skill:exportPackage', async (_event, skillRootPath = '', skillId = '', outputDir = '') => {
-    const outputPath = await skillApi.exportSkillToPackage(skillRootPath, skillId, outputDir)
-    return {
-      success: true,
-      outputPath
-    }
+    return skillApi.exportSkillToPackage(skillRootPath, skillId, outputDir)
   })
 
   handleInvoke('skill:extractPackage', async (_event, filePath = '') => {
-    const extractedPath = await skillApi.extractSkillPackage(filePath)
-    return {
-      success: true,
-      extractedPath
-    }
+    return skillApi.extractSkillPackage(filePath)
   })
 
   handleInvoke('skill:getToolDefinition', async (_event, skillRootPath = '', enabledSkillNames = []) => {

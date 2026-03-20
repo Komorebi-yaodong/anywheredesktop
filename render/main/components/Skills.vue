@@ -31,6 +31,7 @@ const editingSkill = reactive({
   enabled: true,
   forkMode: false,
   allowedTools: '',
+  extraMetadata: {},
   files: [],
   absolutePath: ''
 });
@@ -102,6 +103,7 @@ function prepareAddSkill() {
     enabled: true,
     forkMode: false,
     allowedTools: '',
+    extraMetadata: {},
     files: [],
     absolutePath: ''
   });
@@ -115,14 +117,24 @@ async function prepareEditSkill(skillId) {
     const details = await window.api.getSkillDetails(skillPath.value, skillId);
     const meta = details.metadata;
 
+    const {
+      name,
+      description,
+      context,
+      ['allowed-tools']: allowedTools,
+      ['disable-model-invocation']: disableModelInvocation,
+      ...extraMetadata
+    } = meta;
+
     Object.assign(editingSkill, {
       id: details.id,
-      name: meta.name || details.id,
-      description: meta.description || '',
+      name: name || details.id,
+      description: description || '',
       instructions: details.content || '',
-      enabled: meta['disable-model-invocation'] !== true,
-      forkMode: meta.context === 'fork',
-      allowedTools: Array.isArray(meta['allowed-tools']) ? meta['allowed-tools'].join(', ') : (meta['allowed-tools'] || ''),
+      enabled: disableModelInvocation !== true,
+      forkMode: context === 'fork',
+      allowedTools: Array.isArray(allowedTools) ? allowedTools.join(', ') : (allowedTools || ''),
+      extraMetadata,
       files: details.files || [],
       absolutePath: details.absolutePath
     });
@@ -162,18 +174,47 @@ async function toggleSkillFork(skill, newValue) {
   }
 }
 
+function formatYamlScalar(value) {
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value);
+}
+
+function appendYamlField(lines, key, value) {
+  if (value === undefined || value === null || value === '') return;
+
+  if (Array.isArray(value)) {
+    const formatted = value
+      .map(item => {
+        const str = String(item).replace(/"/g, '\\"');
+        return `"${str}"`;
+      })
+      .join(', ');
+    lines.push(`${key}: [${formatted}]`);
+    return;
+  }
+
+  if (typeof value === 'string' && value.includes('\n')) {
+    lines.push(`${key}: |`);
+    value.split(/\r?\n/).forEach(line => {
+      lines.push(`  ${line}`);
+    });
+    return;
+  }
+
+  lines.push(`${key}: ${formatYamlScalar(value)}`);
+}
+
 async function saveSkillContent(dirName, metadata, body) {
   const lines = ['---'];
-  if (metadata.name) lines.push(`name: ${metadata.name}`);
-  if (metadata.description) lines.push(`description: ${metadata.description}`);
+  appendYamlField(lines, 'name', metadata.name);
+  appendYamlField(lines, 'description', metadata.description);
+  appendYamlField(lines, 'argument-hint', metadata['argument-hint']);
+  appendYamlField(lines, 'user-invocable', metadata['user-invocable']);
   if (metadata['disable-model-invocation'] === true) lines.push('disable-model-invocation: true');
   if (metadata.context === 'fork') lines.push('context: fork');
-
-  if (metadata['allowed-tools']) {
-    let tools = metadata['allowed-tools'];
-    if (typeof tools === 'string') lines.push(`allowed-tools: [${tools}]`);
-    else if (Array.isArray(tools)) lines.push(`allowed-tools: [${tools.join(', ')}]`);
-  }
+  appendYamlField(lines, 'agent', metadata.agent);
+  appendYamlField(lines, 'model', metadata.model);
+  appendYamlField(lines, 'allowed-tools', metadata['allowed-tools']);
 
   lines.push('---');
   lines.push('');
@@ -190,6 +231,7 @@ async function saveEditDialog() {
   }
 
   const metadata = {
+    ...editingSkill.extraMetadata,
     name: editingSkill.name,
     description: editingSkill.description,
   };
@@ -296,145 +338,241 @@ async function handleBatchUpload(files) {
 function handleFileChange(event) { handleBatchUpload(event.target.files); }
 
 // --- 弹窗拖拽逻辑 (解析 Skill) ---
-function onDialogDragOver(e) { e.preventDefault(); isDialogDragOver.value = true; }
-function onDialogDragLeave(e) {
+function logSkillDrag(stage, payload = null) {
+  if (payload === null || payload === undefined) {
+    console.info(`[Skills][drag] ${stage}`);
+    return;
+  }
+  console.info(`[Skills][drag] ${stage}`, payload);
+}
+
+function onDialogDragOver(e) {
+  e.preventDefault();
+  isDialogDragOver.value = true;
+}
+function onDialogDragLeave(e) {
   if (e.relatedTarget === null || !e.currentTarget.contains(e.relatedTarget)) {
     isDialogDragOver.value = false;
   }
 }
 
+function parseYamlScalar(rawValue) {
+  const value = rawValue.trim();
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+
+  if (value.startsWith('[') && value.endsWith(']')) {
+    const inner = value.slice(1, -1).trim();
+    if (!inner) return [];
+
+    const items = [];
+    let current = '';
+    let quote = null;
+
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+      if ((ch === '"' || ch === "'") && inner[i - 1] !== '\\') {
+        quote = quote === ch ? null : (quote || ch);
+        current += ch;
+        continue;
+      }
+      if (ch === ',' && !quote) {
+        items.push(parseYamlScalar(current));
+        current = '';
+        continue;
+      }
+      current += ch;
+    }
+
+    if (current.trim()) items.push(parseYamlScalar(current));
+    return items;
+  }
+
+  return value;
+}
+
 function parseFrontmatterSimple(text) {
-  const regex = /^---\s*[\r\n]+([\s\S]*?)[\r\n]+---\s*([\s\S]*)$/;
-  const match = text.match(regex);
-  if (!match) return { metadata: {}, body: text };
+  const normalized = text.replace(/\r\n/g, '\n');
+  const regex = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/;
+  const match = normalized.match(regex);
+  if (!match) return { metadata: {}, body: normalized };
 
   const yamlStr = match[1];
   const body = match[2];
   const metadata = {};
+  const lines = yamlStr.split('\n');
 
-  yamlStr.split('\n').forEach(line => {
-    const parts = line.split(':');
-    if (parts.length >= 2) {
-      const key = parts[0].trim();
-      let value = parts.slice(1).join(':').trim();
-      if (value === 'true') value = true;
-      else if (value === 'false') value = false;
-      else if (value.startsWith('[') && value.endsWith(']')) {
-        value = value.slice(1, -1).split(',').map(s => s.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+
+    const keyMatch = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!keyMatch) continue;
+
+    const key = keyMatch[1].trim();
+    const rawValue = keyMatch[2] ?? '';
+
+    if (rawValue === '|' || rawValue === '>') {
+      const blockLines = [];
+      for (i = i + 1; i < lines.length; i++) {
+        const nextLine = lines[i];
+        if (!nextLine.trim()) {
+          blockLines.push('');
+          continue;
+        }
+        if (!/^\s+/.test(nextLine)) {
+          i -= 1;
+          break;
+        }
+        blockLines.push(nextLine.replace(/^\s{2}/, '').replace(/^\t/, ''));
       }
-      metadata[key] = value;
+      metadata[key] = blockLines.join(rawValue === '>' ? ' ' : '\n').trim();
+      continue;
     }
-  });
+
+    if (rawValue === '') {
+      const listItems = [];
+      let foundIndentedList = false;
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j];
+        if (!nextLine.trim()) {
+          if (foundIndentedList) continue;
+          break;
+        }
+        const listMatch = nextLine.match(/^\s*-\s+(.*)$/);
+        if (!listMatch) break;
+        foundIndentedList = true;
+        listItems.push(parseYamlScalar(listMatch[1]));
+        i = j;
+      }
+      metadata[key] = foundIndentedList ? listItems : '';
+      continue;
+    }
+
+    metadata[key] = parseYamlScalar(rawValue);
+  }
+
   return { metadata, body };
 }
 
 async function onDialogDrop(e) {
   e.preventDefault();
   isDialogDragOver.value = false;
-  const files = e.dataTransfer.files;
-  if (!files || files.length === 0) return;
+  const files = e.dataTransfer.files;
+
+  if (!files || files.length === 0) {
+    return;
+  }
 
   const item = files[0];
-  if (!item.path) return;
+  const resolvedItemPath = item?.path || window.api.getDroppedFilePath?.(item) || '';
+
+  if (!resolvedItemPath) {
+    ElMessage.warning('无法获取拖拽文件的本地路径，请尝试通过系统文件管理器直接拖入，或改用文件夹/压缩包导入。');
+    return;
+  }
 
   try {
     let isSkillPackage = false;
     let importContent = '';
     let importPath = '';
 
-    // 情况 A: 直接拖入 SKILL.md 文件
-    if (item.name.toLowerCase() === 'skill.md') {
-      importContent = await window.api.readLocalFile(item.path);
-      importPath = window.api.pathJoin(item.path, '..'); // 记录父级目录用于拷贝资源
-      isSkillPackage = true;
-    }
-    // 情况 B: 拖入 .skill 文件 (Zip 包)
-    else if (item.name.toLowerCase().endsWith('.skill') || item.name.toLowerCase().endsWith('.zip')) {
+    if (item.name === 'SKILL.md' || item.name.toLowerCase() === 'skill.md') {
+      importContent = await window.api.readLocalFile(resolvedItemPath);
+      importPath = window.api.pathJoin(resolvedItemPath, '..');
+      isSkillPackage = true;
+    } else if (item.name.toLowerCase().endsWith('.skill') || item.name.toLowerCase().endsWith('.zip')) {
       const loadingInstance = ElMessage.info({ message: t('skills.alerts.extracting'), duration: 0 });
       try {
-        // 解压到临时目录 (后端会智能返回包含 SKILL.md 的实际目录)
-        const tempDir = await window.api.extractSkillPackage(item.path);
-        const skillMdPath = window.api.pathJoin(tempDir, 'SKILL.md');
+        const tempDir = await window.api.extractSkillPackage(resolvedItemPath);
+        const skillMdPath = window.api.pathJoin(tempDir, 'SKILL.md');
 
-        if (await window.api.readLocalFile(skillMdPath).then(() => true).catch(() => false)) {
+        if (await window.api.readLocalFile(skillMdPath).then(() => true).catch((error) => {
+          return false;
+        })) {
           importContent = await window.api.readLocalFile(skillMdPath);
-          importPath = tempDir; // 记录临时目录路径
-          isSkillPackage = true;
+          importPath = tempDir;
+          isSkillPackage = true;
         } else {
           throw new Error(t('skills.alerts.invalidPackage'));
         }
       } finally {
         loadingInstance.close();
       }
-    }
-    // 情况 C: 拖入文件夹 (尝试查找内部的 SKILL.md)
-    else {
-      const skillMdPath = window.api.pathJoin(item.path, 'SKILL.md');
+    } else {
+      const skillMdPath = window.api.pathJoin(resolvedItemPath, 'SKILL.md');
       try {
         importContent = await window.api.readLocalFile(skillMdPath);
-        importPath = item.path; // 记录文件夹路径
-        isSkillPackage = true;
-      } catch (err) {
-        // 不是 Skill 包，忽略
+        importPath = resolvedItemPath;
+        isSkillPackage = true;
+      } catch (err) {
         isSkillPackage = false;
       }
-    }
+    }
 
-    // 逻辑分支 1：如果是 Skill 包，执行导入/替换逻辑
     if (isSkillPackage) {
-      // 记录待导入路径
       if (importPath) {
         pendingImportPath.value = importPath;
       }
 
-      const { metadata, body } = parseFrontmatterSimple(importContent);
+      const { metadata, body } = parseFrontmatterSimple(importContent);
       applyImportedMetadata(metadata, body);
 
-      // 如果是新 Skill 且没名字，尝试用文件名(去掉后缀)或元数据
       if (!editingSkill.name) {
         if (metadata.name) editingSkill.name = metadata.name;
         else editingSkill.name = item.name.replace(/\.skill$/i, '');
-      }
+      }
 
-      // 提示信息
-      const actionText = activeEditTab.value === 'files' ? " (已准备替换当前 Skill)" : " (检测到完整 Skill 包)";
-      ElMessage.success(t('skills.alerts.parseSuccess') + actionText + "，请点击保存以应用");
-
+      const actionText = activeEditTab.value === 'files' ? ' (已准备替换当前 Skill)' : ' (检测到完整 Skill 包)';
+      ElMessage.success(t('skills.alerts.parseSuccess') + actionText + '，请点击保存以应用');
       return;
     }
 
-    // 逻辑分支 2：如果不是 Skill 包，且在“文件管理”Tab，则视为普通文件上传
-    if (activeEditTab.value === 'files') {
+    if (activeEditTab.value === 'files') {
       if (!isNewSkill.value) {
         handleBatchUpload(files);
       } else {
-        ElMessage.warning(t('skills.alerts.saveFirstHint') || "请先保存 Skill 后再上传文件");
+        ElMessage.warning(t('skills.alerts.saveFirstHint') || '请先保存 Skill 后再上传文件');
       }
       return;
-    }
-
-    // 逻辑分支 3：不是 Skill 包，且在“基本信息”Tab，报错
+    }
     ElMessage.warning(t('skills.alerts.noSkillMd'));
-    // 仅在新建时尝试回填名字，编辑时不覆盖
     if (isNewSkill.value) {
       editingSkill.name = item.name;
     }
-
   } catch (err) {
+    console.error('[Skills][drag] drop:error', err);
     ElMessage.error(t('skills.alerts.parseFailed') + ': ' + err.message);
   }
 }
 
 // 辅助函数：应用解析出的元数据
 function applyImportedMetadata(metadata, body) {
-  if (metadata.name) editingSkill.name = metadata.name;
-  if (metadata.description) editingSkill.description = metadata.description;
-  if (metadata['allowed-tools']) {
-    const tools = metadata['allowed-tools'];
-    editingSkill.allowedTools = Array.isArray(tools) ? tools.join(', ') : tools;
+  const {
+    name,
+    description,
+    context,
+    ['allowed-tools']: allowedTools,
+    ['disable-model-invocation']: disableModelInvocation,
+    ...extraMetadata
+  } = metadata;
+
+  if (name) editingSkill.name = name;
+  if (description) editingSkill.description = description;
+  editingSkill.enabled = disableModelInvocation !== true;
+
+  if (allowedTools) {
+    editingSkill.allowedTools = Array.isArray(allowedTools) ? allowedTools.join(', ') : allowedTools;
+  } else {
+    editingSkill.allowedTools = '';
   }
-  // 兼容布尔值和字符串的 context 配置
-  if (metadata.context === 'fork') editingSkill.forkMode = true;
+
+  editingSkill.forkMode = context === 'fork';
+  editingSkill.extraMetadata = extraMetadata;
 
   editingSkill.instructions = body.trim();
 }

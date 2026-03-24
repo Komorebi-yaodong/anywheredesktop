@@ -723,6 +723,35 @@
         "restoreFailed": "Restore failed."
       }
     },
+    "desktop": {
+      "title": "Desktop Settings",
+      "closeToTray": {
+        "label": "Close main window to tray",
+        "description": "When enabled, clicking the main window close button hides the app to the tray instead of quitting."
+      },
+      "mainToggle": {
+        "label": "Main window shortcut",
+        "description": "Shows the main window when triggered.",
+        "placeholder": "Click to record shortcut"
+      },
+      "quickSummon": {
+        "label": "Summon shortcut",
+        "description": "Opens the desktop quick summon panel.",
+        "placeholder": "Click to record shortcut"
+      },
+      "promptShortcuts": {
+        "title": "Prompt shortcut list",
+        "description": "Bind a global shortcut to a prompt and launch it directly.",
+        "addButton": "Add Shortcut",
+        "empty": "No prompt shortcuts configured yet.",
+        "shortcutPlaceholder": "Click to record shortcut"
+      },
+      "alerts": {
+        "invalidShortcut": "Invalid shortcut format. Use “modifier + key”, for example Ctrl+Space or Alt+1.",
+        "shortcutConflict": "Shortcut conflict: {a} and {b} are both using {shortcut}.",
+        "promptRequired": "You must select a prompt first"
+      }
+    },
     "alerts": {
       "importSuccess": "Configuration imported successfully.",
       "importFailed": "Configuration import failed.",

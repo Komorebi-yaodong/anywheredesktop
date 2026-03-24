@@ -354,15 +354,28 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
   if (!toolInfo.isPersistent && serverConfig) {
     let tempClient = null
     const controller = new AbortController()
+    let abortHandler = null
 
     if (signal) {
       if (signal.aborted) controller.abort()
-      signal.addEventListener('abort', () => controller.abort(), { once: true })
+      abortHandler = () => {
+        controller.abort()
+        if (tempClient && typeof tempClient.close === 'function') {
+          tempClient.close().catch(() => {})
+        }
+      }
+      signal.addEventListener('abort', abortHandler, { once: true })
     }
 
     try {
       const cfg = buildServerConfig(serverConfig.id, serverConfig)
       tempClient = new MultiServerMCPClient({ [serverConfig.id]: cfg }, { signal: controller.signal })
+
+      if (controller.signal.aborted) {
+        const abortError = new Error('This operation was aborted')
+        abortError.name = 'AbortError'
+        throw abortError
+      }
 
       const tools = await tempClient.getTools()
       const toolToCall = tools.find((tool) => tool.name === toolName)
@@ -373,6 +386,9 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
 
       return await toolToCall.invoke(toolArgs, { signal: controller.signal })
     } finally {
+      if (signal && abortHandler) {
+        signal.removeEventListener('abort', abortHandler)
+      }
       if (!signal) {
         controller.abort()
       }

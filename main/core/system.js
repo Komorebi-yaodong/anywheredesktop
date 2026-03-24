@@ -1,4 +1,10 @@
 import { clipboard, desktopCapturer, dialog, nativeImage, shell } from 'electron'
+import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
+
 
 function normalizeText(input) {
   if (typeof input === 'string') return input
@@ -81,6 +87,90 @@ export async function copyImage(input = {}) {
     height: size.height
   }
 }
+
+function readClipboardFilePaths() {
+  const formats = clipboard.availableFormats()
+  const fileNameWFormat = formats.find((item) => item === 'FileNameW')
+  if (!fileNameWFormat) return []
+
+  try {
+    const buffer = clipboard.readBuffer(fileNameWFormat)
+    if (!buffer || buffer.length < 4) return []
+
+    const raw = buffer.toString('ucs2').replace(/\u0000+$/g, '')
+    return raw
+      .split('\u0000')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => path.normalize(item))
+  } catch {
+    return []
+  }
+}
+
+function readClipboardImageDataUrl() {
+  try {
+    const image = clipboard.readImage()
+    if (!image || image.isEmpty()) return ''
+    return image.toDataURL()
+  } catch {
+    return ''
+  }
+}
+
+async function tryCaptureSelectionToClipboard() {
+  if (process.platform !== 'win32') {
+    return null
+  }
+
+  try {
+    await execFileAsync('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      '$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 50; $wshell.SendKeys("^c"); Start-Sleep -Milliseconds 120'
+    ], { windowsHide: true })
+  } catch {
+    // ignore selection capture failure
+  }
+
+  return readClipboardPayload()
+}
+
+export async function captureSelectionPayload() {
+  const direct = await readClipboardPayload()
+  if (direct.kind !== 'empty') return direct
+  const captured = await tryCaptureSelectionToClipboard()
+  return captured || direct
+}
+
+
+export async function readClipboardPayload() {
+  const text = clipboard.readText()
+  const imageDataUrl = readClipboardImageDataUrl()
+  const filePaths = readClipboardFilePaths()
+
+  let kind = 'empty'
+  if (filePaths.length > 0) {
+    kind = 'files'
+  } else if (imageDataUrl) {
+    kind = 'img'
+  } else if (text && text.trim()) {
+    kind = 'over'
+  }
+
+  return {
+    ok: true,
+    kind,
+    text,
+    imageDataUrl,
+    filePaths,
+    hasText: Boolean(text && text.trim()),
+    hasImage: Boolean(imageDataUrl),
+    hasFiles: filePaths.length > 0,
+    formats: clipboard.availableFormats()
+  }
+}
+
 
 export async function readClipboardText() {
   return {

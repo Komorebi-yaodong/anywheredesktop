@@ -1,7 +1,7 @@
 <script setup>
-import { ref, onMounted, computed, inject, h, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, inject, h, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Upload, FolderOpened, Refresh, Delete as DeleteIcon, Download, Plus, ArrowRight, Check } from '@element-plus/icons-vue'
+import { Upload, FolderOpened, Refresh, Delete as DeleteIcon, Download, Plus, ArrowRight, Check, Warning, Remove } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
 import draggable from 'vuedraggable'
 
@@ -12,6 +12,7 @@ const selectedLanguage = ref(locale.value);
 
 const collapsedCards = ref({
   general: false,
+  desktop: false,
   voice: false,
   data: false,
   webdav: false
@@ -19,12 +20,71 @@ const collapsedCards = ref({
 
 const cardDefinitions = {
   general: { id: 'general', titleKey: 'setting.title' },
+  desktop: { id: 'desktop', titleKey: 'setting.desktop.title' },
   voice: { id: 'voice', titleKey: 'setting.voice.title' },
   data: { id: 'data', titleKey: 'setting.dataManagement.title' },
   webdav: { id: 'webdav', titleKey: null, staticTitle: 'WebDAV' }
 };
 
 const settingsCards = ref([]);
+const shortcutRecorder = ref({
+  target: '',
+  index: -1,
+  active: false
+});
+
+function stopShortcutRecording() {
+  shortcutRecorder.value = { target: '', index: -1, active: false }
+}
+
+function normalizeRecordedAccelerator(event) {
+  const modifiers = []
+  if (event.ctrlKey || event.metaKey) modifiers.push('Ctrl')
+  if (event.altKey) modifiers.push('Alt')
+  if (event.shiftKey) modifiers.push('Shift')
+
+  const key = String(event.key || '').trim()
+  if (!key || ['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
+    return ''
+  }
+
+  const normalizedKey = key.length === 1 ? key.toUpperCase() : (key === ' ' ? 'Space' : key)
+  if (!modifiers.length) {
+    return ''
+  }
+  return [...modifiers, normalizedKey].join('+')
+}
+
+function handleShortcutRecorderKeydown(event) {
+  if (!shortcutRecorder.value.active) return
+  event.preventDefault()
+  event.stopPropagation()
+
+  if (event.key === 'Escape') {
+    stopShortcutRecording()
+    return
+  }
+
+  const accelerator = normalizeRecordedAccelerator(event)
+  if (!accelerator) return
+
+  ensureDesktopConfig()
+  if (shortcutRecorder.value.target === 'mainToggle') {
+    currentConfig.value.desktop.shortcuts.mainToggle = accelerator
+  } else if (shortcutRecorder.value.target === 'quickSummon') {
+    currentConfig.value.desktop.shortcuts.quickSummon = accelerator
+  } else if (shortcutRecorder.value.target === 'promptBinding' && shortcutRecorder.value.index > -1) {
+    currentConfig.value.desktop.shortcuts.promptBindings[shortcutRecorder.value.index].accelerator = accelerator
+  }
+
+  stopShortcutRecording()
+  handleDesktopShortcutChange()
+}
+
+function startShortcutRecording(target, index = -1) {
+  shortcutRecorder.value = { target, index, active: true }
+}
+
 
 function initCardOrder() {
   if (currentConfig.value && currentConfig.value.settingsCardOrder) {
@@ -38,6 +98,7 @@ function initCardOrder() {
   } else {
     settingsCards.value = [
       cardDefinitions.general,
+      cardDefinitions.desktop,
       cardDefinitions.voice,
       cardDefinitions.data,
       cardDefinitions.webdav
@@ -144,6 +205,7 @@ function buildWebdavInput(extra = {}) {
 
 
 onMounted(() => {
+  window.addEventListener('keydown', handleShortcutRecorderKeydown, true)
   if (['ja', 'ru'].includes(locale.value)) {
     handleLanguageChange('zh');
   } else {
@@ -151,15 +213,23 @@ onMounted(() => {
   }
   
   if (currentConfig.value) {
+    ensureDesktopConfig();
     initCardOrder();
   }
 });
 
 watch(() => currentConfig.value, (newVal) => {
   if (newVal) {
+    ensureDesktopConfig();
     initCardOrder();
   }
 }, { once: true });
+
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleShortcutRecorderKeydown, true)
+})
+
 
 async function saveSingleSetting(keyPath, value) {
   try {
@@ -171,6 +241,196 @@ async function saveSingleSetting(keyPath, value) {
     ElMessage.error(`${t('setting.alerts.saveFailedPrefix')} ${keyPath}`);
   }
 }
+
+function ensureDesktopConfig() {
+  if (!currentConfig.value.desktop || typeof currentConfig.value.desktop !== 'object') {
+    currentConfig.value.desktop = {}
+  }
+  if (typeof currentConfig.value.desktop.closeToTray !== 'boolean') {
+    currentConfig.value.desktop.closeToTray = true
+  }
+  if (!currentConfig.value.desktop.shortcuts || typeof currentConfig.value.desktop.shortcuts !== 'object') {
+    currentConfig.value.desktop.shortcuts = {}
+  }
+  if (!Array.isArray(currentConfig.value.desktop.shortcuts.promptBindings)) {
+    currentConfig.value.desktop.shortcuts.promptBindings = []
+  }
+  if (!currentConfig.value.desktop.shortcuts.mainToggle) {
+    currentConfig.value.desktop.shortcuts.mainToggle = 'Ctrl+Space'
+  }
+  if (!currentConfig.value.desktop.shortcuts.quickSummon) {
+    currentConfig.value.desktop.shortcuts.quickSummon = 'Alt+X'
+  }
+}
+
+function normalizeModifierToken(token = '') {
+  const compact = String(token).replace(/\s+/g, '').toLowerCase()
+  const modifierMap = {
+    ctrl: 'Ctrl',
+    control: 'Ctrl',
+    cmdorctrl: 'CommandOrControl',
+    commandorcontrol: 'CommandOrControl',
+    alt: 'Alt',
+    option: 'Alt',
+    shift: 'Shift',
+    cmd: 'Command',
+    command: 'Command',
+    super: 'Super',
+    meta: 'Super'
+  }
+  return modifierMap[compact] || null
+}
+
+function normalizeKeyToken(token = '') {
+  const value = String(token || '').trim()
+  if (!value) return ''
+  if (/^[a-zA-Z]$/.test(value)) return value.toUpperCase()
+  if (/^[0-9]$/.test(value)) return value
+  if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(value)) return value.toUpperCase()
+  const aliasMap = {
+    space: 'Space',
+    enter: 'Enter',
+    return: 'Enter',
+    esc: 'Escape',
+    escape: 'Escape',
+    tab: 'Tab'
+  }
+  return aliasMap[value.toLowerCase()] || value
+}
+
+function normalizeShortcutValue(value = '') {
+  const tokens = String(value || '').split('+').map((item) => item.trim()).filter(Boolean)
+  if (tokens.length < 2) {
+    return { ok: false, error: t('setting.desktop.alerts.invalidShortcut') }
+  }
+
+  const modifiers = []
+  let normalKey = ''
+  for (const token of tokens) {
+    const modifier = normalizeModifierToken(token)
+    if (modifier) {
+      if (!modifiers.includes(modifier)) modifiers.push(modifier)
+      continue
+    }
+
+    if (normalKey) {
+      return { ok: false, error: t('setting.desktop.alerts.invalidShortcut') }
+    }
+    normalKey = normalizeKeyToken(token)
+  }
+
+  if (!modifiers.length || !normalKey) {
+    return { ok: false, error: t('setting.desktop.alerts.invalidShortcut') }
+  }
+
+  return {
+    ok: true,
+    accelerator: [...modifiers, normalKey].join('+')
+  }
+}
+
+function validateDesktopShortcutDraft() {
+  ensureDesktopConfig()
+  const bindings = [
+    {
+      label: t('setting.desktop.mainToggle.label'),
+      accelerator: currentConfig.value.desktop.shortcuts.mainToggle
+    },
+    {
+      label: t('setting.desktop.quickSummon.label'),
+      accelerator: currentConfig.value.desktop.shortcuts.quickSummon
+    }
+  ]
+
+  currentConfig.value.desktop.shortcuts.promptBindings.forEach((item, index) => {
+    if (item?.enabled === false) return
+    if (!item?.promptKey) {
+      throw new Error(`${t('setting.desktop.promptShortcuts.title')} #${index + 1}：${t('setting.desktop.alerts.promptRequired')}`)
+    }
+    bindings.push({
+      label: item?.promptKey || `${t('setting.desktop.promptShortcuts.title')} #${index + 1}`,
+      accelerator: item?.accelerator || ''
+    })
+  })
+
+  const acceleratorMap = new Map()
+  for (const binding of bindings) {
+    const normalized = normalizeShortcutValue(binding.accelerator)
+    if (!normalized.ok) {
+      return normalized
+    }
+    if (acceleratorMap.has(normalized.accelerator)) {
+      return {
+        ok: false,
+        error: t('setting.desktop.alerts.shortcutConflict', {
+          a: binding.label,
+          b: acceleratorMap.get(normalized.accelerator),
+          shortcut: normalized.accelerator
+        })
+      }
+    }
+    acceleratorMap.set(normalized.accelerator, binding.label)
+  }
+
+  currentConfig.value.desktop.shortcuts.mainToggle = normalizeShortcutValue(currentConfig.value.desktop.shortcuts.mainToggle).accelerator
+  currentConfig.value.desktop.shortcuts.quickSummon = normalizeShortcutValue(currentConfig.value.desktop.shortcuts.quickSummon).accelerator
+  currentConfig.value.desktop.shortcuts.promptBindings = currentConfig.value.desktop.shortcuts.promptBindings.map((item) => ({
+    id: item.id,
+    promptKey: item.promptKey,
+    enabled: item.enabled !== false,
+    accelerator: normalizeShortcutValue(item.accelerator).accelerator
+  }))
+
+  return { ok: true }
+}
+
+async function saveDesktopConfig() {
+  ensureDesktopConfig()
+  let validation
+  try {
+    validation = validateDesktopShortcutDraft()
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, t('setting.alerts.saveFailedPrefix')))
+    return false
+  }
+  if (!validation.ok) {
+    ElMessage.error(validation.error)
+    return false
+  }
+
+  await saveSingleSetting('desktop', JSON.parse(JSON.stringify(currentConfig.value.desktop)))
+  ElMessage.success(t('setting.alerts.saveSuccess'))
+  return true
+}
+
+function addPromptShortcutBinding() {
+  ensureDesktopConfig()
+  currentConfig.value.desktop.shortcuts.promptBindings.push({
+    id: `binding_${Date.now()}`,
+    promptKey: '',
+    accelerator: 'Alt+1',
+    enabled: true
+  })
+}
+
+async function removePromptShortcutBinding(index) {
+  ensureDesktopConfig()
+  currentConfig.value.desktop.shortcuts.promptBindings.splice(index, 1)
+  await saveDesktopConfig()
+}
+
+async function handleDesktopShortcutChange() {
+  await saveDesktopConfig()
+}
+
+const availableWindowPrompts = computed(() => {
+  const prompts = currentConfig.value?.prompts || {}
+  return Object.entries(prompts)
+    .filter(([, prompt]) => prompt?.enable !== false)
+    .map(([key, prompt]) => ({ key, ...prompt }))
+    .sort((a, b) => a.key.localeCompare(b.key))
+})
+
 
 async function saveFullConfig() {
   if (!currentConfig.value) return;
@@ -801,7 +1061,63 @@ async function selectLocalChatPath() {
                     </div>
                   </div>
 
-                  <div v-if="element.id === 'voice'" class="card-body">
+                  
+                  <div v-if="element.id === 'desktop'" class="card-body">
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.desktop.closeToTray.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.desktop.closeToTray.description') }}</span>
+                      </div>
+                      <el-switch v-model="currentConfig.desktop.closeToTray" @change="handleDesktopShortcutChange" />
+                    </div>
+
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.desktop.mainToggle.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.desktop.mainToggle.description') }}</span>
+                      </div>
+                      <el-button class="shortcut-record-btn" @click="startShortcutRecording('mainToggle')">
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'mainToggle' ? '请按下快捷键…' : currentConfig.desktop.shortcuts.mainToggle || t('setting.desktop.mainToggle.placeholder') }}
+                      </el-button>
+                    </div>
+
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.desktop.quickSummon.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.desktop.quickSummon.description') }}</span>
+                      </div>
+                      <el-button class="shortcut-record-btn" @click="startShortcutRecording('quickSummon')">
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'quickSummon' ? '请按下快捷键…' : currentConfig.desktop.shortcuts.quickSummon || t('setting.desktop.quickSummon.placeholder') }}
+                      </el-button>
+                    </div>
+
+                    <div class="desktop-shortcut-list">
+                      <div class="desktop-shortcut-list-head">
+                        <div>
+                          <div class="setting-option-label">{{ t('setting.desktop.promptShortcuts.title') }}</div>
+                          <div class="setting-option-description">{{ t('setting.desktop.promptShortcuts.description') }}</div>
+                        </div>
+                        <el-button plain :icon="Plus" @click="addPromptShortcutBinding">{{ t('setting.desktop.promptShortcuts.addButton') }}</el-button>
+                      </div>
+
+                      <div v-if="!currentConfig.desktop.shortcuts.promptBindings.length" class="desktop-shortcut-empty">
+                        {{ t('setting.desktop.promptShortcuts.empty') }}
+                      </div>
+
+                      <div v-for="(binding, index) in currentConfig.desktop.shortcuts.promptBindings" :key="binding.id || index" class="desktop-shortcut-row">
+                        <el-select v-model="binding.promptKey" style="width: 220px;" filterable @change="handleDesktopShortcutChange">
+                          <el-option v-for="prompt in availableWindowPrompts" :key="prompt.key" :label="prompt.key" :value="prompt.key" />
+                        </el-select>
+                        <el-button class="shortcut-record-btn small" @click="startShortcutRecording('promptBinding', index)">
+                          {{ shortcutRecorder.active && shortcutRecorder.target === 'promptBinding' && shortcutRecorder.index === index ? '请按下快捷键…' : (binding.accelerator || t('setting.desktop.promptShortcuts.shortcutPlaceholder')) }}
+                        </el-button>
+                        <el-switch v-model="binding.enabled" @change="handleDesktopShortcutChange" />
+                        <el-button text type="danger" :icon="Remove" @click="removePromptShortcutBinding(index)" />
+                      </div>
+                    </div>
+                  </div>
+
+<div v-if="element.id === 'voice'" class="card-body">
                     <div class="voice-list-container">
                       <el-tag v-for="voice in currentConfig.voiceList" :key="voice" closable @click="editVoice(voice)"
                         @close="deleteVoice(voice)" class="voice-tag" size="large">
@@ -1132,6 +1448,52 @@ html.dark .settings-page-container {
   line-height: 1.3;
 }
 
+
+.desktop-shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.desktop-shortcut-list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px 2px;
+}
+
+.desktop-shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) 180px 60px 40px;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--panda-bg);
+  border: 1px solid var(--panda-border);
+}
+
+.shortcut-record-btn {
+  min-width: 220px;
+  justify-content: flex-start;
+}
+
+.shortcut-record-btn.small {
+  min-width: 180px;
+}
+
+
+.desktop-shortcut-empty {
+  padding: 14px 12px;
+  border-radius: 12px;
+  color: var(--panda-text-sub);
+  background: var(--panda-bg);
+  border: 1px dashed var(--panda-border);
+  font-size: 12px;
+}
+
 .voice-list-container {
   display: flex;
   flex-wrap: wrap;
@@ -1373,4 +1735,16 @@ html.dark .settings-page-container {
   background-color: var(--panda-bg);
   border-top: 1px solid var(--panda-border);
 }
+
+@media (max-width: 760px) {
+  .desktop-shortcut-row {
+    grid-template-columns: 1fr;
+  }
+
+  .desktop-shortcut-list-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 </style>

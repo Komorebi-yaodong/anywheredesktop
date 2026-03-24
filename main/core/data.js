@@ -1,3 +1,8 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import crypto from 'node:crypto'
+import { app } from 'electron'
+
 import { safeClone } from '../dataConverter.js'
 import { getBuiltinServers as getBuiltinMcpServers } from './mcp_builtin.js'
 import {
@@ -14,6 +19,56 @@ const MCP_SERVERS_DOC_ID = 'mcpServers'
 const TASKS_DOC_ID = 'tasks'
 const LOCAL_CONFIG_DOC_ID = 'config_local_desktop'
 const CURRENT_CONFIG_VERSION = '2.1.15'
+
+const BACKGROUND_CACHE_DOC_ID = 'background_cache'
+const BACKGROUND_CACHE_DIR_NAME = 'background_cache'
+
+let windowChannelNotifier = null
+
+export function setWindowChannelNotifier(notifier) {
+  windowChannelNotifier = typeof notifier === 'function' ? notifier : null
+}
+
+function emitWindowChannel(channel, payload = null) {
+  if (typeof windowChannelNotifier !== 'function') return
+
+  try {
+    windowChannelNotifier(channel, deepClone(payload))
+  } catch (error) {
+    console.error(`[data] failed to emit window channel '${channel}':`, error)
+  }
+}
+
+async function notifyConfigUpdated() {
+  try {
+    const latestConfig = await getConfig()
+    emitWindowChannel('window:configUpdated', latestConfig.config)
+    emitWindowChannel('config-updated', latestConfig.config)
+  } catch (error) {
+    console.error('[data] failed to notify config update:', error)
+  }
+}
+
+
+function toFileUrl(filePath) {
+  return `file://${String(filePath).replace(/\\/g, '/')}`
+}
+
+function getResourceFileUrl(fileName = '') {
+  const resourcePath = path.join(app.getAppPath(), 'resources', fileName)
+  return toFileUrl(resourcePath)
+}
+
+function getBackgroundCacheHash(url = '') {
+  return crypto.createHash('md5').update(String(url)).digest('hex')
+}
+
+async function ensureBackgroundCacheDir() {
+  const cacheDir = path.join(app.getPath('userData'), BACKGROUND_CACHE_DIR_NAME)
+  await fs.mkdir(cacheDir, { recursive: true })
+  return cacheDir
+}
+
 
 export const defaultConfig = {
   config: {
@@ -59,9 +114,10 @@ export const defaultConfig = {
         autoSaveChat: false
       }
     },
-    settingsCardOrder: ['general', 'voice', 'data', 'webdav'],
+    settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],
     settingsCardCollapsed: {
       general: false,
+      desktop: false,
       voice: false,
       data: false,
       webdav: false
@@ -88,7 +144,16 @@ export const defaultConfig = {
       data_path: '/anywhere_data',
       localChatPath: ''
     },
-    voiceList: [
+        desktop: {
+      closeToTray: true,
+      shortcuts: {
+        mainToggle: 'Ctrl+Space',
+        quickSummon: 'Alt+X',
+        promptBindings: []
+      }
+    },
+
+voiceList: [
       'alloy-👩',
       'echo-👨‍🦰清晰',
       'nova-👩清晰',
@@ -232,9 +297,18 @@ function checkConfig(inputConfig) {
     zoom: 1,
     fastWindowPosition: null,
     voiceList: [...defaultConfig.config.voiceList],
-    settingsCardOrder: ['general', 'voice', 'data', 'webdav'],
+    desktop: {
+      closeToTray: true,
+      shortcuts: {
+        mainToggle: 'Ctrl+Space',
+        quickSummon: 'Alt+X',
+        promptBindings: []
+      }
+    },
+    settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],
     settingsCardCollapsed: {
       general: false,
+      desktop: false,
       voice: false,
       data: false,
       webdav: false
@@ -297,18 +371,53 @@ function checkConfig(inputConfig) {
   }
 
   if (!config.settingsCardOrder || !Array.isArray(config.settingsCardOrder)) {
-    config.settingsCardOrder = ['general', 'voice', 'data', 'webdav']
+    config.settingsCardOrder = ['general', 'desktop', 'voice', 'data', 'webdav']
     changed = true
+  }
+
+  if (!config.desktop || typeof config.desktop !== 'object') {
+    config.desktop = deepClone(rootDefaults.desktop)
+    changed = true
+  } else {
+    if (typeof config.desktop.closeToTray !== 'boolean') {
+      config.desktop.closeToTray = true
+      changed = true
+    }
+    if (!config.desktop.shortcuts || typeof config.desktop.shortcuts !== 'object') {
+      config.desktop.shortcuts = deepClone(rootDefaults.desktop.shortcuts)
+      changed = true
+    } else {
+      if (typeof config.desktop.shortcuts.mainToggle !== 'string' || !config.desktop.shortcuts.mainToggle.trim()) {
+        config.desktop.shortcuts.mainToggle = 'Ctrl+Space'
+        changed = true
+      }
+      if (typeof config.desktop.shortcuts.quickSummon !== 'string' || !config.desktop.shortcuts.quickSummon.trim()) {
+        config.desktop.shortcuts.quickSummon = 'Alt+X'
+        changed = true
+      }
+      if (!Array.isArray(config.desktop.shortcuts.promptBindings)) {
+        config.desktop.shortcuts.promptBindings = []
+        changed = true
+      }
+    }
   }
 
   if (!config.settingsCardCollapsed || typeof config.settingsCardCollapsed !== 'object') {
     config.settingsCardCollapsed = {
       general: false,
+      desktop: false,
       voice: false,
       data: false,
       webdav: false
     }
     changed = true
+  }
+
+  for (const [cardKey, cardValue] of Object.entries(rootDefaults.settingsCardCollapsed)) {
+    if (typeof config.settingsCardCollapsed[cardKey] !== 'boolean') {
+      config.settingsCardCollapsed[cardKey] = cardValue
+      changed = true
+    }
   }
 
   if (!config.defaultTaskModel) {
@@ -459,6 +568,9 @@ export async function saveSetting(keyPath, value) {
     }
 
     const writeResult = await writeDocData(getLocalConfigId(), localDoc)
+    if (writeResult?.ok) {
+      await notifyConfigUpdated()
+    }
     return {
       success: Boolean(writeResult?.ok),
       message: writeResult?.ok ? '' : writeResult?.message || 'save local setting failed'
@@ -493,6 +605,9 @@ export async function saveSetting(keyPath, value) {
 
     setByPath(docData[objectKey], rest, normalizedValue)
     const writeResult = await writeDocData(docId, docData)
+    if (writeResult?.ok) {
+      await notifyConfigUpdated()
+    }
 
     return {
       success: Boolean(writeResult?.ok),
@@ -506,6 +621,9 @@ export async function saveSetting(keyPath, value) {
   configDocData.config = configRoot
 
   const writeResult = await writeDocData(CONFIG_DOC_ID, configDocData)
+  if (writeResult?.ok) {
+    await notifyConfigUpdated()
+  }
 
   return {
     success: Boolean(writeResult?.ok),
@@ -549,6 +667,8 @@ export async function updateConfigWithoutFeatures(newConfig) {
     writeDocData(TASKS_DOC_ID, split.tasksPart),
     writeDocData(getLocalConfigId(), split.localConfigPart)
   ])
+
+  await notifyConfigUpdated()
 
   return {
     success: true
@@ -604,6 +724,11 @@ export async function saveMcpToolCache(serverId, tools = []) {
 
   const putResult = await dbPut(doc)
 
+  if (putResult?.ok) {
+    emitWindowChannel('window:mcpCacheUpdated', normalizedId)
+    emitWindowChannel('mcp-cache-updated', normalizedId)
+  }
+
   return {
     success: Boolean(putResult?.ok),
     id: normalizedId,
@@ -611,6 +736,166 @@ export async function saveMcpToolCache(serverId, tools = []) {
   }
 }
 
+
+
+
+
+const debugDataLog = () => {}
+const debugDataError = () => {}
+
+export function notifySkillsUpdated() {
+  emitWindowChannel('window:skillsUpdated')
+  emitWindowChannel('skills-updated')
+}
+
+export async function getUser() {
+  return {
+    avatar: getResourceFileUrl('user.png'),
+    nickname: 'User'
+  }
+}
+
+export async function savePromptWindowSettings(promptKey, settings = {}) {
+  debugDataLog('savePromptWindowSettings:enter', { promptKey, settings })
+  if (typeof promptKey !== 'string' || !promptKey.trim()) {
+    const result = {
+      success: false,
+      message: 'promptKey is required'
+    }
+    debugDataError('savePromptWindowSettings:invalid-prompt-key', result)
+    return result
+  }
+
+  const normalizedPromptKey = promptKey.trim()
+  const nextSettings = safeClone(settings || {})
+  const configResult = await getConfig()
+  const currentFullConfig = configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
+
+  if (!currentFullConfig.prompts || typeof currentFullConfig.prompts !== 'object') {
+    currentFullConfig.prompts = {}
+  }
+
+  if (!currentFullConfig.prompts[normalizedPromptKey] || typeof currentFullConfig.prompts[normalizedPromptKey] !== 'object') {
+    const result = {
+      success: false,
+      message: `Prompt '${normalizedPromptKey}' not found`
+    }
+    debugDataError('savePromptWindowSettings:prompt-not-found', result)
+    return result
+  }
+
+  currentFullConfig.prompts[normalizedPromptKey] = {
+    ...currentFullConfig.prompts[normalizedPromptKey],
+    ...nextSettings
+  }
+
+  debugDataLog('savePromptWindowSettings:before-updateConfigWithoutFeatures', {
+    promptKey: normalizedPromptKey,
+    nextPromptConfig: currentFullConfig.prompts[normalizedPromptKey]
+  })
+
+  await updateConfigWithoutFeatures({ config: currentFullConfig })
+
+  const result = {
+    success: true,
+    message: ''
+  }
+  debugDataLog('savePromptWindowSettings:success', {
+    promptKey: normalizedPromptKey,
+    result
+  })
+  return result
+}
+
+export async function addTaskHistory(taskId, logEntry) {
+  if (typeof taskId !== 'string' || !taskId.trim()) {
+    return {
+      success: false,
+      message: 'taskId is required'
+    }
+  }
+
+  const normalizedTaskId = taskId.trim()
+  const tasksDoc = await readDocData(TASKS_DOC_ID, {})
+  const task = tasksDoc[normalizedTaskId]
+
+  if (!task || typeof task !== 'object') {
+    return {
+      success: false,
+      message: `Task '${normalizedTaskId}' not found`
+    }
+  }
+
+  const history = Array.isArray(task.history) ? [...task.history] : []
+  history.unshift(safeClone(logEntry))
+  task.history = history.slice(0, 50)
+  tasksDoc[normalizedTaskId] = task
+  await writeDocData(TASKS_DOC_ID, tasksDoc)
+
+  return {
+    success: true,
+    historyCount: task.history.length
+  }
+}
+
+export async function getCachedBackgroundImage(url = '') {
+  if (typeof url !== 'string' || !url.trim()) return null
+
+  const cacheDoc = await readDocData(BACKGROUND_CACHE_DOC_ID, {})
+  const hash = getBackgroundCacheHash(url)
+  const fileName = cacheDoc?.[hash]
+  if (!fileName) return null
+
+  const filePath = path.join(await ensureBackgroundCacheDir(), fileName)
+
+  try {
+    return await fs.readFile(filePath)
+  } catch {
+    return null
+  }
+}
+
+export async function cacheBackgroundImage(url = '') {
+  if (typeof url !== 'string' || !url.trim()) {
+    return {
+      success: false,
+      message: 'url is required'
+    }
+  }
+
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch background image: ${response.status} ${response.statusText}`)
+  }
+
+  const arrayBuffer = await response.arrayBuffer()
+  const buffer = Buffer.from(arrayBuffer)
+  const contentType = response.headers.get('content-type') || 'image/png'
+  const extensionMap = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'image/svg+xml': '.svg'
+  }
+  const ext = extensionMap[contentType.toLowerCase()] || '.img'
+  const hash = getBackgroundCacheHash(url)
+  const fileName = `${hash}${ext}`
+  const cacheDir = await ensureBackgroundCacheDir()
+  const filePath = path.join(cacheDir, fileName)
+  await fs.writeFile(filePath, buffer)
+
+  const cacheDoc = await readDocData(BACKGROUND_CACHE_DOC_ID, {})
+  cacheDoc[hash] = fileName
+  await writeDocData(BACKGROUND_CACHE_DOC_ID, cacheDoc)
+
+  return {
+    success: true,
+    fileName,
+    size: buffer.byteLength
+  }
+}
 
 export async function importMemoryData(memories) {
   if (!Array.isArray(memories) || memories.length === 0) {

@@ -374,7 +374,13 @@ async function openTaskChat(logFile) {
     try {
         ElMessage.info(t('chats.alerts.loadingChat') || '正在加载对话...');
         const jsonString = await window.api.readLocalFile(filePath);
-        await window.api.coderedirect(t('chats.alerts.restoreChat') || '恢复聊天', JSON.stringify({ sessionData: jsonString, filename: logFile }));
+        const parsedSession = JSON.parse(jsonString);
+        await window.api.openWindow('window', {
+            code: parsedSession?.CODE || 'AI',
+            type: 'over',
+            payload: jsonString,
+            filename: logFile
+        });
         ElMessage.success(t('chats.alerts.restoreInitiated') || '对话已开始');
     } catch (error) {
         ElMessage.error((t('chats.alerts.restoreFailed') || '无法打开对话') + `: ${error.message}`);

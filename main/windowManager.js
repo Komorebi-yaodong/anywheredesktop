@@ -1,9 +1,10 @@
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow, shell, screen } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import icon from '../resources/icon.png?asset'
+import { getConfig, defaultConfig } from './core/data.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -41,30 +42,46 @@ const WINDOWS = {
       resizable: false,
       skipTaskbar: true
     }
+  },
+  quick: {
+    title: 'AI Anywhere Desktop - Quick',
+    preload: 'quick_preload.js',
+    html: 'quick/index.html',
+    devPath: '/quick/index.html',
+    width: 560,
+    height: 520,
+    options: {
+      frame: false,
+      transparent: false,
+      alwaysOnTop: true,
+      resizable: false,
+      skipTaskbar: true
+    }
   }
 }
 
-const SINGLETON_TYPES = new Set(['main', 'fast'])
-
-/** @type {Map<string, BrowserWindow>} */
+const SINGLETON_TYPES = new Set(['main', 'fast', 'quick'])
 const singletonStore = new Map()
-
-/** @type {Map<string, BrowserWindow>} */
 const multiStore = new Map()
-
-/** @type {Map<string, Set<string>>} */
 const multiTypeIndex = new Map()
-
-
-/** @type {Map<number, string>} */
 const webContentsToWindowRef = new Map()
-
 const WINDOW_INIT_CHANNEL = 'window:init'
+const WINDOW_POSITION_OVERFLOW_ALLOWANCE = 10
+const WINDOW_OVERLAP_OFFSET_STEP = 30
+const WINDOW_OVERLAP_MAX_ATTEMPTS = 12
+const singletonCloseBehavior = {
+  main: 'close'
+}
+let appQuitting = false
+
+
+const debugWindowManagerLog = () => {}
+const debugWindowManagerError = () => {}
+
 
 function bindWindowRef(win, ref) {
   if (!win || win.isDestroyed()) return
   if (!win.webContents || win.webContents.isDestroyed()) return
-
   webContentsToWindowRef.set(win.webContents.id, ref)
 }
 
@@ -72,20 +89,6 @@ function unbindWindowRefByWebContentsId(webContentsId) {
   if (typeof webContentsId !== 'number') return
   webContentsToWindowRef.delete(webContentsId)
 }
-
-function unbindWindowRef(win) {
-  if (!win) return
-
-  let webContentsId = null
-  try {
-    webContentsId = win.webContents?.id
-  } catch {
-    webContentsId = null
-  }
-
-  unbindWindowRefByWebContentsId(webContentsId)
-}
-
 
 function getSingletonWindow(type) {
   const win = singletonStore.get(type)
@@ -99,6 +102,13 @@ function getSingletonWindow(type) {
   return win
 }
 
+export function isSingletonWindowVisible(type = 'main') {
+  const win = getSingletonWindow(type)
+  if (!win || win.isDestroyed()) return false
+  return win.isVisible() && !win.isMinimized()
+}
+
+
 function activateWindow(win) {
   if (!win || win.isDestroyed()) return false
   if (win.isMinimized()) win.restore()
@@ -111,7 +121,311 @@ function resolvePreloadFile(fileName) {
   return path.join(__dirname, `../preload/${fileName}`)
 }
 
-function createBrowserWindow(type, config, titleSuffix = '', windowRef = '') {
+function normalizeWindowOpenPayload(payload) {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    return { ...payload }
+  }
+  return null
+}
+
+function resolveNumber(value, fallback = null) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function resolvePromptCode(payload = null) {
+  if (typeof payload?.originalCode === 'string' && payload.originalCode.trim()) {
+    return payload.originalCode.trim()
+  }
+  if (typeof payload?.code === 'string' && payload.code.trim()) {
+    return payload.code.trim()
+  }
+  return '__DEFAULT__'
+}
+
+function resolvePromptConfig(fullConfig = {}, payload = null, promptCode = '__DEFAULT__') {
+  if (payload?.tempPromptConfig && typeof payload.tempPromptConfig === 'object') {
+    return { ...payload.tempPromptConfig }
+  }
+
+  const prompts = fullConfig?.prompts && typeof fullConfig.prompts === 'object' ? fullConfig.prompts : {}
+  return (
+    prompts[promptCode] ||
+    prompts.AI ||
+    defaultConfig.config.prompts.AI ||
+    {
+      window_width: 580,
+      window_height: 740,
+      position_x: 0,
+      position_y: 0,
+      isAlwaysOnTop: true
+    }
+  )
+}
+
+function resolveWindowConfig(baseConfig, payload) {
+  const nextConfig = {
+    ...baseConfig,
+    options: {
+      ...(baseConfig.options || {})
+    }
+  }
+
+  if (baseConfig?.html === 'quick/index.html') {
+    const cursorPoint = screen.getCursorScreenPoint()
+    const targetDisplay = screen.getDisplayNearestPoint(cursorPoint) || screen.getPrimaryDisplay()
+    const workArea = getWorkArea(targetDisplay)
+    nextConfig.options.x = Math.round(workArea.x + (workArea.width - nextConfig.width) / 2)
+    nextConfig.options.y = Math.round(workArea.y + (workArea.height - nextConfig.height) / 2)
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return nextConfig
+  }
+
+  if (typeof payload.width === 'number' && Number.isFinite(payload.width) && payload.width > 0) {
+    nextConfig.width = payload.width
+  }
+  if (typeof payload.height === 'number' && Number.isFinite(payload.height) && payload.height > 0) {
+    nextConfig.height = payload.height
+  }
+  if (typeof payload.x === 'number' && Number.isFinite(payload.x)) {
+    nextConfig.options.x = payload.x
+  }
+  if (typeof payload.y === 'number' && Number.isFinite(payload.y)) {
+    nextConfig.options.y = payload.y
+  }
+  if (typeof payload.alwaysOnTop === 'boolean') {
+    nextConfig.options.alwaysOnTop = payload.alwaysOnTop
+  }
+
+  return nextConfig
+}
+
+function getDisplayBounds(display) {
+  if (!display) {
+    const primaryDisplay = screen.getPrimaryDisplay()
+    return primaryDisplay?.bounds || { x: 0, y: 0, width: 1920, height: 1080 }
+  }
+  return display.bounds || display.workArea || { x: 0, y: 0, width: 1920, height: 1080 }
+}
+
+function getWorkArea(display) {
+  if (!display) {
+    const primaryDisplay = screen.getPrimaryDisplay()
+    return primaryDisplay?.workArea || primaryDisplay?.bounds || { x: 0, y: 0, width: 1920, height: 1080 }
+  }
+  return display.workArea || display.bounds || { x: 0, y: 0, width: 1920, height: 1080 }
+}
+
+function calculateDialogWindowBounds(fullConfig = {}, payload = null, promptCode = '__DEFAULT__', promptConfig = {}) {
+  const primaryDisplay = screen.getPrimaryDisplay()
+  const baseBounds = getWorkArea(primaryDisplay)
+  const openType = typeof payload?.type === 'string' ? payload.type : ''
+
+  let width = resolveNumber(payload?.width, resolveNumber(promptConfig?.window_width, 580)) || 580
+  let height = resolveNumber(payload?.height, resolveNumber(promptConfig?.window_height, 740)) || 740
+  let windowX = 0
+  let windowY = 0
+  let currentDisplay = primaryDisplay
+
+  if (openType === 'task') {
+    const padding = 30
+    windowX = baseBounds.x + baseBounds.width - width - padding
+    windowY = baseBounds.y + padding
+  } else if (openType === 'summon') {
+    const padding = 30
+    windowX = baseBounds.x + baseBounds.width - width - padding
+    windowY = baseBounds.y + baseBounds.height - height - padding
+  } else {
+    const explicitX = resolveNumber(payload?.x)
+    const explicitY = resolveNumber(payload?.y)
+    const hasExplicitPosition = explicitX !== null && explicitY !== null
+    const hasFixedPosition =
+      Boolean(fullConfig?.fix_position) &&
+      resolveNumber(promptConfig?.position_x) !== null &&
+      resolveNumber(promptConfig?.position_y) !== null
+
+    if (hasExplicitPosition) {
+      const point = { x: explicitX, y: explicitY }
+      currentDisplay = screen.getDisplayNearestPoint(point) || primaryDisplay
+      windowX = Math.floor(point.x)
+      windowY = Math.floor(point.y)
+    } else if (hasFixedPosition) {
+      const point = {
+        x: resolveNumber(promptConfig.position_x, 0),
+        y: resolveNumber(promptConfig.position_y, 0)
+      }
+      currentDisplay = screen.getDisplayNearestPoint(point) || primaryDisplay
+      windowX = Math.floor(point.x)
+      windowY = Math.floor(point.y)
+    } else {
+      const cursorPoint = screen.getCursorScreenPoint()
+      currentDisplay = screen.getDisplayNearestPoint(cursorPoint) || primaryDisplay
+      windowX = Math.floor(cursorPoint.x - width / 2)
+      windowY = Math.floor(cursorPoint.y)
+    }
+  }
+
+  const displayBounds = getDisplayBounds(currentDisplay)
+  if (width > displayBounds.width) width = displayBounds.width
+  if (height > displayBounds.height) height = displayBounds.height
+
+  const minX = displayBounds.x - WINDOW_POSITION_OVERFLOW_ALLOWANCE
+  const maxX = displayBounds.x + displayBounds.width - width + WINDOW_POSITION_OVERFLOW_ALLOWANCE
+  const minY = displayBounds.y - WINDOW_POSITION_OVERFLOW_ALLOWANCE
+  const maxY = displayBounds.y + displayBounds.height - height + WINDOW_POSITION_OVERFLOW_ALLOWANCE
+
+  if (
+    windowX + width < displayBounds.x ||
+    windowX > displayBounds.x + displayBounds.width ||
+    windowY + height < displayBounds.y ||
+    windowY > displayBounds.y + displayBounds.height
+  ) {
+    windowX = displayBounds.x + (displayBounds.width - width) / 2
+    windowY = displayBounds.y + (displayBounds.height - height) / 2
+  } else {
+    if (windowX < minX) windowX = minX
+    if (windowX > maxX) windowX = maxX
+    if (windowY < minY) windowY = minY
+    if (windowY > maxY) windowY = maxY
+  }
+
+  return {
+    x: Math.round(windowX),
+    y: Math.round(windowY),
+    width: Math.round(width),
+    height: Math.round(height)
+  }
+}
+
+function avoidDialogWindowOverlap(bounds) {
+  const nextBounds = { ...bounds }
+  const originalX = nextBounds.x
+  const originalY = nextBounds.y
+  const placementDisplay = screen.getDisplayNearestPoint({ x: nextBounds.x, y: nextBounds.y }) || screen.getPrimaryDisplay()
+  const displayArea = getWorkArea(placementDisplay)
+  const dialogIds = multiTypeIndex.get('window') || new Set()
+
+  let attempts = 0
+  while (attempts < WINDOW_OVERLAP_MAX_ATTEMPTS) {
+    let isOverlap = false
+
+    for (const id of dialogIds.values()) {
+      const existingWin = multiStore.get(id)
+      if (!existingWin || existingWin.isDestroyed() || !existingWin.isVisible()) continue
+
+      try {
+        const existingBounds = existingWin.getBounds()
+        if (Math.abs(existingBounds.x - nextBounds.x) < 5 && Math.abs(existingBounds.y - nextBounds.y) < 5) {
+          isOverlap = true
+          break
+        }
+      } catch {
+        // ignore destroyed window bounds read failure
+      }
+    }
+
+    if (!isOverlap) break
+
+    attempts += 1
+    let candidateX = originalX + attempts * WINDOW_OVERLAP_OFFSET_STEP
+    let candidateY = originalY + attempts * WINDOW_OVERLAP_OFFSET_STEP
+
+    if (
+      candidateX + nextBounds.width > displayArea.x + displayArea.width ||
+      candidateY + nextBounds.height > displayArea.y + displayArea.height
+    ) {
+      candidateX = originalX - attempts * WINDOW_OVERLAP_OFFSET_STEP
+      candidateY = originalY - attempts * WINDOW_OVERLAP_OFFSET_STEP
+
+      if (candidateX < displayArea.x || candidateY < displayArea.y) {
+        nextBounds.x = Math.max(displayArea.x, candidateX)
+        nextBounds.y = Math.max(displayArea.y, candidateY)
+        break
+      }
+    }
+
+    nextBounds.x = candidateX
+    nextBounds.y = candidateY
+  }
+
+  return nextBounds
+}
+
+function resolveDialogWindowConfig(baseConfig, fullConfig = {}, payload = null) {
+  const promptCode = resolvePromptCode(payload)
+  const promptConfig = resolvePromptConfig(fullConfig, payload, promptCode)
+  const placement = avoidDialogWindowOverlap(calculateDialogWindowBounds(fullConfig, payload, promptCode, promptConfig))
+  const isDarkMode = Boolean(fullConfig?.isDarkMode)
+  const backgroundColor = isDarkMode ? 'rgba(33, 33, 33, 1)' : 'rgba(255, 255, 253, 1)'
+  const alwaysOnTop =
+    typeof payload?.alwaysOnTop === 'boolean'
+      ? payload.alwaysOnTop
+      : promptConfig?.isAlwaysOnTop ?? fullConfig?.isAlwaysOnTop_global ?? true
+
+  return {
+    promptCode,
+    promptConfig,
+    fullConfig,
+    config: {
+      ...baseConfig,
+      title: 'AI Anywhere Desktop - Window',
+      width: placement.width,
+      height: placement.height,
+      options: {
+        ...(baseConfig.options || {}),
+        x: placement.x,
+        y: placement.y,
+        frame: false,
+        transparent: false,
+        hasShadow: true,
+        backgroundColor,
+        alwaysOnTop
+      }
+    }
+  }
+}
+
+async function buildWindowInitMessage(payload = {}, senderId = '', fullConfig = null, promptCode = '') {
+  const configSource = fullConfig && typeof fullConfig === 'object'
+    ? { config: fullConfig }
+    : await getConfig()
+  const resolvedFullConfig =
+    configSource?.config && typeof configSource.config === 'object'
+      ? configSource.config
+      : defaultConfig.config
+
+  const code = promptCode || resolvePromptCode(payload)
+  const promptConfig = resolvePromptConfig(resolvedFullConfig, payload, code)
+
+  return {
+    os: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'win' : 'linux',
+    code,
+    type: typeof payload?.type === 'string' && payload.type ? payload.type : 'over',
+    payload: payload?.payload ?? '',
+    summonData: payload?.summonData && typeof payload.summonData === 'object' ? payload.summonData : null,
+    filename: typeof payload?.filename === 'string' ? payload.filename : '',
+    taskConfig: payload?.taskConfig ?? null,
+    tempPromptConfig:
+      payload?.tempPromptConfig && typeof payload.tempPromptConfig === 'object'
+        ? payload.tempPromptConfig
+        : null,
+    senderId,
+    isAlwaysOnTop: payload?.isAlwaysOnTop ?? promptConfig?.isAlwaysOnTop ?? true
+  }
+}
+
+async function buildQuickWindowInitMessage(payload = {}) {
+  return {
+    type: typeof payload?.type === 'string' && payload.type ? payload.type : 'empty',
+    payload: payload?.payload ?? '',
+    promptKey: typeof payload?.promptKey === 'string' ? payload.promptKey : '',
+    triggerMode: typeof payload?.triggerMode === 'string' ? payload.triggerMode : ''
+  }
+}
+
+function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', initMessage = null) {
   const title = titleSuffix ? `${config.title} (${titleSuffix})` : config.title
 
   const win = new BrowserWindow({
@@ -120,7 +434,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '') {
     height: config.height,
     show: false,
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    icon,
     webPreferences: {
       preload: resolvePreloadFile(config.preload),
       sandbox: false,
@@ -130,11 +444,23 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '') {
     ...config.options
   })
 
+  const browserWindowId = win.id
+  const webContentsId = win.webContents?.id ?? null
+
+  debugWindowManagerLog('createBrowserWindow:created', {
+    type,
+    windowRef,
+    browserWindowId,
+    webContentsId,
+    title: config.title,
+    bounds: win.getBounds()
+  })
+
   win.on('ready-to-show', () => {
     win.show()
   })
 
-  if (type === 'fast') {
+  if (type === 'fast' || type === 'quick') {
     win.on('blur', () => {
       if (!win.isDestroyed()) win.hide()
     })
@@ -151,12 +477,26 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '') {
     win.loadFile(path.join(__dirname, `../renderer/${config.html}`))
   }
 
+    if (type === 'main') {
+    win.on('close', (event) => {
+      if (appQuitting) return
+      if (singletonCloseBehavior.main !== 'tray') return
+      event.preventDefault()
+      try {
+        win.hide()
+      } catch {
+        // ignore close-to-tray failure
+      }
+    })
+  }
 
-  win.webContents.once('did-finish-load', () => {
+
+win.webContents.once('did-finish-load', () => {
     try {
       win.webContents.send(WINDOW_INIT_CHANNEL, {
         senderId: windowRef || null,
-        windowType: type
+        windowType: type,
+        ...(initMessage && typeof initMessage === 'object' ? initMessage : {})
       })
     } catch {
       // ignore init signal send errors during teardown
@@ -166,11 +506,12 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '') {
   return win
 }
 
-export function openWindow(type = 'main') {
+export async function openWindow(type = 'main', payload = null) {
   const targetType = typeof type === 'string' ? type : 'main'
-  const config = WINDOWS[targetType]
+  const openPayload = normalizeWindowOpenPayload(payload)
+  const baseConfig = WINDOWS[targetType]
 
-  if (!config) {
+  if (!baseConfig) {
     throw new Error(`[window] unknown window type: ${targetType}`)
   }
 
@@ -178,24 +519,64 @@ export function openWindow(type = 'main') {
     const existing = getSingletonWindow(targetType)
     if (existing) {
       activateWindow(existing)
-      return { ok: true, type: targetType, id: targetType, reused: true }
+      if (targetType === 'quick' && openPayload) {
+        const quickInitMessage = await buildQuickWindowInitMessage(openPayload)
+        try {
+          existing.webContents.send(WINDOW_INIT_CHANNEL, {
+            senderId: targetType,
+            windowType: targetType,
+            ...quickInitMessage
+          })
+        } catch {
+          // ignore quick re-init delivery failure
+        }
+      }
+      return { ok: true, type: targetType, id: targetType, reused: true, payload: openPayload }
     }
 
-    const win = createBrowserWindow(targetType, config, '', targetType)
+    const config = resolveWindowConfig(baseConfig, openPayload)
+    const initMessage = targetType === 'window'
+      ? await buildWindowInitMessage(openPayload, targetType)
+      : targetType === 'quick'
+        ? await buildQuickWindowInitMessage(openPayload)
+        : null
+    const win = createBrowserWindow(targetType, config, '', targetType, initMessage)
     singletonStore.set(targetType, win)
     bindWindowRef(win, targetType)
     const webContentsId = win.webContents?.id
 
     win.on('closed', () => {
       unbindWindowRefByWebContentsId(webContentsId)
+      debugWindowManagerLog('singleton-window:closed-cleanup', {
+        type: targetType,
+        windowRef: targetType,
+        webContentsId
+      })
       singletonStore.delete(targetType)
     })
 
-    return { ok: true, type: targetType, id: targetType, reused: false }
+    return { ok: true, type: targetType, id: targetType, reused: false, payload: openPayload }
   }
 
+  const configResult = targetType === 'window' ? await getConfig() : null
+  const fullConfig =
+    configResult?.config && typeof configResult.config === 'object'
+      ? configResult.config
+      : defaultConfig.config
+
+  const dialogWindowConfig =
+    targetType === 'window'
+      ? resolveDialogWindowConfig(baseConfig, fullConfig, openPayload)
+      : null
+
+  const config = dialogWindowConfig?.config || resolveWindowConfig(baseConfig, openPayload)
   const id = `${targetType}-${randomUUID()}`
-  const win = createBrowserWindow(targetType, config, id, id)
+  const initMessage =
+    targetType === 'window'
+      ? await buildWindowInitMessage(openPayload, id, fullConfig, dialogWindowConfig?.promptCode)
+      : null
+  const titleSuffix = targetType === 'window' ? dialogWindowConfig?.promptCode || id : id
+  const win = createBrowserWindow(targetType, config, titleSuffix, id, initMessage)
 
   multiStore.set(id, win)
   bindWindowRef(win, id)
@@ -207,6 +588,12 @@ export function openWindow(type = 'main') {
   win.on('closed', () => {
     unbindWindowRefByWebContentsId(webContentsId)
     multiStore.delete(id)
+
+    debugWindowManagerLog('multi-window:closed-cleanup', {
+      type: targetType,
+      windowRef: id,
+      webContentsId
+    })
     const indexSet = multiTypeIndex.get(targetType)
     if (indexSet) {
       indexSet.delete(id)
@@ -214,7 +601,20 @@ export function openWindow(type = 'main') {
     }
   })
 
-  return { ok: true, type: targetType, id }
+  return {
+    ok: true,
+    type: targetType,
+    id,
+    payload: openPayload,
+    bounds: targetType === 'window'
+      ? {
+          width: config.width,
+          height: config.height,
+          x: config.options?.x,
+          y: config.options?.y
+        }
+      : undefined
+  }
 }
 
 export function getWindowIds(type) {
@@ -229,14 +629,9 @@ export function getWindowById(id) {
   return multiStore.get(id) || null
 }
 
-
 export function getWindowByRef(ref) {
   if (!ref || typeof ref !== 'string') return null
-
-  if (SINGLETON_TYPES.has(ref)) {
-    return getSingletonWindow(ref)
-  }
-
+  if (SINGLETON_TYPES.has(ref)) return getSingletonWindow(ref)
   return getWindowById(ref)
 }
 
@@ -257,11 +652,7 @@ function resolveActionWindow(windowRef = '') {
 export function minimizeWindow(windowRef = '') {
   const resolved = resolveActionWindow(windowRef)
   if (!resolved.ok) {
-    return {
-      ok: false,
-      error: resolved.error,
-      windowRef: resolved.windowRef
-    }
+    return { ok: false, error: resolved.error, windowRef: resolved.windowRef }
   }
 
   const { win } = resolved
@@ -280,11 +671,7 @@ export function minimizeWindow(windowRef = '') {
 export function maximizeOrRestoreWindow(windowRef = '') {
   const resolved = resolveActionWindow(windowRef)
   if (!resolved.ok) {
-    return {
-      ok: false,
-      error: resolved.error,
-      windowRef: resolved.windowRef
-    }
+    return { ok: false, error: resolved.error, windowRef: resolved.windowRef }
   }
 
   const { win } = resolved
@@ -305,33 +692,41 @@ export function maximizeOrRestoreWindow(windowRef = '') {
 }
 
 export function closeWindow(windowRef = '') {
+  debugWindowManagerLog('closeWindow:enter', { windowRef })
   const resolved = resolveActionWindow(windowRef)
   if (!resolved.ok) {
-    return {
-      ok: false,
-      error: resolved.error,
-      windowRef: resolved.windowRef
-    }
+    const result = { ok: false, error: resolved.error, windowRef: resolved.windowRef }
+    debugWindowManagerError('closeWindow:resolve-failed', result)
+    return result
   }
 
-  const { win } = resolved
-  win.close()
+  const isDialogWindow = multiStore.has(resolved.windowRef)
 
-  return {
-    ok: true,
-    action: 'close',
-    windowRef: resolved.windowRef
+  debugWindowManagerLog('closeWindow:resolved', {
+    windowRef: resolved.windowRef,
+    browserWindowId: resolved.win?.id,
+    isDestroyed: resolved.win?.isDestroyed?.() ?? null,
+    isVisible: resolved.win?.isVisible?.() ?? null,
+    strategy: isDialogWindow ? 'destroy' : 'close'
+  })
+
+  if (isDialogWindow) {
+    resolved.win.destroy()
+    const result = { ok: true, action: 'destroy', windowRef: resolved.windowRef }
+    debugWindowManagerLog('closeWindow:after-destroy-call', result)
+    return result
   }
+
+  resolved.win.close()
+  const result = { ok: true, action: 'close', windowRef: resolved.windowRef }
+  debugWindowManagerLog('closeWindow:after-close-call', result)
+  return result
 }
 
 export function toggleAlwaysOnTop(windowRef = '', nextState) {
   const resolved = resolveActionWindow(windowRef)
   if (!resolved.ok) {
-    return {
-      ok: false,
-      error: resolved.error,
-      windowRef: resolved.windowRef
-    }
+    return { ok: false, error: resolved.error, windowRef: resolved.windowRef }
   }
 
   const { win } = resolved
@@ -341,10 +736,9 @@ export function toggleAlwaysOnTop(windowRef = '', nextState) {
   win.setAlwaysOnTop(willSetAlwaysOnTop)
 
   try {
-    win.webContents.send('window:alwaysOnTopChanged', {
-      windowRef: resolved.windowRef,
-      alwaysOnTop: willSetAlwaysOnTop
-    })
+    const payload = { windowRef: resolved.windowRef, alwaysOnTop: willSetAlwaysOnTop }
+    win.webContents.send('window:alwaysOnTopChanged', payload)
+    win.webContents.send('always-on-top-changed', willSetAlwaysOnTop)
   } catch {
     // ignore notify error during teardown
   }
@@ -356,7 +750,6 @@ export function toggleAlwaysOnTop(windowRef = '', nextState) {
     alwaysOnTop: willSetAlwaysOnTop
   }
 }
-
 
 export function listWindows(type = '') {
   const targetType = typeof type === 'string' ? type : ''
@@ -397,18 +790,10 @@ export function listWindows(type = '') {
   return items
 }
 
-
 export function getWindowRefByWebContentsId(webContentsId) {
   if (typeof webContentsId !== 'number') return null
   return webContentsToWindowRef.get(webContentsId) || null
 }
-
-
-export { WINDOW_INIT_CHANNEL }
-
-
-
-
 
 export function showMainWindow() {
   const mainWindow = getSingletonWindow('main')
@@ -424,13 +809,31 @@ export function showMainWindow() {
 export function hideMainWindow() {
   const mainWindow = getSingletonWindow('main')
   if (!mainWindow) {
-    return { ok: true, action: 'minimize', existed: false }
+    return { ok: true, action: 'hide', existed: false }
   }
 
-  if (!mainWindow.isMinimized()) {
-    mainWindow.minimize()
+  try {
+    mainWindow.hide()
+  } catch {
+    if (!mainWindow.isMinimized()) {
+      mainWindow.minimize()
+    }
   }
 
-  return { ok: true, action: 'minimize', existed: true }
+  return { ok: true, action: 'hide', existed: true }
 }
 
+export function setMainWindowCloseBehavior(nextBehavior = 'close') {
+  singletonCloseBehavior.main = nextBehavior === 'tray' ? 'tray' : 'close'
+  return {
+    ok: true,
+    behavior: singletonCloseBehavior.main
+  }
+}
+
+export function markAppQuitting(nextState = true) {
+  appQuitting = Boolean(nextState)
+}
+
+
+export { WINDOW_INIT_CHANNEL }

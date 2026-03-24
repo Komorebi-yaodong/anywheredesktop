@@ -38,7 +38,7 @@ electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
 
 const api = {
   appWindowType: defaultWindowType,
-  openWindow: (type) => electronAPI.ipcRenderer.invoke('window:open', type),
+  openWindow: (type, payload = null) => electronAPI.ipcRenderer.invoke('window:open', type, payload),
   showMainWindow: () => electronAPI.ipcRenderer.invoke('window:showMain'),
   hideMainWindow: () => electronAPI.ipcRenderer.invoke('window:hideMain'),
   listWindows: (type = '') => electronAPI.ipcRenderer.invoke('window:list', type),
@@ -67,6 +67,8 @@ const api = {
   copyText: (text) => electronAPI.ipcRenderer.invoke('system:clipboard:copyText', text),
   copyImage: (input) => electronAPI.ipcRenderer.invoke('system:clipboard:copyImage', input),
   readClipboardText: () => electronAPI.ipcRenderer.invoke('system:clipboard:readText'),
+  readClipboardPayload: () => electronAPI.ipcRenderer.invoke('system:clipboard:readPayload'),
+  captureSelectionPayload: () => electronAPI.ipcRenderer.invoke('system:clipboard:captureSelection'),
   showOpenDialog: (options) => electronAPI.ipcRenderer.invoke('system:dialog:open', options),
   showSaveDialog: (options) => electronAPI.ipcRenderer.invoke('system:dialog:save', options),
   shellOpenPath: (targetPath) => electronAPI.ipcRenderer.invoke('system:shell:openPath', targetPath),
@@ -181,7 +183,10 @@ const api = {
     electronAPI.ipcRenderer.invoke('window:minimize', { windowRef }),
   maximizeOrRestoreWindow: (windowRef = '') =>
     electronAPI.ipcRenderer.invoke('window:maximizeOrRestore', { windowRef }),
-  closeWindow: (windowRef = '') => electronAPI.ipcRenderer.invoke('window:close', { windowRef }),
+  closeWindow: (windowRef = '') => {
+    electronAPI.ipcRenderer.send('window:close', { windowRef })
+    return Promise.resolve({ ok: true, action: 'close', windowRef: windowRef || null, dispatched: true })
+  },
   toggleAlwaysOnTop: (payload = {}) => {
     const input =
       typeof payload === 'boolean'
@@ -205,6 +210,11 @@ const api = {
     const channel = actionMap[action]
     if (!channel) {
       return Promise.resolve({ ok: false, error: 'unsupported_window_action', action })
+    }
+
+    if (channel === 'window:close') {
+      electronAPI.ipcRenderer.send(channel, { windowRef })
+      return Promise.resolve({ ok: true, action: 'close', windowRef: windowRef || null, dispatched: true })
     }
 
     return electronAPI.ipcRenderer.invoke(channel, { windowRef })

@@ -64,7 +64,6 @@ export function isFileLike(value) {
   if (typeof value.arrayBuffer === 'function') return true
   if (typeof value.base64 === 'string' && value.base64.trim()) return true
   if (typeof value.dataUrl === 'string' && value.dataUrl.startsWith('data:')) return true
-  if (typeof value.url === 'string' && value.url.startsWith('data:')) return true
 
   if (Buffer.isBuffer(value.buffer)) return true
 
@@ -288,7 +287,14 @@ function serializeBinary(buffer, type) {
 
 function isErrorLike(value) {
   if (!value || typeof value !== 'object') return false
-  return value instanceof Error || typeof value.message === 'string'
+  if (value instanceof Error) return true
+  if (value.__type === 'Error') return true
+
+  const hasMessage = typeof value.message === 'string'
+  const hasName = typeof value.name === 'string' && value.name.trim().length > 0
+  const hasStack = typeof value.stack === 'string'
+
+  return hasMessage && hasName && hasStack && /error|exception/i.test(value.name)
 }
 
 function sanitizeValue(value, seen, depth) {

@@ -42,9 +42,129 @@ showDismissibleMessage.error = (message) => showDismissibleMessage({ message, ty
 showDismissibleMessage.info = (message) => showDismissibleMessage({ message, type: 'info' });
 showDismissibleMessage.warning = (message) => showDismissibleMessage({ message, type: 'warning' });
 
+const WINDOW_DEBUG_PREFIX = '[AnywhereWindow Debug]';
+const debugWindowLog = (...args) => console.log(WINDOW_DEBUG_PREFIX, ...args);
+const debugWindowError = (...args) => console.error(WINDOW_DEBUG_PREFIX, ...args);
+
+
 const handleMinimize = () => window.api.windowControl('minimize-window');
 const handleMaximize = () => window.api.windowControl('maximize-window');
-const handleCloseWindow = () => closePage();
+const handleCloseWindow = () => {
+  if (isClosingWindow.value) return;
+  setTimeout(() => {
+    closePage();
+  }, 0);
+};
+
+const getErrorMessage = (input, fallback = '未知错误') => {
+  if (!input) return fallback;
+  if (typeof input === 'string') return input;
+  if (input instanceof Error) {
+    return getErrorMessage(input.message || input.details || input.cause, fallback);
+  }
+  if (typeof input === 'object') {
+    if (typeof input.message === 'string' && input.message) return input.message;
+    if (typeof input.error === 'string' && input.error) return input.error;
+    if (input.error && typeof input.error === 'object') {
+      return getErrorMessage(input.error, fallback);
+    }
+    if (input.details) {
+      return getErrorMessage(input.details, fallback);
+    }
+    if (input.cause) {
+      return getErrorMessage(input.cause, fallback);
+    }
+    try {
+      return JSON.stringify(input);
+    } catch {
+      return fallback;
+    }
+  }
+  return String(input);
+};
+
+const applyZoomFactor = (factor) => {
+  const numericFactor = Number(factor);
+  const finalFactor = Number.isFinite(numericFactor) && numericFactor > 0 ? numericFactor : 1;
+  zoomLevel.value = Math.max(0.5, Math.min(2.0, finalFactor));
+  if (window.api && typeof window.api.setZoomFactor === 'function') {
+    window.api.setZoomFactor(zoomLevel.value);
+  }
+};
+
+const syncThemeClass = (isDarkMode) => {
+  document.documentElement.classList.toggle('dark', Boolean(isDarkMode));
+};
+
+const applyPromptRuntimeConfig = async (config, options = {}) => {
+  if (!config || !CODE.value || isClosingWindow.value) return;
+  if (options.skipIfSavingWindowSettings && isSavingWindowSettings.value) return;
+  const promptConfig = config?.prompts?.[CODE.value] || defaultConfig.config.prompts.AI || {};
+  sourcePromptConfig.value = promptConfig;
+
+  syncThemeClass(config.isDarkMode);
+  updateModelListAndMap(config);
+
+  isAlwaysOnTop.value = promptConfig.isAlwaysOnTop ?? config.isAlwaysOnTop_global ?? true;
+  tempReasoningEffort.value = promptConfig.reasoning_effort || 'default';
+  selectedVoice.value = promptConfig.voice || null;
+  model.value = promptConfig.model || modelList.value[0]?.value || '';
+  autoCloseOnBlur.value = promptConfig.autoCloseOnBlur ?? false;
+
+  if (currentTaskConfig.value) {
+    autoCloseOnBlur.value = false;
+  }
+
+  if (autoCloseOnBlur.value) window.addEventListener('blur', closePage);
+  else window.removeEventListener('blur', closePage);
+
+  if (model.value) {
+    currentProviderID.value = model.value.split('|')[0];
+    base_url.value = config.providers?.[currentProviderID.value]?.url || '';
+    api_key.value = config.providers?.[currentProviderID.value]?.api_key || '';
+  }
+
+  if (promptConfig.icon) {
+    AIAvart.value = promptConfig.icon;
+    favicon.value = promptConfig.icon;
+  } else {
+    AIAvart.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
+    favicon.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
+  }
+
+  await loadBackground(promptConfig.backgroundImage || '');
+  applyZoomFactor(promptConfig.zoom ?? config.zoom ?? 1);
+
+  if (!options.skipSystemPromptSync) {
+    const nextSystemPrompt = promptConfig.prompt || '';
+    currentSystemPrompt.value = nextSystemPrompt;
+    const firstMessage = history.value[0];
+    const hasSystemMessage = firstMessage?.role === 'system';
+
+    if (nextSystemPrompt) {
+      if (hasSystemMessage) {
+        history.value[0] = { ...history.value[0], content: nextSystemPrompt };
+      } else {
+        history.value.unshift({ role: 'system', content: nextSystemPrompt });
+      }
+
+      if (chat_show.value[0]?.role === 'system') {
+        chat_show.value[0] = { ...chat_show.value[0], content: nextSystemPrompt };
+      } else {
+        chat_show.value.unshift({ role: 'system', content: nextSystemPrompt, id: messageIdCounter.value++ });
+      }
+    } else {
+      if (hasSystemMessage) {
+        history.value.shift();
+      }
+      if (chat_show.value[0]?.role === 'system') {
+        chat_show.value.shift();
+      }
+    }
+  }
+};
+
+
 
 const chatInputRef = ref(null);
 const lastSelectionStart = ref(null);
@@ -124,9 +244,9 @@ if (isDarkInit) {
 }
 
 const defaultConfig = window.api.defaultConfig;
-const UserAvart = ref("user.png");
-const AIAvart = ref("ai.svg");
-const favicon = ref("favicon.png");
+const UserAvart = ref("file:///E:/Programming/Anywhere_desktop/resources/user.png");
+const AIAvart = ref("file:///E:/Programming/Anywhere_desktop/resources/icon.png");
+const favicon = ref("file:///E:/Programming/Anywhere_desktop/resources/icon.png");
 const CODE = ref("");
 
 const isInit = ref(false);
@@ -144,6 +264,68 @@ const model = ref("");
 const isAlwaysOnTop = ref(true);
 const currentOS = ref('win');
 const currentTaskConfig = ref(null);
+
+const isClosingWindow = ref(false);
+const isSavingWindowSettings = ref(false);
+
+
+const normalizeWindowEventPayload = (input) => {
+  if (!input) return null;
+
+  if (input.event === 'coderedirect' && input.payload && typeof input.payload === 'object') {
+    return input.payload.payload || null;
+  }
+
+  if (input.event === 'task:run-now' && input.payload && typeof input.payload === 'object') {
+    return input.payload;
+  }
+
+  return input.payload ?? input;
+};
+
+const handleAppendMessageEvent = async (data) => {
+  if (!data) return;
+
+  if (loading.value) {
+    cancelAskAI();
+    showDismissibleMessage.info('已中断当前生成，开始处理追问');
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  let isFileDirectSend = false;
+  const nowTime = new Date().toLocaleString('sv-SE');
+
+  if (data.type === "over" && data.payload) {
+    history.value.push({ role: "user", content: data.payload });
+    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
+  } else if (data.type === "img" && data.payload) {
+    history.value.push({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
+    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }], timestamp: nowTime });
+  } else if (data.type === "files" && data.payload) {
+    try {
+      const fileProcessingPromises = data.payload.map((fileInfo) => processFilePath(fileInfo.path));
+      await Promise.all(fileProcessingPromises);
+      isFileDirectSend = true;
+    } catch (error) {
+      console.error(error);
+      showDismissibleMessage.error("处理文件失败: " + error.message);
+      return;
+    }
+  } else if (data.type === "task" && data.payload) {
+    history.value.push({ role: "user", content: data.payload });
+    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
+  } else {
+    return;
+  }
+
+  scrollToBottom();
+  if (isFileDirectSend) {
+    await askAI(false);
+  } else {
+    await askAI(true);
+  }
+};
+
 
 const currentProviderID = ref(defaultConfig.config.providerOrder[0]);
 const base_url = ref("");
@@ -236,6 +418,34 @@ const tempSessionMcpServerIds = ref([]);
 
 const isAutoApproveTools = ref(true);
 const pendingToolApprovals = ref(new Map());
+
+
+const formatToolResult = (result) => {
+  if (result == null) return '';
+  if (typeof result === 'string') return result;
+  if (Array.isArray(result)) {
+    const textItems = result.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text);
+    if (textItems.length > 0) return textItems.join('\n\n');
+    try {
+      return JSON.stringify(result, null, 2);
+    } catch {
+      return String(result);
+    }
+  }
+  if (typeof result === 'object') {
+    if (typeof result.content === 'string') return result.content;
+    if (Array.isArray(result.content)) {
+      const textItems = result.content.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text);
+      if (textItems.length > 0) return textItems.join('\n\n');
+    }
+    try {
+      return JSON.stringify(result, null, 2);
+    } catch {
+      return String(result);
+    }
+  }
+  return String(result);
+};
 
 const handleToolApproval = (toolCallId, isApproved) => {
   const resolver = pendingToolApprovals.value.get(toolCallId);
@@ -809,8 +1019,8 @@ const handleWheel = (event) => {
   if (event.ctrlKey) {
     event.preventDefault();
     const zoomStep = 0.05;
-    let newZoom = (event.deltaY < 0) ? zoomLevel.value + zoomStep : zoomLevel.value - zoomStep;
-    zoomLevel.value = Math.max(0.5, Math.min(2.0, newZoom));
+    const newZoom = (event.deltaY < 0) ? zoomLevel.value + zoomStep : zoomLevel.value - zoomStep;
+    applyZoomFactor(newZoom);
     if (currentConfig.value) currentConfig.value.zoom = zoomLevel.value;
   }
 };
@@ -1152,20 +1362,26 @@ const saveSystemPrompt = async () => {
 };
 
 const closePage = async (force_save = false) => {
-  // 1. 如果是为了打开文件选择器而失去焦点，拦截关闭
+  if (isClosingWindow.value) return;
   if (isFilePickerOpen.value) return;
 
-  // 条件：配置了本地存储路径 且 当前对话已有名称
-  if (currentConfig.value?.webdav?.localChatPath && (defaultConversationName.value || force_save)) {
-    try {
-      await autoSaveSession(force_save);
-    } catch (e) {
-      console.error("关闭时自动保存失败:", e);
-    }
-  }
+  isClosingWindow.value = true;
 
-  // 3. 关闭窗口
-  window.api.windowControl('close-window');
+  try {
+    if (currentConfig.value?.webdav?.localChatPath && (defaultConversationName.value || force_save)) {
+      try {
+        await autoSaveSession(force_save);
+      } catch (e) {
+        console.error("关闭时自动保存失败:", e);
+      }
+    }
+
+    await window.api.windowControl('close-window');
+  } catch (error) {
+    isClosingWindow.value = false;
+    console.error('关闭窗口失败:', error);
+    showDismissibleMessage.error(`关闭窗口失败: ${getErrorMessage(error)}`);
+  }
 };
 
 const handlePickFileStart = () => {
@@ -1330,24 +1546,20 @@ onMounted(async () => {
       }
       return "Unknown message format.";
     },
+    readChatMessage: (index, offset = 0, length = 128000) => {
+      const message = window.__AGENT_API__?.getMessage(index);
+      if (typeof message !== 'string') return null;
+      const safeOffset = Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0;
+      const safeLength = Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 128000;
+      return message.slice(safeOffset, safeOffset + safeLength);
+    },
+
     sendMessage: async (text, filePaths) => {
-      if (loading.value) {
-        return Promise.reject("Error: This agent is currently busy generating a response. Please wait until it becomes Idle.");
-      }
-      if (text) prompt.value = text;
-
-      let fileMsg = "";
-      if (filePaths && Array.isArray(filePaths) && filePaths.length > 0) {
-        let success = 0;
-        for (const p of filePaths) {
-          try { await processFilePath(p); success++; } catch (e) { }
-        }
-        await nextTick();
-        fileMsg = ` (${success} files attached)`;
-      }
-
-      askAI(false).catch(err => console.error("Background generation error:", err));
-      return `Message sent successfully${fileMsg}. Agent is now generating response...`;
+      return await sendAgentToolMessage({
+        text,
+        filePaths,
+        source: 'continue_agent_chats'
+      });
     },
     closeWindow: async () => {
       await closePage(true);
@@ -1394,7 +1606,7 @@ onMounted(async () => {
       const userInfo = await window.api.getUser();
       UserAvart.value = userInfo.avatar;
     } catch (err) {
-      UserAvart.value = "user.png";
+      UserAvart.value = "file:///E:/Programming/Anywhere_desktop/resources/user.png";
     }
 
     if (data?.os) {
@@ -1404,38 +1616,11 @@ onMounted(async () => {
     updateModelListAndMap(currentConfig.value);
 
     const code = data?.code || "AI";
-    const currentPromptConfig = currentConfig.value.prompts[code] || defaultConfig.config.prompts.AI;
-    if (currentPromptConfig.backgroundImage) {
-      loadBackground(currentPromptConfig.backgroundImage);
-    }
-    isAlwaysOnTop.value = data?.isAlwaysOnTop ?? currentPromptConfig.isAlwaysOnTop ?? true;
-    zoomLevel.value = currentPromptConfig.zoom || currentConfig.value.zoom || 1;
-    if (window.api && typeof window.api.setZoomFactor === 'function') {
-      window.api.setZoomFactor(zoomLevel.value);
-    }
-    if (currentConfig.value.isDarkMode) {
-      document.documentElement.classList.add('dark');
-    }
-
     CODE.value = code;
     document.title = code;
-    sourcePromptConfig.value = currentPromptConfig;
+    const currentPromptConfig = currentConfig.value.prompts[code] || defaultConfig.config.prompts.AI;
+    await applyPromptRuntimeConfig(currentConfig.value, { skipSystemPromptSync: true });
 
-    if (currentPromptConfig.icon) {
-      AIAvart.value = currentPromptConfig.icon;
-      favicon.value = currentPromptConfig.icon;
-    } else {
-      AIAvart.value = "ai.svg";
-      favicon.value = currentConfig.value.isDarkMode ? "favicon-b.png" : "favicon.png";
-    }
-
-    autoCloseOnBlur.value = currentPromptConfig.autoCloseOnBlur ?? false;
-    if (data?.type === "task" || data?.type === "summon") {
-      autoCloseOnBlur.value = false;
-    }
-    tempReasoningEffort.value = currentPromptConfig.reasoning_effort || 'default';
-    model.value = currentPromptConfig.model || modelList.value[0]?.value || '';
-    selectedVoice.value = currentPromptConfig.voice || null;
 
     if (model.value) {
       currentProviderID.value = model.value.split("|")[0];
@@ -1468,6 +1653,7 @@ onMounted(async () => {
     let shouldDirectSend = false;
     let isFileDirectSend = false;
     let isSessionRestored = false;
+    let pendingAgentToolSend = null;
 
     if (data) {
       basic_msg.value = { code: data.code, type: data.type, payload: data.payload };
@@ -1500,13 +1686,19 @@ onMounted(async () => {
         // 标记需要直接发送
         shouldDirectSend = true;
       } if (data.type === "summon") {
-        shouldDirectSend = true;
-        isFileDirectSend = true;
         if (data.summonData) {
           const { text, file_paths, enable_tools } = data.summonData;
-          if (text) prompt.value = text;
-          if (file_paths && Array.isArray(file_paths) && file_paths.length > 0) {
-            for (const p of file_paths) await processFilePath(p);
+          const normalizedText = typeof text === 'string' ? text.trim() : '';
+          const normalizedPaths = Array.isArray(file_paths)
+            ? file_paths.filter((p) => typeof p === 'string' && p.trim())
+            : [];
+          if (normalizedText || normalizedPaths.length > 0) {
+            pendingAgentToolSend = {
+              text: normalizedText,
+              filePaths: normalizedPaths,
+              source: 'summon_agent'
+            };
+            defaultConversationName.value = `召唤-${CODE.value}-${new Date().toLocaleString('sv-SE').replace(/[ :]/g, '-')}`;
           }
           if (enable_tools) {
             const builtinIds = getActiveBuiltinIds();
@@ -1600,7 +1792,10 @@ onMounted(async () => {
 
     await fetchSkillsList();
 
-    if (shouldDirectSend) {
+    if (pendingAgentToolSend) {
+      if (isAtBottom.value) scrollToBottom();
+      await sendAgentToolMessage(pendingAgentToolSend);
+    } else if (shouldDirectSend) {
       if (isAtBottom.value) scrollToBottom();
       if (isFileDirectSend) await askAI(false);
       else await askAI(true);
@@ -1612,61 +1807,40 @@ onMounted(async () => {
     }, 100);
   };
 
-  if (window.preload && typeof window.preload.receiveMsg === 'function') {
+  let hasDesktopInitBinding = false;
+  if (window.api && typeof window.api.onWindowInit === 'function') {
+    hasDesktopInitBinding = true;
+    window.api.onWindowInit(async (data) => {
+      await initializeWindow(data);
+    });
+  }
+
+  if (!hasDesktopInitBinding && window.preload && typeof window.preload.receiveMsg === 'function') {
     window.preload.receiveMsg(async (data) => {
       await initializeWindow(data);
     });
-  } else {
+  } else if (!hasDesktopInitBinding) {
     const data = {
       os: "win",
       code: "Moss",
-      config: await window.api.getConfig().config,
+      config: (await window.api.getConfig()).config,
     };
     await initializeWindow(data);
   }
 
-  // 监听来自 uTools 的"追问"内容追加事件
+    // 优先接桌面端事件总线，同时保留原插件 preload 回退
+  if (window.api && typeof window.api.onWindowEvent === 'function') {
+    window.api.onWindowEvent(async (envelope) => {
+      const payload = normalizeWindowEventPayload(envelope);
+      if (payload && typeof payload === 'object' && payload.type) {
+        await handleAppendMessageEvent(payload);
+      }
+    });
+  }
+
   if (window.preload && typeof window.preload.onAppendMessage === 'function') {
     window.preload.onAppendMessage(async (data) => {
-      // 1. 如果 AI 正在生成，立刻中断当前生成
-      if (loading.value) {
-        cancelAskAI();
-        showDismissibleMessage.info('已中断当前生成，开始处理追问');
-        // 等待状态清理和 DOM 更新
-        await new Promise(r => setTimeout(r, 100));
-      }
-
-      let isFileDirectSend = false;
-      const nowTime = new Date().toLocaleString('sv-SE');
-
-      // 2. 将收到的数据直接压入聊天历史或文件列表
-      if (data.type === "over" && data.payload) {
-        history.value.push({ role: "user", content: data.payload });
-        chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
-      } else if (data.type === "img" && data.payload) {
-        history.value.push({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
-        chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }], timestamp: nowTime });
-      } else if (data.type === "files" && data.payload) {
-        try {
-          const fileProcessingPromises = data.payload.map((fileInfo) => processFilePath(fileInfo.path));
-          await Promise.all(fileProcessingPromises);
-          isFileDirectSend = true;
-        } catch (error) { 
-          console.error(error);
-          showDismissibleMessage.error("处理文件失败: " + error.message);
-          return; // 处理失败则终止发送
-        }
-      }
-
-      // 3. 强制触发自动发送
-      scrollToBottom();
-      if (isFileDirectSend) {
-        // 如果是文件，askAI(false) 会自动收集刚才压入 fileList.value 的文件并发起对话
-        await askAI(false);
-      } else {
-        // 如果是文本/图片，已经压入 history，传入 true 跳过输入框收集，直接向 AI 发送
-        await askAI(true);
-      }
+      await handleAppendMessageEvent(data);
     });
   }
 
@@ -1675,39 +1849,41 @@ onMounted(async () => {
   window.addEventListener('error', handleGlobalImageError, true);
   window.addEventListener('keydown', handleGlobalKeyDown);
 
+  if (window.api && window.api.onAlwaysOnTopChanged) {
+    window.api.onAlwaysOnTopChanged((value) => {
+      if (isClosingWindow.value) return;
+      isAlwaysOnTop.value = Boolean(value);
+      if (CODE.value && currentConfig.value?.prompts?.[CODE.value]) {
+        currentConfig.value.prompts[CODE.value].isAlwaysOnTop = isAlwaysOnTop.value;
+      }
+    });
+  }
+
   if (window.api && window.api.onConfigUpdated) {
-    window.api.onConfigUpdated((newConfig) => {
-      if (newConfig) {
-        currentConfig.value = newConfig;
-        if (newConfig.zoom !== undefined) {
-          zoomLevel.value = newConfig.zoom;
+    window.api.onConfigUpdated(async (newConfig) => {
+      if (!newConfig || isClosingWindow.value) return;
+
+      currentConfig.value = newConfig;
+      await applyPromptRuntimeConfig(newConfig, { skipIfSavingWindowSettings: true });
+
+      if (newConfig.mcpServers) {
+        let mcpChanged = false;
+        const validMcpIds = sessionMcpServerIds.value.filter(id => {
+          const server = newConfig.mcpServers[id];
+          return server && server.isActive;
+        });
+
+        if (validMcpIds.length !== sessionMcpServerIds.value.length) {
+          sessionMcpServerIds.value = validMcpIds;
+          tempSessionMcpServerIds.value = tempSessionMcpServerIds.value.filter(id => {
+            const server = newConfig.mcpServers[id];
+            return server && server.isActive;
+          });
+          mcpChanged = true;
         }
 
-        // 1. 配置更新后同步重构服务商和模型列表
-        updateModelListAndMap(newConfig);
-
-        // 2. 校验并清理已删除或被禁用的 MCP 服务
-        if (newConfig.mcpServers) {
-          let mcpChanged = false;
-          // 筛选当前真正有效的选中 ID
-          const validMcpIds = sessionMcpServerIds.value.filter(id => {
-            const server = newConfig.mcpServers[id];
-            return server && server.isActive; // 必须存在且启用
-          });
-
-          if (validMcpIds.length !== sessionMcpServerIds.value.length) {
-            sessionMcpServerIds.value = validMcpIds;
-            tempSessionMcpServerIds.value = tempSessionMcpServerIds.value.filter(id => {
-              const server = newConfig.mcpServers[id];
-              return server && server.isActive;
-            });
-            mcpChanged = true;
-          }
-
-          // 如果发现存在失效的 MCP 服务，通知后端重新加载客户端
-          if (mcpChanged && !loading.value) {
-            applyMcpTools(false);
-          }
+        if (mcpChanged && !loading.value) {
+          applyMcpTools(false);
         }
       }
     });
@@ -1782,8 +1958,17 @@ const autoSaveSession = async (force = false) => {
         const now = new Date();
         const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
 
+        // 判断上下文并添加合适的前缀
+        let prefixTag = "";
+        if (basic_msg.value?.type === "summon") {
+          prefixTag = "召唤-";
+        } else if (force) {
+          // force 为 true 通常是由 MCP 调用 close_agent_window 引起的强制保存关闭
+          prefixTag = "关闭留档-";
+        }
+
         // 组合文件名
-        defaultConversationName.value = `${namePrefix}-${safeCodeName}-${timestamp}`;
+        defaultConversationName.value = `${prefixTag}${namePrefix}-${safeCodeName}-${timestamp}`;
       }
     }
   }
@@ -1804,19 +1989,24 @@ const autoSaveSession = async (force = false) => {
   }
 };
 
-onBeforeUnmount(async () => {
+onBeforeUnmount(() => {
   window.removeEventListener('wheel', handleWheel);
   window.removeEventListener('focus', handleWindowFocus);
   window.removeEventListener('blur', handleWindowBlur);
   if (textSearchInstance) textSearchInstance.destroy();
   if (!autoCloseOnBlur.value) window.removeEventListener('blur', closePage);
-  await window.api.closeMcpClient();
+  
   window.removeEventListener('error', handleGlobalImageError, true);
   window.removeEventListener('keydown', handleGlobalKeyDown);
 
   if (chatObserver) {
     chatObserver.disconnect();
     chatObserver = null;
+  }
+  
+  if (autoSaveInterval) {
+    clearInterval(autoSaveInterval);
+    autoSaveInterval = null;
   }
 });
 
@@ -1839,19 +2029,58 @@ const saveWindowSize = async () => {
     position_y: window.screenY,
   };
 
+  debugWindowLog('saveWindowSize:prepared', {
+    code: CODE.value,
+    settingsToSave,
+    currentPromptExists: Boolean(currentConfig.value?.prompts?.[CODE.value])
+  });
+
+  isSavingWindowSettings.value = true;
+  debugWindowLog('saveWindowSize:mark-saving-true');
+
   try {
+    debugWindowLog('saveWindowSize:invoke:before', { code: CODE.value, settingsToSave });
     const result = await window.api.savePromptWindowSettings(CODE.value, settingsToSave);
-    if (result.success) {
+    debugWindowLog('saveWindowSize:invoke:after', result);
+    const isSuccess = Boolean(result?.success || result?.ok);
+    const errorMessage = getErrorMessage(result, '保存失败');
+
+    debugWindowLog('saveWindowSize:result:normalized', {
+      isSuccess,
+      errorMessage,
+      rawResult: result
+    });
+
+    if (isSuccess) {
       showDismissibleMessage.success('当前快捷助手的窗口大小、位置与缩放已保存');
       if (currentConfig.value.prompts[CODE.value]) {
         Object.assign(currentConfig.value.prompts[CODE.value], settingsToSave);
       }
+      if (currentConfig.value) {
+        currentConfig.value.zoom = settingsToSave.zoom;
+      }
+      applyZoomFactor(settingsToSave.zoom);
     } else {
-      showDismissibleMessage.error(`保存失败: ${result.message}`);
+      debugWindowError('saveWindowSize:result:failed', {
+        rawResult: result,
+        errorMessage
+      });
+      showDismissibleMessage.error(`保存失败: ${errorMessage}`);
     }
   } catch (error) {
-    console.error("Error saving window settings:", error);
-    showDismissibleMessage.error('保存窗口设置时出错');
+    const message = getErrorMessage(error, '保存窗口设置时出错');
+    debugWindowError('saveWindowSize:invoke:error', error, {
+      message,
+      code: CODE.value,
+      settingsToSave
+    });
+    console.error('Error saving window settings:', error);
+    showDismissibleMessage.error(`保存失败: ${message}`);
+  } finally {
+    setTimeout(() => {
+      isSavingWindowSettings.value = false;
+      debugWindowLog('saveWindowSize:mark-saving-false');
+    }, 200);
   }
 }
 
@@ -2903,8 +3132,8 @@ const loadSession = async (jsonData) => {
       AIAvart.value = currentPromptConfigFromLoad.icon;
       favicon.value = currentPromptConfigFromLoad.icon;
     } else {
-      AIAvart.value = "ai.svg";
-      favicon.value = currentConfig.value.isDarkMode ? "favicon-b.png" : "favicon.png";
+      AIAvart.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
+      favicon.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
     }
 
     updateModelListAndMap(currentConfig.value);
@@ -3026,14 +3255,26 @@ const file2fileList = async (file, idx) => {
   const isSessionFile = await checkAndLoadSessionFromFile(file);
   if (isSessionFile) { chatInputRef.value?.focus({ cursor: 'end' }); return; }
 
-  return new Promise((resolve, reject) => {
-    if (!window.api.isFileTypeSupported(file.name)) {
-      const errorMsg = `不支持的文件类型: ${file.name}`;
-      showDismissibleMessage.warning(errorMsg);
-      reject(new Error(errorMsg));
-      return;
-    }
+  if (!window.api.isFileTypeSupported(file.name)) {
+    const errorMsg = `不支持的文件类型: ${file.name}`;
+    showDismissibleMessage.warning(errorMsg);
+    throw new Error(errorMsg);
+  }
 
+  if (file?.base64 && typeof file.base64 === 'string') {
+    const mimeType = file.type || 'application/octet-stream';
+    fileList.value.push({
+      uid: idx,
+      name: file.name,
+      size: file.size,
+      type: mimeType,
+      url: `data:${mimeType};base64,${file.base64}`,
+      path: file.path || ''
+    });
+    return;
+  }
+
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       fileList.value.push({
@@ -3041,7 +3282,8 @@ const file2fileList = async (file, idx) => {
         name: file.name,
         size: file.size,
         type: file.type,
-        url: e.target.result
+        url: e.target.result,
+        path: file.path || ''
       });
       resolve();
     };
@@ -3055,12 +3297,26 @@ const file2fileList = async (file, idx) => {
 };
 
 const processFilePath = async (filePath) => {
-  if (!filePath || typeof filePath !== 'string') { showDismissibleMessage.error('无效的文件路径'); return; }
+  if (!filePath || typeof filePath !== 'string') {
+    const error = new Error('无效的文件路径');
+    showDismissibleMessage.error(error.message);
+    throw error;
+  }
   try {
     const fileObject = await window.api.handleFilePath(filePath);
-    if (fileObject) await file2fileList(fileObject, fileList.value.length + 1);
-    else showDismissibleMessage.error('无法读取或访问该文件，请检查路径和权限');
-  } catch (error) { console.error('调用 handleFilePath 时发生意外错误:', error); showDismissibleMessage.error('处理文件路径时发生未知错误'); }
+    if (!fileObject) {
+      const error = new Error('无法读取或访问该文件，请检查路径和权限');
+      showDismissibleMessage.error(error.message);
+      throw error;
+    }
+    await file2fileList(fileObject, fileList.value.length + 1);
+    return fileObject;
+  } catch (error) {
+    console.error('调用 handleFilePath 时发生意外错误:', error);
+    const normalizedError = error instanceof Error ? error : new Error(error?.message || '处理文件路径时发生未知错误');
+    showDismissibleMessage.error(normalizedError.message);
+    throw normalizedError;
+  }
 };
 
 const sendFile = async () => {
@@ -3089,6 +3345,75 @@ const sendFile = async () => {
   fileList.value = [];
   return contentList;
 };
+
+const buildAgentToolContentList = async ({ text, filePaths, source = 'agent_tool' } = {}) => {
+  const normalizedText = typeof text === 'string' ? text.trim() : '';
+  const normalizedPaths = Array.isArray(filePaths)
+    ? filePaths.filter((item) => typeof item === 'string' && item.trim())
+    : [];
+
+  const contentList = [];
+  if (normalizedText) {
+    contentList.push({ type: 'text', text: normalizedText });
+  }
+
+  let fileContentList = [];
+  if (normalizedPaths.length > 0) {
+    try {
+      fileContentList = await window.api.sendfileDirect(normalizedPaths.map((path) => ({ path })));
+    } catch (error) {
+      throw new Error(`Failed to attach files. ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  if (Array.isArray(fileContentList) && fileContentList.length > 0) {
+    contentList.push(...fileContentList);
+  }
+
+  return {
+    normalizedText,
+    normalizedPaths,
+    attachedFiles: Array.isArray(fileContentList) ? fileContentList : [],
+    contentList
+  };
+};
+
+const sendAgentToolMessage = async ({ text, filePaths, source = 'agent_tool' } = {}) => {
+  if (loading.value) {
+    return Promise.reject("Error: This agent is currently busy generating a response. Please wait until it becomes Idle.");
+  }
+
+  const { normalizedText, normalizedPaths, attachedFiles, contentList } = await buildAgentToolContentList({
+    text,
+    filePaths,
+    source
+  });
+
+  if (contentList.length === 0) {
+    return Promise.reject('Error: No text or valid attachments were provided.');
+  }
+
+  const userTimestamp = new Date().toLocaleString('sv-SE');
+  const contentForHistory = contentList.length === 1 && contentList[0].type === 'text'
+    ? contentList[0].text
+    : contentList;
+
+  history.value.push({ role: 'user', content: contentForHistory });
+  chat_show.value.push({
+    id: messageIdCounter.value++,
+    role: 'user',
+    content: contentList,
+    timestamp: userTimestamp
+  });
+  autoSaveSession();
+
+  prompt.value = '';
+  fileList.value = [];
+
+  askAI(true).catch((err) => console.error('Background generation error:', err));
+  return `Message sent successfully${Array.isArray(attachedFiles) && attachedFiles.length > 0 ? ` (${attachedFiles.length} files attached)` : ''}. Agent is now generating response...`;
+};
+
 
 async function applyMcpTools(show_none = true) {
   isMcpDialogVisible.value = false;
@@ -3783,7 +4108,7 @@ const askAI = async (forceSend = false) => {
                   executionContext
                 );
 
-                toolContent = Array.isArray(result) ? result.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text).join('\n\n') : String(result);
+                toolContent = formatToolResult(result);
 
                 if (uiToolCall) {
                   if (toolCall.function.name === 'sub_agent') {
@@ -3803,7 +4128,7 @@ const askAI = async (forceSend = false) => {
 
             } catch (e) {
               if (e.name === 'AbortError') {
-                toolContent = "Error: Tool call was canceled by the user.";
+                toolContent = "[System Note]: Tool call was aborted by user.";
                 if (uiToolCall) uiToolCall.approvalStatus = 'rejected';
               } else {
                 toolContent = `{'result':'工具执行或参数解析错误: ${e.message}'}`;
@@ -3905,7 +4230,7 @@ const askAI = async (forceSend = false) => {
         if (currentTaskConfig.value.autoSave && currentConfig.value.webdav?.localChatPath) {
           // 构造文件名：任务名-时间
           const timeStr = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[\/ :]/g, '-').replace(/,/g, '');
-          defaultConversationName.value = `${currentTaskConfig.value.name}-${timeStr}`;
+          defaultConversationName.value = `定时任务-${currentTaskConfig.value.name}-${timeStr}`;
           const sessionData = getSessionDataAsObject();
           const jsonString = JSON.stringify(sessionData, null, 2);
 
@@ -4105,7 +4430,17 @@ const handleCancelToolCall = (toolCallId) => {
   const controller = toolCallControllers.value.get(toolCallId);
   if (controller) {
     controller.abort();
-    showDismissibleMessage.info('正在取消工具调用...');
+    chat_show.value.forEach(msg => {
+      if (msg.tool_calls) {
+        msg.tool_calls.forEach(tc => {
+          if (tc.id === toolCallId && tc.approvalStatus === 'executing') {
+            tc.approvalStatus = 'rejected';
+            tc.result = '[System Note]: Tool call was aborted by user.';
+          }
+        });
+      }
+    });
+    showDismissibleMessage.info('已发送取消请求');
   }
 };
 
@@ -4215,7 +4550,8 @@ const handleGlobalKeyDown = (event) => {
     // 重置缩放 (Ctrl + 0)
     if (event.key === '0') {
       event.preventDefault();
-      zoomLevel.value = 1;
+      applyZoomFactor(1);
+      if (currentConfig.value) currentConfig.value.zoom = zoomLevel.value;
       showDismissibleMessage.info('缩放已重置 (100%)');
       return;
     }
@@ -4224,9 +4560,8 @@ const handleGlobalKeyDown = (event) => {
     // 注意：在大多数键盘上，+ 号位于 = 键上，不按 Shift 时 key 为 '='
     if (event.key === '=' || event.key === '+') {
       event.preventDefault();
-      const newZoom = zoomLevel.value + 0.1;
-      // 限制最大缩放为 2.0，与鼠标滚轮逻辑保持一致
-      zoomLevel.value = Math.min(2.0, newZoom);
+      applyZoomFactor(zoomLevel.value + 0.1);
+      if (currentConfig.value) currentConfig.value.zoom = zoomLevel.value;
       showDismissibleMessage.info(`缩放: ${Math.round(zoomLevel.value * 100)}%`);
       return;
     }
@@ -4234,9 +4569,8 @@ const handleGlobalKeyDown = (event) => {
     // 缩小 (Ctrl + -)
     if (event.key === '-') {
       event.preventDefault();
-      const newZoom = zoomLevel.value - 0.1;
-      // 限制最小缩放为 0.5，与鼠标滚轮逻辑保持一致
-      zoomLevel.value = Math.max(0.5, newZoom);
+      applyZoomFactor(zoomLevel.value - 0.1);
+      if (currentConfig.value) currentConfig.value.zoom = zoomLevel.value;
       showDismissibleMessage.info(`缩放: ${Math.round(zoomLevel.value * 100)}%`);
       return;
     }

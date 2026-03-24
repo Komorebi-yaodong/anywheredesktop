@@ -2,15 +2,40 @@ import path from 'node:path'
 import { BrowserWindow, ipcMain } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
 
+const liveSignalControllers = new Map()
+
+const debugIpcLog = () => {}
+const debugIpcError = () => {}
+
+
+function getLiveSignalKey(senderId, token = '') {
+  return `${senderId}:${token}`
+}
+
+
 function handleInvoke(channel, handler, options = {}) {
   ipcMain.handle(channel, async (event, ...args) => {
+    const senderRef = (() => {
+      try {
+        return BrowserWindow.fromWebContents(event.sender)?.id || event.sender?.id || null
+      } catch {
+        return event.sender?.id || null
+      }
+    })()
+
+    debugIpcLog('invoke:before', { channel, senderRef, args })
+
     try {
       const result = await handler(event, ...args)
-      return await serializeIpcPayload(result, options)
+      const serialized = await serializeIpcPayload(result, options)
+      debugIpcLog('invoke:after', { channel, senderRef, result: serialized })
+      return serialized
     } catch (error) {
+      const serializedError = serializeError(error)
+      debugIpcError('invoke:error', { channel, senderRef, args, error: serializedError })
       return {
         ok: false,
-        error: serializeError(error)
+        error: serializedError
       }
     }
   })
@@ -37,10 +62,21 @@ export function registerIpcHandlers({
   closeWindow,
   toggleAlwaysOnTop
 }) {
-  ipcMain.on('ping', () => console.log('pong'))
+  ipcMain.on('ping', () => {})
 
-  handleInvoke('window:open', async (_event, type = 'main') => {
-    return openWindow(type)
+  ipcMain.on('window:signal-abort', (event, token = '') => {
+    const key = getLiveSignalKey(event.sender.id, typeof token === 'string' ? token : '')
+    const controller = liveSignalControllers.get(key)
+    if (controller) {
+      controller.abort()
+      liveSignalControllers.delete(key)
+    }
+  })
+
+
+
+  handleInvoke('window:open', async (_event, type = 'main', payload = null) => {
+    return openWindow(type, payload)
   })
 
 
@@ -99,7 +135,7 @@ export function registerIpcHandlers({
     return maximizeOrRestoreWindow(windowRef)
   })
 
-  handleInvoke('window:close', async (event, input = {}) => {
+  ipcMain.on('window:close', (event, input = {}) => {
     const fallbackRef = getWindowRefByWebContentsId(event.sender.id)
     const windowRef =
       typeof input === 'string'
@@ -108,7 +144,20 @@ export function registerIpcHandlers({
           ? input.windowRef
           : fallbackRef
 
-    return closeWindow(windowRef)
+    debugIpcLog('send:before', { channel: 'window:close', senderRef: event.sender?.id || null, args: [input], windowRef })
+
+    try {
+      const result = closeWindow(windowRef)
+      debugIpcLog('send:after', { channel: 'window:close', senderRef: event.sender?.id || null, result })
+    } catch (error) {
+      const serializedError = serializeError(error)
+      debugIpcError('send:error', {
+        channel: 'window:close',
+        senderRef: event.sender?.id || null,
+        args: [input],
+        error: serializedError
+      })
+    }
   })
 
   handleInvoke('window:toggleAlwaysOnTop', async (event, input = {}) => {
@@ -141,6 +190,16 @@ export function registerIpcHandlers({
 
   handleInvoke('system:clipboard:readText', async () => {
     return systemApi.readClipboardText()
+  })
+
+
+  handleInvoke('system:clipboard:readPayload', async () => {
+    return systemApi.readClipboardPayload()
+  })
+
+
+  handleInvoke('system:clipboard:captureSelection', async () => {
+    return systemApi.captureSelectionPayload()
   })
 
   handleInvoke('system:dialog:open', async (event, options = {}) => {
@@ -221,6 +280,11 @@ export function registerIpcHandlers({
   })
 
 
+  
+  handleInvoke('data:getUser', async () => {
+    return dataApi.getUser()
+  })
+
   handleInvoke('data:getConfig', async () => {
     return dataApi.getConfig()
   })
@@ -246,9 +310,26 @@ export function registerIpcHandlers({
   })
 
 
-  handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
+  
+  handleInvoke('data:savePromptWindowSettings', async (_event, promptKey = '', settings = {}) => {
+    return dataApi.savePromptWindowSettings(promptKey, settings)
+  })
+
+  handleInvoke('data:addTaskHistory', async (_event, taskId = '', logEntry = null) => {
+    return dataApi.addTaskHistory(taskId, logEntry)
+  })
+
+  handleInvoke('data:getCachedBackgroundImage', async (_event, url = '') => {
+    return dataApi.getCachedBackgroundImage(url)
+  })
+
+  handleInvoke('data:cacheBackgroundImage', async (_event, url = '') => {
+    return dataApi.cacheBackgroundImage(url)
+  })
+
+handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
     const sourceId = getWindowRefByWebContentsId(event.sender.id)
-    const openResult = openWindow('window')
+    const openResult = await openWindow('window')
     const target = typeof openResult?.id === 'string' && openResult.id ? openResult.id : 'type:window'
 
     const dispatchResult = dispatchWindowEvent(
@@ -272,7 +353,7 @@ export function registerIpcHandlers({
     }
   })
 
-  handleInvoke('data:runTaskNow', async (event, taskId = '') => {
+  handleInvoke('data:runTaskNow', async (_event, taskId = '') => {
     const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : ''
     if (!normalizedTaskId) {
       return {
@@ -312,36 +393,25 @@ export function registerIpcHandlers({
           }
         : null
 
-    const openResult = openWindow('window')
-    const target = typeof openResult?.id === 'string' && openResult.id ? openResult.id : 'type:window'
-    const sourceId = getWindowRefByWebContentsId(event.sender.id)
-
-    const dispatchResult = dispatchWindowEvent(
-      {
-        sourceId,
-        target,
-        event: 'task:run-now',
-        payload: {
-          os: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'win' : 'linux',
-          code: promptKey,
-          type: 'task',
-          payload: typeof task.description === 'string' ? task.description : '',
-          taskConfig: {
-            id: normalizedTaskId,
-            ...task
-          },
-          tempPromptConfig
-        }
+    const openPayload = {
+      code: promptKey,
+      type: 'task',
+      payload: typeof task.description === 'string' ? task.description : '',
+      taskConfig: {
+        id: normalizedTaskId,
+        ...task
       },
-      { getWindowByRef, listWindows }
-    )
+      tempPromptConfig
+    }
+
+    const openResult = await openWindow('window', openPayload)
 
     return {
-      success: Boolean(dispatchResult?.ok),
+      success: Boolean(openResult?.ok),
       taskId: normalizedTaskId,
-      target,
-      event: 'task:run-now',
-      result: dispatchResult
+      target: openResult?.id || null,
+      event: 'window:open',
+      result: openResult
     }
   })
 
@@ -357,13 +427,7 @@ export function registerIpcHandlers({
 
 
   handleInvoke('chat:createCompletion', async (_event, params = {}) => {
-    const normalizedParams = {
-      ...params,
-      // 先走非流式最小闭环，避免将 Stream 对象跨 IPC 传输
-      stream: params?.stream === undefined ? false : Boolean(params.stream)
-    }
-
-    return chatApi.createChatCompletion(normalizedParams)
+    return chatApi.createChatCompletion(params)
   })
 
 
@@ -440,7 +504,54 @@ export function registerIpcHandlers({
     return mcpApi.invokeMcpTool(toolName, toolArgs, null, context)
   })
 
-  handleInvoke('mcp:closeClient', async () => {
+  
+  handleInvoke('mcp:invokeToolLive', async (event, toolName = '', toolArgs = {}, meta = {}) => {
+    const signalToken = typeof meta?.signalToken === 'string' ? meta.signalToken : ''
+    const callbackToken = typeof meta?.callbackToken === 'string' ? meta.callbackToken : ''
+    const context = meta?.context && typeof meta.context === 'object' ? meta.context : null
+    const controller = new AbortController()
+    const signalKey = signalToken ? getLiveSignalKey(event.sender.id, signalToken) : ''
+
+    if (signalKey) {
+      liveSignalControllers.set(signalKey, controller)
+    }
+    if (meta?.aborted) {
+      controller.abort()
+    }
+
+    const nextContext = context ? { ...context } : null
+    if (nextContext && callbackToken) {
+      nextContext.onUpdate = (payload) => {
+        try {
+          event.sender.send('window:callback', {
+            token: callbackToken,
+            payload: typeof payload === 'string' ? payload : JSON.parse(JSON.stringify(payload))
+          })
+        } catch {
+          // ignore callback notify failure
+        }
+      }
+    }
+
+    try {
+      return await mcpApi.invokeMcpTool(toolName, toolArgs, controller.signal, nextContext)
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        return {
+          ok: false,
+          error: serializeError(error)
+        }
+      }
+      throw error
+    } finally {
+      if (signalKey) {
+        liveSignalControllers.delete(signalKey)
+      }
+    }
+  })
+
+
+handleInvoke('mcp:closeClient', async () => {
     return mcpApi.closeMcpClient()
   })
 
@@ -454,11 +565,15 @@ export function registerIpcHandlers({
   })
 
   handleInvoke('skill:save', async (_event, skillRootPath = '', skillId = '', content = '') => {
-    return skillApi.saveSkill(skillRootPath, skillId, content)
+    const result = skillApi.saveSkill(skillRootPath, skillId, content)
+    dataApi.notifySkillsUpdated()
+    return result
   })
 
   handleInvoke('skill:delete', async (_event, skillRootPath = '', skillId = '') => {
-    return skillApi.deleteSkill(skillRootPath, skillId)
+    const result = skillApi.deleteSkill(skillRootPath, skillId)
+    dataApi.notifySkillsUpdated()
+    return result
   })
 
   handleInvoke('skill:exportPackage', async (_event, skillRootPath = '', skillId = '', outputDir = '') => {
@@ -523,8 +638,70 @@ export function registerIpcHandlers({
     }
   )
 
-  handleInvoke('skill:pathJoin', async (_event, ...args) => {
+  
+  handleInvoke('skill:resolveInvocationLive', async (event, skillRootPath = '', skillName = '', toolArgsObj = {}, meta = {}) => {
+    const signalToken = typeof meta?.signalToken === 'string' ? meta.signalToken : ''
+    const callbackToken = typeof meta?.callbackToken === 'string' ? meta.callbackToken : ''
+    const context = meta?.context && typeof meta.context === 'object' ? meta.context : null
+    const controller = new AbortController()
+    const signalKey = signalToken ? getLiveSignalKey(event.sender.id, signalToken) : ''
+
+    if (signalKey) {
+      liveSignalControllers.set(signalKey, controller)
+    }
+    if (meta?.aborted) {
+      controller.abort()
+    }
+
+    const configResult = await dataApi.getConfig()
+    const currentConfig = configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
+    const currentMcpServers = currentConfig?.mcpServers && typeof currentConfig.mcpServers === 'object' ? currentConfig.mcpServers : {}
+
+    try {
+      const result = await skillApi.resolveSkillInvocation(skillRootPath, skillName, toolArgsObj, {
+        mcpServers: currentMcpServers
+      })
+
+      if (result && typeof result === 'object' && result.__isForkRequest && result.subAgentArgs) {
+        if (!context) {
+          return JSON.stringify([{ type: 'text', text: 'Error: Sub-Agent skill requires execution context (API Key, etc).' }], null, 2)
+        }
+
+        const nextContext = { ...context }
+        if (callbackToken) {
+          nextContext.onUpdate = (payload) => {
+            try {
+              event.sender.send('window:callback', {
+                token: callbackToken,
+                payload: typeof payload === 'string' ? payload : JSON.parse(JSON.stringify(payload))
+              })
+            } catch {
+              // ignore callback notify failure
+            }
+          }
+        }
+
+        return await mcpApi.invokeMcpTool('sub_agent', result.subAgentArgs, controller.signal, nextContext)
+      }
+
+      return JSON.stringify([{ type: 'text', text: result }], null, 2)
+    } finally {
+      if (signalKey) {
+        liveSignalControllers.delete(signalKey)
+      }
+    }
+  })
+
+
+handleInvoke('skill:pathJoin', async (_event, ...args) => {
     return path.join(...args)
+  })
+
+  
+  handleInvoke('skill:toggleForkMode', async (_event, skillRootPath = '', skillId = '', enableFork = false) => {
+    const result = skillApi.toggleSkillForkMode(skillRootPath, skillId, enableFork)
+    dataApi.notifySkillsUpdated()
+    return result
   })
 
   handleInvoke('file:handleFilePath', async (_event, filePath = '') => {

@@ -63,9 +63,10 @@ const fallbackDefaultConfig = {
       autoSaveChat: false
     }
   },
-  settingsCardOrder: ['general', 'voice', 'data', 'webdav'],
+  settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],
   settingsCardCollapsed: {
     general: false,
+    desktop: false,
     voice: false,
     data: false,
     webdav: false
@@ -92,7 +93,16 @@ const fallbackDefaultConfig = {
     data_path: '/anywhere_data',
     localChatPath: ''
   },
-  voiceList: []
+    desktop: {
+    closeToTray: true,
+    shortcuts: {
+      mainToggle: 'Ctrl+Space',
+      quickSummon: 'Alt+X',
+      promptBindings: []
+    }
+  },
+
+voiceList: []
 };
 
 function normalizeConfigPayload(result) {

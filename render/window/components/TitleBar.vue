@@ -46,6 +46,20 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize);
 });
+
+const TITLEBAR_DEBUG_PREFIX = '[AnywhereWindow TitleBar Debug]';
+const logTitleBar = (...args) => console.log(TITLEBAR_DEBUG_PREFIX, ...args);
+
+const emitCloseWithLog = () => {
+  logTitleBar('emit-close', {
+    os: props.os,
+    promptName: props.promptName,
+    conversationName: props.conversationName,
+    isNarrow: isNarrow.value
+  });
+  emit('close');
+};
+
 </script>
 
 <template>
@@ -55,7 +69,7 @@ onBeforeUnmount(() => {
     <div class="left-container">
       <!-- macOS 红绿灯 -->
       <div v-if="isMac" class="window-controls mac-traffic-lights no-drag">
-        <div class="traffic-btn close" @click="emit('close')">
+        <div class="traffic-btn close" @click="emitCloseWithLog()">
           <el-icon class="traffic-icon"><CloseBold /></el-icon>
         </div>
         <div class="traffic-btn minimize" @click="emit('minimize')">
@@ -161,7 +175,7 @@ onBeforeUnmount(() => {
         <div class="win-btn maximize" @click="emit('maximize')" title="最大化">
           <el-icon><FullScreen /></el-icon>
         </div>
-        <div class="win-btn close" @click="emit('close')" title="关闭">
+        <div class="win-btn close" @click="emitCloseWithLog()" title="关闭">
           <el-icon><Close /></el-icon>
         </div>
       </div>
@@ -174,7 +188,7 @@ onBeforeUnmount(() => {
         <div class="linux-btn maximize" @click="emit('maximize')">
           <el-icon><FullScreen /></el-icon>
         </div>
-        <div class="linux-btn close" @click="emit('close')">
+        <div class="linux-btn close" @click="emitCloseWithLog()">
           <el-icon><Close /></el-icon>
         </div>
       </div>

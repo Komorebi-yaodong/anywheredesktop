@@ -566,6 +566,42 @@ export function deleteSkill(skillRootPath, skillId) {
 /**
  * 导出 Skill 为 .skill
  */
+
+/**
+ * 切换 Skill 的 Sub-Agent(Fork) 模式
+ */
+export function toggleSkillForkMode(skillRootPath, skillId, enableFork = false) {
+  const details = getSkillDetails(skillRootPath, skillId)
+  const meta = { ...(details.metadata || {}) }
+  const body = details.content || ''
+
+  if (enableFork) {
+    meta.context = 'fork'
+  } else {
+    delete meta.context
+  }
+
+  const lines = ['---']
+  for (const [key, value] of Object.entries(meta)) {
+    if (value === undefined || value === null || value === '') continue
+
+    if (Array.isArray(value)) {
+      lines.push(`${key}: [${value.join(', ')}]`)
+      continue
+    }
+
+    if (typeof value === 'boolean') {
+      lines.push(`${key}: ${value ? 'true' : 'false'}`)
+      continue
+    }
+
+    lines.push(`${key}: ${String(value)}`)
+  }
+  lines.push('---', '', body)
+
+  return saveSkill(skillRootPath, skillId, lines.join('\n'))
+}
+
 export function exportSkillToPackage(skillRootPath, skillId, outputDir) {
   return new Promise((resolve, reject) => {
     try {

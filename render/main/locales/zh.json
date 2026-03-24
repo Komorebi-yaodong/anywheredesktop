@@ -723,6 +723,35 @@
         "restoreFailed": "恢复失败"
       }
     },
+    "desktop": {
+      "title": "桌面端设置",
+      "closeToTray": {
+        "label": "主界面关闭时最小化到托盘",
+        "description": "启用后点击主界面右上角关闭按钮不会退出应用，而是隐藏到托盘。"
+      },
+      "mainToggle": {
+        "label": "主界面快捷键",
+        "description": "按下后显示主界面。",
+        "placeholder": "点击开始录制快捷键"
+      },
+      "quickSummon": {
+        "label": "召唤快捷键",
+        "description": "按下后打开桌面端 quick 召唤面板。",
+        "placeholder": "点击开始录制快捷键"
+      },
+      "promptShortcuts": {
+        "title": "快捷助手快捷键",
+        "description": "可为指定快捷助手配置全局快捷键，触发后直接召唤。",
+        "addButton": "添加快捷键",
+        "empty": "暂未配置快捷助手快捷键。",
+        "shortcutPlaceholder": "点击开始录制快捷键"
+      },
+      "alerts": {
+        "invalidShortcut": "快捷键格式无效，必须为“修饰键 + 普通键”，例如 Ctrl+Space 或 Alt+1。",
+        "shortcutConflict": "快捷键冲突：{a} 与 {b} 都使用了 {shortcut}。",
+        "promptRequired": "必须先选择一个快捷助手"
+      }
+    },
     "alerts": {
       "importSuccess": "配置导入成功",
       "importFailed": "配置导入失败",

@@ -585,6 +585,19 @@ IMPORTANT:
             }
         },
         {
+            name: "continue_agent_chats",
+            description: "Send follow-up messages to an ALREADY OPEN agent window. \n\nUse this tool to REUSE an existing agent's context instead of creating a new window. Returns immediately. The agent starts generating in background. You can do other things or immediately call 'read_agent_chats' with index=-1 to wait for its result.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    window_id: { type: "string", description: "The window_id of the target agent." },
+                    text: { type: "string", description: "The follow-up message to send." },
+                    file_paths: { type: "array", items: { type: "string" }, description: "Optional. Local paths of files/images to attach." }
+                },
+                required: ["window_id", "text"]
+            }
+        },
+        {
             name: "close_agent_window",
             description: "Close an active agent window using its 'window_id'(get window_id from 'list_agent_chats'). The system will automatically generate a name and save the chat history before closing. HIGH PRIVILEGE OPERATION: please use this function with caution, ensuring the task of that window is complete before closing the Agent window.",
             inputSchema: {
@@ -1744,10 +1757,12 @@ ${contextBlock}
 
         const unlock = await acquireLock(safePath);
         try {
-            let content = await fs.promises.readFile(safePath, 'utf-8');
+            let rawContent = await fs.promises.readFile(safePath, 'utf-8');
+            const isCRLF = rawContent.includes('\r\n');
 
-            const targetOld = old_string;
-            const targetNew = new_string;
+            let content = rawContent.replace(/\r\n/g, '\n');
+            const targetOld = typeof old_string === 'string' ? old_string.replace(/\r\n/g, '\n') : old_string;
+            const targetNew = typeof new_string === 'string' ? new_string.replace(/\r\n/g, '\n') : new_string;
 
             // 检查 old_string 是否存在
             if (!content.includes(targetOld)) {
@@ -1769,6 +1784,10 @@ ${contextBlock}
                 if (index !== -1) {
                     content = content.substring(0, index) + targetNew + content.substring(index + targetOld.length);
                 }
+            }
+
+            if (isCRLF) {
+                content = content.replace(/\n/g, '\r\n');
             }
 
             await fs.promises.writeFile(safePath, content, 'utf-8');
@@ -2149,9 +2168,7 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
             const pid = proc.pid;
             if (isWin) {
                 // Windows Tree Kill (/T)
-                exec(`taskkill /pid ${pid} /T /F`, (err) => {
-                    if (err) console.log('Taskkill ignored error:', err.message);
-                });
+                exec(`taskkill /pid ${pid} /T /F`, () => {});
             } else {
                 // Unix Group Kill (使用 -pid)
                 try {
@@ -2389,36 +2406,36 @@ ${agentStr}`;
             return `Error: Agent "${agent_name}" not found.`;
         }
 
-        const openResult = openWindow('window');
+        const openResult = await openWindow('window', {
+            code: agent_name || '__DEFAULT__',
+            type: "summon",
+            summonData: { text, file_paths, enable_tools },
+            tempPromptConfig: agent_name === '__DEFAULT__'
+                ? {
+                    type: 'general',
+                    prompt: '',
+                    showMode: 'window',
+                    model: windowConfig.defaultTaskModel || '',
+                    stream: true,
+                    isAlwaysOnTop: windowConfig.isAlwaysOnTop_global ?? true,
+                    autoCloseOnBlur: false,
+                    window_width: 580,
+                    window_height: 740,
+                    icon: ''
+                }
+                : null
+        });
         const senderId = openResult?.id;
         if (!senderId) {
             return `Error: Failed to create agent window.`;
         }
-
-        const msg = {
-            os: process.platform === 'win32' ? 'win' : (process.platform === 'darwin' ? 'macos' : 'linux'),
-            code: agent_name || '__DEFAULT__',
-            type: "summon",
-            summonData: { text, file_paths, enable_tools },
-            windowConfig
-        };
-
-        dispatchWindowEvent(
-            {
-                sourceId: context?.senderId || null,
-                target: senderId,
-                event: 'agent:summon',
-                payload: msg
-            },
-            { getWindowByRef, listWindows }
-        );
 
         return `Agent summoned successfully. Window ID: ${senderId}`;
     },
 
     list_agent_chats: async (args, context, signal) => {
         let result = "Active Agent Windows:\n";
-        const callerId = args ? args._callerId : (context ? context.senderId : null);
+        const callerId = context?.senderId || args?._callerId || null;
 
         const windows = listWindows('window');
         for (const item of windows) {
@@ -2430,7 +2447,7 @@ ${agentStr}`;
             if (title === "Anywhere") {
                 continue;
             }
-            const isMe = callerId === item.id ? "  <-- [This is YOU]" : "";
+            const isMe = callerId && callerId === item.id ? "  <-- [This is YOU]" : "";
             result += `- Window ID: ${item.id} | Agent: ${title}${isMe}\n`;
         }
 
@@ -2439,7 +2456,7 @@ ${agentStr}`;
     },
 
     read_agent_chats: async (args, context, signal) => {
-        const callerId = args?._callerId || context?.senderId;
+        const callerId = context?.senderId || args?._callerId || null;
         const { window_id, message_index, offset = 0, length = 128000 } = args || {};
 
         if (window_id === callerId) {
@@ -2451,7 +2468,12 @@ ${agentStr}`;
         if (!win || win.isDestroyed()) return `[System Notice]: Target Window (ID: ${window_id}) is already closed or does not exist.`;
 
         try {
-            const chatLength = await win.webContents.executeJavaScript('window.__AGENT_API__ ? window.__AGENT_API__.getChatLength() : 0');
+            const apiReady = await win.webContents.executeJavaScript('Boolean(window.__AGENT_API__)').catch(() => false);
+            if (!apiReady) {
+                return `[System Notice]: Could not read chats from window ${window_id}. API not ready.`;
+            }
+
+            const chatLength = await win.webContents.executeJavaScript('window.__AGENT_API__.getChatLength()').catch(() => 0);
 
             let shouldWait = false;
             if (message_index !== undefined && message_index !== null) {
@@ -2466,10 +2488,10 @@ ${agentStr}`;
             if (shouldWait) {
                 let waitCount = 0;
                 while (!win.isDestroyed() && waitCount < 1200) {
-                    const isBusy = await win.webContents.executeJavaScript('window.__AGENT_API__ ? window.__AGENT_API__.isBusy() : false').catch(() => false);
+                    const isBusy = await win.webContents.executeJavaScript('window.__AGENT_API__.isBusy()').catch(() => false);
                     if (!isBusy) {
-                        const newLength = await win.webContents.executeJavaScript('window.__AGENT_API__ ? window.__AGENT_API__.getChatLength() : 0').catch(() => chatLength);
-                        if (newLength > chatLength) break;
+                        await win.webContents.executeJavaScript('window.__AGENT_API__.getChatLength()').catch(() => chatLength);
+                        break;
                     }
                     await new Promise(r => setTimeout(r, 100));
                     waitCount++;
@@ -2480,7 +2502,15 @@ ${agentStr}`;
                 }
             }
 
-            const msg = await win.webContents.executeJavaScript(`window.__AGENT_API__ ? window.__AGENT_API__.readChatMessage(${JSON.stringify(message_index)}, ${offset}, ${length}) : null`);
+            if (message_index === undefined || message_index === null) {
+                const outline = await win.webContents.executeJavaScript('window.__AGENT_API__.getOutline()').catch(() => null);
+                if (!outline) return `[System Notice]: Could not read chats from window ${window_id}. API not ready.${timeoutMsg}`;
+                const safeOffset = Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0;
+                const safeLength = Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 128000;
+                return `${String(outline).slice(safeOffset, safeOffset + safeLength)}${timeoutMsg}`;
+            }
+
+            const msg = await win.webContents.executeJavaScript(`window.__AGENT_API__.readChatMessage(${JSON.stringify(message_index)}, ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0}, ${Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 128000})`).catch(() => null);
             if (!msg) return `[System Notice]: Could not read chats from window ${window_id}. API not ready.${timeoutMsg}`;
 
             return `${msg}${timeoutMsg}`;
@@ -2491,7 +2521,7 @@ ${agentStr}`;
     },
 
     continue_agent_chats: async (args, context, signal) => {
-        const callerId = args?._callerId || context?.senderId;
+        const callerId = context?.senderId || args?._callerId || null;
         const { window_id, text, file_paths } = args || {};
 
         if (window_id === callerId) {
@@ -2502,7 +2532,20 @@ ${agentStr}`;
         if (!win || win.isDestroyed()) return `Error: Window ID ${window_id} not found or closed.`;
 
         try {
-            const res = await win.webContents.executeJavaScript(`window.__AGENT_API__ ? window.__AGENT_API__.sendMessage(${JSON.stringify(text)}, ${JSON.stringify(file_paths || [])}) : Promise.reject("API not ready")`);
+            let apiReady = false;
+            let waitCount = 0;
+            while (!win.isDestroyed() && waitCount < 300) {
+                apiReady = await win.webContents.executeJavaScript('Boolean(window.__AGENT_API__)').catch(() => false);
+                if (apiReady) break;
+                await new Promise(r => setTimeout(r, 100));
+                waitCount++;
+            }
+
+            if (!apiReady) {
+                return `Error sending message: API not ready for window ${window_id}.`;
+            }
+
+            const res = await win.webContents.executeJavaScript(`window.__AGENT_API__.sendMessage(${JSON.stringify(text)}, ${JSON.stringify(file_paths || [])})`);
             return res;
         } catch (e) {
             return `Error sending message: ${e.message}`;

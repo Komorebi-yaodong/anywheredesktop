@@ -229,7 +229,8 @@ export async function createChatCompletion(params = {}) {
   const client = new OpenAI({
     baseURL: baseUrl,
     apiKey: getRandomItem(apiKey),
-    maxRetries: 3
+    maxRetries: 3,
+    dangerouslyAllowBrowser: true
   })
 
   try {

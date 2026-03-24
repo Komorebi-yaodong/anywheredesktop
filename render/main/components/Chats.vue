@@ -507,7 +507,13 @@ async function startChat(file) {
             );
             jsonString = getSafeString(result.content);
         }
-        await window.api.coderedirect(t('chats.alerts.restoreChat'), JSON.stringify({ sessionData: jsonString, filename: basename }));
+        const parsedSession = JSON.parse(jsonString);
+        await window.api.openWindow('window', {
+            code: parsedSession?.CODE || 'AI',
+            type: 'over',
+            payload: jsonString,
+            filename: basename
+        });
         ElMessage.success(t('chats.alerts.restoreInitiated'));
     } catch (error) { ElMessage.error(`${t('chats.alerts.restoreFailed')}: ${error.message}`); }
 }

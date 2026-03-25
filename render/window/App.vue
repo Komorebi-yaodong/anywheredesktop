@@ -3252,6 +3252,17 @@ const checkAndLoadSessionFromFile = async (file) => {
 };
 
 const file2fileList = async (file, idx) => {
+  console.log('[window:file2fileList] incoming file payload', {
+    name: file?.name,
+    type: file?.type,
+    size: file?.size,
+    hasBase64: Boolean(typeof file?.base64 === 'string' && file.base64),
+    hasBufferString: Boolean(typeof file?.buffer === 'string' && file.buffer),
+    hasUrl: Boolean(typeof file?.url === 'string' && file.url),
+    fileTypeTag: file?.__type || null,
+    isBlob: file instanceof Blob
+  })
+
   const isSessionFile = await checkAndLoadSessionFromFile(file);
   if (isSessionFile) { chatInputRef.value?.focus({ cursor: 'end' }); return; }
 
@@ -3261,39 +3272,76 @@ const file2fileList = async (file, idx) => {
     throw new Error(errorMsg);
   }
 
-  if (file?.base64 && typeof file.base64 === 'string') {
-    const mimeType = file.type || 'application/octet-stream';
+  const mimeType = file.type || 'application/octet-stream';
+  const normalizedBase64 =
+    typeof file?.base64 === 'string' && file.base64
+      ? file.base64
+      : typeof file?.buffer === 'string' && file.buffer
+        ? file.buffer
+        : '';
+
+  if (normalizedBase64) {
     fileList.value.push({
       uid: idx,
       name: file.name,
       size: file.size,
       type: mimeType,
-      url: `data:${mimeType};base64,${file.base64}`,
+      url: `data:${mimeType};base64,${normalizedBase64}`,
       path: file.path || ''
     });
     return;
   }
 
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      fileList.value.push({
-        uid: idx,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        url: e.target.result,
-        path: file.path || ''
-      });
-      resolve();
-    };
-    reader.onerror = () => {
-      const errorMsg = `读取文件 ${file.name} 失败`;
-      showDismissibleMessage.error(errorMsg);
-      reject(new Error(errorMsg));
-    }
-    reader.readAsDataURL(file);
-  });
+  if (typeof file?.url === 'string' && file.url.startsWith('data:')) {
+    fileList.value.push({
+      uid: idx,
+      name: file.name,
+      size: file.size,
+      type: mimeType,
+      url: file.url,
+      path: file.path || ''
+    });
+    return;
+  }
+
+  if (file instanceof Blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        fileList.value.push({
+          uid: idx,
+          name: file.name,
+          size: file.size,
+          type: mimeType,
+          url: e.target.result,
+          path: file.path || ''
+        });
+        resolve();
+      };
+      reader.onerror = () => {
+        const errorMsg = `读取文件 ${file.name} 失败`;
+        showDismissibleMessage.error(errorMsg);
+        reject(new Error(errorMsg));
+      }
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (file?.__type === 'File' && typeof file?.buffer === 'string' && file.buffer) {
+    fileList.value.push({
+      uid: idx,
+      name: file.name,
+      size: file.size,
+      type: mimeType,
+      url: `data:${mimeType};base64,${file.buffer}`,
+      path: file.path || ''
+    });
+    return;
+  }
+
+  const errorMsg = `读取文件 ${file?.name || 'unknown'} 失败：无可用的 Blob 或 Base64 数据`;
+  showDismissibleMessage.error(errorMsg);
+  throw new Error(errorMsg);
 };
 
 const processFilePath = async (filePath) => {

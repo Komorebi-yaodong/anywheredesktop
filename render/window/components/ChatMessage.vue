@@ -603,7 +603,11 @@ const truncateFilename = (filename, maxLength = 30) => {
                           </path>
                         </svg>
                       </el-icon>
-                      <span class="tool-name">{{ toolCall.name }}</span>
+                      <div class="tool-name-wrapper">
+                        <el-tooltip :content="toolCall.name" placement="top" :show-after="500">
+                          <span class="tool-name">{{ toolCall.name }}</span>
+                        </el-tooltip>
+                      </div>
                       <div class="tool-header-right">
                         <el-tag v-if="toolCall.approvalStatus === 'waiting'" type="warning" size="small" effect="light"
                           round>等待批准</el-tag>
@@ -1553,13 +1557,28 @@ html.dark .ai-bubble :deep(.el-thinking .content pre) {
   gap: 8px;
 }
 
+.tool-name-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+
 .tool-name {
   font-weight: 500;
   color: var(--el-text-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  width: 100%;
 }
 
 .tool-icon {
   color: var(--el-text-color-secondary);
+  flex-shrink: 0;
 }
 
 .tool-header-right {
@@ -1568,6 +1587,7 @@ html.dark .ai-bubble :deep(.el-thinking .content pre) {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .stop-btn-wrapper {

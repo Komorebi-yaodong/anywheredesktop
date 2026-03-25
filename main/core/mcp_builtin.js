@@ -737,7 +737,7 @@ IMPORTANT:
     "builtin_memory": [
         {
             name: "create_memory",
-            description: "Create a new structured memory document with optional initial content. CRITICAL: Upon successful creation, you MUST inform the user of the generated 'name'. Pay attention to reasonably categorize memories for easy storage and subsequent retrieval of memory content.",
+            description: "Create a new structured memory. It initializes with a default 'Main' section. CRITICAL: Upon successful creation, you MUST inform the user of the generated 'name'. You are highly encouraged to use 'update_section' or 'add_to_list' later to create custom categorized sections (e.g., 'Preferences', 'Code Snippets', 'Todos') to keep data organized, rather than dumping everything into 'Main'.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -749,34 +749,34 @@ IMPORTANT:
         },
         {
             name: "list_memories",
-            description: "List all available memory documents.",
+            description: "Please list all available memories and read the necessary relevant memory content before starting the formal chat.",
             inputSchema: { type: "object", properties: {} }
         },
         {
             name: "get_memory_summary",
-            description: "Get a high-level summary of a memory document.",
+            description: "Get a high-level summary of a memory.",
             inputSchema: {
                 type: "object",
-                properties: { memory_id: { type: "string", description: "The ID of the memory document to summarize." } },
+                properties: { memory_id: { type: "string", description: "The ID of the memory to summarize." } },
                 required: ["memory_id"]
             }
         },
         {
             name: "get_full_memory",
-            description: "Retrieve the complete content of a memory document with all Markdown formatting preserved. Please naturally integrate memories to better maintain memory continuity across sessions.",
+            description: "Retrieve the complete content of a memory with all Markdown formatting preserved. Please naturally integrate memories to better maintain memory continuity across sessions.",
             inputSchema: {
                 type: "object",
-                properties: { memory_id: { type: "string", description: "The ID(not the name of memory, use list_memories to get memory_id) of the memory document to retrieve." } },
+                properties: { memory_id: { type: "string", description: "The ID(not the name of memory, use list_memories to get memory_id) of the memory to retrieve." } },
                 required: ["memory_id"]
             }
         },
         {
             name: "get_section",
-            description: "Retrieve a specific section from a memory document. Please naturally integrate memories to better maintain memory continuity across sessions.",
+            description: "Retrieve a specific section from a memory. Please naturally integrate memories to better maintain memory continuity across sessions.",
             inputSchema: {
                 type: "object",
                 properties: {
-                    memory_id: { type: "string", description: "The ID of the memory document to read from." },
+                    memory_id: { type: "string", description: "The ID of the memory to read from." },
                     section: { type: "string", description: "The section name to retrieve." }
                 },
                 required: ["memory_id", "section"]
@@ -784,11 +784,11 @@ IMPORTANT:
         },
         {
             name: "search_within_memory",
-            description: "Search for information within a memory document. Please naturally integrate memories to better maintain memory continuity across sessions.",
+            description: "Search for information within a memory. Please naturally integrate memories to better maintain memory continuity across sessions.",
             inputSchema: {
                 type: "object",
                 properties: {
-                    memory_id: { type: "string", description: "The ID of the memory document to search." },
+                    memory_id: { type: "string", description: "The ID of the memory to search." },
                     query: { type: "string", description: "The search query (words or phrases)." }
                 },
                 required: ["memory_id", "query"]
@@ -796,11 +796,11 @@ IMPORTANT:
         },
         {
             name: "update_section",
-            description: "Update an entire section of a memory document. Content supports full Markdown formatting.",
+            description: "Update a section of a memory. If the 'section' name does not exist, it will be CREATED AUTOMATICALLY. Use this to organize data into meaningful categories (e.g., 'User Preferences', 'Project Links'). Content supports full Markdown formatting.",
             inputSchema: {
                 type: "object",
                 properties: {
-                    memory_id: { type: "string", description: "The ID of the memory document to update." },
+                    memory_id: { type: "string", description: "The ID of the memory to update." },
                     section: { type: "string", description: "The section name to update." },
                     content: { type: "string", description: "The new content for the section. Supports full Markdown." },
                     mode: { type: "string", enum: ["append", "replace"], description: "Whether to append to or replace the section content (default: append).", default: "append" }
@@ -810,11 +810,11 @@ IMPORTANT:
         },
         {
             name: "add_to_list",
-            description: "Add an item to a list section in a memory document.",
+            description: "Add an item to a list section in a memory. If the 'section' does not exist, a NEW list section will be CREATED AUTOMATICALLY.",
             inputSchema: {
                 type: "object",
                 properties: {
-                    memory_id: { type: "string", description: "The ID of the memory document to update." },
+                    memory_id: { type: "string", description: "The ID of the memory to update." },
                     section: { type: "string", description: "The section name to add the item to." },
                     item: { type: "object", description: "The item data (object) to add." }
                 },
@@ -827,7 +827,7 @@ IMPORTANT:
             inputSchema: {
                 type: "object",
                 properties: {
-                    memory_id: { type: "string", description: "The ID of the memory document to update." },
+                    memory_id: { type: "string", description: "The ID of the memory to update." },
                     section: { type: "string", description: "The section containing the item to update." },
                     item_identifier: { type: "string", description: "Identifier for the item to update (e.g., name, keyword)." },
                     updates: { type: "object", description: "Fields to update with their new values." }
@@ -841,7 +841,7 @@ IMPORTANT:
             inputSchema: {
                 type: "object",
                 properties: {
-                    memory_id: { type: "string", description: "The ID of the memory document to update." },
+                    memory_id: { type: "string", description: "The ID of the memory to update." },
                     from_section: { type: "string", description: "The source section containing the item." },
                     to_section: { type: "string", description: "The destination section for the item." },
                     item_identifier: { type: "string", description: "Identifier for the item to move." },
@@ -852,11 +852,11 @@ IMPORTANT:
         },
         {
             name: "delete_memory",
-            description: "Delete an existing memory document completely. This action is irreversible.",
+            description: "Delete an existing memory completely. This action is irreversible.",
             inputSchema: {
                 type: "object",
                 properties: {
-                    memory_id: { type: "string", description: "The ID of the memory document to delete." }
+                    memory_id: { type: "string", description: "The ID of the memory to delete." }
                 },
                 required: ["memory_id"]
             }

@@ -75,8 +75,8 @@ const singletonCloseBehavior = {
 let appQuitting = false
 
 
-const debugWindowManagerLog = () => {}
-const debugWindowManagerError = () => {}
+const debugWindowManagerLog = (...args) => console.log('[windowManager]', ...args)
+const debugWindowManagerError = (...args) => console.error('[windowManager]', ...args)
 
 
 function bindWindowRef(win, ref) {
@@ -719,16 +719,17 @@ export function closeWindow(windowRef = '') {
   }
 
   const isDialogWindow = multiStore.has(resolved.windowRef)
+  const isQuickSingleton = resolved.windowRef === 'quick'
 
   debugWindowManagerLog('closeWindow:resolved', {
     windowRef: resolved.windowRef,
     browserWindowId: resolved.win?.id,
     isDestroyed: resolved.win?.isDestroyed?.() ?? null,
     isVisible: resolved.win?.isVisible?.() ?? null,
-    strategy: isDialogWindow ? 'destroy' : 'close'
+    strategy: isDialogWindow || isQuickSingleton ? 'destroy' : 'close'
   })
 
-  if (isDialogWindow) {
+  if (isDialogWindow || isQuickSingleton) {
     resolved.win.destroy()
     const result = { ok: true, action: 'destroy', windowRef: resolved.windowRef }
     debugWindowManagerLog('closeWindow:after-destroy-call', result)

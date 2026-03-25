@@ -1,19 +1,26 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { pinyin } from 'pinyin-pro'
 
-const windowContext = window.api?.getWindowContext?.() || { senderId: 'quick' }
-const senderId = windowContext.senderId || 'quick'
+const senderId = ref('quick')
 
 const currentConfig = ref(null)
-const searchText = ref('')
-const payloadType = ref('empty')
-const imageDataUrl = ref('')
-const filePaths = ref([])
-const filePreviewName = ref('')
+const queryText = ref('')
 const selectedPromptKey = ref('')
 const restoreCandidates = ref([])
-const isReadonlyPreview = ref(false)
+const attachment = ref(createEmptyAttachment())
+let blurCloseTimer = null
+
+function createEmptyAttachment() {
+  return {
+    type: 'none',
+    rawText: '',
+    imageDataUrl: '',
+    filePaths: [],
+    previewLabel: ''
+  }
+}
 
 function getErrorMessage(error, fallback = '操作失败') {
   if (!error) return fallback
@@ -46,24 +53,109 @@ function getPromptIcon(prompt) {
   return typeof prompt?.icon === 'string' && prompt.icon ? prompt.icon : ''
 }
 
-function getInitials(text = '') {
-  return String(text || '')
-    .split(/[^a-zA-Z0-9\u4e00-\u9fa5]+/)
-    .filter(Boolean)
-    .map((part) => /^[a-zA-Z]/.test(part) ? part[0].toLowerCase() : '')
-    .join('')
+function getPinyinProfile(text = '') {
+  const source = String(text || '').trim()
+  if (!source) {
+    return {
+      full: '',
+      initials: '',
+      compact: ''
+    }
+  }
+
+  const normalized = source.toLowerCase()
+  try {
+    const full = pinyin(source, { toneType: 'none', type: 'array' })
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean)
+    const initials = full.map((item) => item[0] || '').join('')
+    return {
+      full: full.join(' '),
+      initials,
+      compact: full.join('')
+    }
+  } catch {
+    const asciiWords = normalized.split(/[^a-z0-9]+/).filter(Boolean)
+    return {
+      full: asciiWords.join(' '),
+      initials: asciiWords.map((item) => item[0] || '').join(''),
+      compact: asciiWords.join('')
+    }
+  }
 }
 
-function updateReadonlyPreviewState() {
-  isReadonlyPreview.value = payloadType.value !== 'empty' && searchText.value.includes('\n')
+function buildPromptSearchProfile(prompt) {
+  const name = String(prompt?.key || '')
+  const lowerName = name.toLowerCase()
+  const promptText = String(prompt?.prompt || '').toLowerCase()
+  const pinyinProfile = getPinyinProfile(name)
+
+  return {
+    lowerName,
+    promptText,
+    pinyinFull: pinyinProfile.full,
+    pinyinInitials: pinyinProfile.initials,
+    pinyinCompact: pinyinProfile.compact
+  }
 }
 
-function setAttachmentState(next = {}) {
-  payloadType.value = next.type || 'empty'
-  imageDataUrl.value = next.imageDataUrl || ''
-  filePaths.value = Array.isArray(next.filePaths) ? next.filePaths : []
-  filePreviewName.value = next.filePreviewName || (filePaths.value[0] ? filePaths.value[0].split(/[/\\]/).pop() || '' : '')
-  updateReadonlyPreviewState()
+function classifyTextAttachment(text = '') {
+  const normalized = String(text || '')
+  const trimmed = normalized.trim()
+  if (!trimmed) return 'none'
+  return /\r?\n/.test(trimmed) ? 'multiline-text' : 'singleline-text'
+}
+
+function getAttachmentPreviewLabel(next = createEmptyAttachment()) {
+  if (next.type === 'files') {
+    const first = next.previewLabel || next.filePaths[0]?.split(/[/\\]/).pop() || ''
+    if (!first) return '文件'
+    if (next.filePaths.length <= 1) return first
+    return `${first} ${next.filePaths.length}`
+  }
+
+  if (next.type === 'img') {
+    return '图片'
+  }
+
+  if (next.type === 'multiline-text') {
+    return String(next.rawText || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60)
+  }
+
+  return ''
+}
+
+function clearAttachment() {
+  attachment.value = createEmptyAttachment()
+  restoreCandidates.value = []
+}
+
+function setAttachment(next = {}) {
+  attachment.value = {
+    type: next.type || 'none',
+    rawText: typeof next.rawText === 'string' ? next.rawText : '',
+    imageDataUrl: typeof next.imageDataUrl === 'string' ? next.imageDataUrl : '',
+    filePaths: Array.isArray(next.filePaths) ? next.filePaths : [],
+    previewLabel: typeof next.previewLabel === 'string' ? next.previewLabel : ''
+  }
+}
+
+function focusInputToEnd() {
+  clearTimeout(blurCloseTimer)
+  nextTick(() => {
+    const element = inputRef.value
+    if (!element) return
+    element.focus()
+    const length = element.value?.length || 0
+    try {
+      element.setSelectionRange(length, length)
+    } catch {
+      // ignore unsupported selection API
+    }
+  })
 }
 
 async function inspectSessionCandidates(paths = []) {
@@ -96,94 +188,188 @@ const allPrompts = computed(() => {
     .map(([key, prompt]) => ({ key, ...prompt }))
 })
 
-const candidatePrompts = computed(() => {
-  const prompts = allPrompts.value
-  const rawQuery = searchText.value.trim()
-  const query = rawQuery.toLowerCase()
-  const runtimeType = payloadType.value
-  const hasTextQuery = Boolean(query)
-
-  const scored = prompts
-    .map((prompt) => {
-      const promptType = normalizePromptType(prompt.type)
-      let score = 0
-      const name = prompt.key || ''
-      const lowerName = name.toLowerCase()
-      const initials = getInitials(name)
-
-      if (hasTextQuery) {
-        if (lowerName === query) score += 2200
-        else if (lowerName.startsWith(query)) score += 1600
-        else if (initials && initials === query) score += 1400
-        else if (lowerName.includes(query)) score += 900
-        else if (initials && initials.includes(query)) score += 800
-      }
-
-      if (runtimeType === 'img') {
-        if (promptType === 'img') score += hasTextQuery ? 180 : 420
-        else if (promptType === 'general') score += hasTextQuery ? 120 : 180
-      } else if (runtimeType === 'files') {
-        if (promptType === 'files') score += hasTextQuery ? 180 : 420
-        else if (promptType === 'general') score += hasTextQuery ? 120 : 180
-      } else if (runtimeType === 'over') {
-        if (promptType === 'over') {
-          const regex = normalizeRegex(prompt.matchRegex)
-          if (regex && regex.test(searchText.value)) score += 260
-          else if (!regex) score += 160
-        } else if (promptType === 'general') {
-          score += 100
-        }
-      } else {
-        score += promptType === 'general' ? 60 : 0
-      }
-
-      if (!hasTextQuery && score <= 0) return null
-
-      if (hasTextQuery && score <= 0) {
-        const searchable = `${lowerName} ${(prompt.prompt || '').toLowerCase()}`
-        if (!searchable.includes(query)) return null
-        score += 30
-      }
-
-      return {
-        ...prompt,
-        iconUrl: getPromptIcon(prompt),
-        score,
-        initials
-      }
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score || a.key.localeCompare(b.key))
-
-  if (!selectedPromptKey.value && scored.length > 0) {
-    selectedPromptKey.value = scored[0].key
-  }
-
-  return scored
+const runtimeMode = computed(() => {
+  if (attachment.value.type === 'img') return 'img'
+  if (attachment.value.type === 'files') return 'files'
+  if (attachment.value.type === 'multiline-text') return 'multiline-text'
+  return 'singleline-text'
 })
 
-function resolveWindowPayload(prompt) {
-  const nextPayload = { code: prompt.key }
+const hasAttachment = computed(() => attachment.value.type !== 'none')
+const attachmentPreviewLabel = computed(() => getAttachmentPreviewLabel(attachment.value))
+const candidateSections = computed(() => {
+  const prompts = allPrompts.value
+  const rawQuery = queryText.value.trim()
+  const query = rawQuery.toLowerCase()
+  const queryPinyin = getPinyinProfile(rawQuery)
+  const hasQuery = Boolean(query)
+  const mode = runtimeMode.value
+  const attachmentLocked = mode !== 'singleline-text'
 
-  if (payloadType.value === 'img' && imageDataUrl.value) {
-    nextPayload.type = 'img'
-    nextPayload.payload = imageDataUrl.value
-    if (searchText.value.trim()) nextPayload.userText = searchText.value.trim()
-  } else if (payloadType.value === 'files' && filePaths.value.length > 0) {
-    nextPayload.type = 'files'
-    nextPayload.payload = filePaths.value.map((filePath) => ({ path: filePath }))
-    if (searchText.value.trim()) nextPayload.userText = searchText.value.trim()
-  } else if (searchText.value.trim()) {
-    nextPayload.type = 'over'
-    nextPayload.payload = searchText.value.trim()
+  const nameMatches = []
+  const textMatches = []
+  const typeMatches = []
+  const fallbackMatches = []
+
+  for (const prompt of prompts) {
+    const promptType = normalizePromptType(prompt.type)
+    const searchProfile = buildPromptSearchProfile(prompt)
+    let nameScore = 0
+    let textScore = 0
+
+    const matchName = () => {
+      if (!hasQuery) return 0
+      if (searchProfile.lowerName === query) return 3200
+      if (searchProfile.lowerName.startsWith(query)) return 2800
+      if (searchProfile.pinyinInitials && searchProfile.pinyinInitials === query) return 2600
+      if (searchProfile.pinyinInitials && searchProfile.pinyinInitials.startsWith(query)) return 2400
+      if (searchProfile.pinyinCompact && searchProfile.pinyinCompact.startsWith(query)) return 2200
+      if (queryPinyin.compact && searchProfile.pinyinCompact && searchProfile.pinyinCompact.startsWith(queryPinyin.compact)) return 2100
+      if (searchProfile.lowerName.includes(query)) return 1800
+      if (searchProfile.pinyinFull && searchProfile.pinyinFull.includes(query)) return 1600
+      return 0
+    }
+
+    const matchText = () => {
+      if (!hasQuery || attachmentLocked) return 0
+      if (!(promptType === 'over' || promptType === 'general')) return 0
+
+      const regex = normalizeRegex(prompt.matchRegex)
+      if (promptType === 'over') {
+        if (regex && regex.test(rawQuery)) return 3200
+        if (!regex) return 1900
+      }
+
+      const searchable = `${searchProfile.promptText} ${searchProfile.lowerName}`
+      if (searchable.includes(query)) {
+        return promptType === 'over' ? 2600 : 2200
+      }
+
+      return promptType === 'general' ? 1600 : 0
+    }
+
+    nameScore = matchName()
+    textScore = matchText()
+
+    const item = {
+      ...prompt,
+      iconUrl: getPromptIcon(prompt),
+      score: 0
+    }
+
+    if (attachmentLocked) {
+      if (nameScore > 0) {
+        item.score = nameScore
+        nameMatches.push(item)
+        continue
+      }
+
+      if (!hasQuery) {
+        if ((mode === 'img' && promptType === 'img') || (mode === 'files' && promptType === 'files') || (mode === 'multiline-text' && promptType === 'over')) {
+          item.score = 900
+          typeMatches.push(item)
+        } else if (promptType === 'general') {
+          item.score = 600
+          fallbackMatches.push(item)
+        } else {
+          item.score = 100
+          fallbackMatches.push(item)
+        }
+      }
+      continue
+    }
+
+    if (textScore > 0) {
+      item.score = textScore
+      textMatches.push(item)
+      continue
+    }
+
+    if (nameScore > 0) {
+      item.score = nameScore
+      nameMatches.push(item)
+      continue
+    }
+
+    if (!hasQuery) {
+      if (promptType === 'over' || promptType === 'general') {
+        item.score = promptType === 'over' ? 700 : 620
+        typeMatches.push(item)
+      } else {
+        item.score = 100
+        fallbackMatches.push(item)
+      }
+    } else if (promptType === 'general') {
+      item.score = 900
+      fallbackMatches.push(item)
+    }
   }
 
-  return nextPayload
+  const sorter = (a, b) => b.score - a.score || a.key.localeCompare(b.key, 'zh-CN')
+  const sections = [
+    ...textMatches.sort(sorter),
+    ...nameMatches.sort(sorter),
+    ...typeMatches.sort(sorter),
+    ...fallbackMatches.sort(sorter)
+  ]
+
+  const deduped = []
+  const seen = new Set()
+  for (const item of sections) {
+    if (seen.has(item.key)) continue
+    seen.add(item.key)
+    deduped.push(item)
+  }
+
+  if (!deduped.some((item) => item.key === selectedPromptKey.value)) {
+    selectedPromptKey.value = deduped[0]?.key || ''
+  }
+
+  return deduped
+})
+
+const selectedPrompt = computed(() => {
+  return candidateSections.value.find((item) => item.key === selectedPromptKey.value) || candidateSections.value[0] || null
+})
+
+function resolveQuickOpenPayload(prompt) {
+  if (!prompt) return null
+  const payload = { code: prompt.key }
+
+  if (attachment.value.type === 'img' && attachment.value.imageDataUrl) {
+    payload.type = 'img'
+    payload.payload = attachment.value.imageDataUrl
+    if (queryText.value.trim()) payload.userText = queryText.value.trim()
+    return payload
+  }
+
+  if (attachment.value.type === 'files' && attachment.value.filePaths.length > 0) {
+    payload.type = 'files'
+    payload.payload = attachment.value.filePaths.map((filePath) => ({ path: filePath }))
+    if (queryText.value.trim()) payload.userText = queryText.value.trim()
+    return payload
+  }
+
+  if (attachment.value.type === 'multiline-text' && attachment.value.rawText.trim()) {
+    payload.type = 'over'
+    payload.payload = attachment.value.rawText.trim()
+    return payload
+  }
+
+  if (queryText.value.trim()) {
+    payload.type = 'over'
+    payload.payload = queryText.value.trim()
+    return payload
+  }
+
+  payload.type = 'empty'
+  payload.payload = ''
+  return payload
 }
 
 async function closeQuick() {
   try {
-    await window.api.closeWindow(senderId)
+    await window.api.closeWindow(senderId.value)
   } catch {
     // ignore fire-and-forget close
   }
@@ -192,8 +378,9 @@ async function closeQuick() {
 async function openPrompt(prompt) {
   if (!prompt) return
   try {
-    const payload = resolveWindowPayload(prompt)
-    await window.api.openWindow('window', payload)
+    const payload = resolveQuickOpenPayload(prompt)
+    const showMode = prompt.showMode === 'fastinput' ? 'fast' : 'window'
+    await window.api.openWindow(showMode, payload)
     await closeQuick()
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
@@ -214,49 +401,86 @@ async function restoreSession(candidate) {
   }
 }
 
+function updateFromTextInput(text = '', forceOverride = false) {
+  const normalizedText = String(text || '')
+  const trimmed = normalizedText.trim()
+  const textKind = classifyTextAttachment(trimmed)
+
+  if (!trimmed) {
+    if (forceOverride) {
+      queryText.value = ''
+      clearAttachment()
+    }
+    return
+  }
+
+  if (textKind === 'multiline-text') {
+    setAttachment({
+      type: 'multiline-text',
+      rawText: trimmed,
+      previewLabel: trimmed
+    })
+    if (forceOverride) queryText.value = ''
+    return
+  }
+
+  if (forceOverride || !queryText.value.trim()) {
+    queryText.value = trimmed
+  }
+}
+
 async function handleClipboardPayload(result = {}, forceOverride = false) {
   restoreCandidates.value = []
-
   const nextFilePaths = Array.isArray(result?.filePaths) ? result.filePaths : []
   const nextImage = typeof result?.imageDataUrl === 'string' ? result.imageDataUrl : ''
   const nextText = typeof result?.text === 'string' ? result.text : ''
 
   if (nextFilePaths.length > 0) {
-    setAttachmentState({
+    setAttachment({
       type: 'files',
       filePaths: nextFilePaths,
-      filePreviewName: nextFilePaths[0]?.split(/[/\\]/).pop() || ''
+      previewLabel: nextFilePaths[0]?.split(/[/\\]/).pop() || ''
     })
-    if (forceOverride && nextText.trim()) {
-      searchText.value = nextText
-    }
+    queryText.value = classifyTextAttachment(nextText) === 'singleline-text' ? nextText.trim() : ''
     await inspectSessionCandidates(nextFilePaths)
-    updateReadonlyPreviewState()
     return
   }
 
   if (nextImage) {
-    setAttachmentState({ type: 'img', imageDataUrl: nextImage })
-    if (forceOverride && nextText.trim()) {
-      searchText.value = nextText
-    }
-    updateReadonlyPreviewState()
+    setAttachment({
+      type: 'img',
+      imageDataUrl: nextImage,
+      previewLabel: '图片'
+    })
+    queryText.value = classifyTextAttachment(nextText) === 'singleline-text' ? nextText.trim() : ''
     return
   }
 
   if (nextText.trim()) {
-    setAttachmentState({ type: nextText.includes('\n') ? 'over' : 'empty' })
-    if (forceOverride || !searchText.value.trim()) {
-      searchText.value = nextText
-    }
-    updateReadonlyPreviewState()
+    updateFromTextInput(nextText, forceOverride || true)
     return
   }
 
-  if (!searchText.value.trim()) {
-    setAttachmentState({ type: 'empty' })
+  if (forceOverride) {
+    clearAttachment()
+    queryText.value = ''
   }
 }
+
+function applyRuntimeConfig(config = null) {
+  currentConfig.value = config && typeof config === 'object' ? config : {}
+  document.documentElement.classList.toggle('dark', Boolean(currentConfig.value?.isDarkMode))
+
+  const prompts = currentConfig.value?.prompts || {}
+  const currentSelected = selectedPromptKey.value
+  if (currentSelected) {
+    const selectedPromptConfig = prompts[currentSelected]
+    if (!selectedPromptConfig || selectedPromptConfig.enable === false) {
+      selectedPromptKey.value = ''
+    }
+  }
+}
+
 
 async function refreshFromClipboard(forceOverride = false) {
   try {
@@ -267,104 +491,214 @@ async function refreshFromClipboard(forceOverride = false) {
   }
 }
 
+function applyImageAttachment(dataUrl = '') {
+  setAttachment({
+    type: 'img',
+    imageDataUrl: String(dataUrl || ''),
+    previewLabel: '图片'
+  })
+  restoreCandidates.value = []
+}
+
+async function applyFileAttachment(paths = [], previewLabel = '') {
+  const normalizedPaths = Array.isArray(paths) ? paths.filter(Boolean) : []
+  if (!normalizedPaths.length) return
+  setAttachment({
+    type: 'files',
+    filePaths: normalizedPaths,
+    previewLabel: previewLabel || normalizedPaths[0]?.split(/[/\\]/).pop() || ''
+  })
+  await inspectSessionCandidates(normalizedPaths)
+}
+
 async function handlePaste(event) {
-  const items = Array.from(event.clipboardData?.items || [])
-  if (!items.length) return
+  const clipboardData = event.clipboardData
+  if (!clipboardData) return
 
-  for (const item of items) {
-    if (item.kind !== 'file') continue
+  const items = Array.from(clipboardData.items || [])
+  const fileItems = items.filter((item) => item.kind === 'file')
+  if (fileItems.length > 0) {
     event.preventDefault()
-    const file = item.getAsFile()
-    if (!file) continue
-
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader()
-      reader.onload = () => {
-        setAttachmentState({ type: 'img', imageDataUrl: String(reader.result || '') })
+    for (const item of fileItems) {
+      const file = item.getAsFile()
+      if (!file) continue
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader()
+        reader.onload = () => applyImageAttachment(String(reader.result || ''))
+        reader.readAsDataURL(file)
+        return
       }
-      reader.readAsDataURL(file)
-      return
-    }
 
-    const filePath = window.api.getDroppedFilePath?.(file)
-    if (filePath) {
-      setAttachmentState({
-        type: 'files',
-        filePaths: [filePath],
-        filePreviewName: file.name || filePath.split(/[/\\]/).pop() || ''
-      })
-      await inspectSessionCandidates([filePath])
-      return
+      const filePath = window.api.getDroppedFilePath?.(file)
+      if (filePath) {
+        await applyFileAttachment([filePath], file.name || filePath.split(/[/\\]/).pop() || '')
+        return
+      }
     }
+  }
+
+  const pastedText = clipboardData.getData('text')
+  if (!pastedText) return
+  if (/\r?\n/.test(pastedText)) {
+    event.preventDefault()
+    updateFromTextInput(pastedText, true)
   }
 }
 
+function handleKeydown(event) {
+  if (event.isComposing) return
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    const list = candidateSections.value
+    if (!list.length) return
+    const currentIndex = list.findIndex((item) => item.key === selectedPromptKey.value)
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % list.length
+    selectedPromptKey.value = list[nextIndex].key
+    return
+  }
+
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    const list = candidateSections.value
+    if (!list.length) return
+    const currentIndex = list.findIndex((item) => item.key === selectedPromptKey.value)
+    const nextIndex = currentIndex < 0 ? list.length - 1 : (currentIndex - 1 + list.length) % list.length
+    selectedPromptKey.value = list[nextIndex].key
+    return
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    if (restoreCandidates.value.length > 0 && !queryText.value.trim() && attachment.value.type === 'files') {
+      restoreSession(restoreCandidates.value[0])
+      return
+    }
+    openPrompt(selectedPrompt.value)
+    return
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeQuick()
+    return
+  }
+}
+
+function handleGlobalKeydown(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeQuick()
+    return
+  }
+
+  if (event.key === 'Backspace') {
+    const active = document.activeElement
+    if (active !== inputRef.value) return
+    if (queryText.value.length > 0) return
+    if (!hasAttachment.value) return
+    event.preventDefault()
+    clearAttachment()
+  }
+}
+
+function handleWindowBlur() {
+  clearTimeout(blurCloseTimer)
+  blurCloseTimer = setTimeout(() => {
+    closeQuick()
+  }, 30)
+}
+
 onMounted(async () => {
-  window.api?.onWindowInit?.((data) => {
-    if (data?.type === 'files' && Array.isArray(data.payload)) {
-      const paths = data.payload.map((item) => item?.path).filter(Boolean)
-      setAttachmentState({
-        type: 'files',
-        filePaths: paths,
-        filePreviewName: paths[0]?.split(/[/\\]/).pop() || ''
-      })
-      inspectSessionCandidates(paths)
-    } else if (data?.type === 'img' && typeof data.payload === 'string') {
-      setAttachmentState({ type: 'img', imageDataUrl: data.payload })
-    } else if (data?.type === 'over' && typeof data.payload === 'string') {
-      searchText.value = data.payload
-      setAttachmentState({ type: data.payload.includes('\n') ? 'over' : 'empty' })
-    } else if (data?.type === 'empty') {
-      setAttachmentState({ type: 'empty' })
+  window.addEventListener('keydown', handleGlobalKeydown, true)
+  window.addEventListener('blur', handleWindowBlur)
+
+    window.api?.onConfigUpdated?.((newConfig) => {
+    applyRuntimeConfig(newConfig || {})
+  })
+
+
+window.api?.onWindowInit?.((data) => {
+    if (typeof data?.senderId === 'string' && data.senderId) {
+      senderId.value = data.senderId
     }
 
-    if (typeof data?.userText === 'string' && data.userText.trim()) {
-      searchText.value = data.userText
+
+    if (data?.type === 'files' && Array.isArray(data.payload)) {
+      const paths = data.payload.map((item) => item?.path).filter(Boolean)
+      applyFileAttachment(paths)
+    } else if (data?.type === 'img' && typeof data.payload === 'string') {
+      applyImageAttachment(data.payload)
+    } else if (data?.type === 'over' && typeof data.payload === 'string') {
+      updateFromTextInput(data.payload, true)
+    } else if (data?.type === 'empty') {
+      clearAttachment()
+      queryText.value = ''
+    }
+
+    if (typeof data?.userText === 'string') {
+      queryText.value = data.userText.trim()
     }
 
     if (data?.promptKey) {
       selectedPromptKey.value = data.promptKey
     }
 
-    updateReadonlyPreviewState()
+    focusInputToEnd()
   })
 
   try {
     const result = await window.api.getConfig()
-    currentConfig.value = result?.config || {}
-    document.documentElement.classList.toggle('dark', Boolean(currentConfig.value?.isDarkMode))
+    applyRuntimeConfig(result?.config || {})
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '加载配置失败'))
   }
 
   await refreshFromClipboard(true)
+  focusInputToEnd()
+  requestAnimationFrame(() => {
+    focusInputToEnd()
+  })
+  setTimeout(() => {
+    focusInputToEnd()
+  }, 60)
+})
+
+onBeforeUnmount(() => {
+  clearTimeout(blurCloseTimer)
+  window.removeEventListener('keydown', handleGlobalKeydown, true)
+  window.removeEventListener('blur', handleWindowBlur)
 })
 </script>
 
 <template>
   <div class="quick-shell">
     <div class="quick-panel">
-      <div class="search-strip">
-        <div v-if="payloadType === 'img' && imageDataUrl" class="left-preview image-preview">
-          <img :src="imageDataUrl" alt="clipboard image" />
-        </div>
-        <div v-else-if="payloadType === 'files' && filePreviewName" class="left-preview file-preview">
-          <span class="file-ext">{{ filePreviewName.split('.').pop()?.toUpperCase() || 'FILE' }}</span>
-        </div>
-
-        <div class="search-content">
-          <textarea
-            v-if="!isReadonlyPreview"
-            v-model="searchText"
+      <div class="quick-topbar">
+        <div class="quick-search-row">
+          <div v-if="hasAttachment" class="top-token" :title="attachmentPreviewLabel">
+            <span class="top-token-icon" v-if="attachment.type === 'files'">📄</span>
+            <span class="top-token-icon" v-else-if="attachment.type === 'img'">🖼</span>
+            <span class="top-token-icon" v-else>≡</span>
+            <span class="top-token-label">{{ attachmentPreviewLabel }}</span>
+            <span v-if="attachment.type === 'files' && attachment.filePaths.length > 1" class="top-token-count">{{ attachment.filePaths.length }}</span>
+          </div>
+          <input
+            ref="inputRef"
+            v-model="queryText"
             class="search-input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
             placeholder="搜索"
             @paste="handlePaste"
+            @keydown="handleKeydown"
           />
-          <div v-else class="readonly-preview">{{ searchText }}</div>
         </div>
       </div>
 
-      <div class="section-title">最佳匹配</div>
+      <div class="recommend-title">匹配推荐</div>
 
       <div v-if="restoreCandidates.length > 0" class="restore-zone">
         <button
@@ -380,7 +714,7 @@ onMounted(async () => {
 
       <div class="grid-wrap">
         <button
-          v-for="prompt in candidatePrompts"
+          v-for="prompt in candidateSections"
           :key="prompt.key"
           type="button"
           class="prompt-tile"
@@ -404,82 +738,114 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 14px;
+  padding: 8px 12px;
   box-sizing: border-box;
-  background: transparent;
+  background: #f7f7f8;
+  overflow: hidden;
+}
+
+html.dark .quick-shell {
+  background: #1f1f23;
 }
 
 .quick-panel {
-  width: min(1180px, 100%);
+  width: min(1280px, 100%);
+  height: min(520px, calc(100vh - 16px));
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  background: #f7f7f8;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
-.search-strip {
+html.dark .quick-panel {
+  background: #1f1f23;
+}
+
+.quick-topbar {
+  flex: 0 0 auto;
+}
+
+.quick-search-row {
+  min-height: 52px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 64px;
-  background: rgba(255, 255, 255, 0.92);
-  border-radius: 16px;
-  padding: 10px 14px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
-}
-
-html.dark .search-strip {
-  background: rgba(30, 30, 34, 0.94);
-}
-
-.left-preview {
-  width: 52px;
-  height: 52px;
-  border-radius: 12px;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid #d8d8df;
+  border-radius: 10px;
+  background: #ffffff;
   overflow: hidden;
+}
+
+html.dark .quick-search-row {
+  border-color: #3a3a41;
+  background: #2a2a2f;
+}
+
+.top-token {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 360px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #d0d0d8;
+  border-radius: 8px;
+  background: #fafafa;
+  overflow: hidden;
+}
+
+html.dark .top-token {
+  border-color: #474750;
+  background: #34343b;
+}
+
+.top-token-icon {
   flex-shrink: 0;
-  background: rgba(0, 0, 0, 0.05);
-  display: flex;
+  font-size: 13px;
+}
+
+.top-token-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  color: #2d2d36;
+}
+
+html.dark .top-token-label {
+  color: #f3f3f6;
+}
+
+.top-token-count {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #2d2d36;
+  color: #fff;
+  font-size: 12px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-html.dark .left-preview {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.image-preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.file-preview {
-  color: #555561;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-html.dark .file-preview {
-  color: #f1f1f5;
-}
-
-.search-content {
+.search-input {
   flex: 1;
   min-width: 0;
-}
-
-.search-input {
-  width: 100%;
-  height: 42px;
+  height: 38px;
   border: none;
   outline: none;
-  resize: none;
-  overflow: hidden;
   background: transparent;
-  font-size: 24px;
-  line-height: 42px;
-  color: #18181b;
-  font-family: inherit;
+  font-size: 20px;
+  line-height: 38px;
+  color: #1f1f24;
   padding: 0;
 }
 
@@ -488,57 +854,50 @@ html.dark .search-input {
 }
 
 .search-input::placeholder {
-  color: #9a9aa3;
+  color: #a0a0aa;
 }
 
-.readonly-preview {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 18px;
-  line-height: 1.4;
-  color: #18181b;
-}
-
-html.dark .readonly-preview {
-  color: #f5f5f7;
-}
-
-.section-title {
-  font-size: 15px;
+.recommend-title {
+  flex: 0 0 auto;
+  font-size: 14px;
   font-weight: 700;
-  color: #202028;
+  color: #111116;
 }
 
-html.dark .section-title { color: #f1f1f5; }
+html.dark .recommend-title {
+  color: #f3f3f6;
+}
 
 .restore-zone {
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  overflow: hidden;
 }
 
 .restore-chip {
   border: none;
   border-radius: 999px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 10px;
+  background: #ececf1;
   color: #4e4e59;
   cursor: pointer;
 }
 
 html.dark .restore-chip {
-  background: rgba(255, 255, 255, 0.08);
+  background: #33333a;
   color: #ececf0;
 }
 
 .grid-wrap {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-  gap: 14px 12px;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-content: start;
+  overflow: hidden;
 }
 
 .prompt-tile {
@@ -547,37 +906,36 @@ html.dark .restore-chip {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 8px 4px;
-  border-radius: 12px;
+  gap: 6px;
+  padding: 4px 2px;
+  border-radius: 10px;
   cursor: pointer;
-  transition: transform 0.18s ease, background 0.18s ease;
+  transition: background 0.16s ease;
 }
 
 .prompt-tile:hover,
 .prompt-tile.active {
-  background: rgba(0, 0, 0, 0.05);
-  transform: translateY(-1px);
+  background: rgba(0, 0, 0, 0.06);
 }
 
 html.dark .prompt-tile:hover,
 html.dark .prompt-tile.active {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .tile-icon-wrap {
-  width: 58px;
-  height: 58px;
-  border-radius: 14px;
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.92);
+  background: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 html.dark .tile-icon-wrap {
-  background: rgba(255, 255, 255, 0.08);
+  background: #2a2a2f;
 }
 
 .tile-icon {
@@ -587,29 +945,44 @@ html.dark .tile-icon-wrap {
 }
 
 .tile-fallback {
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 700;
   color: #565666;
 }
 
-html.dark .tile-fallback { color: #f2f2f6; }
+html.dark .tile-fallback {
+  color: #f2f2f6;
+}
 
 .tile-name {
-  font-size: 13px;
-  line-height: 1.35;
+  font-size: 11px;
+  line-height: 1.2;
   text-align: center;
   color: #2d2d36;
-  word-break: break-word;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  word-break: break-word;
 }
 
-html.dark .tile-name { color: #f2f2f6; }
+html.dark .tile-name {
+  color: #f2f2f6;
+}
 
-@media (max-width: 900px) {
-  .quick-panel { width: 100%; }
-  .search-input { font-size: 20px; }
+@media (max-width: 1100px) {
+  .grid-wrap {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .grid-wrap {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .search-input {
+    font-size: 18px;
+  }
 }
 </style>

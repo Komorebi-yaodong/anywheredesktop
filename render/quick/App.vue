@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { pinyin } from 'pinyin-pro'
 
 const senderId = ref('quick')
+let hasInitPayloadApplied = false
 
 const currentConfig = ref(null)
 const queryText = ref('')
@@ -347,7 +348,7 @@ function resolveQuickOpenPayload(prompt) {
 
 async function closeQuick() {
   try {
-    await window.api.closeWindow(senderId.value)
+    await window.api.closeWindow('quick')
   } catch {
     // ignore fire-and-forget close
   }
@@ -359,7 +360,6 @@ async function openPrompt(prompt) {
     const payload = resolveQuickOpenPayload(prompt)
     const showMode = prompt.showMode === 'fastinput' ? 'fast' : 'window'
     await window.api.openWindow(showMode, payload)
-    await closeQuick()
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   }
@@ -373,7 +373,6 @@ async function restoreSession(candidate) {
       payload: candidate.raw,
       filename: candidate.fileName
     })
-    await closeQuick()
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '恢复对话失败'))
   }
@@ -463,6 +462,9 @@ function applyRuntimeConfig(config = null) {
 async function refreshFromClipboard(forceOverride = false) {
   try {
     const result = await window.api.captureSelectionPayload?.() || await window.api.readClipboardPayload()
+    if (!forceOverride && hasInitPayloadApplied) {
+      return
+    }
     await handleClipboardPayload(result, forceOverride)
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '读取剪贴板失败'))
@@ -573,7 +575,8 @@ function handleGlobalKeydown(event) {
 
   if (event.key === 'Backspace') {
     const active = document.activeElement
-    if (active !== inputRef.value) return
+    const isInputActive = active === inputRef.value || active === document.body || active === document.documentElement
+    if (!isInputActive) return
     if (queryText.value.length > 0) return
     if (!hasAttachment.value) return
     event.preventDefault()
@@ -581,35 +584,29 @@ function handleGlobalKeydown(event) {
   }
 }
 
-function handleWindowBlur() {
-  clearTimeout(blurCloseTimer)
-  blurCloseTimer = setTimeout(() => {
-    closeQuick()
-  }, 30)
-}
-
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown, true)
-  window.addEventListener('blur', handleWindowBlur)
 
-    window.api?.onConfigUpdated?.((newConfig) => {
+  window.api?.onConfigUpdated?.((newConfig) => {
     applyRuntimeConfig(newConfig || {})
   })
 
-
-window.api?.onWindowInit?.((data) => {
+  window.api?.onWindowInit?.((data) => {
+    hasInitPayloadApplied = false
     if (typeof data?.senderId === 'string' && data.senderId) {
       senderId.value = data.senderId
     }
 
-
     if (data?.type === 'files' && Array.isArray(data.payload)) {
       const paths = data.payload.map((item) => item?.path).filter(Boolean)
       applyFileAttachment(paths)
+      hasInitPayloadApplied = paths.length > 0
     } else if (data?.type === 'img' && typeof data.payload === 'string') {
       applyImageAttachment(data.payload)
+      hasInitPayloadApplied = Boolean(data.payload)
     } else if (data?.type === 'over' && typeof data.payload === 'string') {
       updateFromTextInput(data.payload, true)
+      hasInitPayloadApplied = Boolean(data.payload.trim())
     } else if (data?.type === 'empty') {
       clearAttachment()
       queryText.value = ''
@@ -646,7 +643,6 @@ window.api?.onWindowInit?.((data) => {
 onBeforeUnmount(() => {
   clearTimeout(blurCloseTimer)
   window.removeEventListener('keydown', handleGlobalKeydown, true)
-  window.removeEventListener('blur', handleWindowBlur)
 })
 </script>
 

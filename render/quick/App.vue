@@ -87,16 +87,27 @@ function getPinyinProfile(text = '') {
 function buildPromptSearchProfile(prompt) {
   const name = String(prompt?.key || '')
   const lowerName = name.toLowerCase()
-  const promptText = String(prompt?.prompt || '').toLowerCase()
   const pinyinProfile = getPinyinProfile(name)
 
   return {
     lowerName,
-    promptText,
     pinyinFull: pinyinProfile.full,
     pinyinInitials: pinyinProfile.initials,
     pinyinCompact: pinyinProfile.compact
   }
+}
+
+function getNameMatchScore(searchProfile, query = '', queryPinyin = { compact: '' }) {
+  if (!query) return 0
+  if (searchProfile.lowerName === query) return 3200
+  if (searchProfile.lowerName.startsWith(query)) return 2800
+  if (searchProfile.pinyinInitials && searchProfile.pinyinInitials === query) return 2600
+  if (searchProfile.pinyinInitials && searchProfile.pinyinInitials.startsWith(query)) return 2400
+  if (searchProfile.pinyinCompact && searchProfile.pinyinCompact.startsWith(query)) return 2200
+  if (queryPinyin.compact && searchProfile.pinyinCompact && searchProfile.pinyinCompact.startsWith(queryPinyin.compact)) return 2100
+  if (searchProfile.lowerName.includes(query)) return 1800
+  if (searchProfile.pinyinFull && searchProfile.pinyinFull.includes(query)) return 1600
+  return 0
 }
 
 function classifyTextAttachment(text = '') {
@@ -204,114 +215,81 @@ const candidateSections = computed(() => {
   const queryPinyin = getPinyinProfile(rawQuery)
   const hasQuery = Boolean(query)
   const mode = runtimeMode.value
-  const attachmentLocked = mode !== 'singleline-text'
+  const hasLockedAttachment = mode === 'img' || mode === 'files' || mode === 'multiline-text'
 
   const nameMatches = []
-  const textMatches = []
-  const typeMatches = []
-  const fallbackMatches = []
+  const textRegexMatches = []
+  const generalMatches = []
+  const attachmentTypeMatches = []
+
+  const sorter = (a, b) => b.score - a.score || a.key.localeCompare(b.key, 'zh-CN')
 
   for (const prompt of prompts) {
     const promptType = normalizePromptType(prompt.type)
     const searchProfile = buildPromptSearchProfile(prompt)
-    let nameScore = 0
-    let textScore = 0
-
-    const matchName = () => {
-      if (!hasQuery) return 0
-      if (searchProfile.lowerName === query) return 3200
-      if (searchProfile.lowerName.startsWith(query)) return 2800
-      if (searchProfile.pinyinInitials && searchProfile.pinyinInitials === query) return 2600
-      if (searchProfile.pinyinInitials && searchProfile.pinyinInitials.startsWith(query)) return 2400
-      if (searchProfile.pinyinCompact && searchProfile.pinyinCompact.startsWith(query)) return 2200
-      if (queryPinyin.compact && searchProfile.pinyinCompact && searchProfile.pinyinCompact.startsWith(queryPinyin.compact)) return 2100
-      if (searchProfile.lowerName.includes(query)) return 1800
-      if (searchProfile.pinyinFull && searchProfile.pinyinFull.includes(query)) return 1600
-      return 0
-    }
-
-    const matchText = () => {
-      if (!hasQuery || attachmentLocked) return 0
-      if (!(promptType === 'over' || promptType === 'general')) return 0
-
-      const regex = normalizeRegex(prompt.matchRegex)
-      if (promptType === 'over') {
-        if (regex && regex.test(rawQuery)) return 3200
-        if (!regex) return 1900
-      }
-
-      const searchable = `${searchProfile.promptText} ${searchProfile.lowerName}`
-      if (searchable.includes(query)) {
-        return promptType === 'over' ? 2600 : 2200
-      }
-
-      return promptType === 'general' ? 1600 : 0
-    }
-
-    nameScore = matchName()
-    textScore = matchText()
-
+    const nameScore = getNameMatchScore(searchProfile, query, queryPinyin)
     const item = {
       ...prompt,
       iconUrl: getPromptIcon(prompt),
       score: 0
     }
 
-    if (attachmentLocked) {
-      if (nameScore > 0) {
-        item.score = nameScore
-        nameMatches.push(item)
+    if (hasLockedAttachment) {
+      const isAttachmentPrimary =
+        (mode === 'files' && promptType === 'files') ||
+        (mode === 'img' && promptType === 'img') ||
+        (mode === 'multiline-text' && promptType === 'over')
+      const isGeneralFallback = promptType === 'general'
+      const inAttachmentPool = isAttachmentPrimary || isGeneralFallback
+
+      if (!inAttachmentPool) continue
+
+      if (!hasQuery) {
+        item.score = isAttachmentPrimary ? 2200 : 1200
+        attachmentTypeMatches.push(item)
         continue
       }
 
-      if (!hasQuery) {
-        if ((mode === 'img' && promptType === 'img') || (mode === 'files' && promptType === 'files') || (mode === 'multiline-text' && promptType === 'over')) {
-          item.score = 900
-          typeMatches.push(item)
-        } else if (promptType === 'general') {
-          item.score = 600
-          fallbackMatches.push(item)
-        } else {
-          item.score = 100
-          fallbackMatches.push(item)
-        }
+      if (nameScore > 0) {
+        item.score = (isAttachmentPrimary ? 4200 : 3200) + nameScore
+        nameMatches.push(item)
       }
-      continue
-    }
-
-    if (textScore > 0) {
-      item.score = textScore
-      textMatches.push(item)
-      continue
-    }
-
-    if (nameScore > 0) {
-      item.score = nameScore
-      nameMatches.push(item)
       continue
     }
 
     if (!hasQuery) {
-      if (promptType === 'over' || promptType === 'general') {
-        item.score = promptType === 'over' ? 700 : 620
-        typeMatches.push(item)
-      } else {
-        item.score = 100
-        fallbackMatches.push(item)
+      if (promptType === 'over') {
+        item.score = 1400
+        textRegexMatches.push(item)
+      } else if (promptType === 'general') {
+        item.score = 1000
+        generalMatches.push(item)
       }
-    } else if (promptType === 'general') {
-      item.score = 900
-      fallbackMatches.push(item)
+      continue
+    }
+
+    if (nameScore > 0) {
+      item.score = 4000 + nameScore
+      nameMatches.push(item)
+    }
+
+    if (promptType === 'over') {
+      const regex = normalizeRegex(prompt.matchRegex)
+      if (regex ? regex.test(rawQuery) : true) {
+        item.score = 2400 + (regex ? 200 : 0)
+        textRegexMatches.push(item)
+      }
+    }
+
+    if (promptType === 'general') {
+      item.score = 1200
+      generalMatches.push(item)
     }
   }
 
-  const sorter = (a, b) => b.score - a.score || a.key.localeCompare(b.key, 'zh-CN')
-  const sections = [
-    ...textMatches.sort(sorter),
-    ...nameMatches.sort(sorter),
-    ...typeMatches.sort(sorter),
-    ...fallbackMatches.sort(sorter)
-  ]
+  const sections = hasLockedAttachment
+    ? [...nameMatches.sort(sorter), ...attachmentTypeMatches.sort(sorter)]
+    : [...nameMatches.sort(sorter), ...textRegexMatches.sort(sorter), ...generalMatches.sort(sorter)]
 
   const deduped = []
   const seen = new Set()

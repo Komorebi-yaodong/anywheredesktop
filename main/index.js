@@ -58,6 +58,14 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
   }
 
   if (typeof result.imageDataUrl === 'string' && result.imageDataUrl) {
+    if (result.imageDataUrl.startsWith('data:image/svg+xml')) {
+      const fallbackText = typeof result.text === 'string' ? result.text.trim() : ''
+      return {
+        type: 'over',
+        payload: fallbackText || result.imageDataUrl
+      }
+    }
+
     return {
       type: 'img',
       payload: result.imageDataUrl,

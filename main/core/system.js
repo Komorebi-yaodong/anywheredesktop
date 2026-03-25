@@ -98,24 +98,35 @@ const clipboardTimeline = {
   files: { signature: '', timestamp: 0, value: [] }
 }
 
+function decodeClipboardPathBuffer(buffer) {
+  if (!buffer || buffer.length < 4) return []
+
+  const raw = buffer.toString('ucs2').replace(/\u0000+$/g, '')
+  return raw
+    .split('\u0000')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => path.normalize(item))
+}
+
 function readClipboardFilePaths() {
   const formats = clipboard.availableFormats()
-  const fileNameWFormat = formats.find((item) => item === 'FileNameW')
-  if (!fileNameWFormat) return []
+  const candidateFormats = ['FileNameW', 'text/uri-list', 'CF_HDROP']
 
-  try {
-    const buffer = clipboard.readBuffer(fileNameWFormat)
-    if (!buffer || buffer.length < 4) return []
+  for (const formatName of candidateFormats) {
+    const matchedFormat = formats.find((item) => item === formatName)
+    if (!matchedFormat) continue
 
-    const raw = buffer.toString('ucs2').replace(/\u0000+$/g, '')
-    return raw
-      .split('\u0000')
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .map((item) => path.normalize(item))
-  } catch {
-    return []
+    try {
+      const buffer = clipboard.readBuffer(matchedFormat)
+      const paths = decodeClipboardPathBuffer(buffer)
+      if (paths.length > 0) return paths
+    } catch {
+      // ignore and try next available format
+    }
   }
+
+  return []
 }
 
 function readClipboardImageDataUrl() {

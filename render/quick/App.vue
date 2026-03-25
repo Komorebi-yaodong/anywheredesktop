@@ -11,6 +11,7 @@ const queryText = ref('')
 const selectedPromptKey = ref('')
 const restoreCandidates = ref([])
 const attachment = ref(createEmptyAttachment())
+const inputRef = ref(null)
 let blurCloseTimer = null
 
 function createEmptyAttachment() {
@@ -462,7 +463,7 @@ function applyRuntimeConfig(config = null) {
 async function refreshFromClipboard(forceOverride = false) {
   try {
     const result = await window.api.captureSelectionPayload?.() || await window.api.readClipboardPayload()
-    if (!forceOverride && hasInitPayloadApplied) {
+    if (forceOverride && hasInitPayloadApplied) {
       return
     }
     await handleClipboardPayload(result, forceOverride)

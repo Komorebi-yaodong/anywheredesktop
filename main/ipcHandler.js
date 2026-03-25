@@ -706,7 +706,7 @@ handleInvoke('skill:pathJoin', async (_event, ...args) => {
 
   handleInvoke('file:handleFilePath', async (_event, filePath = '') => {
     return fileApi.handleFilePath(filePath)
-  })
+  }, { fileMode: 'buffer' })
 
   handleInvoke('file:sendfileDirect', async (_event, filePathList = []) => {
     return fileApi.sendfileDirect(filePathList)

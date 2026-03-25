@@ -53,6 +53,9 @@ importers:
       openai:
         specifier: 6.18.0
         version: 6.18.0(zod@4.3.6)
+      pinyin-pro:
+        specifier: ^3.28.0
+        version: 3.28.0
       recorder-core:
         specifier: ^1.3.25011100
         version: 1.3.25011100
@@ -3202,6 +3205,9 @@ packages:
   pify@4.0.1:
     resolution: {integrity: sha512-uB80kBFb/tfd68bVleG9T5GGsGPjJrLAUpR5PZIrhBnIaRTQRjqdJSsIKkOP6OAIFbj7GOrcudc5pNjZ+geV2g==}
     engines: {node: '>=6'}
+
+  pinyin-pro@3.28.0:
+    resolution: {integrity: sha512-mMRty6RisoyYNphJrTo3pnvp3w8OMZBrXm9YSWkxhAfxKj1KZk2y8T2PDIZlDDRsvZ0No+Hz6FI4sZpA6Ey25g==}
 
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
@@ -7503,6 +7509,8 @@ snapshots:
 
   pify@4.0.1:
     optional: true
+
+  pinyin-pro@3.28.0: {}
 
   pkce-challenge@5.0.1: {}
 

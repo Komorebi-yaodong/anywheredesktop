@@ -88,6 +88,16 @@ export async function copyImage(input = {}) {
   }
 }
 
+const CLIPBOARD_FRESHNESS_MS = 5000
+const CLIPBOARD_POLL_INTERVAL_MS = 400
+
+let clipboardWatcherTimer = null
+const clipboardTimeline = {
+  text: { signature: '', timestamp: 0, value: '' },
+  image: { signature: '', timestamp: 0, value: '' },
+  files: { signature: '', timestamp: 0, value: [] }
+}
+
 function readClipboardFilePaths() {
   const formats = clipboard.availableFormats()
   const fileNameWFormat = formats.find((item) => item === 'FileNameW')
@@ -118,59 +128,210 @@ function readClipboardImageDataUrl() {
   }
 }
 
+function readClipboardPayloadRaw() {
+  return {
+    text: clipboard.readText(),
+    imageDataUrl: readClipboardImageDataUrl(),
+    filePaths: readClipboardFilePaths(),
+    formats: clipboard.availableFormats()
+  }
+}
+
+function buildFieldSignatures(raw = {}) {
+  const text = typeof raw.text === 'string' ? raw.text : ''
+  const imageDataUrl = typeof raw.imageDataUrl === 'string' ? raw.imageDataUrl : ''
+  const filePaths = Array.isArray(raw.filePaths) ? raw.filePaths.map((item) => path.normalize(String(item))) : []
+
+  return {
+    text,
+    imageDataUrl,
+    filePaths,
+    signatures: {
+      text,
+      image: imageDataUrl ? `${imageDataUrl.length}:${imageDataUrl.slice(0, 128)}` : '',
+      files: JSON.stringify(filePaths)
+    }
+  }
+}
+
+function updateTimelineEntry(entry, nextSignature, nextValue) {
+  const hasValue = Array.isArray(nextValue) ? nextValue.length > 0 : Boolean(nextValue)
+  if (!hasValue) {
+    entry.signature = ''
+    entry.timestamp = 0
+    entry.value = Array.isArray(nextValue) ? [] : ''
+    return false
+  }
+
+  const changed = entry.signature !== nextSignature
+  if (changed) {
+    entry.signature = nextSignature
+    entry.timestamp = Date.now()
+  }
+  entry.value = Array.isArray(nextValue) ? [...nextValue] : nextValue
+  return changed
+}
+
+function updateClipboardTimeline(raw = {}) {
+  const normalized = buildFieldSignatures(raw)
+  const changedKinds = []
+
+  if (updateTimelineEntry(clipboardTimeline.text, normalized.signatures.text, normalized.text)) {
+    changedKinds.push('text')
+  }
+  if (updateTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageDataUrl)) {
+    changedKinds.push('image')
+  }
+  if (updateTimelineEntry(clipboardTimeline.files, normalized.signatures.files, normalized.filePaths)) {
+    changedKinds.push('files')
+  }
+
+  return {
+    normalized,
+    changedKinds
+  }
+}
+
+function resolveLatestKind(preferredKinds = ['files', 'image', 'text']) {
+  return preferredKinds
+    .map((kind) => ({ kind, timestamp: clipboardTimeline[kind]?.timestamp || 0 }))
+    .filter((item) => item.timestamp > 0)
+    .sort((a, b) => b.timestamp - a.timestamp)[0]?.kind || 'empty'
+}
+
+function buildClipboardPayloadFromKind(kind = 'empty', source = 'clipboard', formats = []) {
+  const finalKind = kind === 'files' ? 'files' : kind === 'image' ? 'img' : kind === 'text' ? 'over' : 'empty'
+  const timestamp = kind === 'files'
+    ? clipboardTimeline.files.timestamp
+    : kind === 'image'
+      ? clipboardTimeline.image.timestamp
+      : kind === 'text'
+        ? clipboardTimeline.text.timestamp
+        : 0
+  const ageMs = timestamp > 0 ? Math.max(0, Date.now() - timestamp) : Number.POSITIVE_INFINITY
+
+  return {
+    ok: true,
+    kind: finalKind,
+    text: kind === 'text' ? clipboardTimeline.text.value : '',
+    imageDataUrl: kind === 'image' ? clipboardTimeline.image.value : '',
+    filePaths: kind === 'files' ? [...clipboardTimeline.files.value] : [],
+    hasText: kind === 'text' && Boolean(clipboardTimeline.text.value?.trim()),
+    hasImage: kind === 'image' && Boolean(clipboardTimeline.image.value),
+    hasFiles: kind === 'files' && clipboardTimeline.files.value.length > 0,
+    formats,
+    timestamp,
+    ageMs,
+    freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
+    isFresh: finalKind !== 'empty' && ageMs <= CLIPBOARD_FRESHNESS_MS,
+    source
+  }
+}
+
+function getFreshClipboardPayload(source = 'clipboard', preferredKinds = ['files', 'image', 'text'], formats = []) {
+  const latestKind = resolveLatestKind(preferredKinds)
+  const payload = buildClipboardPayloadFromKind(latestKind, source, formats)
+  return payload.isFresh ? payload : buildClipboardPayloadFromKind('empty', 'empty', formats)
+}
+
+function primeClipboardWatcherState() {
+  const raw = readClipboardPayloadRaw()
+  updateClipboardTimeline(raw)
+  return getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
+}
+
+function pollClipboardSnapshot() {
+  try {
+    const raw = readClipboardPayloadRaw()
+    updateClipboardTimeline(raw)
+  } catch {
+    // ignore clipboard polling failure
+  }
+}
+
+export function startClipboardWatcher() {
+  if (clipboardWatcherTimer) {
+    return {
+      ok: true,
+      started: false,
+      reason: 'already_started'
+    }
+  }
+
+  primeClipboardWatcherState()
+  clipboardWatcherTimer = setInterval(pollClipboardSnapshot, CLIPBOARD_POLL_INTERVAL_MS)
+  clipboardWatcherTimer.unref?.()
+
+  return {
+    ok: true,
+    started: true,
+    intervalMs: CLIPBOARD_POLL_INTERVAL_MS
+  }
+}
+
+export function stopClipboardWatcher() {
+  if (!clipboardWatcherTimer) {
+    return {
+      ok: true,
+      stopped: false,
+      reason: 'not_started'
+    }
+  }
+
+  clearInterval(clipboardWatcherTimer)
+  clipboardWatcherTimer = null
+
+  return {
+    ok: true,
+    stopped: true
+  }
+}
+
 async function tryCaptureSelectionToClipboard() {
   if (process.platform !== 'win32') {
     return null
   }
 
+  const beforeRaw = readClipboardPayloadRaw()
+  const beforeSignature = JSON.stringify(buildFieldSignatures(beforeRaw).signatures)
+
   try {
     await execFileAsync('powershell.exe', [
       '-NoProfile',
       '-Command',
-      '$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 50; $wshell.SendKeys("^c"); Start-Sleep -Milliseconds 120'
+      '$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 80; $wshell.SendKeys("^c"); Start-Sleep -Milliseconds 260'
     ], { windowsHide: true })
   } catch {
     // ignore selection capture failure
   }
 
-  return readClipboardPayload()
+  const afterRaw = readClipboardPayloadRaw()
+  const afterSignature = JSON.stringify(buildFieldSignatures(afterRaw).signatures)
+  updateClipboardTimeline(afterRaw)
+
+  if (afterSignature === beforeSignature) {
+    return null
+  }
+
+  return getFreshClipboardPayload('selection', ['files', 'image', 'text'], afterRaw.formats)
 }
 
 export async function captureSelectionPayload() {
-  const direct = await readClipboardPayload()
-  if (direct.kind !== 'empty') return direct
   const captured = await tryCaptureSelectionToClipboard()
-  return captured || direct
-}
+  if (captured && captured.kind !== 'empty') {
+    return captured
+  }
 
+  const directRaw = readClipboardPayloadRaw()
+  updateClipboardTimeline(directRaw)
+  return getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
+}
 
 export async function readClipboardPayload() {
-  const text = clipboard.readText()
-  const imageDataUrl = readClipboardImageDataUrl()
-  const filePaths = readClipboardFilePaths()
-
-  let kind = 'empty'
-  if (filePaths.length > 0) {
-    kind = 'files'
-  } else if (imageDataUrl) {
-    kind = 'img'
-  } else if (text && text.trim()) {
-    kind = 'over'
-  }
-
-  return {
-    ok: true,
-    kind,
-    text,
-    imageDataUrl,
-    filePaths,
-    hasText: Boolean(text && text.trim()),
-    hasImage: Boolean(imageDataUrl),
-    hasFiles: filePaths.length > 0,
-    formats: clipboard.availableFormats()
-  }
+  const raw = readClipboardPayloadRaw()
+  updateClipboardTimeline(raw)
+  return getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
 }
-
 
 export async function readClipboardText() {
   return {

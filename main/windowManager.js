@@ -48,8 +48,8 @@ const WINDOWS = {
     preload: 'quick_preload.js',
     html: 'quick/index.html',
     devPath: '/quick/index.html',
-    width: 560,
-    height: 520,
+    width: 980,
+    height: 560,
     options: {
       frame: false,
       transparent: false,
@@ -404,6 +404,7 @@ async function buildWindowInitMessage(payload = {}, senderId = '', fullConfig = 
     code,
     type: typeof payload?.type === 'string' && payload.type ? payload.type : 'over',
     payload: payload?.payload ?? '',
+    userText: typeof payload?.userText === 'string' ? payload.userText : '',
     summonData: payload?.summonData && typeof payload.summonData === 'object' ? payload.summonData : null,
     filename: typeof payload?.filename === 'string' ? payload.filename : '',
     taskConfig: payload?.taskConfig ?? null,
@@ -458,11 +459,28 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
 
   win.on('ready-to-show', () => {
     win.show()
+    if (type === 'fast' || type === 'quick') {
+      try {
+        win.focus()
+      } catch {
+        // ignore focus failure during ready-to-show
+      }
+    }
   })
 
   if (type === 'fast' || type === 'quick') {
     win.on('blur', () => {
-      if (!win.isDestroyed()) win.hide()
+      if (!win.isDestroyed()) {
+        setTimeout(() => {
+          try {
+            if (!win.isDestroyed() && !win.isFocused()) {
+              win.hide()
+            }
+          } catch {
+            // ignore blur-hide failure
+          }
+        }, 0)
+      }
     })
   }
 
@@ -805,6 +823,44 @@ export function showMainWindow() {
   openWindow('main')
   return { ok: true, action: 'show', existed: false }
 }
+
+export function ensureMainWindowVisible() {
+  const mainWindow = getSingletonWindow('main')
+  if (!mainWindow) {
+    return { ok: true, action: 'ensure-visible', existed: false }
+  }
+
+  try {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
+
+    if (!mainWindow.isVisible()) {
+      if (typeof mainWindow.showInactive === 'function') {
+        mainWindow.showInactive()
+      } else {
+        mainWindow.show()
+      }
+    }
+  } catch {
+    try {
+      if (!mainWindow.isVisible()) {
+        mainWindow.show()
+      }
+    } catch {
+      // ignore ensure-visible failure during teardown
+    }
+  }
+
+  return {
+    ok: true,
+    action: 'ensure-visible',
+    existed: true,
+    visible: mainWindow.isVisible(),
+    minimized: mainWindow.isMinimized()
+  }
+}
+
 
 export function hideMainWindow() {
   const mainWindow = getSingletonWindow('main')

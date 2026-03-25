@@ -5,6 +5,7 @@ import {
   openWindow,
   showMainWindow,
   hideMainWindow,
+  ensureMainWindowVisible,
   listWindows,
   getWindowByRef,
   getWindowRefByWebContentsId,
@@ -51,14 +52,16 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
   if (filePaths.length > 0) {
     return {
       type: 'files',
-      payload: filePaths.map((filePath) => ({ path: filePath }))
+      payload: filePaths.map((filePath) => ({ path: filePath })),
+      userText: typeof result.text === 'string' ? result.text.trim() : ''
     }
   }
 
   if (typeof result.imageDataUrl === 'string' && result.imageDataUrl) {
     return {
       type: 'img',
-      payload: result.imageDataUrl
+      payload: result.imageDataUrl,
+      userText: typeof result.text === 'string' ? result.text.trim() : ''
     }
   }
 
@@ -87,6 +90,22 @@ async function collectQuickPayload() {
   }
 }
 
+async function openQuickWindowPreservingMain(payload = null) {
+  const keepMainVisible = isSingletonWindowVisible('main')
+  const result = await openWindow('quick', payload)
+
+  if (keepMainVisible) {
+    try {
+      ensureMainWindowVisible()
+    } catch {
+      // ignore main visibility restore failure
+    }
+  }
+
+  return result
+}
+
+
 async function triggerQuickSummon() {
   if (isSingletonWindowVisible('quick')) {
     const quickWindow = getWindowByRef('quick')
@@ -97,7 +116,7 @@ async function triggerQuickSummon() {
   }
 
   const quickPayload = await collectQuickPayload()
-  return openWindow('quick', quickPayload)
+  return openQuickWindowPreservingMain(quickPayload)
 }
 
 async function triggerPromptShortcut(promptKey = '') {
@@ -113,7 +132,7 @@ async function triggerPromptShortcut(promptKey = '') {
     const hasPayload = quickPayload.type !== 'empty'
 
     if (promptConfig.showMode === 'fastinput') {
-      await openWindow('quick', {
+      await openQuickWindowPreservingMain({
         ...quickPayload,
         promptKey,
         triggerMode: 'shortcut'
@@ -253,6 +272,7 @@ app.whenReady().then(async () => {
     toggleAlwaysOnTop
   })
 
+  systemApi.startClipboardWatcher()
   await syncDesktopRuntimeFromConfig()
   ensureTray()
   await openWindow('main')
@@ -265,6 +285,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   markAppQuitting(true)
   clearDesktopShortcuts()
+  systemApi.stopClipboardWatcher()
   dataApi.setWindowChannelNotifier(null)
 })
 

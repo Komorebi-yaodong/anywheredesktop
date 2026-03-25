@@ -473,9 +473,15 @@ async function refreshFromClipboard(forceOverride = false) {
 }
 
 function applyImageAttachment(dataUrl = '') {
+  const normalizedDataUrl = String(dataUrl || '')
+  if (normalizedDataUrl.startsWith('data:image/svg+xml')) {
+    updateFromTextInput(normalizedDataUrl, true)
+    return
+  }
+
   setAttachment({
     type: 'img',
-    imageDataUrl: String(dataUrl || ''),
+    imageDataUrl: normalizedDataUrl,
     previewLabel: '图片'
   })
   restoreCandidates.value = []
@@ -639,6 +645,12 @@ onMounted(async () => {
   setTimeout(() => {
     focusInputToEnd()
   }, 60)
+  setTimeout(() => {
+    focusInputToEnd()
+  }, 180)
+  setTimeout(() => {
+    focusInputToEnd()
+  }, 360)
 })
 
 onBeforeUnmount(() => {

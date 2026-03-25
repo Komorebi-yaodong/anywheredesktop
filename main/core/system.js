@@ -310,14 +310,24 @@ async function tryCaptureSelectionToClipboard() {
     await execFileAsync('powershell.exe', [
       '-NoProfile',
       '-Command',
-      '$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 80; $wshell.SendKeys("^c"); Start-Sleep -Milliseconds 260'
+      '$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 120; $wshell.SendKeys("^c"); Start-Sleep -Milliseconds 420'
     ], { windowsHide: true })
   } catch {
     // ignore selection capture failure
   }
 
-  const afterRaw = readClipboardPayloadRaw()
-  const afterSignature = JSON.stringify(buildFieldSignatures(afterRaw).signatures)
+  let afterRaw = readClipboardPayloadRaw()
+  let afterSignature = JSON.stringify(buildFieldSignatures(afterRaw).signatures)
+
+  if (afterSignature === beforeSignature) {
+    for (let i = 0; i < 3; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      afterRaw = readClipboardPayloadRaw()
+      afterSignature = JSON.stringify(buildFieldSignatures(afterRaw).signatures)
+      if (afterSignature !== beforeSignature) break
+    }
+  }
+
   updateClipboardTimeline(afterRaw)
 
   if (afterSignature === beforeSignature) {
@@ -328,14 +338,16 @@ async function tryCaptureSelectionToClipboard() {
 }
 
 export async function captureSelectionPayload() {
+  const directRaw = readClipboardPayloadRaw()
+  updateClipboardTimeline(directRaw)
+  const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
+
   const captured = await tryCaptureSelectionToClipboard()
   if (captured && captured.kind !== 'empty') {
     return captured
   }
 
-  const directRaw = readClipboardPayloadRaw()
-  updateClipboardTimeline(directRaw)
-  return getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
+  return clipboardPayload
 }
 
 export async function readClipboardPayload() {

@@ -4,8 +4,8 @@ import { serializeError, serializeIpcPayload } from './dataConverter.js'
 
 const liveSignalControllers = new Map()
 
-const debugIpcLog = (...args) => console.log('[ipcHandler]', ...args)
-const debugIpcError = (...args) => console.error('[ipcHandler]', ...args)
+const debugIpcLog = () => {}
+const debugIpcError = () => {}
 
 
 function getLiveSignalKey(senderId, token = '') {

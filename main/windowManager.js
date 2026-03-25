@@ -75,8 +75,8 @@ const singletonCloseBehavior = {
 let appQuitting = false
 
 
-const debugWindowManagerLog = (...args) => console.log('[windowManager]', ...args)
-const debugWindowManagerError = (...args) => console.error('[windowManager]', ...args)
+const debugWindowManagerLog = () => {}
+const debugWindowManagerError = () => {}
 
 
 function bindWindowRef(win, ref) {

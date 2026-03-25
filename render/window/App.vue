@@ -115,8 +115,7 @@ const applyPromptRuntimeConfig = async (config, options = {}) => {
     autoCloseOnBlur.value = false;
   }
 
-  if (autoCloseOnBlur.value) window.addEventListener('blur', closePage);
-  else window.removeEventListener('blur', closePage);
+  syncAutoCloseOnBlurListener();
 
   if (model.value) {
     currentProviderID.value = model.value.split('|')[0];
@@ -1054,10 +1053,18 @@ const handleChangeModel = (chosenModel) => {
   api_key.value = provider.api_key;
   chatInputRef.value?.focus({ cursor: 'end' });
 };
+const handleAutoCloseOnBlur = () => closePage(false);
+const syncAutoCloseOnBlurListener = () => {
+  window.removeEventListener('blur', handleAutoCloseOnBlur);
+  if (autoCloseOnBlur.value && !loading.value) {
+    window.addEventListener('blur', handleAutoCloseOnBlur);
+  }
+};
+
+
 const handleTogglePin = () => {
   autoCloseOnBlur.value = !autoCloseOnBlur.value;
-  if (autoCloseOnBlur.value) window.addEventListener('blur', closePage);
-  else window.removeEventListener('blur', closePage);
+  syncAutoCloseOnBlurListener();
 };
 const handleToggleAlwaysOnTop = () => {
   window.api.toggleAlwaysOnTop();
@@ -1365,12 +1372,13 @@ const closePage = async (force_save = false) => {
   if (isClosingWindow.value) return;
   if (isFilePickerOpen.value) return;
 
+  const shouldForceSave = force_save === true;
   isClosingWindow.value = true;
 
   try {
-    if (currentConfig.value?.webdav?.localChatPath && (defaultConversationName.value || force_save)) {
+    if (currentConfig.value?.webdav?.localChatPath && (defaultConversationName.value || shouldForceSave)) {
       try {
-        await autoSaveSession(force_save);
+        await autoSaveSession(shouldForceSave);
       } catch (e) {
         console.error("关闭时自动保存失败:", e);
       }
@@ -1763,9 +1771,7 @@ onMounted(async () => {
         } catch (error) { console.error("Error during initial file processing:", error); showDismissibleMessage.error("文件处理失败: " + error.message); }
       }
     }
-    if (autoCloseOnBlur.value) {
-      window.addEventListener('blur', closePage);
-    }
+    syncAutoCloseOnBlurListener();
 
     if (!isSessionRestored) {
       const defaultMcpServers = currentPromptConfig.defaultMcpServers || [];
@@ -1920,7 +1926,7 @@ const autoSaveSession = async (force = false) => {
 
   // 2. 获取当前快捷助手的配置
   const promptConfig = currentConfig.value?.prompts?.[CODE.value];
-  const isAutoSaveConfigEnabled = promptConfig?.autoSaveChat ?? true;
+  const isAutoSaveConfigEnabled = promptConfig?.autoSaveChat ?? false;
 
   if (!defaultConversationName.value && !isAutoSaveConfigEnabled && !force) {
     return;
@@ -1994,7 +2000,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('focus', handleWindowFocus);
   window.removeEventListener('blur', handleWindowBlur);
   if (textSearchInstance) textSearchInstance.destroy();
-  if (!autoCloseOnBlur.value) window.removeEventListener('blur', closePage);
+  window.removeEventListener('blur', handleAutoCloseOnBlur);
   
   window.removeEventListener('error', handleGlobalImageError, true);
   window.removeEventListener('keydown', handleGlobalKeyDown);
@@ -3193,10 +3199,12 @@ const loadSession = async (jsonData) => {
     } else {
       showDismissibleMessage.error("没有可用的模型。请检查您的服务商配置。");
       loading.value = false;
+      syncAutoCloseOnBlurListener();
       return;
     }
 
     loading.value = false;
+    syncAutoCloseOnBlurListener();
     await nextTick();
     scrollToBottom();
 
@@ -3232,6 +3240,7 @@ const loadSession = async (jsonData) => {
     console.error("加载会话失败:", error);
     showDismissibleMessage.error(`加载会话失败: ${error.message}`);
     loading.value = false;
+    syncAutoCloseOnBlurListener();
   }
 };
 
@@ -3658,6 +3667,7 @@ const askAI = async (forceSend = false) => {
 
   // --- 2. 初始化 AI 回合 ---
   loading.value = true;
+  syncAutoCloseOnBlurListener();
   signalController.value = new AbortController();
   await nextTick();
 
@@ -4260,6 +4270,7 @@ const askAI = async (forceSend = false) => {
 
   } finally {
     loading.value = false;
+    syncAutoCloseOnBlurListener();
     signalController.value = null;
     if (currentAssistantChatShowIndex > -1) {
       const endTime = Date.now();

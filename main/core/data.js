@@ -18,7 +18,7 @@ const PROVIDERS_DOC_ID = 'providers'
 const MCP_SERVERS_DOC_ID = 'mcpServers'
 const TASKS_DOC_ID = 'tasks'
 const LOCAL_CONFIG_DOC_ID = 'config_local_desktop'
-const CURRENT_CONFIG_VERSION = '2.1.15'
+const CURRENT_CONFIG_VERSION = '2.6.10'
 
 const BACKGROUND_CACHE_DOC_ID = 'background_cache'
 const BACKGROUND_CACHE_DIR_NAME = 'background_cache'
@@ -337,6 +337,26 @@ function checkConfig(inputConfig) {
   config.tasks = ensureObject(config.tasks, {})
   config.providerFolders = ensureObject(config.providerFolders, {})
   config.tags = ensureObject(config.tags, {})
+
+
+  if (typeof config.autoSaveChat_global !== 'boolean') {
+    config.autoSaveChat_global = false
+    changed = true
+  }
+
+  for (const [promptKey, promptConfig] of Object.entries(config.prompts)) {
+    if (!promptConfig || typeof promptConfig !== 'object' || Array.isArray(promptConfig)) {
+      config.prompts[promptKey] = deepClone(defaultConfig.config.prompts.AI)
+      changed = true
+      continue
+    }
+
+    if (typeof promptConfig.autoSaveChat !== 'boolean') {
+      promptConfig.autoSaveChat = false
+      changed = true
+    }
+  }
+
 
   if (!Array.isArray(config.providerOrder) || config.providerOrder.length === 0) {
     config.providerOrder = Object.keys(config.providers)

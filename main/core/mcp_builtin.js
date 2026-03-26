@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
-import { net } from 'electron'
 import { exec, execSync, spawn } from 'node:child_process'
 import { handleFilePath, parseFileObject } from './file.js'
 import { createChatCompletion } from './chat.js'
@@ -43,115 +42,6 @@ async function callParentShell(action, payload, signal = null) {
 }
 
 const MAX_READ = 256 * 1000; // 256k characters
-
-
-function requestText(url, {
-    method = 'GET',
-    headers = {},
-    body = '',
-    signal = null,
-    timeout = 30000
-} = {}) {
-    return new Promise(async (resolve, reject) => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => {
-            controller.abort(new Error(`Request timeout after ${timeout}ms`));
-        }, timeout);
-
-        const abortWithSourceSignal = () => {
-            controller.abort(new Error('Request aborted'));
-        };
-
-        try {
-            if (signal) {
-                if (signal.aborted) {
-                    clearTimeout(timer);
-                    reject(new Error('Request aborted'));
-                    return;
-                }
-                signal.addEventListener('abort', abortWithSourceSignal, { once: true });
-            }
-
-            const response = await net.fetch(url, {
-                method,
-                headers,
-                body: body || undefined,
-                signal: controller.signal
-            });
-
-            const responseBody = await response.text();
-            clearTimeout(timer);
-            if (signal) {
-                signal.removeEventListener('abort', abortWithSourceSignal);
-            }
-
-            resolve({
-                statusCode: response.status,
-                headers: Object.fromEntries(response.headers.entries()),
-                body: responseBody
-            });
-        } catch (error) {
-            clearTimeout(timer);
-            if (signal) {
-                signal.removeEventListener('abort', abortWithSourceSignal);
-            }
-            reject(error instanceof Error ? error : new Error(String(error)));
-        }
-    });
-}
-
-function decodeHtmlEntities(str = '') {
-    if (!str) return '';
-    return String(str)
-        .replace(/&amp;/g, '&')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/<b>/g, '')
-        .replace(/<\/b>/g, '')
-        .replace(/<strong>/g, '')
-        .replace(/<\/strong>/g, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function normalizeSearchResultLink(link = '', baseUrl = '') {
-    const rawLink = String(link || '').trim();
-    if (!rawLink) return '';
-
-    try {
-        const urlObj = new URL(rawLink, baseUrl || undefined);
-        const uddg = urlObj.searchParams.get('uddg');
-        if (uddg) {
-            return decodeURIComponent(uddg);
-        }
-        return urlObj.toString();
-    } catch {
-        return rawLink;
-    }
-}
-
-function parseDuckDuckGoHtml(html = '', limit = 5) {
-    const results = [];
-    const titleLinkRegex = /<a[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-    const snippetRegex = /<(?:a|div|span)[^>]*class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/(?:a|div|span)>/gi;
-
-    const titles = [...String(html).matchAll(titleLinkRegex)];
-    const snippets = [...String(html).matchAll(snippetRegex)];
-
-    for (let i = 0; i < titles.length && results.length < limit; i++) {
-        const link = normalizeSearchResultLink(titles[i][1], 'https://html.duckduckgo.com');
-        const title = decodeHtmlEntities(titles[i][2]);
-        const snippet = decodeHtmlEntities(snippets[i] ? snippets[i][1] : '');
-        if (!link || !title) continue;
-        results.push({ title, link, snippet });
-    }
-
-    return results;
-}
 
 
 // 数据提取函数 (提取标题、作者、简介)
@@ -2300,11 +2190,6 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
     // Web Search Handler
     web_search: async ({ query, count = 5, language = 'zh-CN' }, context, signal) => {
         try {
-            const normalizedQuery = String(query || '').trim();
-            if (!normalizedQuery) {
-                return JSON.stringify({ message: 'Search query is required.' });
-            }
-
             const limit = Math.min(Math.max(parseInt(count) || 5, 1), 10);
 
             let ddgRegion = 'cn-zh';
@@ -2326,49 +2211,75 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
             }
 
             const headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': acceptLang,
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Origin': 'https://html.duckduckgo.com',
-                'Referer': 'https://html.duckduckgo.com/',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": acceptLang,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": "https://html.duckduckgo.com",
+                "Referer": "https://html.duckduckgo.com/"
             };
 
-            const body = new URLSearchParams();
-            body.append('q', normalizedQuery);
-            body.append('b', '');
-            body.append('kl', ddgRegion);
+            const decodeHtml = (str) => {
+                if (!str) return "";
+                return str
+                    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+                    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
+                    .replace(/<b>/g, "").replace(/<\/b>/g, "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+            };
 
-            const response = await requestText('https://html.duckduckgo.com/html/', {
-                method: 'POST',
-                headers: {
-                    ...headers,
-                    'Content-Length': String(Buffer.byteLength(body.toString()))
-                },
-                body: body.toString(),
-                signal,
-                timeout: 20000
-            });
+            let results = [];
 
-            if (response.statusCode < 200 || response.statusCode >= 400) {
-                return JSON.stringify({
-                    message: `DuckDuckGo returned status ${response.statusCode}.`,
-                    query: normalizedQuery
-                }, null, 2);
+            try {
+                const body = new URLSearchParams();
+                body.append('q', query);
+                body.append('b', '');
+                body.append('kl', ddgRegion);
+
+                const response = await fetch("https://html.duckduckgo.com/html/", {
+                    method: 'POST',
+                    headers: headers,
+                    body: body,
+                    signal: signal
+                });
+
+                const html = await response.text();
+
+                // 放宽类名匹配，并同时兼容 <a> 和 <div> 标签结尾
+                const titleLinkRegex = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+                const snippetRegex = /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/g;
+                
+                const titles = [...html.matchAll(titleLinkRegex)];
+                const snippets = [...html.matchAll(snippetRegex)];
+                
+                for (let i = 0; i < titles.length && i < limit; i++) {
+                    let link = titles[i][1];
+                    const titleRaw = titles[i][2];
+                    const snippetRaw = snippets[i] ? snippets[i][1] : "";
+                    
+                    try {
+                        if (link.includes('uddg=')) {
+                            const urlObj = new URL(link, "https://html.duckduckgo.com");
+                            const uddg = urlObj.searchParams.get("uddg");
+                            if (uddg) link = decodeURIComponent(uddg);
+                        }
+                    } catch (e) { }
+                    
+                    results.push({
+                        title: decodeHtml(titleRaw),
+                        link: link,
+                        snippet: decodeHtml(snippetRaw)
+                    });
+                }
+            } catch (e) {
+                console.warn("DDG fetch error:", e);
             }
 
-            const results = parseDuckDuckGoHtml(response.body, limit);
             if (results.length === 0) {
-                return JSON.stringify({
-                    message: 'No results found.',
-                    query: normalizedQuery,
-                    note: 'DuckDuckGo request succeeded but parser returned 0 items.'
-                }, null, 2);
+                if (ddgRegion === 'cn-zh') return JSON.stringify({ message: "No results found in Chinese region. Try setting language='en' or 'all'.", query: query });
+                return JSON.stringify({ message: "No results found.", query: query });
             }
-
             return JSON.stringify(results, null, 2);
+
         } catch (e) {
             return `Search failed: ${e.message}`;
         }

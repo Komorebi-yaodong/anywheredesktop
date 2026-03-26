@@ -171,6 +171,24 @@ function resolveWindowConfig(baseConfig, payload) {
     }
   }
 
+  if (payload && typeof payload === 'object') {
+    if (typeof payload.width === 'number' && Number.isFinite(payload.width) && payload.width > 0) {
+      nextConfig.width = payload.width
+    }
+    if (typeof payload.height === 'number' && Number.isFinite(payload.height) && payload.height > 0) {
+      nextConfig.height = payload.height
+    }
+    if (typeof payload.x === 'number' && Number.isFinite(payload.x)) {
+      nextConfig.options.x = payload.x
+    }
+    if (typeof payload.y === 'number' && Number.isFinite(payload.y)) {
+      nextConfig.options.y = payload.y
+    }
+    if (typeof payload.alwaysOnTop === 'boolean') {
+      nextConfig.options.alwaysOnTop = payload.alwaysOnTop
+    }
+  }
+
   if (baseConfig?.html === 'quick/index.html') {
     const cursorPoint = screen.getCursorScreenPoint()
     const targetDisplay = screen.getDisplayNearestPoint(cursorPoint) || screen.getPrimaryDisplay()
@@ -179,27 +197,31 @@ function resolveWindowConfig(baseConfig, payload) {
     nextConfig.options.y = Math.round(workArea.y + (workArea.height - nextConfig.height) / 2)
   }
 
-  if (!payload || typeof payload !== 'object') {
-    return nextConfig
-  }
-
-  if (typeof payload.width === 'number' && Number.isFinite(payload.width) && payload.width > 0) {
-    nextConfig.width = payload.width
-  }
-  if (typeof payload.height === 'number' && Number.isFinite(payload.height) && payload.height > 0) {
-    nextConfig.height = payload.height
-  }
-  if (typeof payload.x === 'number' && Number.isFinite(payload.x)) {
-    nextConfig.options.x = payload.x
-  }
-  if (typeof payload.y === 'number' && Number.isFinite(payload.y)) {
-    nextConfig.options.y = payload.y
-  }
-  if (typeof payload.alwaysOnTop === 'boolean') {
-    nextConfig.options.alwaysOnTop = payload.alwaysOnTop
-  }
-
   return nextConfig
+}
+
+function applyQuickWindowBounds(win, config) {
+  if (!win || win.isDestroyed() || !config) return
+
+  const nextX = resolveNumber(config?.options?.x)
+  const nextY = resolveNumber(config?.options?.y)
+  const nextWidth = resolveNumber(config?.width)
+  const nextHeight = resolveNumber(config?.height)
+
+  if (nextX === null || nextY === null || nextWidth === null || nextHeight === null) {
+    return
+  }
+
+  try {
+    win.setBounds({
+      x: Math.round(nextX),
+      y: Math.round(nextY),
+      width: Math.round(nextWidth),
+      height: Math.round(nextHeight)
+    }, false)
+  } catch {
+    // ignore quick bounds update failure
+  }
 }
 
 function getDisplayBounds(display) {
@@ -536,6 +558,10 @@ export async function openWindow(type = 'main', payload = null) {
   if (SINGLETON_TYPES.has(targetType)) {
     const existing = getSingletonWindow(targetType)
     if (existing) {
+      const config = resolveWindowConfig(baseConfig, openPayload)
+      if (targetType === 'quick') {
+        applyQuickWindowBounds(existing, config)
+      }
       activateWindow(existing)
       if (targetType === 'quick' && openPayload) {
         const quickInitMessage = await buildQuickWindowInitMessage(openPayload)
@@ -726,10 +752,23 @@ export function closeWindow(windowRef = '') {
     browserWindowId: resolved.win?.id,
     isDestroyed: resolved.win?.isDestroyed?.() ?? null,
     isVisible: resolved.win?.isVisible?.() ?? null,
-    strategy: isDialogWindow || isQuickSingleton ? 'destroy' : 'close'
+    strategy: isDialogWindow ? 'destroy' : isQuickSingleton ? 'hide' : 'close'
   })
 
-  if (isDialogWindow || isQuickSingleton) {
+  if (isQuickSingleton) {
+    try {
+      if (!resolved.win.isDestroyed()) {
+        resolved.win.hide()
+      }
+    } catch {
+      // ignore quick hide failure during teardown
+    }
+    const result = { ok: true, action: 'hide', windowRef: resolved.windowRef }
+    debugWindowManagerLog('closeWindow:after-hide-call', result)
+    return result
+  }
+
+  if (isDialogWindow) {
     resolved.win.destroy()
     const result = { ok: true, action: 'destroy', windowRef: resolved.windowRef }
     debugWindowManagerLog('closeWindow:after-destroy-call', result)

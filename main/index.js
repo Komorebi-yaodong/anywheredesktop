@@ -58,18 +58,18 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
   }
 
   if (typeof result.imageDataUrl === 'string' && result.imageDataUrl) {
-    if (result.imageDataUrl.startsWith('data:image/svg+xml')) {
-      const fallbackText = typeof result.text === 'string' ? result.text.trim() : ''
+    if (!result.imageDataUrl.startsWith('data:image/svg+xml')) {
       return {
-        type: 'over',
-        payload: fallbackText || result.imageDataUrl
+        type: 'img',
+        payload: result.imageDataUrl,
+        userText: typeof result.text === 'string' ? result.text.trim() : ''
       }
     }
 
+    const fallbackText = typeof result.text === 'string' ? result.text.trim() : ''
     return {
-      type: 'img',
-      payload: result.imageDataUrl,
-      userText: typeof result.text === 'string' ? result.text.trim() : ''
+      type: fallbackText ? 'over' : 'empty',
+      payload: fallbackText
     }
   }
 

@@ -344,13 +344,19 @@ const messageIdCounter = ref(0);
 const sourcePromptConfig = ref(null);
 const cachedBackgroundBlobUrl = ref("");
 
-const windowBackgroundImage = computed(() => {
-  if (cachedBackgroundBlobUrl.value) {
-    return cachedBackgroundBlobUrl.value;
-  }
+const backgroundLoadState = ref('idle');
+const backgroundResolvedSource = ref('');
+let backgroundLoadToken = 0;
+
+
+const promptBackgroundImage = computed(() => {
   if (!CODE.value || !currentConfig.value?.prompts) return "";
   const promptConfig = currentConfig.value.prompts[CODE.value];
   return promptConfig?.backgroundImage || "";
+});
+
+const windowBackgroundImage = computed(() => {
+  return backgroundLoadState.value === 'ready' ? backgroundResolvedSource.value : '';
 });
 
 const windowBackgroundOpacity = computed(() => {
@@ -365,41 +371,96 @@ const windowBackgroundBlur = computed(() => {
   return promptConfig?.backgroundBlur ?? 0;
 });
 
+const clearCachedBackgroundBlobUrl = () => {
+  if (cachedBackgroundBlobUrl.value && cachedBackgroundBlobUrl.value.startsWith('blob:')) {
+    URL.revokeObjectURL(cachedBackgroundBlobUrl.value);
+  }
+  cachedBackgroundBlobUrl.value = "";
+};
+
+const preloadImage = (src) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.onload = () => resolve(src);
+  img.onerror = (error) => reject(error);
+  img.src = src;
+});
+
 const loadBackground = async (newUrl) => {
-  if (!newUrl) {
-    if (cachedBackgroundBlobUrl.value) {
-      if (cachedBackgroundBlobUrl.value.startsWith('blob:')) {
-        URL.revokeObjectURL(cachedBackgroundBlobUrl.value);
-      }
-      cachedBackgroundBlobUrl.value = "";
-    }
+  const token = ++backgroundLoadToken;
+  const nextUrl = typeof newUrl === 'string' ? newUrl.trim() : '';
+
+  if (!nextUrl) {
+    backgroundLoadState.value = 'idle';
+    backgroundResolvedSource.value = '';
+    clearCachedBackgroundBlobUrl();
     return;
   }
-  if (newUrl.startsWith('data:') || newUrl.startsWith('file:')) return;
+
+  backgroundLoadState.value = 'loading';
 
   try {
-    const buffer = await window.api.getCachedBackgroundImage(newUrl);
+    if (nextUrl.startsWith('data:') || nextUrl.startsWith('file:')) {
+      await preloadImage(nextUrl);
+      if (token !== backgroundLoadToken) return;
+      backgroundResolvedSource.value = nextUrl;
+      backgroundLoadState.value = 'ready';
+      clearCachedBackgroundBlobUrl();
+      return;
+    }
+
+    const buffer = await window.api.getCachedBackgroundImage(nextUrl);
+    if (token !== backgroundLoadToken) return;
+
     if (buffer) {
       const blob = new Blob([buffer]);
       const newBlobUrl = URL.createObjectURL(blob);
-      if (cachedBackgroundBlobUrl.value && cachedBackgroundBlobUrl.value.startsWith('blob:')) {
-        URL.revokeObjectURL(cachedBackgroundBlobUrl.value);
+      await preloadImage(newBlobUrl);
+      if (token !== backgroundLoadToken) {
+        URL.revokeObjectURL(newBlobUrl);
+        return;
       }
+      clearCachedBackgroundBlobUrl();
       cachedBackgroundBlobUrl.value = newBlobUrl;
-    } else {
-      window.api.cacheBackgroundImage(newUrl);
+      backgroundResolvedSource.value = newBlobUrl;
+      backgroundLoadState.value = 'ready';
+      return;
     }
+
+    await window.api.cacheBackgroundImage(nextUrl);
+    if (token !== backgroundLoadToken) return;
+
+    const refreshedBuffer = await window.api.getCachedBackgroundImage(nextUrl);
+    if (token !== backgroundLoadToken) return;
+
+    if (refreshedBuffer) {
+      const blob = new Blob([refreshedBuffer]);
+      const newBlobUrl = URL.createObjectURL(blob);
+      await preloadImage(newBlobUrl);
+      if (token !== backgroundLoadToken) {
+        URL.revokeObjectURL(newBlobUrl);
+        return;
+      }
+      clearCachedBackgroundBlobUrl();
+      cachedBackgroundBlobUrl.value = newBlobUrl;
+      backgroundResolvedSource.value = newBlobUrl;
+      backgroundLoadState.value = 'ready';
+      return;
+    }
+
+    backgroundResolvedSource.value = nextUrl;
+    backgroundLoadState.value = 'ready';
   } catch (e) {
+    if (token !== backgroundLoadToken) return;
     console.error("Failed to load cached background:", e);
+    backgroundLoadState.value = 'error';
+    backgroundResolvedSource.value = '';
+    clearCachedBackgroundBlobUrl();
   }
 };
 
-watch(() => {
-  if (!CODE.value || !currentConfig.value?.prompts) return null;
-  return currentConfig.value.prompts[CODE.value]?.backgroundImage;
-}, async (newUrl) => {
+watch(promptBackgroundImage, async (newUrl) => {
   await loadBackground(newUrl);
-}, { immediate: false });
+}, { immediate: true });
 
 const inputLayout = computed(() => currentConfig.value.inputLayout || 'horizontal');
 const currentSystemPrompt = ref("");
@@ -4707,14 +4768,14 @@ const scrollToMessageByIndex = (index) => {
 
 <template>
   <main>
-    <div v-if="windowBackgroundImage" class="window-bg-base"></div>
-    <div class="window-bg-layer" :class="{ 'is-visible': !!windowBackgroundImage }" :style="{
-      backgroundImage: windowBackgroundImage ? `url('${windowBackgroundImage}')` : 'none',
-      opacity: windowBackgroundImage ? windowBackgroundOpacity : 0,
+    <div v-if="backgroundLoadState === 'ready' && windowBackgroundImage" class="window-bg-base"></div>
+    <div class="window-bg-layer" :class="{ 'is-visible': backgroundLoadState === 'ready' && !!windowBackgroundImage }" :style="{
+      backgroundImage: backgroundLoadState === 'ready' && windowBackgroundImage ? `url('${windowBackgroundImage}')` : 'none',
+      opacity: backgroundLoadState === 'ready' && windowBackgroundImage ? windowBackgroundOpacity : 0,
       filter: `blur(${windowBackgroundBlur}px)`
     }">
     </div>
-    <el-container class="app-container" :class="{ 'has-bg': !!windowBackgroundImage }">
+    <el-container class="app-container" :class="{ 'has-bg': backgroundLoadState === 'ready' && !!windowBackgroundImage }">
       <TitleBar :favicon="favicon" :promptName="CODE" :conversationName="defaultConversationName"
         :isAlwaysOnTop="isAlwaysOnTop" :autoCloseOnBlur="autoCloseOnBlur" :isDarkMode="currentConfig.isDarkMode"
         :os="currentOS" @save-window-size="handleSaveWindowSize" @save-session="handleSaveSession"
@@ -6205,7 +6266,7 @@ html.dark .persistent-btn:hover {
 
   /* 核心优化：默认透明，且具有过渡效果 */
   opacity: 0;
-  transition: opacity 0.4s ease-in-out, filter 0.3s ease;
+  transition: opacity 0.18s ease-out, filter 0.2s ease;
 }
 
 .app-container.has-bg,

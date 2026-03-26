@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
+import https from 'node:https'
 import { exec, execSync, spawn } from 'node:child_process'
 import { handleFilePath, parseFileObject } from './file.js'
 import { createChatCompletion } from './chat.js'
@@ -42,6 +43,138 @@ async function callParentShell(action, payload, signal = null) {
 }
 
 const MAX_READ = 256 * 1000; // 256k characters
+
+
+function requestText(url, {
+    method = 'GET',
+    headers = {},
+    body = '',
+    signal = null,
+    timeout = 30000,
+    family = 4
+} = {}) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            handler(value);
+        };
+
+        const req = https.request(url, {
+            method,
+            family,
+            timeout,
+            headers
+        }, (res) => {
+            let data = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+                data += chunk;
+            });
+            res.on('end', () => {
+                finish(resolve, {
+                    statusCode: res.statusCode || 0,
+                    headers: res.headers || {},
+                    body: data
+                });
+            });
+        });
+
+        req.on('timeout', () => {
+            req.destroy(new Error(`Request timeout after ${timeout}ms`));
+        });
+
+        req.on('error', (error) => {
+            finish(reject, error);
+        });
+
+        if (signal) {
+            if (signal.aborted) {
+                req.destroy(new Error('Request aborted'));
+                return;
+            }
+            signal.addEventListener('abort', () => {
+                req.destroy(new Error('Request aborted'));
+            }, { once: true });
+        }
+
+        if (body) {
+            req.write(body);
+        }
+        req.end();
+    });
+}
+
+function decodeHtmlEntities(str = '') {
+    if (!str) return '';
+    return String(str)
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/<b>/g, '')
+        .replace(/<\/b>/g, '')
+        .replace(/<strong>/g, '')
+        .replace(/<\/strong>/g, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function normalizeSearchResultLink(link = '', baseUrl = '') {
+    const rawLink = String(link || '').trim();
+    if (!rawLink) return '';
+
+    try {
+        const urlObj = new URL(rawLink, baseUrl || undefined);
+        const uddg = urlObj.searchParams.get('uddg');
+        if (uddg) {
+            return decodeURIComponent(uddg);
+        }
+        return urlObj.toString();
+    } catch {
+        return rawLink;
+    }
+}
+
+function parseDuckDuckGoHtml(html = '', limit = 5) {
+    const results = [];
+    const titleLinkRegex = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+    const snippetRegex = /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/g;
+
+    const titles = [...String(html).matchAll(titleLinkRegex)];
+    const snippets = [...String(html).matchAll(snippetRegex)];
+
+    for (let i = 0; i < titles.length && results.length < limit; i++) {
+        const link = normalizeSearchResultLink(titles[i][1], 'https://html.duckduckgo.com');
+        const title = decodeHtmlEntities(titles[i][2]);
+        const snippet = decodeHtmlEntities(snippets[i] ? snippets[i][1] : '');
+        if (!link || !title) continue;
+        results.push({ title, link, snippet });
+    }
+
+    return results;
+}
+
+function parseBingHtml(html = '', limit = 5) {
+    const results = [];
+    const itemRegex = /<li[^>]*class="[^"]*b_algo[^"]*"[\s\S]*?<h2[^>]*>\s*<a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>\s*<\/h2>[\s\S]*?(?:<div[^>]*class="[^"]*b_caption[^"]*"[\s\S]*?<p>([\s\S]*?)<\/p>[\s\S]*?<\/div>)?[\s\S]*?<\/li>/g;
+
+    for (const match of String(html).matchAll(itemRegex)) {
+        if (results.length >= limit) break;
+        const link = normalizeSearchResultLink(match[1], 'https://cn.bing.com');
+        const title = decodeHtmlEntities(match[2]);
+        const snippet = decodeHtmlEntities(match[3] || '');
+        if (!link || !title) continue;
+        results.push({ title, link, snippet });
+    }
+
+    return results;
+}
+
 
 // 数据提取函数 (提取标题、作者、简介)
 function extractMetadata(html) {
@@ -2189,96 +2322,110 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
     // Web Search Handler
     web_search: async ({ query, count = 5, language = 'zh-CN' }, context, signal) => {
         try {
+            const normalizedQuery = String(query || '').trim();
+            if (!normalizedQuery) {
+                return JSON.stringify({ message: 'Search query is required.' });
+            }
+
             const limit = Math.min(Math.max(parseInt(count) || 5, 1), 10);
 
             let ddgRegion = 'cn-zh';
             let acceptLang = 'zh-CN,zh;q=0.9,en;q=0.8';
+            let bingHost = 'https://cn.bing.com';
 
             const langInput = (language || '').toLowerCase();
             if (langInput.includes('en') || langInput.includes('us')) {
                 ddgRegion = 'us-en';
                 acceptLang = 'en-US,en;q=0.9';
+                bingHost = 'https://www.bing.com';
             } else if (langInput.includes('jp') || langInput.includes('ja')) {
                 ddgRegion = 'jp-jp';
                 acceptLang = 'ja-JP,ja;q=0.9,en;q=0.8';
+                bingHost = 'https://www.bing.com';
             } else if (langInput.includes('ru')) {
                 ddgRegion = 'ru-ru';
                 acceptLang = 'ru-RU,ru;q=0.9,en;q=0.8';
+                bingHost = 'https://www.bing.com';
             } else if (langInput === 'all' || langInput === 'world') {
                 ddgRegion = 'wt-wt';
                 acceptLang = 'en-US,en;q=0.9';
+                bingHost = 'https://www.bing.com';
             }
 
-            const headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": acceptLang,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Origin": "https://html.duckduckgo.com",
-                "Referer": "https://html.duckduckgo.com/"
-            };
-
-            const decodeHtml = (str) => {
-                if (!str) return "";
-                return str
-                    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-                    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
-                    .replace(/<b>/g, "").replace(/<\/b>/g, "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+            const browserHeaders = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': acceptLang,
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
             };
 
             let results = [];
+            const warnings = [];
 
             try {
                 const body = new URLSearchParams();
-                body.append('q', query);
+                body.append('q', normalizedQuery);
                 body.append('b', '');
                 body.append('kl', ddgRegion);
 
-                const response = await fetch("https://html.duckduckgo.com/html/", {
+                const ddgResponse = await requestText('https://html.duckduckgo.com/html/', {
                     method: 'POST',
-                    headers: headers,
-                    body: body,
-                    signal: signal
+                    headers: {
+                        ...browserHeaders,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Origin': 'https://html.duckduckgo.com',
+                        'Referer': 'https://html.duckduckgo.com/',
+                        'Content-Length': String(Buffer.byteLength(body.toString()))
+                    },
+                    body: body.toString(),
+                    signal,
+                    timeout: 20000,
+                    family: 4
                 });
 
-                const html = await response.text();
-
-                // 放宽类名匹配，并同时兼容 <a> 和 <div> 标签结尾
-                const titleLinkRegex = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-                const snippetRegex = /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/g;
-                
-                const titles = [...html.matchAll(titleLinkRegex)];
-                const snippets = [...html.matchAll(snippetRegex)];
-                
-                for (let i = 0; i < titles.length && i < limit; i++) {
-                    let link = titles[i][1];
-                    const titleRaw = titles[i][2];
-                    const snippetRaw = snippets[i] ? snippets[i][1] : "";
-                    
-                    try {
-                        if (link.includes('uddg=')) {
-                            const urlObj = new URL(link, "https://html.duckduckgo.com");
-                            const uddg = urlObj.searchParams.get("uddg");
-                            if (uddg) link = decodeURIComponent(uddg);
-                        }
-                    } catch (e) { }
-                    
-                    results.push({
-                        title: decodeHtml(titleRaw),
-                        link: link,
-                        snippet: decodeHtml(snippetRaw)
-                    });
+                if (ddgResponse.statusCode >= 200 && ddgResponse.statusCode < 400) {
+                    results = parseDuckDuckGoHtml(ddgResponse.body, limit);
+                } else {
+                    warnings.push(`DuckDuckGo returned status ${ddgResponse.statusCode}`);
                 }
-            } catch (e) {
-                console.warn("DDG fetch error:", e);
+            } catch (error) {
+                warnings.push(`DuckDuckGo failed: ${error.message}`);
             }
 
             if (results.length === 0) {
-                if (ddgRegion === 'cn-zh') return JSON.stringify({ message: "No results found in Chinese region. Try setting language='en' or 'all'.", query: query });
-                return JSON.stringify({ message: "No results found.", query: query });
-            }
-            return JSON.stringify(results, null, 2);
+                try {
+                    const bingUrl = new URL('/search', bingHost);
+                    bingUrl.searchParams.set('q', normalizedQuery);
+                    bingUrl.searchParams.set('setlang', langInput.includes('en') || langInput === 'all' || langInput === 'world' ? 'en-US' : 'zh-Hans');
 
+                    const bingResponse = await requestText(bingUrl.toString(), {
+                        method: 'GET',
+                        headers: browserHeaders,
+                        signal,
+                        timeout: 20000,
+                        family: 4
+                    });
+
+                    if (bingResponse.statusCode >= 200 && bingResponse.statusCode < 400) {
+                        results = parseBingHtml(bingResponse.body, limit);
+                    } else {
+                        warnings.push(`Bing returned status ${bingResponse.statusCode}`);
+                    }
+                } catch (error) {
+                    warnings.push(`Bing failed: ${error.message}`);
+                }
+            }
+
+            if (results.length === 0) {
+                return JSON.stringify({
+                    message: 'No results found.',
+                    query: normalizedQuery,
+                    warnings
+                }, null, 2);
+            }
+
+            return JSON.stringify(results, null, 2);
         } catch (e) {
             return `Search failed: ${e.message}`;
         }

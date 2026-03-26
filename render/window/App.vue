@@ -3551,6 +3551,7 @@ async function applyMcpTools(show_none = true) {
         env: serverConf.env,
         headers: serverConf.headers,
         isPersistent: serverConf.isPersistent,
+        currentAgentName: CODE.value || '',
       };
     }
   }

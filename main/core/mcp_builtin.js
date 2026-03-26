@@ -561,7 +561,7 @@ IMPORTANT:
                 properties: {
                     agent_name: { type: "string", description: "The exact name of the agent to summon." },
                     text: { type: "string", description: "The first message or task description to send to this agent." },
-                    file_paths: { type: "array", items: { type: "string" }, description: "Optional. Array of local absolute paths to send files/images." },
+                    file_paths: { type: "array", items: { type: "string" }, description: "Optional. Local absolute file paths to attach. Use this field ONLY when you already know the real absolute local paths (for example, paths explicitly provided by the user or returned by a tool). Never invent, guess, or infer paths from images/files visible in the current chat. If the user uploaded an image but no actual local path is available, DO NOT generate a path and DO NOT include this field." },
                     enable_tools: { type: "boolean", description: "Optional. If true, the summoned agent will be granted access to all built-in MCP tools (like file system, shell, web search, etc.), thereby expanding its local control capabilities." }
                 },
                 required: ["agent_name", "text"]
@@ -594,7 +594,7 @@ IMPORTANT:
                 properties: {
                     window_id: { type: "string", description: "The window_id of the target agent." },
                     text: { type: "string", description: "The follow-up message to send." },
-                    file_paths: { type: "array", items: { type: "string" }, description: "Optional. Local paths of files/images to attach." }
+                    file_paths: { type: "array", items: { type: "string" }, description: "Optional. Local absolute file paths to attach. Include this field ONLY when you have the exact real absolute local paths. Never fabricate, estimate, or infer paths from chat-visible images/files. If no verified local path is available, omit this field entirely." }
                 },
                 required: ["window_id", "text"]
             }
@@ -3217,6 +3217,11 @@ async function getBuiltinTools(serverId, options = {}) {
             const listTool = tools.find((tool) => tool.name === 'list_agents');
             if (listTool) {
                 listTool.description += `\n\n[CURRENTLY AVAILABLE AGENTS]: ${fullListStr}`;
+
+                const currentAgentName = options?.currentAgentName || '';
+                if (currentAgentName && currentAgentName !== 'Anywhere' && currentAgentName !== 'Anywhere Clip') {
+                    listTool.description += `\n[SYSTEM NOTE]: You are an Agent named "${currentAgentName}".`;
+                }
             }
 
             const summonTool = tools.find((tool) => tool.name === 'summon_agent');

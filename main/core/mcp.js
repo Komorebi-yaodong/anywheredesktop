@@ -112,7 +112,7 @@ function registerToolsToMap({ id, config, tools, isPersistent, isBuiltin, cached
  */
 export async function connectAndFetchTools(id, config = {}) {
   if (config.transport === 'builtin' || config.type === 'builtin') {
-    return await getBuiltinTools(id, { configPrompts: config?.prompts })
+    return await getBuiltinTools(id, { configPrompts: config?.prompts, currentAgentName: config?.currentAgentName })
   }
 
   let tempClient = null
@@ -242,7 +242,7 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
     for (const { id, config } of persistentConfigsToAdd) {
       if (config.transport === 'builtin' || config.type === 'builtin') {
         try {
-          const tools = await getBuiltinTools(id, { configPrompts: config?.prompts })
+          const tools = await getBuiltinTools(id, { configPrompts: config?.prompts, currentAgentName: config?.currentAgentName })
           saveToolCache(saveCacheCallback, id, tools, cachedToolsMap)
 
           registerToolsToMap({

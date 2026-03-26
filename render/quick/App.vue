@@ -12,7 +12,6 @@ const selectedPromptKey = ref('')
 const restoreCandidates = ref([])
 const attachment = ref(createEmptyAttachment())
 const inputRef = ref(null)
-let blurCloseTimer = null
 
 function createEmptyAttachment() {
   return {
@@ -131,7 +130,7 @@ function getAttachmentPreviewLabel(next = createEmptyAttachment()) {
     return '图片'
   }
 
-  if (next.type === 'multiline-text') {
+  if (next.type === 'multiline-text' || next.type === 'text') {
     return String(next.rawText || '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -146,6 +145,11 @@ function clearAttachment() {
   restoreCandidates.value = []
 }
 
+function clearQuickContent() {
+  queryText.value = ''
+  clearAttachment()
+}
+
 function setAttachment(next = {}) {
   attachment.value = {
     type: next.type || 'none',
@@ -157,7 +161,6 @@ function setAttachment(next = {}) {
 }
 
 function focusInputToEnd() {
-  clearTimeout(blurCloseTimer)
   nextTick(() => {
     const element = inputRef.value
     if (!element) return
@@ -169,6 +172,29 @@ function focusInputToEnd() {
       // ignore unsupported selection API
     }
   })
+}
+
+function isPromptTextCompatible(prompt, rawText = '') {
+  const promptType = normalizePromptType(prompt?.type)
+  if (promptType === 'general') return true
+  if (promptType !== 'over') return false
+
+  const regex = normalizeRegex(prompt?.matchRegex)
+  if (!regex) return true
+  return regex.test(String(rawText || ''))
+}
+
+function isSvgFilePath(filePath = '') {
+  return String(filePath || '').trim().toLowerCase().endsWith('.svg')
+}
+
+function getAttachmentFilterMode(nextAttachment = createEmptyAttachment()) {
+  if (nextAttachment.type === 'img' && nextAttachment.imageDataUrl) return 'img'
+  if (nextAttachment.type === 'files' && nextAttachment.filePaths.length > 0) {
+    return nextAttachment.filePaths.every((filePath) => isSvgFilePath(filePath)) ? 'files' : 'files'
+  }
+  if (nextAttachment.type === 'multiline-text' && nextAttachment.rawText.trim()) return 'multiline-text'
+  return 'none'
 }
 
 async function inspectSessionCandidates(paths = []) {
@@ -205,6 +231,7 @@ const runtimeMode = computed(() => {
   if (attachment.value.type === 'img') return 'img'
   if (attachment.value.type === 'files') return 'files'
   if (attachment.value.type === 'multiline-text') return 'multiline-text'
+  if (attachment.value.type === 'text') return 'text'
   return 'singleline-text'
 })
 
@@ -216,15 +243,13 @@ const candidateSections = computed(() => {
   const query = rawQuery.toLowerCase()
   const queryPinyin = getPinyinProfile(rawQuery)
   const hasQuery = Boolean(query)
-  const mode = runtimeMode.value
-  const hasLockedAttachment = mode === 'img' || mode === 'files' || mode === 'multiline-text'
-
-  const nameMatches = []
-  const textRegexMatches = []
-  const generalMatches = []
-  const attachmentTypeMatches = []
+  const attachmentMode = getAttachmentFilterMode(attachment.value)
+  const hasAttachmentFilter = attachmentMode !== 'none'
 
   const sorter = (a, b) => b.score - a.score || a.key.localeCompare(b.key, 'zh-CN')
+  const firstPass = []
+  const secondPassNameMatches = []
+  const secondPassFallback = []
 
   for (const prompt of prompts) {
     const promptType = normalizePromptType(prompt.type)
@@ -236,62 +261,61 @@ const candidateSections = computed(() => {
       score: 0
     }
 
-    if (hasLockedAttachment) {
-      const isAttachmentPrimary =
-        (mode === 'files' && promptType === 'files') ||
-        (mode === 'img' && promptType === 'img') ||
-        (mode === 'multiline-text' && promptType === 'over')
+    if (hasAttachmentFilter) {
       const isGeneralFallback = promptType === 'general'
-      const inAttachmentPool = isAttachmentPrimary || isGeneralFallback
+      const isTypeMatch =
+        (attachmentMode === 'img' && promptType === 'img') ||
+        (attachmentMode === 'files' && promptType === 'files') ||
+        (attachmentMode === 'multiline-text' && isPromptTextCompatible(prompt, attachment.value.rawText))
 
-      if (!inAttachmentPool) continue
+      if (!isTypeMatch && !isGeneralFallback) continue
 
-      if (!hasQuery) {
-        item.score = isAttachmentPrimary ? 2200 : 1200
-        attachmentTypeMatches.push(item)
-        continue
-      }
+      item.score = isTypeMatch ? 2400 : 1200
+      firstPass.push(item)
 
-      if (nameScore > 0) {
-        item.score = (isAttachmentPrimary ? 4200 : 3200) + nameScore
-        nameMatches.push(item)
+      if (hasQuery) {
+        if (nameScore > 0) {
+          item.score = (isTypeMatch ? 5200 : 4200) + nameScore
+          secondPassNameMatches.push(item)
+        } else {
+          secondPassFallback.push(item)
+        }
       }
       continue
     }
 
     if (!hasQuery) {
-      if (promptType === 'over') {
-        item.score = 1400
-        textRegexMatches.push(item)
+      if (isPromptTextCompatible(prompt, rawQuery) && promptType === 'over') {
+        item.score = 1800
+        firstPass.push(item)
       } else if (promptType === 'general') {
-        item.score = 1000
-        generalMatches.push(item)
+        item.score = 1200
+        firstPass.push(item)
       }
       continue
     }
 
     if (nameScore > 0) {
-      item.score = 4000 + nameScore
-      nameMatches.push(item)
+      item.score = 5200 + nameScore
+      firstPass.push(item)
+      continue
     }
 
-    if (promptType === 'over') {
-      const regex = normalizeRegex(prompt.matchRegex)
-      if (regex ? regex.test(rawQuery) : true) {
-        item.score = 2400 + (regex ? 200 : 0)
-        textRegexMatches.push(item)
-      }
+    if (isPromptTextCompatible(prompt, rawQuery) && promptType === 'over') {
+      item.score = 2600
+      firstPass.push(item)
+      continue
     }
 
     if (promptType === 'general') {
-      item.score = 1200
-      generalMatches.push(item)
+      item.score = 1400
+      firstPass.push(item)
     }
   }
 
-  const sections = hasLockedAttachment
-    ? [...nameMatches.sort(sorter), ...attachmentTypeMatches.sort(sorter)]
-    : [...nameMatches.sort(sorter), ...textRegexMatches.sort(sorter), ...generalMatches.sort(sorter)]
+  const sections = hasAttachmentFilter && hasQuery
+    ? [...secondPassNameMatches.sort(sorter), ...secondPassFallback.sort(sorter)]
+    : firstPass.sort(sorter)
 
   const deduped = []
   const seen = new Set()
@@ -347,7 +371,7 @@ function resolveQuickOpenPayload(prompt) {
   return payload
 }
 
-async function closeQuick() {
+async function hideQuick() {
   try {
     await window.api.closeWindow('quick')
   } catch {
@@ -361,6 +385,7 @@ async function openPrompt(prompt) {
     const payload = resolveQuickOpenPayload(prompt)
     const showMode = prompt.showMode === 'fastinput' ? 'fast' : 'window'
     await window.api.openWindow(showMode, payload)
+    await hideQuick()
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
   }
@@ -386,25 +411,22 @@ function updateFromTextInput(text = '', forceOverride = false) {
 
   if (!trimmed) {
     if (forceOverride) {
-      queryText.value = ''
-      clearAttachment()
+      clearQuickContent()
     }
     return
   }
 
-  if (textKind === 'multiline-text') {
+  if (forceOverride) {
     setAttachment({
-      type: 'multiline-text',
+      type: textKind === 'multiline-text' ? 'multiline-text' : 'text',
       rawText: trimmed,
       previewLabel: trimmed
     })
-    if (forceOverride) queryText.value = ''
+    queryText.value = ''
     return
   }
 
-  if (forceOverride || !queryText.value.trim()) {
-    queryText.value = trimmed
-  }
+  queryText.value = trimmed
 }
 
 async function handleClipboardPayload(result = {}, forceOverride = false) {
@@ -414,34 +436,22 @@ async function handleClipboardPayload(result = {}, forceOverride = false) {
   const nextText = typeof result?.text === 'string' ? result.text : ''
 
   if (nextFilePaths.length > 0) {
-    setAttachment({
-      type: 'files',
-      filePaths: nextFilePaths,
-      previewLabel: nextFilePaths[0]?.split(/[/\\]/).pop() || ''
-    })
-    queryText.value = classifyTextAttachment(nextText) === 'singleline-text' ? nextText.trim() : ''
-    await inspectSessionCandidates(nextFilePaths)
+    await applyFileAttachment(nextFilePaths)
     return
   }
 
   if (nextImage) {
-    setAttachment({
-      type: 'img',
-      imageDataUrl: nextImage,
-      previewLabel: '图片'
-    })
-    queryText.value = classifyTextAttachment(nextText) === 'singleline-text' ? nextText.trim() : ''
+    applyImageAttachment(nextImage)
     return
   }
 
   if (nextText.trim()) {
-    updateFromTextInput(nextText, forceOverride || true)
+    updateFromTextInput(nextText, true)
     return
   }
 
   if (forceOverride) {
-    clearAttachment()
-    queryText.value = ''
+    clearQuickContent()
   }
 }
 
@@ -475,7 +485,12 @@ async function refreshFromClipboard(forceOverride = false) {
 function applyImageAttachment(dataUrl = '') {
   const normalizedDataUrl = String(dataUrl || '')
   if (normalizedDataUrl.startsWith('data:image/svg+xml')) {
-    updateFromTextInput(normalizedDataUrl, true)
+    setAttachment({
+      type: 'files',
+      filePaths: ['clipboard.svg'],
+      previewLabel: 'clipboard.svg'
+    })
+    restoreCandidates.value = []
     return
   }
 
@@ -495,6 +510,7 @@ async function applyFileAttachment(paths = [], previewLabel = '') {
     filePaths: normalizedPaths,
     previewLabel: previewLabel || normalizedPaths[0]?.split(/[/\\]/).pop() || ''
   })
+  queryText.value = ''
   await inspectSessionCandidates(normalizedPaths)
 }
 
@@ -509,7 +525,7 @@ async function handlePaste(event) {
     for (const item of fileItems) {
       const file = item.getAsFile()
       if (!file) continue
-      if (file.type.startsWith('image/')) {
+      if (file.type.startsWith('image/') && file.type !== 'image/svg+xml') {
         const reader = new FileReader()
         reader.onload = () => applyImageAttachment(String(reader.result || ''))
         reader.readAsDataURL(file)
@@ -529,7 +545,10 @@ async function handlePaste(event) {
   if (/\r?\n/.test(pastedText)) {
     event.preventDefault()
     updateFromTextInput(pastedText, true)
+    return
   }
+
+  clearAttachment()
 }
 
 function handleKeydown(event) {
@@ -565,29 +584,44 @@ function handleKeydown(event) {
     return
   }
 
+  if (event.key === 'Backspace' && !queryText.value && hasAttachment.value) {
+    event.preventDefault()
+    clearAttachment()
+    return
+  }
+
   if (event.key === 'Escape') {
     event.preventDefault()
-    closeQuick()
-    return
+    if (queryText.value.trim() || hasAttachment.value) {
+      clearQuickContent()
+      focusInputToEnd()
+      return
+    }
+    hideQuick()
   }
 }
 
 function handleGlobalKeydown(event) {
-  if (event.key === 'Escape') {
+  const active = document.activeElement
+  const isInputActive = active === inputRef.value || active === document.body || active === document.documentElement
+  if (!isInputActive) return
+
+  if (event.key === 'Backspace' && !queryText.value && hasAttachment.value) {
     event.preventDefault()
     event.stopPropagation()
-    closeQuick()
+    clearAttachment()
     return
   }
 
-  if (event.key === 'Backspace') {
-    const active = document.activeElement
-    const isInputActive = active === inputRef.value || active === document.body || active === document.documentElement
-    if (!isInputActive) return
-    if (queryText.value.length > 0) return
-    if (!hasAttachment.value) return
+  if (event.key === 'Escape') {
     event.preventDefault()
-    clearAttachment()
+    event.stopPropagation()
+    if (queryText.value.trim() || hasAttachment.value) {
+      clearQuickContent()
+      focusInputToEnd()
+      return
+    }
+    hideQuick()
   }
 }
 
@@ -615,11 +649,10 @@ onMounted(async () => {
       updateFromTextInput(data.payload, true)
       hasInitPayloadApplied = Boolean(data.payload.trim())
     } else if (data?.type === 'empty') {
-      clearAttachment()
-      queryText.value = ''
+      clearQuickContent()
     }
 
-    if (typeof data?.userText === 'string') {
+    if (typeof data?.userText === 'string' && data.userText.trim()) {
       queryText.value = data.userText.trim()
     }
 
@@ -654,7 +687,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  clearTimeout(blurCloseTimer)
   window.removeEventListener('keydown', handleGlobalKeydown, true)
 })
 </script>
@@ -725,31 +757,35 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 12px;
+  padding: 18px 22px;
   box-sizing: border-box;
-  background: #f7f7f8;
+  background: #eef1f6;
   overflow: hidden;
 }
 
 html.dark .quick-shell {
-  background: #1f1f23;
+  background: #17181c;
 }
 
 .quick-panel {
-  width: min(1280px, 100%);
-  height: min(520px, calc(100vh - 16px));
+  width: min(1120px, 100%);
+  height: min(430px, calc(100vh - 36px));
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px 10px;
-  border-radius: 14px;
-  background: #f7f7f8;
+  gap: 12px;
+  padding: 16px 18px 14px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(20, 24, 33, 0.08);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.12);
   box-sizing: border-box;
   overflow: hidden;
 }
 
 html.dark .quick-panel {
-  background: #1f1f23;
+  background: rgba(28, 30, 36, 0.96);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
 }
 
 .quick-topbar {
@@ -757,39 +793,41 @@ html.dark .quick-panel {
 }
 
 .quick-search-row {
-  min-height: 52px;
+  min-height: 58px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 10px;
-  border: 1px solid #d8d8df;
-  border-radius: 10px;
-  background: #ffffff;
+  padding: 8px 14px;
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
   overflow: hidden;
 }
 
 html.dark .quick-search-row {
-  border-color: #3a3a41;
-  background: #2a2a2f;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(39, 42, 49, 0.98);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .top-token {
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 360px;
+  max-width: 420px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid #d0d0d8;
-  border-radius: 8px;
-  background: #fafafa;
+  padding: 6px 10px;
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  border-radius: 999px;
+  background: rgba(244, 247, 251, 0.96);
   overflow: hidden;
 }
 
 html.dark .top-token {
-  border-color: #474750;
-  background: #34343b;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(52, 56, 64, 0.94);
 }
 
 .top-token-icon {
@@ -846,13 +884,15 @@ html.dark .search-input {
 
 .recommend-title {
   flex: 0 0 auto;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
-  color: #111116;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6a7280;
 }
 
 html.dark .recommend-title {
-  color: #f3f3f6;
+  color: #aeb6c3;
 }
 
 .restore-zone {
@@ -881,33 +921,40 @@ html.dark .restore-chip {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: 10px 12px;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 12px 12px;
   align-content: start;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .prompt-tile {
   border: none;
-  background: transparent;
+  background: rgba(246, 248, 251, 0.9);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 4px 2px;
-  border-radius: 10px;
+  gap: 8px;
+  padding: 10px 8px;
+  border-radius: 14px;
   cursor: pointer;
-  transition: background 0.16s ease;
+  transition: transform 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
 }
 
 .prompt-tile:hover,
 .prompt-tile.active {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(227, 233, 241, 0.96);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+html.dark .prompt-tile {
+  background: rgba(35, 38, 45, 0.9);
 }
 
 html.dark .prompt-tile:hover,
 html.dark .prompt-tile.active {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(56, 61, 71, 0.98);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
 .tile-icon-wrap {
@@ -959,13 +1006,13 @@ html.dark .tile-name {
 
 @media (max-width: 1100px) {
   .grid-wrap {
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 860px) {
   .grid-wrap {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .search-input {

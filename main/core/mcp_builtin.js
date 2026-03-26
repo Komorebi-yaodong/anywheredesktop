@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
-import https from 'node:https'
+import { net } from 'electron'
 import { exec, execSync, spawn } from 'node:child_process'
 import { handleFilePath, parseFileObject } from './file.js'
 import { createChatCompletion } from './chat.js'
@@ -50,8 +50,7 @@ function requestText(url, {
     headers = {},
     body = '',
     signal = null,
-    timeout = 30000,
-    family = 4
+    timeout = 30000
 } = {}) {
     return new Promise((resolve, reject) => {
         let settled = false;
@@ -61,48 +60,71 @@ function requestText(url, {
             handler(value);
         };
 
-        const req = https.request(url, {
+        const request = net.request({
+            url,
             method,
-            family,
-            timeout,
-            headers
-        }, (res) => {
+            redirect: 'follow'
+        });
+
+        request.setHeader('Connection', 'close');
+        Object.entries(headers).forEach(([key, value]) => {
+            if (value !== undefined && value !== null) {
+                request.setHeader(key, value);
+            }
+        });
+
+        const timer = setTimeout(() => {
+            try {
+                request.abort();
+            } catch {}
+            finish(reject, new Error(`Request timeout after ${timeout}ms`));
+        }, timeout);
+
+        const cleanup = () => clearTimeout(timer);
+
+        request.on('response', (response) => {
             let data = '';
-            res.setEncoding('utf8');
-            res.on('data', (chunk) => {
+            response.setEncoding('utf8');
+            response.on('data', (chunk) => {
                 data += chunk;
             });
-            res.on('end', () => {
+            response.on('end', () => {
+                cleanup();
                 finish(resolve, {
-                    statusCode: res.statusCode || 0,
-                    headers: res.headers || {},
+                    statusCode: response.statusCode || 0,
+                    headers: response.headers || {},
                     body: data
                 });
             });
         });
 
-        req.on('timeout', () => {
-            req.destroy(new Error(`Request timeout after ${timeout}ms`));
-        });
-
-        req.on('error', (error) => {
+        request.on('error', (error) => {
+            cleanup();
             finish(reject, error);
         });
 
         if (signal) {
             if (signal.aborted) {
-                req.destroy(new Error('Request aborted'));
+                cleanup();
+                try {
+                    request.abort();
+                } catch {}
+                finish(reject, new Error('Request aborted'));
                 return;
             }
             signal.addEventListener('abort', () => {
-                req.destroy(new Error('Request aborted'));
+                cleanup();
+                try {
+                    request.abort();
+                } catch {}
+                finish(reject, new Error('Request aborted'));
             }, { once: true });
         }
 
         if (body) {
-            req.write(body);
+            request.write(body);
         }
-        req.end();
+        request.end();
     });
 }
 
@@ -142,8 +164,8 @@ function normalizeSearchResultLink(link = '', baseUrl = '') {
 
 function parseDuckDuckGoHtml(html = '', limit = 5) {
     const results = [];
-    const titleLinkRegex = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-    const snippetRegex = /class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/g;
+    const titleLinkRegex = /<a[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    const snippetRegex = /<(?:a|div|span)[^>]*class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/(?:a|div|span)>/gi;
 
     const titles = [...String(html).matchAll(titleLinkRegex)];
     const snippets = [...String(html).matchAll(snippetRegex)];
@@ -152,22 +174,6 @@ function parseDuckDuckGoHtml(html = '', limit = 5) {
         const link = normalizeSearchResultLink(titles[i][1], 'https://html.duckduckgo.com');
         const title = decodeHtmlEntities(titles[i][2]);
         const snippet = decodeHtmlEntities(snippets[i] ? snippets[i][1] : '');
-        if (!link || !title) continue;
-        results.push({ title, link, snippet });
-    }
-
-    return results;
-}
-
-function parseBingHtml(html = '', limit = 5) {
-    const results = [];
-    const itemRegex = /<li[^>]*class="[^"]*b_algo[^"]*"[\s\S]*?<h2[^>]*>\s*<a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>\s*<\/h2>[\s\S]*?(?:<div[^>]*class="[^"]*b_caption[^"]*"[\s\S]*?<p>([\s\S]*?)<\/p>[\s\S]*?<\/div>)?[\s\S]*?<\/li>/g;
-
-    for (const match of String(html).matchAll(itemRegex)) {
-        if (results.length >= limit) break;
-        const link = normalizeSearchResultLink(match[1], 'https://cn.bing.com');
-        const title = decodeHtmlEntities(match[2]);
-        const snippet = decodeHtmlEntities(match[3] || '');
         if (!link || !title) continue;
         results.push({ title, link, snippet });
     }
@@ -2331,97 +2337,62 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
 
             let ddgRegion = 'cn-zh';
             let acceptLang = 'zh-CN,zh;q=0.9,en;q=0.8';
-            let bingHost = 'https://cn.bing.com';
 
             const langInput = (language || '').toLowerCase();
             if (langInput.includes('en') || langInput.includes('us')) {
                 ddgRegion = 'us-en';
                 acceptLang = 'en-US,en;q=0.9';
-                bingHost = 'https://www.bing.com';
             } else if (langInput.includes('jp') || langInput.includes('ja')) {
                 ddgRegion = 'jp-jp';
                 acceptLang = 'ja-JP,ja;q=0.9,en;q=0.8';
-                bingHost = 'https://www.bing.com';
             } else if (langInput.includes('ru')) {
                 ddgRegion = 'ru-ru';
                 acceptLang = 'ru-RU,ru;q=0.9,en;q=0.8';
-                bingHost = 'https://www.bing.com';
             } else if (langInput === 'all' || langInput === 'world') {
                 ddgRegion = 'wt-wt';
                 acceptLang = 'en-US,en;q=0.9';
-                bingHost = 'https://www.bing.com';
             }
 
-            const browserHeaders = {
+            const headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': acceptLang,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Origin': 'https://html.duckduckgo.com',
+                'Referer': 'https://html.duckduckgo.com/',
                 'Cache-Control': 'no-cache',
                 'Pragma': 'no-cache'
             };
 
-            let results = [];
-            const warnings = [];
+            const body = new URLSearchParams();
+            body.append('q', normalizedQuery);
+            body.append('b', '');
+            body.append('kl', ddgRegion);
 
-            try {
-                const body = new URLSearchParams();
-                body.append('q', normalizedQuery);
-                body.append('b', '');
-                body.append('kl', ddgRegion);
+            const response = await requestText('https://html.duckduckgo.com/html/', {
+                method: 'POST',
+                headers: {
+                    ...headers,
+                    'Content-Length': String(Buffer.byteLength(body.toString()))
+                },
+                body: body.toString(),
+                signal,
+                timeout: 20000
+            });
 
-                const ddgResponse = await requestText('https://html.duckduckgo.com/html/', {
-                    method: 'POST',
-                    headers: {
-                        ...browserHeaders,
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Origin': 'https://html.duckduckgo.com',
-                        'Referer': 'https://html.duckduckgo.com/',
-                        'Content-Length': String(Buffer.byteLength(body.toString()))
-                    },
-                    body: body.toString(),
-                    signal,
-                    timeout: 20000,
-                    family: 4
-                });
-
-                if (ddgResponse.statusCode >= 200 && ddgResponse.statusCode < 400) {
-                    results = parseDuckDuckGoHtml(ddgResponse.body, limit);
-                } else {
-                    warnings.push(`DuckDuckGo returned status ${ddgResponse.statusCode}`);
-                }
-            } catch (error) {
-                warnings.push(`DuckDuckGo failed: ${error.message}`);
+            if (response.statusCode < 200 || response.statusCode >= 400) {
+                return JSON.stringify({
+                    message: `DuckDuckGo returned status ${response.statusCode}.`,
+                    query: normalizedQuery
+                }, null, 2);
             }
 
-            if (results.length === 0) {
-                try {
-                    const bingUrl = new URL('/search', bingHost);
-                    bingUrl.searchParams.set('q', normalizedQuery);
-                    bingUrl.searchParams.set('setlang', langInput.includes('en') || langInput === 'all' || langInput === 'world' ? 'en-US' : 'zh-Hans');
-
-                    const bingResponse = await requestText(bingUrl.toString(), {
-                        method: 'GET',
-                        headers: browserHeaders,
-                        signal,
-                        timeout: 20000,
-                        family: 4
-                    });
-
-                    if (bingResponse.statusCode >= 200 && bingResponse.statusCode < 400) {
-                        results = parseBingHtml(bingResponse.body, limit);
-                    } else {
-                        warnings.push(`Bing returned status ${bingResponse.statusCode}`);
-                    }
-                } catch (error) {
-                    warnings.push(`Bing failed: ${error.message}`);
-                }
-            }
-
+            const results = parseDuckDuckGoHtml(response.body, limit);
             if (results.length === 0) {
                 return JSON.stringify({
                     message: 'No results found.',
                     query: normalizedQuery,
-                    warnings
+                    note: 'DuckDuckGo request succeeded but parser returned 0 items.'
                 }, null, 2);
             }
 

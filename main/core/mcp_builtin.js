@@ -62,8 +62,7 @@ function requestText(url, {
 
         const request = net.request({
             url,
-            method,
-            redirect: 'follow'
+            method
         });
 
         request.setHeader('Connection', 'close');

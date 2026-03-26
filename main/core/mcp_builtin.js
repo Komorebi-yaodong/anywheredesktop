@@ -7,6 +7,7 @@ import { handleFilePath, parseFileObject } from './file.js'
 import { createChatCompletion } from './chat.js'
 import { get as dbGet, put as dbPut, remove as dbRemove, allDocs as dbAllDocs } from './db.js'
 import { getConfig, updateConfigWithoutFeatures } from './data.js'
+import { fetchWithProxy } from './net.js'
 import { openWindow, getWindowByRef, listWindows } from '../windowManager.js'
 import { dispatchWindowEvent } from '../eventBus.js'
 
@@ -1586,7 +1587,7 @@ ${contextBlock}
 
             if (file_path.startsWith('http://') || file_path.startsWith('https://')) {
                 try {
-                    const response = await fetch(file_path, { signal });
+                    const response = await fetchWithProxy(file_path, { signal });
                     if (!response.ok) {
                         return `Error fetching URL: ${response.status} ${response.statusText}`;
                     }
@@ -2228,6 +2229,7 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
             };
 
             let results = [];
+            let searchRequestFailed = null;
 
             try {
                 const body = new URLSearchParams();
@@ -2235,12 +2237,16 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
                 body.append('b', '');
                 body.append('kl', ddgRegion);
 
-                const response = await fetch("https://html.duckduckgo.com/html/", {
+                const response = await fetchWithProxy("https://html.duckduckgo.com/html/", {
                     method: 'POST',
                     headers: headers,
                     body: body,
                     signal: signal
                 });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status} ${response.statusText}`);
+                }
 
                 const html = await response.text();
 
@@ -2271,10 +2277,18 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
                     });
                 }
             } catch (e) {
+                searchRequestFailed = e;
                 console.warn("DDG fetch error:", e);
             }
 
             if (results.length === 0) {
+                if (searchRequestFailed) {
+                    return JSON.stringify({
+                        message: "Web search request failed. Please check your network or proxy settings.",
+                        query: query,
+                        error: searchRequestFailed.message
+                    });
+                }
                 if (ddgRegion === 'cn-zh') return JSON.stringify({ message: "No results found in Chinese region. Try setting language='en' or 'all'.", query: query });
                 return JSON.stringify({ message: "No results found.", query: query });
             }
@@ -2302,7 +2316,7 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
                 "Referer": "https://www.google.com/"
             };
 
-            const response = await fetch(url, { headers, redirect: 'follow', signal });
+            const response = await fetchWithProxy(url, { headers, redirect: 'follow', signal });
 
             if (response.status === 403 || response.status === 521) {
                 return `Failed to fetch page (Anti-bot protection ${response.status}).`;

@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import { fetchWithProxy } from './net.js'
 
 /**
  * 随机获取列表中的一项（用于 API Key 负载均衡）
@@ -50,7 +51,7 @@ export async function listProviderModels(params = {}) {
     headers.Authorization = `Bearer ${apiKey}`
   }
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithProxy(endpoint, {
     method: 'GET',
     headers
   })

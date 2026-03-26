@@ -4,6 +4,7 @@ import crypto from 'node:crypto'
 import { app } from 'electron'
 
 import { safeClone } from '../dataConverter.js'
+import { fetchWithProxy } from './net.js'
 import { getBuiltinServers as getBuiltinMcpServers } from './mcp_builtin.js'
 import {
   get as dbGet,
@@ -883,7 +884,7 @@ export async function cacheBackgroundImage(url = '') {
     }
   }
 
-  const response = await fetch(url)
+  const response = await fetchWithProxy(url)
   if (!response.ok) {
     throw new Error(`Failed to fetch background image: ${response.status} ${response.statusText}`)
   }

@@ -52,78 +52,51 @@ function requestText(url, {
     signal = null,
     timeout = 30000
 } = {}) {
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        const finish = (handler, value) => {
-            if (settled) return;
-            settled = true;
-            handler(value);
-        };
-
-        const request = net.request({
-            url,
-            method
-        });
-
-        request.setHeader('Connection', 'close');
-        Object.entries(headers).forEach(([key, value]) => {
-            if (value !== undefined && value !== null) {
-                request.setHeader(key, value);
-            }
-        });
-
+    return new Promise(async (resolve, reject) => {
+        const controller = new AbortController();
         const timer = setTimeout(() => {
-            try {
-                request.abort();
-            } catch {}
-            finish(reject, new Error(`Request timeout after ${timeout}ms`));
+            controller.abort(new Error(`Request timeout after ${timeout}ms`));
         }, timeout);
 
-        const cleanup = () => clearTimeout(timer);
+        const abortWithSourceSignal = () => {
+            controller.abort(new Error('Request aborted'));
+        };
 
-        request.on('response', (response) => {
-            let data = '';
-            response.setEncoding('utf8');
-            response.on('data', (chunk) => {
-                data += chunk;
-            });
-            response.on('end', () => {
-                cleanup();
-                finish(resolve, {
-                    statusCode: response.statusCode || 0,
-                    headers: response.headers || {},
-                    body: data
-                });
-            });
-        });
-
-        request.on('error', (error) => {
-            cleanup();
-            finish(reject, error);
-        });
-
-        if (signal) {
-            if (signal.aborted) {
-                cleanup();
-                try {
-                    request.abort();
-                } catch {}
-                finish(reject, new Error('Request aborted'));
-                return;
+        try {
+            if (signal) {
+                if (signal.aborted) {
+                    clearTimeout(timer);
+                    reject(new Error('Request aborted'));
+                    return;
+                }
+                signal.addEventListener('abort', abortWithSourceSignal, { once: true });
             }
-            signal.addEventListener('abort', () => {
-                cleanup();
-                try {
-                    request.abort();
-                } catch {}
-                finish(reject, new Error('Request aborted'));
-            }, { once: true });
-        }
 
-        if (body) {
-            request.write(body);
+            const response = await net.fetch(url, {
+                method,
+                headers,
+                body: body || undefined,
+                signal: controller.signal
+            });
+
+            const responseBody = await response.text();
+            clearTimeout(timer);
+            if (signal) {
+                signal.removeEventListener('abort', abortWithSourceSignal);
+            }
+
+            resolve({
+                statusCode: response.status,
+                headers: Object.fromEntries(response.headers.entries()),
+                body: responseBody
+            });
+        } catch (error) {
+            clearTimeout(timer);
+            if (signal) {
+                signal.removeEventListener('abort', abortWithSourceSignal);
+            }
+            reject(error instanceof Error ? error : new Error(String(error)));
         }
-        request.end();
     });
 }
 

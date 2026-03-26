@@ -250,6 +250,7 @@ const CODE = ref("");
 
 const isInit = ref(false);
 const isFilePickerOpen = ref(false); // 标记文件选择器是否打开
+const isPreparingSend = ref(false); // 防止发送文件异步解析时的并发触发
 const basic_msg = ref({ os: "macos", code: "AI", type: "over", payload: "请简洁地介绍一下你自己" });
 const initialConfigData = JSON.parse(JSON.stringify(defaultConfig.config));
 if (isDarkInit) {
@@ -3109,6 +3110,11 @@ const saveSessionAsImage = async () => {
 };
 
 const handleSaveAction = async () => {
+  if (loading.value) {
+    showDismissibleMessage.warning('请等待 AI 回复完成后再执行保存或重命名操作');
+    return;
+  }
+
   if (autoCloseOnBlur.value) handleTogglePin();
   const isCloudEnabled = currentConfig.value.webdav?.url && currentConfig.value.webdav?.data_path;
   const saveOptions = [];
@@ -3179,8 +3185,40 @@ const loadSession = async (jsonData) => {
     isInit.value = jsonData.isInit;
     autoCloseOnBlur.value = jsonData.autoCloseOnBlur;
 
-    history.value = jsonData.history;
-    chat_show.value = jsonData.chat_show;
+    history.value = Array.isArray(jsonData.history) ? jsonData.history : [];
+    chat_show.value = Array.isArray(jsonData.chat_show) ? jsonData.chat_show : [];
+
+    while (
+      history.value.length > 0 &&
+      history.value[history.value.length - 1].role === 'assistant' &&
+      !history.value[history.value.length - 1].content &&
+      !(history.value[history.value.length - 1].tool_calls?.length > 0)
+    ) {
+      history.value.pop();
+    }
+
+    const visibleHistoryCount = history.value.filter(m => m.role !== 'tool').length;
+    if (chat_show.value.length > visibleHistoryCount) {
+      console.warn(`[Auto-Heal] 检测到 UI 节点冗余，自动清理了 ${chat_show.value.length - visibleHistoryCount} 条异常显示节点。`);
+      chat_show.value.splice(visibleHistoryCount);
+    } else if (chat_show.value.length < visibleHistoryCount) {
+      let visibleCount = 0;
+      let cutIndex = history.value.length;
+      for (let i = 0; i < history.value.length; i++) {
+        if (history.value[i].role !== 'tool') {
+          visibleCount++;
+        }
+        if (visibleCount > chat_show.value.length) {
+          cutIndex = i;
+          break;
+        }
+      }
+      if (cutIndex < history.value.length) {
+        console.warn('[Auto-Heal] 检测到历史记录污染，自动修复了状态。');
+        history.value.splice(cutIndex);
+      }
+    }
+
     selectedVoice.value = jsonData.selectedVoice || '';
     tempReasoningEffort.value = jsonData.currentPromptConfig?.reasoning_effort || 'default';
     isAutoApproveTools.value = jsonData.isAutoApproveTools || true;
@@ -3250,6 +3288,9 @@ const loadSession = async (jsonData) => {
       });
     } else {
       currentSystemPrompt.value = "";
+      if (chat_show.value.length > 0 && chat_show.value[0].role === 'system') {
+        chat_show.value.shift();
+      }
     }
 
     if (model.value) {
@@ -3698,7 +3739,7 @@ Here are the rules you should always follow to solve your task:
 };
 
 const askAI = async (forceSend = false) => {
-  if (loading.value) return;
+  if (loading.value || isPreparingSend.value) return;
   if (isMcpLoading.value) {
     showDismissibleMessage.info('正在加载工具，请稍后再试...');
     return;
@@ -3706,25 +3747,30 @@ const askAI = async (forceSend = false) => {
 
   // --- 1. 处理用户输入 ---
   if (!forceSend) {
-    let file_content = await sendFile();
-    const promptText = prompt.value.trim();
-    if ((file_content && file_content.length > 0) || promptText) {
-      const userContentList = [];
-      if (promptText) userContentList.push({ type: "text", text: promptText });
-      if (file_content && file_content.length > 0) userContentList.push(...file_content);
-      const userTimestamp = new Date().toLocaleString('sv-SE');
-      if (userContentList.length > 0) {
-        const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
-          ? userContentList[0].text
-          : userContentList;
-        history.value.push({ role: "user", content: contentForHistory });
-        chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
+    isPreparingSend.value = true;
+    try {
+      let file_content = await sendFile();
+      const promptText = prompt.value.trim();
+      if ((file_content && file_content.length > 0) || promptText) {
+        const userContentList = [];
+        if (promptText) userContentList.push({ type: "text", text: promptText });
+        if (file_content && file_content.length > 0) userContentList.push(...file_content);
+        const userTimestamp = new Date().toLocaleString('sv-SE');
+        if (userContentList.length > 0) {
+          const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
+            ? userContentList[0].text
+            : userContentList;
+          history.value.push({ role: "user", content: contentForHistory });
+          chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
 
-        autoSaveSession();
+          autoSaveSession();
 
+        } else return;
       } else return;
-    } else return;
-    prompt.value = "";
+      prompt.value = "";
+    } finally {
+      isPreparingSend.value = false;
+    }
   }
 
   // --- 2. 初始化 AI 回合 ---

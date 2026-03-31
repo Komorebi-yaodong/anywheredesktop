@@ -693,7 +693,7 @@ onBeforeUnmount(() => {
   <div class="quick-shell">
     <div class="quick-content">
       <div class="quick-drag-layer"></div>
-      <div class="quick-search-row">
+      <div class="quick-search-row quick-drag-handle">
           <div v-if="hasAttachment" class="top-token" :title="attachmentPreviewLabel">
             <span class="top-token-icon" v-if="attachment.type === 'files'">📄</span>
             <span class="top-token-icon" v-else-if="attachment.type === 'img'">🖼</span>
@@ -762,7 +762,7 @@ onBeforeUnmount(() => {
 
 .quick-content {
   position: relative;
-  width: min(960px, calc(100vw - 32px));
+  width: min(900px, calc(100vw - 16px));
   display: flex;
   flex-direction: column;
   gap: 8px;

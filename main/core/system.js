@@ -110,6 +110,27 @@ function decodeClipboardPathBuffer(buffer) {
     .map((item) => path.normalize(item))
 }
 
+
+function decodeWindowsDropFiles(buffer) {
+  if (!buffer || buffer.length < 20) return []
+
+  try {
+    const offset = buffer.readUInt32LE(0)
+    const isUnicode = (buffer.readUInt32LE(16) & 1) === 1
+    if (!offset || offset >= buffer.length) return []
+
+    const raw = buffer.slice(offset).toString(isUnicode ? 'ucs2' : 'utf8').replace(/\u0000+$/g, '')
+    return raw
+      .split('\u0000')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => path.normalize(item))
+      .filter((item) => item && fs.existsSync(item))
+  } catch {
+    return []
+  }
+}
+
 function parseUriListText(input = '') {
   return String(input || '')
     .split(/\r?\n/)
@@ -145,7 +166,7 @@ function parseExistingFilePathsFromText(input = '') {
 function readClipboardFilePaths() {
   const formats = clipboard.availableFormats()
   const lowerLookup = new Map(formats.map((item) => [String(item).toLowerCase(), item]))
-  const candidateFormats = ['FileNameW', 'CF_HDROP', 'text/uri-list']
+  const candidateFormats = ['CF_HDROP', 'FileNameW', 'fileNameW', 'text/uri-list']
 
   for (const formatName of candidateFormats) {
     const matchedFormat = lowerLookup.get(formatName.toLowerCase())
@@ -153,14 +174,20 @@ function readClipboardFilePaths() {
 
     try {
       const buffer = clipboard.readBuffer(matchedFormat)
-      if (matchedFormat.toLowerCase() === 'text/uri-list') {
+      const lowered = matchedFormat.toLowerCase()
+      if (lowered === 'text/uri-list') {
         const paths = parseUriListText(buffer.toString('utf8'))
         if (paths.length > 0) return paths
         continue
       }
 
+      if (lowered === 'cf_hdrop') {
+        const dropFiles = decodeWindowsDropFiles(buffer)
+        if (dropFiles.length > 0) return dropFiles
+      }
+
       const paths = decodeClipboardPathBuffer(buffer)
-      if (paths.length > 0) return paths.filter((item) => fs.existsSync(item))
+      if (paths.length > 0) return paths.filter((item) => item && fs.existsSync(item))
     } catch {
       // ignore and try next available format
     }

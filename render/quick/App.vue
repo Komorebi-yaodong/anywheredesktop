@@ -528,21 +528,48 @@ async function handlePaste(event) {
   const fileItems = items.filter((item) => item.kind === 'file')
   if (fileItems.length > 0) {
     event.preventDefault()
+
+    const imageDataUrls = []
+    const filePaths = []
+
     for (const item of fileItems) {
       const file = item.getAsFile()
       if (!file) continue
+
       if (file.type.startsWith('image/') && file.type !== 'image/svg+xml') {
-        const reader = new FileReader()
-        reader.onload = () => applyImageAttachment(String(reader.result || ''))
-        reader.readAsDataURL(file)
-        return
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result || ''))
+          reader.onerror = () => reject(new Error('读取图片失败'))
+          reader.readAsDataURL(file)
+        }).catch(() => '')
+        if (dataUrl) imageDataUrls.push(dataUrl)
+        continue
       }
 
       const filePath = window.api.getDroppedFilePath?.(file)
-      if (filePath) {
-        await applyFileAttachment([filePath], file.name || filePath.split(/[/\\]/).pop() || '')
-        return
-      }
+      if (filePath) filePaths.push(filePath)
+    }
+
+    if (filePaths.length > 0) {
+      await applyFileAttachment(filePaths, filePaths[0]?.split(/[/\\]/).pop() || '')
+      return
+    }
+
+    if (imageDataUrls.length === 1) {
+      applyImageAttachment(imageDataUrls[0])
+      return
+    }
+
+    if (imageDataUrls.length > 1) {
+      setAttachment({
+        type: 'files',
+        filePaths: imageDataUrls.map((_, index) => `clipboard-image-${index + 1}.png`),
+        previewLabel: `图片 ${imageDataUrls.length}`
+      })
+      restoreCandidates.value = []
+      focusInputToEnd()
+      return
     }
   }
 

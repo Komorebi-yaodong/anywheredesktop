@@ -295,7 +295,13 @@ const handleAppendMessageEvent = async (data) => {
   let isFileDirectSend = false;
   const nowTime = new Date().toLocaleString('sv-SE');
 
-  if (data.type === "over" && data.payload) {
+  if (data.type === "multiline-text" && data.payload) {
+    prompt.value = String(data.payload);
+    scrollToBottom();
+    await nextTick();
+    chatInputRef.value?.focus({ cursor: 'end' });
+    return;
+  } else if (data.type === "over" && data.payload) {
     history.value.push({ role: "user", content: data.payload });
     chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
   } else if (data.type === "img" && data.payload) {
@@ -1783,7 +1789,9 @@ onMounted(async () => {
           }
         }
       }
-      if (data.type === "over" && data.payload) {
+      if (data.type === "multiline-text" && data.payload) {
+        prompt.value = String(data.payload);
+      } else if (data.type === "over" && data.payload) {
         let sessionLoaded = false;
         try {
           let old_session = JSON.parse(data.payload);

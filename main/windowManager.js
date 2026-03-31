@@ -115,7 +115,22 @@ function activateWindow(win) {
   if (!win || win.isDestroyed()) return false
   if (win.isMinimized()) win.restore()
   if (!win.isVisible()) win.show()
-  win.focus()
+  try {
+    win.__suppressBlurUntil = Date.now() + 260
+  } catch {
+    // ignore suppress blur mark failure
+  }
+  try {
+    win.moveTop?.()
+  } catch {
+    // ignore moveTop failure
+  }
+  try {
+    win.focus()
+    win.webContents?.focus?.()
+  } catch {
+    // ignore focus failure
+  }
   return true
 }
 
@@ -482,10 +497,21 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   })
 
   win.on('ready-to-show', () => {
+    try {
+      win.__suppressBlurUntil = Date.now() + 260
+    } catch {
+      // ignore suppress blur mark failure during ready-to-show
+    }
     win.show()
     if (type === 'fast' || type === 'quick') {
       try {
+        win.moveTop?.()
+      } catch {
+        // ignore moveTop failure during ready-to-show
+      }
+      try {
         win.focus()
+        win.webContents?.focus?.()
       } catch {
         // ignore focus failure during ready-to-show
       }
@@ -497,6 +523,9 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
       if (!win.isDestroyed()) {
         setTimeout(() => {
           try {
+            if (Date.now() < Number(win.__suppressBlurUntil || 0)) {
+              return
+            }
             if (!win.isDestroyed() && !win.isFocused()) {
               win.hide()
             }

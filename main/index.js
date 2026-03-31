@@ -99,32 +99,56 @@ async function collectQuickPayload() {
 }
 
 async function openQuickWindowPreservingMain(payload = null) {
-  const keepMainVisible = isSingletonWindowVisible('main')
-  const result = await openWindow('quick', payload)
-
-  if (keepMainVisible) {
-    try {
-      ensureMainWindowVisible()
-    } catch {
-      // ignore main visibility restore failure
-    }
-  }
-
-  return result
+  return openWindow('quick', payload)
 }
 
+function pushQuickPayloadToVisibleWindow(payload = null) {
+  const quickWindow = getWindowByRef('quick')
+  if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return false
+
+  try {
+    quickWindow.webContents.send('window:init', {
+      senderId: 'quick',
+      windowType: 'quick',
+      type: typeof payload?.type === 'string' && payload.type ? payload.type : 'empty',
+      payload: payload?.payload ?? '',
+      userText: typeof payload?.userText === 'string' ? payload.userText : '',
+      promptKey: typeof payload?.promptKey === 'string' ? payload.promptKey : '',
+      triggerMode: typeof payload?.triggerMode === 'string' ? payload.triggerMode : ''
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+let quickSummonToken = 0
 
 async function triggerQuickSummon() {
-  if (isSingletonWindowVisible('quick')) {
-    const quickWindow = getWindowByRef('quick')
-    if (quickWindow && !quickWindow.isDestroyed()) {
-      quickWindow.hide()
-      return { ok: true, action: 'hide', type: 'quick' }
-    }
+  const quickWindow = getWindowByRef('quick')
+  if (quickWindow && !quickWindow.isDestroyed() && quickWindow.isVisible() && quickWindow.isFocused()) {
+    quickSummonToken += 1
+    quickWindow.hide()
+    return { ok: true, action: 'hide', type: 'quick' }
   }
 
-  const quickPayload = await collectQuickPayload()
-  return openQuickWindowPreservingMain(quickPayload)
+  const token = ++quickSummonToken
+  const openResult = await openQuickWindowPreservingMain({
+    type: 'empty',
+    payload: ''
+  })
+
+  collectQuickPayload()
+    .then((quickPayload) => {
+      if (token !== quickSummonToken) return
+      if (!quickPayload || quickPayload.type === 'empty') return
+      pushQuickPayloadToVisibleWindow(quickPayload)
+    })
+    .catch((error) => {
+      debugMainError('quick:payload-collect-failed', error)
+    })
+
+  return openResult
 }
 
 async function triggerPromptShortcut(promptKey = '') {

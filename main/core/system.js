@@ -1,4 +1,5 @@
 import { clipboard, desktopCapturer, dialog, nativeImage, shell } from 'electron'
+import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -109,22 +110,65 @@ function decodeClipboardPathBuffer(buffer) {
     .map((item) => path.normalize(item))
 }
 
+function parseUriListText(input = '') {
+  return String(input || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      if (/^file:\/\//i.test(line)) {
+        try {
+          const url = new URL(line)
+          let pathname = decodeURIComponent(url.pathname || '')
+          if (process.platform === 'win32' && /^\/[A-Za-z]:/.test(pathname)) {
+            pathname = pathname.slice(1)
+          }
+          return path.normalize(pathname)
+        } catch {
+          return ''
+        }
+      }
+      return path.normalize(line)
+    })
+    .filter((item) => item && fs.existsSync(item))
+}
+
+function parseExistingFilePathsFromText(input = '') {
+  return String(input || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean)
+    .map((line) => (/^file:\/\//i.test(line) ? parseUriListText(line)[0] || '' : path.normalize(line)))
+    .filter((item) => item && fs.existsSync(item))
+}
+
 function readClipboardFilePaths() {
   const formats = clipboard.availableFormats()
-  const candidateFormats = ['FileNameW', 'text/uri-list', 'CF_HDROP']
+  const lowerLookup = new Map(formats.map((item) => [String(item).toLowerCase(), item]))
+  const candidateFormats = ['FileNameW', 'CF_HDROP', 'text/uri-list']
 
   for (const formatName of candidateFormats) {
-    const matchedFormat = formats.find((item) => item === formatName)
+    const matchedFormat = lowerLookup.get(formatName.toLowerCase())
     if (!matchedFormat) continue
 
     try {
       const buffer = clipboard.readBuffer(matchedFormat)
+      if (matchedFormat.toLowerCase() === 'text/uri-list') {
+        const paths = parseUriListText(buffer.toString('utf8'))
+        if (paths.length > 0) return paths
+        continue
+      }
+
       const paths = decodeClipboardPathBuffer(buffer)
-      if (paths.length > 0) return paths
+      if (paths.length > 0) return paths.filter((item) => fs.existsSync(item))
     } catch {
       // ignore and try next available format
     }
   }
+
+  const textFallback = clipboard.readText()
+  const fallbackPaths = parseExistingFilePathsFromText(textFallback)
+  if (fallbackPaths.length > 0) return fallbackPaths
 
   return []
 }

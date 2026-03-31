@@ -423,6 +423,7 @@ function updateFromTextInput(text = '', forceOverride = false) {
       previewLabel: trimmed
     })
     queryText.value = ''
+    focusInputToEnd()
     return
   }
 
@@ -500,6 +501,7 @@ function applyImageAttachment(dataUrl = '') {
     previewLabel: '图片'
   })
   restoreCandidates.value = []
+  focusInputToEnd()
 }
 
 async function applyFileAttachment(paths = [], previewLabel = '') {
@@ -512,6 +514,7 @@ async function applyFileAttachment(paths = [], previewLabel = '') {
   })
   queryText.value = ''
   await inspectSessionCandidates(normalizedPaths)
+  focusInputToEnd()
 }
 
 async function handlePaste(event) {
@@ -650,6 +653,7 @@ onMounted(async () => {
       hasInitPayloadApplied = Boolean(data.payload.trim())
     } else if (data?.type === 'empty') {
       clearQuickContent()
+      focusInputToEnd()
     }
 
     if (typeof data?.userText === 'string' && data.userText.trim()) {
@@ -660,7 +664,9 @@ onMounted(async () => {
       selectedPromptKey.value = data.promptKey
     }
 
-    focusInputToEnd()
+    requestAnimationFrame(() => {
+      focusInputToEnd()
+    })
   })
 
   try {
@@ -670,20 +676,12 @@ onMounted(async () => {
     ElMessage.error(getErrorMessage(error, '加载配置失败'))
   }
 
-  await refreshFromClipboard(true)
-  focusInputToEnd()
   requestAnimationFrame(() => {
     focusInputToEnd()
   })
   setTimeout(() => {
     focusInputToEnd()
-  }, 60)
-  setTimeout(() => {
-    focusInputToEnd()
-  }, 180)
-  setTimeout(() => {
-    focusInputToEnd()
-  }, 360)
+  }, 30)
 })
 
 onBeforeUnmount(() => {
@@ -693,9 +691,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="quick-shell">
-    <div class="quick-panel">
-      <div class="quick-topbar">
-        <div class="quick-search-row">
+    <div class="quick-content">
+      <div class="quick-drag-layer"></div>
+      <div class="quick-search-row">
           <div v-if="hasAttachment" class="top-token" :title="attachmentPreviewLabel">
             <span class="top-token-icon" v-if="attachment.type === 'files'">📄</span>
             <span class="top-token-icon" v-else-if="attachment.type === 'img'">🖼</span>
@@ -710,11 +708,10 @@ onBeforeUnmount(() => {
             type="text"
             spellcheck="false"
             autocomplete="off"
-            placeholder="搜索"
+            placeholder="搜索快捷助手，或粘贴文本、图片、文件"
             @paste="handlePaste"
             @keydown="handleKeydown"
           />
-        </div>
       </div>
 
       <div class="recommend-title">匹配推荐</div>
@@ -745,7 +742,6 @@ onBeforeUnmount(() => {
             <div v-else class="tile-fallback">{{ prompt.key.slice(0, 1).toUpperCase() }}</div>
           </div>
           <div class="tile-name">{{ prompt.key }}</div>
-          <div v-if="prompt.showMode === 'fastinput'" class="tile-mode">Fast</div>
         </button>
       </div>
     </div>
@@ -764,75 +760,77 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-html.dark .quick-shell {
-  background: transparent;
-}
-
-.quick-panel {
-  width: min(1120px, calc(100vw - 40px));
-  height: auto;
-  max-height: calc(100vh - 32px);
+.quick-content {
+  position: relative;
+  width: min(960px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 18px 14px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.16);
+  gap: 8px;
+  padding: 14px 14px 12px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
   box-sizing: border-box;
-  overflow: hidden;
+  -webkit-app-region: drag;
 }
 
-html.dark .quick-panel {
-  background: rgba(28, 30, 36, 0.94);
-  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.34);
+html.dark .quick-content {
+  background: rgba(29, 31, 37, 0.96);
+  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.34);
 }
 
-.quick-topbar {
-  flex: 0 0 auto;
+.quick-drag-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: 22px;
+  pointer-events: none;
+}
+
+.quick-search-row,
+.restore-zone,
+.grid-wrap,
+.prompt-tile,
+.restore-chip,
+.search-input,
+.top-token {
+  -webkit-app-region: no-drag;
 }
 
 .quick-search-row {
-  min-height: 58px;
+  min-height: 52px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border: 1px solid rgba(31, 35, 41, 0.08);
+  gap: 8px;
+  padding: 8px 12px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  background: rgba(248, 250, 252, 0.96);
   overflow: hidden;
 }
 
 html.dark .quick-search-row {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(39, 42, 49, 0.98);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: rgba(40, 43, 50, 0.98);
 }
 
 .top-token {
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 420px;
+  max-width: 320px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid rgba(31, 35, 41, 0.08);
+  gap: 5px;
+  padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(244, 247, 251, 0.96);
+  background: rgba(231, 237, 244, 0.96);
   overflow: hidden;
 }
 
 html.dark .top-token {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(52, 56, 64, 0.94);
+  background: rgba(60, 64, 73, 0.94);
 }
 
 .top-token-icon {
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .top-token-label {
@@ -840,7 +838,7 @@ html.dark .top-token {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 14px;
+  font-size: 12px;
   color: #2d2d36;
 }
 
@@ -850,12 +848,12 @@ html.dark .top-token-label {
 
 .top-token-count {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
   background: #2d2d36;
   color: #fff;
-  font-size: 12px;
+  font-size: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -864,12 +862,12 @@ html.dark .top-token-label {
 .search-input {
   flex: 1;
   min-width: 0;
-  height: 38px;
+  height: 34px;
   border: none;
   outline: none;
   background: transparent;
-  font-size: 20px;
-  line-height: 38px;
+  font-size: 15px;
+  line-height: 34px;
   color: #1f1f24;
   padding: 0;
 }
@@ -879,16 +877,15 @@ html.dark .search-input {
 }
 
 .search-input::placeholder {
-  color: #a0a0aa;
+  color: #9aa3b2;
 }
 
 .recommend-title {
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #6a7280;
+  color: #667085;
+  padding-left: 2px;
 }
 
 html.dark .recommend-title {
@@ -899,78 +896,71 @@ html.dark .recommend-title {
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   overflow: hidden;
 }
 
 .restore-chip {
   border: none;
   border-radius: 999px;
-  padding: 6px 10px;
-  background: #ececf1;
+  padding: 5px 9px;
+  background: rgba(242, 245, 249, 0.96);
   color: #4e4e59;
   cursor: pointer;
 }
 
 html.dark .restore-chip {
-  background: #33333a;
+  background: rgba(44, 47, 55, 0.94);
   color: #ececf0;
 }
 
 .grid-wrap {
-  flex: 0 0 auto;
-  min-height: 0;
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
-  grid-template-rows: repeat(3, minmax(0, 1fr));
-  gap: 12px 12px;
-  align-content: start;
+  grid-auto-rows: 80px;
+  gap: 8px;
   overflow: hidden;
+  max-height: calc(80px * 3 + 16px);
 }
 
 .prompt-tile {
   border: none;
-  background: rgba(246, 248, 251, 0.9);
+  background: rgba(247, 249, 252, 0.96);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 10px 8px;
-  border-radius: 14px;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 4px;
+  border-radius: 12px;
   cursor: pointer;
-  transition: transform 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+  transition: transform 0.1s ease, background 0.1s ease;
 }
 
 .prompt-tile:hover,
 .prompt-tile.active {
-  background: rgba(227, 233, 241, 0.96);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  background: rgba(237, 242, 248, 1);
   transform: translateY(-1px);
 }
 
 html.dark .prompt-tile {
-  background: rgba(35, 38, 45, 0.9);
+  background: rgba(35, 38, 45, 0.92);
 }
 
 html.dark .prompt-tile:hover,
 html.dark .prompt-tile.active {
-  background: rgba(56, 61, 71, 0.98);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  background: rgba(49, 54, 63, 0.98);
 }
 
 .tile-icon-wrap {
-  width: 46px;
-  height: 46px;
-  border-radius: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   overflow: hidden;
-  background: #ffffff;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-html.dark .tile-icon-wrap {
-  background: #2a2a2f;
 }
 
 .tile-icon {
@@ -980,7 +970,7 @@ html.dark .tile-icon-wrap {
 }
 
 .tile-fallback {
-  font-size: 18px;
+  font-size: 12px;
   font-weight: 700;
   color: #565666;
 }
@@ -990,7 +980,7 @@ html.dark .tile-fallback {
 }
 
 .tile-name {
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.2;
   text-align: center;
   color: #2d2d36;
@@ -1000,14 +990,6 @@ html.dark .tile-fallback {
   overflow: hidden;
   word-break: break-word;
 }
-
-
-.tile-mode {
-  font-size: 10px;
-  line-height: 1;
-  color: #8a93a3;
-}
-
 
 html.dark .tile-name {
   color: #f2f2f6;
@@ -1025,7 +1007,7 @@ html.dark .tile-name {
   }
 
   .search-input {
-    font-size: 18px;
+    font-size: 14px;
   }
 }
 </style>

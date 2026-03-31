@@ -19,6 +19,7 @@ function createEmptyAttachment() {
     type: 'none',
     rawText: '',
     imageDataUrl: '',
+    imageDataUrls: [],
     filePaths: [],
     previewLabel: ''
   }
@@ -157,6 +158,7 @@ function setAttachment(next = {}) {
     type: next.type || 'none',
     rawText: typeof next.rawText === 'string' ? next.rawText : '',
     imageDataUrl: typeof next.imageDataUrl === 'string' ? next.imageDataUrl : '',
+    imageDataUrls: Array.isArray(next.imageDataUrls) ? next.imageDataUrls : [],
     filePaths: Array.isArray(next.filePaths) ? next.filePaths : [],
     previewLabel: typeof next.previewLabel === 'string' ? next.previewLabel : ''
   }
@@ -345,6 +347,16 @@ function resolveQuickOpenPayload(prompt) {
   if (attachment.value.type === 'img' && attachment.value.imageDataUrl) {
     payload.type = 'img'
     payload.payload = attachment.value.imageDataUrl
+    if (queryText.value.trim()) payload.userText = queryText.value.trim()
+    return payload
+  }
+
+  if (attachment.value.type === 'image-files' && attachment.value.imageDataUrls.length > 0) {
+    payload.type = 'files'
+    payload.payload = attachment.value.imageDataUrls.map((dataUrl, index) => ({
+      name: `clipboard-image-${index + 1}.png`,
+      dataUrl
+    }))
     if (queryText.value.trim()) payload.userText = queryText.value.trim()
     return payload
   }
@@ -563,8 +575,8 @@ async function handlePaste(event) {
 
     if (imageDataUrls.length > 1) {
       setAttachment({
-        type: 'files',
-        filePaths: imageDataUrls.map((_, index) => `clipboard-image-${index + 1}.png`),
+        type: 'image-files',
+        imageDataUrls,
         previewLabel: `图片 ${imageDataUrls.length}`
       })
       restoreCandidates.value = []

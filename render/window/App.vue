@@ -309,7 +309,21 @@ const handleAppendMessageEvent = async (data) => {
     chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }], timestamp: nowTime });
   } else if (data.type === "files" && data.payload) {
     try {
-      const fileProcessingPromises = data.payload.map((fileInfo) => processFilePath(fileInfo.path));
+      const payloadList = Array.isArray(data.payload) ? data.payload : [];
+      const fileProcessingPromises = payloadList.map(async (fileInfo, index) => {
+        if (fileInfo?.path) {
+          return processFilePath(fileInfo.path);
+        }
+        if (fileInfo?.dataUrl) {
+          return file2fileList({
+            name: fileInfo.name || `clipboard-image-${index + 1}.png`,
+            type: 'image/png',
+            size: 0,
+            url: fileInfo.dataUrl
+          }, fileList.value.length + index + 1);
+        }
+        return null;
+      });
       await Promise.all(fileProcessingPromises);
       isFileDirectSend = true;
     } catch (error) {
@@ -1823,15 +1837,29 @@ onMounted(async () => {
       } else if (data.type === "files" && data.payload) {
         try {
           let sessionLoaded = false;
-          if (data.payload.length === 1 && data.payload[0].path.toLowerCase().endsWith('.json')) {
-            const fileObject = await window.api.handleFilePath(data.payload[0].path);
+          const payloadList = Array.isArray(data.payload) ? data.payload : [];
+          if (payloadList.length === 1 && payloadList[0]?.path && payloadList[0].path.toLowerCase().endsWith('.json')) {
+            const fileObject = await window.api.handleFilePath(payloadList[0].path);
             if (fileObject) {
               sessionLoaded = await checkAndLoadSessionFromFile(fileObject);
               if (sessionLoaded) isSessionRestored = true; // 标记会话已恢复
             }
           }
           if (!sessionLoaded) {
-            const fileProcessingPromises = data.payload.map((fileInfo) => processFilePath(fileInfo.path));
+            const fileProcessingPromises = payloadList.map(async (fileInfo, index) => {
+              if (fileInfo?.path) {
+                return processFilePath(fileInfo.path);
+              }
+              if (fileInfo?.dataUrl) {
+                return file2fileList({
+                  name: fileInfo.name || `clipboard-image-${index + 1}.png`,
+                  type: 'image/png',
+                  size: 0,
+                  url: fileInfo.dataUrl
+                }, fileList.value.length + index + 1);
+              }
+              return null;
+            });
             await Promise.all(fileProcessingPromises);
             if (currentPromptConfig.isDirectSend_file) {
               shouldDirectSend = true;

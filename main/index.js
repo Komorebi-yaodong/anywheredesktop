@@ -108,6 +108,20 @@ async function collectQuickPayload() {
   }
 }
 
+async function collectQuickPayloadFast() {
+  try {
+    const result = await systemApi.readClipboardPayload()
+    return buildQuickPayloadFromClipboardResult(result)
+  } catch {
+    return {
+      type: 'empty',
+      payload: '',
+      source: 'empty'
+    }
+  }
+}
+
+
 async function openQuickWindowPreservingMain(payload = null) {
   return openWindow('quick', payload)
 }
@@ -143,19 +157,21 @@ async function triggerQuickSummon() {
   }
 
   const token = ++quickSummonToken
-  const quickPayload = await collectQuickPayload()
-  if (token !== quickSummonToken) {
-    return { ok: false, action: 'stale', type: 'quick' }
-  }
+  const openResult = await openQuickWindowPreservingMain({
+    type: 'empty',
+    payload: '',
+    source: 'empty'
+  })
 
-  const openResult = await openQuickWindowPreservingMain(quickPayload)
-  if (token !== quickSummonToken) {
-    return openResult
-  }
-
-  if (quickPayload && quickPayload.type !== 'empty') {
-    pushQuickPayloadToVisibleWindow(quickPayload)
-  }
+  collectQuickPayloadFast()
+    .then((quickPayload) => {
+      if (token !== quickSummonToken) return
+      if (!quickPayload || quickPayload.type === 'empty') return
+      pushQuickPayloadToVisibleWindow(quickPayload)
+    })
+    .catch((error) => {
+      debugMainError('quick:fast-payload-collect-failed', error)
+    })
 
   return openResult
 }

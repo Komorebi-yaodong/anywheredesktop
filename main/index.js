@@ -110,7 +110,7 @@ async function collectQuickPayload() {
 
 async function collectQuickPayloadFast() {
   try {
-    const result = await systemApi.readClipboardPayload()
+    const result = await systemApi.captureQuickPayload()
     return buildQuickPayloadFromClipboardResult(result)
   } catch {
     return {

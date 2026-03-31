@@ -369,6 +369,62 @@ export function stopClipboardWatcher() {
   }
 }
 
+
+async function tryReadForegroundExplorerSelection() {
+  if (process.platform !== 'win32') {
+    return []
+  }
+
+  const script = `$sig = @"
+using System;
+using System.Runtime.InteropServices;
+public static class Win32 {
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+}
+"@;
+Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;
+$hwnd = [int64][Win32]::GetForegroundWindow();
+$shell = New-Object -ComObject Shell.Application;
+$target = $null;
+foreach ($win in $shell.Windows()) {
+  try {
+    if ([int64]$win.HWND -eq $hwnd) {
+      $target = $win;
+      break;
+    }
+  } catch {}
+}
+if ($null -eq $target) {
+  '{"filePaths":[]}'
+  exit
+}
+$paths = @();
+try {
+  foreach ($item in @($target.Document.SelectedItems())) {
+    try {
+      if ($item -and $item.Path) {
+        $paths += [string]$item.Path
+      }
+    } catch {}
+  }
+} catch {}
+@{ filePaths = @($paths | Where-Object { $_ } | Select-Object -Unique) } | ConvertTo-Json -Compress`
+
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    })
+    const parsed = JSON.parse(String(stdout || '').trim() || '{"filePaths":[]}')
+    return Array.isArray(parsed?.filePaths)
+      ? parsed.filePaths.map((item) => path.normalize(String(item))).filter((item) => item && fs.existsSync(item))
+      : []
+  } catch {
+    return []
+  }
+}
+
 async function tryCaptureSelectionToClipboard() {
   if (process.platform !== 'win32') {
     return null
@@ -406,6 +462,40 @@ async function tryCaptureSelectionToClipboard() {
   }
 
   return getFreshClipboardPayload('selection', ['files', 'image', 'text'], afterRaw.formats)
+}
+
+
+export async function captureQuickPayload() {
+  const explorerSelection = await tryReadForegroundExplorerSelection()
+  if (explorerSelection.length > 0) {
+    return {
+      ok: true,
+      kind: 'files',
+      text: '',
+      imageDataUrl: '',
+      filePaths: explorerSelection,
+      hasText: false,
+      hasImage: false,
+      hasFiles: true,
+      formats: ['foreground-explorer-selection'],
+      timestamp: Date.now(),
+      ageMs: 0,
+      freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
+      isFresh: true,
+      source: 'selection'
+    }
+  }
+
+  const raw = readClipboardPayloadRaw()
+  updateClipboardTimeline(raw)
+  const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
+  if (clipboardPayload.kind !== 'empty') {
+    return clipboardPayload.isFresh
+      ? { ...clipboardPayload, source: 'recent-clipboard' }
+      : { ...clipboardPayload, source: 'clipboard' }
+  }
+
+  return clipboardPayload
 }
 
 export async function captureSelectionPayload() {

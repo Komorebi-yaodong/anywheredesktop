@@ -760,10 +760,11 @@ onBeforeUnmount(() => {
 <style scoped>
 .quick-shell {
   min-height: 100vh;
+  height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1px;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
   box-sizing: border-box;
   background: transparent;
   overflow: hidden;
@@ -771,22 +772,23 @@ onBeforeUnmount(() => {
 
 .quick-content {
   position: relative;
-  width: calc(100vw - 2px);
-  min-height: calc(100vh - 2px);
+  width: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
+  justify-content: flex-start;
   gap: 8px;
-  padding: 14px 14px 12px;
+  padding: 14px;
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
+  box-shadow: none;
   box-sizing: border-box;
   -webkit-app-region: drag;
 }
 
 html.dark .quick-content {
-  background: rgba(29, 31, 37, 0.96);
-  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.34);
+  background: rgba(29, 31, 37, 1);
+  box-shadow: none;
 }
 
 .quick-drag-layer {

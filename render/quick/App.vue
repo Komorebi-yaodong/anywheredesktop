@@ -9,6 +9,7 @@ let hasInitPayloadApplied = false
 const currentConfig = ref(null)
 const queryText = ref('')
 const selectedPromptKey = ref('')
+const shouldShowSelection = ref(false)
 const restoreCandidates = ref([])
 const attachment = ref(createEmptyAttachment())
 const inputRef = ref(null)
@@ -148,6 +149,7 @@ function clearAttachment() {
 function clearQuickContent() {
   queryText.value = ''
   clearAttachment()
+  shouldShowSelection.value = false
 }
 
 function setAttachment(next = {}) {
@@ -325,8 +327,8 @@ const candidateSections = computed(() => {
     deduped.push(item)
   }
 
-  if (!deduped.some((item) => item.key === selectedPromptKey.value)) {
-    selectedPromptKey.value = deduped[0]?.key || ''
+  if (selectedPromptKey.value && !deduped.some((item) => item.key === selectedPromptKey.value)) {
+    selectedPromptKey.value = ''
   }
 
   return deduped
@@ -564,6 +566,7 @@ function handleKeydown(event) {
     const currentIndex = list.findIndex((item) => item.key === selectedPromptKey.value)
     const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % list.length
     selectedPromptKey.value = list[nextIndex].key
+    shouldShowSelection.value = true
     return
   }
 
@@ -574,6 +577,7 @@ function handleKeydown(event) {
     const currentIndex = list.findIndex((item) => item.key === selectedPromptKey.value)
     const nextIndex = currentIndex < 0 ? list.length - 1 : (currentIndex - 1 + list.length) % list.length
     selectedPromptKey.value = list[nextIndex].key
+    shouldShowSelection.value = true
     return
   }
 
@@ -597,6 +601,7 @@ function handleKeydown(event) {
     event.preventDefault()
     if (queryText.value.trim() || hasAttachment.value) {
       clearQuickContent()
+      shouldShowSelection.value = false
       focusInputToEnd()
       return
     }
@@ -621,6 +626,7 @@ function handleGlobalKeydown(event) {
     event.stopPropagation()
     if (queryText.value.trim() || hasAttachment.value) {
       clearQuickContent()
+      shouldShowSelection.value = false
       focusInputToEnd()
       return
     }
@@ -653,6 +659,7 @@ onMounted(async () => {
       hasInitPayloadApplied = Boolean(data.payload.trim())
     } else if (data?.type === 'empty') {
       clearQuickContent()
+      shouldShowSelection.value = false
       focusInputToEnd()
     }
 
@@ -662,6 +669,7 @@ onMounted(async () => {
 
     if (data?.promptKey) {
       selectedPromptKey.value = data.promptKey
+      shouldShowSelection.value = Boolean(data.promptKey)
     }
 
     requestAnimationFrame(() => {
@@ -734,8 +742,9 @@ onBeforeUnmount(() => {
           :key="prompt.key"
           type="button"
           class="prompt-tile"
-          :class="{ active: selectedPromptKey === prompt.key }"
-          @click="selectedPromptKey = prompt.key; openPrompt(prompt)"
+          :class="{ active: shouldShowSelection && selectedPromptKey === prompt.key }"
+          @mouseenter="selectedPromptKey = prompt.key; shouldShowSelection = true"
+          @click="selectedPromptKey = prompt.key; shouldShowSelection = true; openPrompt(prompt)"
         >
           <div class="tile-icon-wrap">
             <img v-if="prompt.iconUrl" :src="prompt.iconUrl" :alt="prompt.key" class="tile-icon" />
@@ -754,7 +763,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  padding: 1px;
   box-sizing: border-box;
   background: transparent;
   overflow: hidden;
@@ -762,7 +771,8 @@ onBeforeUnmount(() => {
 
 .quick-content {
   position: relative;
-  width: min(900px, calc(100vw - 16px));
+  width: calc(100vw - 2px);
+  min-height: calc(100vh - 2px);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -786,7 +796,6 @@ html.dark .quick-content {
   pointer-events: none;
 }
 
-.quick-search-row,
 .restore-zone,
 .grid-wrap,
 .prompt-tile,
@@ -805,6 +814,7 @@ html.dark .quick-content {
   border-radius: 16px;
   background: rgba(248, 250, 252, 0.96);
   overflow: hidden;
+  -webkit-app-region: drag;
 }
 
 html.dark .quick-search-row {
@@ -870,6 +880,7 @@ html.dark .top-token-label {
   line-height: 34px;
   color: #1f1f24;
   padding: 0;
+  cursor: text;
 }
 
 html.dark .search-input {

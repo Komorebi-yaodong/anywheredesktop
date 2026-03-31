@@ -49,13 +49,15 @@ const WINDOWS = {
     html: 'quick/index.html',
     devPath: '/quick/index.html',
     width: 980,
-    height: 560,
+    height: 420,
     options: {
       frame: false,
-      transparent: false,
+      transparent: true,
       alwaysOnTop: true,
       resizable: false,
-      skipTaskbar: true
+      skipTaskbar: true,
+      hasShadow: false,
+      backgroundColor: '#00000000'
     }
   }
 }

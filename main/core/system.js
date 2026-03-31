@@ -342,6 +342,12 @@ export async function captureSelectionPayload() {
   updateClipboardTimeline(directRaw)
   const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
 
+  // 【核心修复】：如果最近 5 秒内剪贴板里已经有内容了（用户刚刚复制了东西），直接使用并瞬间返回！
+  // 坚决不执行后面的 PowerShell 模拟 Ctrl+C，解决 0.8s 延迟和剪贴板文件被冲掉的 bug！
+  if (clipboardPayload.isFresh && clipboardPayload.kind !== 'empty') {
+    return clipboardPayload
+  }
+
   const captured = await tryCaptureSelectionToClipboard()
   if (captured && captured.kind !== 'empty') {
     return captured

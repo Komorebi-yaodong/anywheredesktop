@@ -745,6 +745,7 @@ onBeforeUnmount(() => {
             <div v-else class="tile-fallback">{{ prompt.key.slice(0, 1).toUpperCase() }}</div>
           </div>
           <div class="tile-name">{{ prompt.key }}</div>
+          <div v-if="prompt.showMode === 'fastinput'" class="tile-mode">Fast</div>
         </button>
       </div>
     </div>
@@ -757,35 +758,34 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 18px 22px;
+  padding: 0;
   box-sizing: border-box;
-  background: #eef1f6;
+  background: transparent;
   overflow: hidden;
 }
 
 html.dark .quick-shell {
-  background: #17181c;
+  background: transparent;
 }
 
 .quick-panel {
-  width: min(1120px, 100%);
-  height: min(430px, calc(100vh - 36px));
+  width: min(1120px, calc(100vw - 40px));
+  height: auto;
+  max-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 16px 18px 14px;
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(20, 24, 33, 0.08);
-  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.16);
   box-sizing: border-box;
   overflow: hidden;
 }
 
 html.dark .quick-panel {
-  background: rgba(28, 30, 36, 0.96);
-  border-color: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+  background: rgba(28, 30, 36, 0.94);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.34);
 }
 
 .quick-topbar {
@@ -918,13 +918,14 @@ html.dark .restore-chip {
 }
 
 .grid-wrap {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
   gap: 12px 12px;
   align-content: start;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .prompt-tile {
@@ -999,6 +1000,14 @@ html.dark .tile-fallback {
   overflow: hidden;
   word-break: break-word;
 }
+
+
+.tile-mode {
+  font-size: 10px;
+  line-height: 1;
+  color: #8a93a3;
+}
+
 
 html.dark .tile-name {
   color: #f2f2f6;

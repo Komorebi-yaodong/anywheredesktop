@@ -357,8 +357,8 @@ function resolveQuickOpenPayload(prompt) {
   }
 
   if (attachment.value.type === 'multiline-text' && attachment.value.rawText.trim()) {
-    payload.type = 'over'
-    payload.payload = attachment.value.rawText.trim()
+    payload.type = 'multiline-text'
+    payload.payload = attachment.value.rawText
     return payload
   }
 
@@ -409,7 +409,7 @@ async function restoreSession(candidate) {
 function updateFromTextInput(text = '', forceOverride = false) {
   const normalizedText = String(text || '')
   const trimmed = normalizedText.trim()
-  const textKind = classifyTextAttachment(trimmed)
+  const textKind = classifyTextAttachment(normalizedText)
 
   if (!trimmed) {
     if (forceOverride) {
@@ -419,9 +419,10 @@ function updateFromTextInput(text = '', forceOverride = false) {
   }
 
   if (forceOverride) {
+    const preservedText = textKind === 'multiline-text' ? normalizedText : trimmed
     setAttachment({
       type: textKind === 'multiline-text' ? 'multiline-text' : 'text',
-      rawText: trimmed,
+      rawText: preservedText,
       previewLabel: trimmed
     })
     queryText.value = ''
@@ -654,7 +655,7 @@ onMounted(async () => {
     } else if (data?.type === 'img' && typeof data.payload === 'string') {
       applyImageAttachment(data.payload)
       hasInitPayloadApplied = Boolean(data.payload)
-    } else if (data?.type === 'over' && typeof data.payload === 'string') {
+    } else if ((data?.type === 'over' || data?.type === 'multiline-text') && typeof data.payload === 'string') {
       updateFromTextInput(data.payload, true)
       hasInitPayloadApplied = Boolean(data.payload.trim())
     } else if (data?.type === 'empty') {
@@ -779,7 +780,7 @@ onBeforeUnmount(() => {
   justify-content: flex-start;
   gap: 8px;
   padding: 14px;
-  border-radius: 22px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: none;
   box-sizing: border-box;
@@ -929,11 +930,11 @@ html.dark .restore-chip {
 
 .grid-wrap {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  grid-auto-rows: 80px;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-auto-rows: 78px;
   gap: 8px;
   overflow: hidden;
-  max-height: calc(80px * 3 + 16px);
+  max-height: calc(78px * 3 + 16px);
 }
 
 .prompt-tile {
@@ -943,8 +944,8 @@ html.dark .restore-chip {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 6px 4px;
+  gap: 6px;
+  padding: 6px 3px;
   border-radius: 12px;
   cursor: pointer;
   transition: transform 0.1s ease, background 0.1s ease;
@@ -966,9 +967,9 @@ html.dark .prompt-tile.active {
 }
 
 .tile-icon-wrap {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
   overflow: hidden;
   background: transparent;
   display: flex;
@@ -983,7 +984,7 @@ html.dark .prompt-tile.active {
 }
 
 .tile-fallback {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   color: #565666;
 }
@@ -993,8 +994,8 @@ html.dark .tile-fallback {
 }
 
 .tile-name {
-  font-size: 10px;
-  line-height: 1.2;
+  font-size: 11.5px;
+  line-height: 1.25;
   text-align: center;
   color: #2d2d36;
   display: -webkit-box;
@@ -1010,13 +1011,13 @@ html.dark .tile-name {
 
 @media (max-width: 1100px) {
   .grid-wrap {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 860px) {
   .grid-wrap {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .search-input {

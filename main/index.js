@@ -49,11 +49,17 @@ app.on('child-process-gone', (_event, details) => {
 
 function buildQuickPayloadFromClipboardResult(result = {}) {
   const filePaths = Array.isArray(result.filePaths) ? result.filePaths : []
-  if (filePaths.length > 0) {
+  const rawText = typeof result.text === 'string' ? result.text : ''
+  const trimmedText = rawText.trim()
+  const normalizedType = typeof result.kind === 'string' && result.kind ? result.kind : ''
+  const textType = /\r?\n/.test(rawText) ? 'multiline-text' : 'over'
+
+  if (filePaths.length > 0 || normalizedType === 'files') {
     return {
       type: 'files',
       payload: filePaths.map((filePath) => ({ path: filePath })),
-      userText: typeof result.text === 'string' ? result.text.trim() : ''
+      userText: trimmedText,
+      source: result.source || 'clipboard'
     }
   }
 
@@ -62,27 +68,30 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
       return {
         type: 'img',
         payload: result.imageDataUrl,
-        userText: typeof result.text === 'string' ? result.text.trim() : ''
+        userText: trimmedText,
+        source: result.source || 'clipboard'
       }
     }
 
-    const fallbackText = typeof result.text === 'string' ? result.text.trim() : ''
     return {
-      type: fallbackText ? 'over' : 'empty',
-      payload: fallbackText
+      type: trimmedText ? textType : 'empty',
+      payload: trimmedText ? rawText : '',
+      source: result.source || 'clipboard'
     }
   }
 
-  if (typeof result.text === 'string' && result.text.trim()) {
+  if (trimmedText) {
     return {
-      type: 'over',
-      payload: result.text
+      type: textType,
+      payload: rawText,
+      source: result.source || 'clipboard'
     }
   }
 
   return {
     type: 'empty',
-    payload: ''
+    payload: '',
+    source: result.source || 'empty'
   }
 }
 
@@ -93,7 +102,8 @@ async function collectQuickPayload() {
   } catch {
     return {
       type: 'empty',
-      payload: ''
+      payload: '',
+      source: 'empty'
     }
   }
 }
@@ -133,20 +143,19 @@ async function triggerQuickSummon() {
   }
 
   const token = ++quickSummonToken
-  const openResult = await openQuickWindowPreservingMain({
-    type: 'empty',
-    payload: ''
-  })
+  const quickPayload = await collectQuickPayload()
+  if (token !== quickSummonToken) {
+    return { ok: false, action: 'stale', type: 'quick' }
+  }
 
-  collectQuickPayload()
-    .then((quickPayload) => {
-      if (token !== quickSummonToken) return
-      if (!quickPayload || quickPayload.type === 'empty') return
-      pushQuickPayloadToVisibleWindow(quickPayload)
-    })
-    .catch((error) => {
-      debugMainError('quick:payload-collect-failed', error)
-    })
+  const openResult = await openQuickWindowPreservingMain(quickPayload)
+  if (token !== quickSummonToken) {
+    return openResult
+  }
+
+  if (quickPayload && quickPayload.type !== 'empty') {
+    pushQuickPayloadToVisibleWindow(quickPayload)
+  }
 
   return openResult
 }

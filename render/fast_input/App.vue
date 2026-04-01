@@ -200,9 +200,7 @@ function handleFastInputEvent(event = {}) {
     sessionStatus.value = payload?.status || 'ready'
     inlineInputText.value = typeof payload?.inputText === 'string' ? payload.inputText : inlineInputText.value
     autoCopied.value = false
-    if (sessionStatus.value === 'empty' || sessionStatus.value === 'input-only') {
-      scheduleBlurAutoClose()
-    }
+    clearBlurAutoCloseTimer()
     return
   }
 

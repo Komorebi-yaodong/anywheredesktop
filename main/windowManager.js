@@ -936,13 +936,14 @@ export function closeWindow(windowRef = '') {
 
   const isDialogWindow = multiStore.has(resolved.windowRef)
   const isQuickSingleton = resolved.windowRef === 'quick'
+  const isFastSingleton = resolved.windowRef === 'fast'
 
   debugWindowManagerLog('closeWindow:resolved', {
     windowRef: resolved.windowRef,
     browserWindowId: resolved.win?.id,
     isDestroyed: resolved.win?.isDestroyed?.() ?? null,
     isVisible: resolved.win?.isVisible?.() ?? null,
-    strategy: isDialogWindow ? 'destroy' : isQuickSingleton ? 'hide' : 'close'
+    strategy: isDialogWindow ? 'destroy' : isQuickSingleton ? 'hide' : isFastSingleton ? 'destroy' : 'close'
   })
 
   if (isQuickSingleton) {
@@ -958,7 +959,7 @@ export function closeWindow(windowRef = '') {
     return result
   }
 
-  if (isDialogWindow) {
+  if (isFastSingleton || isDialogWindow) {
     resolved.win.destroy()
     const result = { ok: true, action: 'destroy', windowRef: resolved.windowRef }
     debugWindowManagerLog('closeWindow:after-destroy-call', result)

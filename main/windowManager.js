@@ -462,6 +462,7 @@ async function buildQuickWindowInitMessage(payload = {}) {
   return {
     type: typeof payload?.type === 'string' && payload.type ? payload.type : 'empty',
     payload: payload?.payload ?? '',
+    userText: typeof payload?.userText === 'string' ? payload.userText : '',
     promptKey: typeof payload?.promptKey === 'string' ? payload.promptKey : '',
     triggerMode: typeof payload?.triggerMode === 'string' ? payload.triggerMode : ''
   }

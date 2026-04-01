@@ -236,30 +236,40 @@ async function triggerPromptShortcut(promptKey = '') {
   try {
     if (typeof promptKey !== 'string' || !promptKey.trim()) return
 
+    const normalizedPromptKey = promptKey.trim()
     const configResult = await dataApi.getConfig()
     const config = configResult?.config && typeof configResult.config === 'object' ? configResult.config : null
-    const promptConfig = config?.prompts?.[promptKey]
+    const promptConfig = config?.prompts?.[normalizedPromptKey]
     if (!promptConfig || promptConfig.enable === false) return
 
-    const quickPayload = await collectQuickPayload()
+    const quickPayload = await collectQuickPayloadFast()
     const hasPayload = quickPayload.type !== 'empty'
+
+    logQuickPayloadSummary('triggerPromptShortcut:payload', {
+      ...quickPayload,
+      promptKey: normalizedPromptKey,
+      triggerMode: 'shortcut'
+    })
 
     if (promptConfig.showMode === 'fastinput') {
       await openQuickWindowPreservingMain({
         ...quickPayload,
-        promptKey,
+        promptKey: normalizedPromptKey,
         triggerMode: 'shortcut'
       })
       return
     }
 
     const openPayload = {
-      code: promptKey
+      code: normalizedPromptKey
     }
 
     if (hasPayload) {
       openPayload.type = quickPayload.type
       openPayload.payload = quickPayload.payload
+      if (typeof quickPayload.userText === 'string' && quickPayload.userText.trim()) {
+        openPayload.userText = quickPayload.userText.trim()
+      }
     }
 
     await openWindow('window', openPayload)

@@ -294,6 +294,7 @@ const handleAppendMessageEvent = async (data) => {
 
   let isFileDirectSend = false;
   const nowTime = new Date().toLocaleString('sv-SE');
+  const normalizedUserText = typeof data?.userText === 'string' ? data.userText.trim() : '';
 
   if (data.type === "multiline-text" && data.payload) {
     prompt.value = String(data.payload);
@@ -307,6 +308,9 @@ const handleAppendMessageEvent = async (data) => {
   } else if (data.type === "img" && data.payload) {
     history.value.push({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
     chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }], timestamp: nowTime });
+    if (normalizedUserText) {
+      prompt.value = normalizedUserText;
+    }
   } else if (data.type === "files" && data.payload) {
     try {
       const payloadList = Array.isArray(data.payload) ? data.payload : [];
@@ -325,6 +329,9 @@ const handleAppendMessageEvent = async (data) => {
         return null;
       });
       await Promise.all(fileProcessingPromises);
+      if (normalizedUserText) {
+        prompt.value = normalizedUserText;
+      }
       isFileDirectSend = true;
     } catch (error) {
       console.error(error);
@@ -1744,6 +1751,7 @@ onMounted(async () => {
     let isFileDirectSend = false;
     let isSessionRestored = false;
     let pendingAgentToolSend = null;
+    const normalizedUserText = typeof data?.userText === 'string' ? data.userText.trim() : '';
 
     if (data) {
       basic_msg.value = { code: data.code, type: data.type, payload: data.payload };
@@ -1830,9 +1838,15 @@ onMounted(async () => {
         if (currentPromptConfig.isDirectSend_image ?? true) {
           history.value.push({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
           chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
+          if (normalizedUserText) {
+            prompt.value = normalizedUserText;
+          }
           shouldDirectSend = true;
         } else {
           fileList.value.push({ uid: 1, name: "截图.png", size: 0, type: "image/png", url: String(data.payload) });
+          if (normalizedUserText) {
+            prompt.value = normalizedUserText;
+          }
         }
       } else if (data.type === "files" && data.payload) {
         try {
@@ -1861,6 +1875,9 @@ onMounted(async () => {
               return null;
             });
             await Promise.all(fileProcessingPromises);
+            if (normalizedUserText) {
+              prompt.value = normalizedUserText;
+            }
             if (currentPromptConfig.isDirectSend_file) {
               shouldDirectSend = true;
               isFileDirectSend = true;

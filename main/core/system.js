@@ -170,6 +170,11 @@ const explorerSelectionState = {
   timestamp: 0,
   filePaths: []
 }
+const clipboardFileDropState = {
+  signature: '',
+  timestamp: 0,
+  filePaths: []
+}
 
 function decodeClipboardPathBuffer(buffer) {
   if (!buffer || buffer.length < 4) return []
@@ -586,6 +591,40 @@ if ($null -eq $target -or @($target.filePaths).Count -eq 0) {
 }
 
 
+
+function updateClipboardFileDropState(filePaths = []) {
+  const normalized = Array.isArray(filePaths)
+    ? filePaths.map((item) => path.normalize(String(item))).filter(Boolean)
+    : []
+  const signature = JSON.stringify(normalized)
+
+  if (normalized.length === 0) {
+    clipboardFileDropState.signature = ''
+    clipboardFileDropState.timestamp = 0
+    clipboardFileDropState.filePaths = []
+    return {
+      filePaths: [],
+      ageMs: Number.POSITIVE_INFINITY,
+      isFresh: false
+    }
+  }
+
+  if (signature !== clipboardFileDropState.signature) {
+    clipboardFileDropState.signature = signature
+    clipboardFileDropState.timestamp = Date.now()
+    clipboardFileDropState.filePaths = [...normalized]
+  }
+
+  const ageMs = Math.max(0, Date.now() - (clipboardFileDropState.timestamp || 0))
+  const isFresh = ageMs <= CLIPBOARD_FRESHNESS_MS
+  return {
+    filePaths: [...clipboardFileDropState.filePaths],
+    ageMs,
+    isFresh
+  }
+}
+
+
 function updateExplorerSelectionState(filePaths = []) {
   const normalized = Array.isArray(filePaths)
     ? filePaths.map((item) => path.normalize(String(item))).filter(Boolean)
@@ -688,23 +727,26 @@ export async function captureQuickPayload() {
   }
 
   const clipboardPowerShellFiles = await tryReadClipboardFileDropListViaPowerShell()
+  const clipboardFileDropStateResult = updateClipboardFileDropState(clipboardPowerShellFiles)
   appendQuickDebugLog('captureQuickPayload:clipboardPowerShellFiles', {
-    count: clipboardPowerShellFiles.length,
-    sample: clipboardPowerShellFiles.slice(0, 5)
+    count: clipboardFileDropStateResult.filePaths.length,
+    sample: clipboardFileDropStateResult.filePaths.slice(0, 5),
+    ageMs: clipboardFileDropStateResult.ageMs,
+    isFresh: clipboardFileDropStateResult.isFresh
   })
-  if (clipboardPowerShellFiles.length > 0) {
+  if (clipboardFileDropStateResult.isFresh && clipboardFileDropStateResult.filePaths.length > 0) {
     return {
       ok: true,
       kind: 'files',
       text: '',
       imageDataUrl: '',
-      filePaths: clipboardPowerShellFiles,
+      filePaths: clipboardFileDropStateResult.filePaths,
       hasText: false,
       hasImage: false,
       hasFiles: true,
       formats: ['clipboard-file-drop-powershell'],
-      timestamp: Date.now(),
-      ageMs: 0,
+      timestamp: clipboardFileDropState.timestamp,
+      ageMs: clipboardFileDropStateResult.ageMs,
       freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
       isFresh: true,
       source: 'clipboard'

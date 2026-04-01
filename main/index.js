@@ -393,7 +393,6 @@ app.whenReady().then(async () => {
     toggleAlwaysOnTop
   })
 
-  systemApi.startClipboardWatcher()
   await syncDesktopRuntimeFromConfig()
   ensureTray()
   await openWindow('main')

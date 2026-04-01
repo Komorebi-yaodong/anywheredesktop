@@ -459,6 +459,8 @@ async function tryReadClipboardFileDropListViaPowerShell() {
   }
 
   const script = `Add-Type -AssemblyName System.Windows.Forms;
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+$OutputEncoding = [Console]::OutputEncoding;
 try {
   $list = [System.Windows.Forms.Clipboard]::GetFileDropList();
   $paths = @();
@@ -509,6 +511,8 @@ public static class Win32 {
 }
 "@;
 Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+$OutputEncoding = [Console]::OutputEncoding;
 $foregroundHwnd = [int64][Win32]::GetForegroundWindow();
 $shell = New-Object -ComObject Shell.Application;
 $windows = @();

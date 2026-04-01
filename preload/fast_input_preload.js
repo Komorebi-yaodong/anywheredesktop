@@ -50,6 +50,7 @@ const api = {
     if (typeof callback !== 'function') return
     electronAPI.ipcRenderer.on(FAST_INPUT_EVENT_CHANNEL, (_event, data) => callback(data))
   },
+  emitWindowEvent: (input) => invokeOrThrow('window:event:emit', input),
   copyText: (text) => invokeOrThrow('system:clipboard:copyText', text),
   pasteTextToActiveInput: (text) => invokeOrThrow('system:input:pasteText', text),
   readClipboardText: () => invokeOrThrow('system:clipboard:readText'),

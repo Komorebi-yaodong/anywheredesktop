@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const initialContext = window.api?.getWindowContext ? window.api.getWindowContext() : {}
@@ -19,7 +19,10 @@ const inlineInputText = ref('')
 const lastError = ref('')
 const isCopied = ref(false)
 const isDragging = ref(false)
+const autoCopied = ref(false)
 let copiedResetTimer = null
+let blurAutoCloseTimer = null
+let keyboardCleanup = null
 
 function getErrorMessage(error, fallback = '操作失败') {
   if (!error) return fallback
@@ -32,7 +35,13 @@ const promptIcon = computed(() => {
   return typeof promptConfig.value?.icon === 'string' && promptConfig.value.icon ? promptConfig.value.icon : ''
 })
 
+const isFinishedState = computed(() => ['done', 'error', 'cancelled', 'empty', 'input-only'].includes(sessionStatus.value))
+
 const displayText = computed(() => {
+  if (sessionStatus.value === 'cancelled') {
+    return '已取消快捷输入请求'
+  }
+
   if (sessionStatus.value === 'error') {
     return lastError.value || '执行失败'
   }
@@ -45,6 +54,10 @@ const displayText = computed(() => {
     return inlineInputText.value.replace(/[\r\n]+/g, ' ').trim()
   }
 
+  if (sessionStatus.value === 'empty') {
+    return '请先复制或选择文本、文件、图片后再召唤'
+  }
+
   if (sessionStatus.value === 'streaming') {
     return '等待内容…'
   }
@@ -54,8 +67,23 @@ const displayText = computed(() => {
 
 const canCopy = computed(() => Boolean(streamText.value.trim()))
 const canType = computed(() => Boolean(streamText.value.trim() || inlineInputText.value.trim()))
-const leftButtonMode = computed(() => (sessionStatus.value === 'done' && canCopy.value ? 'copy' : 'close'))
-const shouldShowTypingButton = computed(() => sessionStatus.value === 'done' || sessionStatus.value === 'streaming')
+const leftButtonMode = computed(() => (isFinishedState.value && canCopy.value ? 'copy' : 'close'))
+const shouldShowTypingButton = computed(() => sessionStatus.value === 'done' || sessionStatus.value === 'error' || sessionStatus.value === 'cancelled')
+
+function clearBlurAutoCloseTimer() {
+  if (blurAutoCloseTimer) {
+    clearTimeout(blurAutoCloseTimer)
+    blurAutoCloseTimer = null
+  }
+}
+
+function scheduleBlurAutoClose() {
+  clearBlurAutoCloseTimer()
+  if (!isFinishedState.value) return
+  blurAutoCloseTimer = setTimeout(() => {
+    closeFastInput()
+  }, 5000)
+}
 
 function resetCopiedStateSoon() {
   if (copiedResetTimer) clearTimeout(copiedResetTimer)
@@ -63,6 +91,12 @@ function resetCopiedStateSoon() {
     isCopied.value = false
     copiedResetTimer = null
   }, 900)
+}
+
+function markFinishedState() {
+  if (!autoCopied.value) return
+  isCopied.value = true
+  resetCopiedStateSoon()
 }
 
 function applyInitPayload(data = {}) {
@@ -88,6 +122,7 @@ function applyInitPayload(data = {}) {
 }
 
 async function closeFastInput() {
+  clearBlurAutoCloseTimer()
   try {
     await window.api.closeWindow(senderId.value)
   } catch {
@@ -146,20 +181,28 @@ function handleFastInputEvent(event = {}) {
     sessionStatus.value = 'ready'
     lastError.value = ''
     streamText.value = ''
+    autoCopied.value = false
     isCopied.value = false
+    clearBlurAutoCloseTimer()
     return
   }
 
   if (eventType === 'session:start') {
     sessionStatus.value = 'streaming'
     lastError.value = ''
+    autoCopied.value = false
     isCopied.value = false
+    clearBlurAutoCloseTimer()
     return
   }
 
   if (eventType === 'session:idle') {
     sessionStatus.value = payload?.status || 'ready'
     inlineInputText.value = typeof payload?.inputText === 'string' ? payload.inputText : inlineInputText.value
+    autoCopied.value = false
+    if (sessionStatus.value === 'empty' || sessionStatus.value === 'input-only') {
+      scheduleBlurAutoClose()
+    }
     return
   }
 
@@ -172,15 +215,19 @@ function handleFastInputEvent(event = {}) {
   if (eventType === 'session:done') {
     sessionStatus.value = 'done'
     streamText.value = typeof payload?.text === 'string' ? payload.text : streamText.value
+    autoCopied.value = Boolean(payload?.autoCopied)
+    markFinishedState()
     return
   }
 
   if (eventType === 'session:error') {
-    sessionStatus.value = 'error'
+    sessionStatus.value = String(payload?.message || '').includes('取消') ? 'cancelled' : 'error'
     lastError.value = typeof payload?.message === 'string' ? payload.message : '快捷输入执行失败'
     if (typeof payload?.text === 'string' && payload.text) {
       streamText.value = payload.text
     }
+    autoCopied.value = Boolean(payload?.autoCopied)
+    markFinishedState()
   }
 }
 
@@ -192,10 +239,14 @@ function handleDragStart(event) {
   }
   event.dataTransfer?.setData('text/plain', textToDrag)
   isDragging.value = true
+  clearBlurAutoCloseTimer()
 }
 
 function handleDragEnd() {
   isDragging.value = false
+  if (isFinishedState.value) {
+    closeFastInput()
+  }
 }
 
 if (window.api?.onWindowInit) {
@@ -221,12 +272,49 @@ onMounted(async () => {
     // ignore initial config fallback failure
   }
 
-  window.addEventListener('keydown', (event) => {
+  const handleWindowFocus = () => {
+    clearBlurAutoCloseTimer()
+  }
+
+  const handleWindowBlur = () => {
+    if (isFinishedState.value) {
+      scheduleBlurAutoClose()
+    }
+  }
+
+  const handleKeydown = (event) => {
     if (event.key === 'Escape') {
       event.preventDefault()
+      if (sessionStatus.value === 'streaming') {
+        window.api.emitWindowEvent?.({
+          target: senderId.value,
+          event: 'fast-input:cancel-request',
+          payload: { reason: 'user_cancelled' }
+        }).catch(() => {})
+        lastError.value = '已取消快捷输入请求'
+        sessionStatus.value = 'cancelled'
+        scheduleBlurAutoClose()
+        return
+      }
       closeFastInput()
     }
-  })
+  }
+
+  window.addEventListener('focus', handleWindowFocus)
+  window.addEventListener('blur', handleWindowBlur)
+  window.addEventListener('keydown', handleKeydown)
+
+  keyboardCleanup = () => {
+    window.removeEventListener('focus', handleWindowFocus)
+    window.removeEventListener('blur', handleWindowBlur)
+    window.removeEventListener('keydown', handleKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (copiedResetTimer) clearTimeout(copiedResetTimer)
+  clearBlurAutoCloseTimer()
+  keyboardCleanup?.()
 })
 </script>
 
@@ -285,9 +373,7 @@ onMounted(async () => {
 }
 
 .fast-bar {
-
   -webkit-app-region: drag;
-
   width: min(100%, 560px);
   min-height: 52px;
   border-radius: 999px;
@@ -307,7 +393,9 @@ html.dark .fast-bar {
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
 }
 
-.fast-bar.status-done {
+.fast-bar.status-done,
+.fast-bar.status-error,
+.fast-bar.status-cancelled {
   animation: glow 0.45s ease-out;
 }
 
@@ -318,7 +406,6 @@ html.dark .fast-bar {
 .drag-region {
   -webkit-app-region: drag;
 }
-
 
 .icon-btn {
   width: 30px;
@@ -375,9 +462,6 @@ html.dark .icon-btn:hover:not(:disabled) {
 }
 
 .content-zone {
-
-  -webkit-app-region: drag;
-
   min-width: 0;
   display: flex;
   align-items: center;

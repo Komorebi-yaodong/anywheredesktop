@@ -5,7 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import icon from '../resources/icon.png?asset'
 import { getConfig, defaultConfig } from './core/data.js'
-import { startFastInputSession, getFastInputRecommendedBounds } from './core/fastInput.js'
+import { startFastInputSession, getFastInputRecommendedBounds, cancelFastInputSession } from './core/fastInput.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -204,7 +204,8 @@ function resolveWindowConfig(baseConfig, payload) {
     const targetDisplay = screen.getDisplayNearestPoint(cursorPoint) || screen.getPrimaryDisplay()
     const workArea = getWorkArea(targetDisplay)
     nextConfig.options.x = Math.round(workArea.x + (workArea.width - nextConfig.width) / 2)
-    nextConfig.options.y = Math.round(workArea.y + Math.max(24, workArea.height * 0.22))
+    nextConfig.options.y = Math.round(workArea.y + workArea.height - nextConfig.height - Math.max(20, Math.round(workArea.height * 0.15)))
+    nextConfig.options.alwaysOnTop = true
   }
 
   if (payload && typeof payload === 'object') {
@@ -541,7 +542,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
     }
   })
 
-  if (type === 'fast' || type === 'quick') {
+  if (type === 'quick') {
     win.on('blur', () => {
       if (!win.isDestroyed()) {
         setTimeout(() => {
@@ -789,6 +790,20 @@ export function getWindowIds(type) {
 export function getWindowById(id) {
   if (!id || typeof id !== 'string') return null
   return multiStore.get(id) || null
+}
+
+
+export function handleFastInputWindowEvent(windowRef = '', eventName = '', payload = null) {
+  const win = getWindowByRef(windowRef)
+  if (!win || win.isDestroyed()) {
+    return { ok: false, reason: 'window_not_found', windowRef }
+  }
+
+  if (eventName === 'fast-input:cancel-request') {
+    return cancelFastInputSession(win, payload?.reason || 'cancelled')
+  }
+
+  return { ok: false, reason: 'unsupported_event', event: eventName, windowRef }
 }
 
 export function getWindowByRef(ref) {

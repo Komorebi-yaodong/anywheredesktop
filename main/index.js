@@ -14,6 +14,7 @@ import {
   maximizeOrRestoreWindow,
   closeWindow,
   toggleAlwaysOnTop,
+  handleFastInputWindowEvent,
   setMainWindowCloseBehavior,
   markAppQuitting,
   isSingletonWindowVisible
@@ -381,7 +382,8 @@ app.whenReady().then(async () => {
     minimizeWindow,
     maximizeOrRestoreWindow,
     closeWindow,
-    toggleAlwaysOnTop
+    toggleAlwaysOnTop,
+    handleFastInputWindowEvent
   })
 
   await syncDesktopRuntimeFromConfig()

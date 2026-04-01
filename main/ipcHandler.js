@@ -60,7 +60,8 @@ export function registerIpcHandlers({
   minimizeWindow,
   maximizeOrRestoreWindow,
   closeWindow,
-  toggleAlwaysOnTop
+  toggleAlwaysOnTop,
+  handleFastInputWindowEvent
 }) {
   ipcMain.on('ping', () => {})
 
@@ -98,6 +99,11 @@ export function registerIpcHandlers({
 
   handleInvoke('window:event:emit', async (event, input = {}) => {
     const sourceId = getWindowRefByWebContentsId(event.sender.id)
+
+    if (input?.event === 'fast-input:cancel-request') {
+      const fallbackTarget = typeof input?.target === 'string' && input.target ? input.target : sourceId
+      return handleFastInputWindowEvent(fallbackTarget, input?.event, input?.payload)
+    }
 
     return dispatchWindowEvent(
       {

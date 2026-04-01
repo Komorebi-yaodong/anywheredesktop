@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import * as chatApi from './chat.js'
 import * as fileApi from './file.js'
+import * as systemApi from './system.js'
 import { defaultConfig, getConfig } from './data.js'
 
 const FAST_INPUT_EVENT_CHANNEL = 'fast-input:event'
+const fastInputSessionStore = new WeakMap()
 
 function getOsName() {
   if (process.platform === 'darwin') return 'macos'
@@ -311,6 +313,44 @@ function emitFastInputEvent(win, type, payload = null) {
   }
 }
 
+
+function setFastInputSessionState(win, nextState = {}) {
+  if (!win || win.isDestroyed()) return null
+  const previous = fastInputSessionStore.get(win) || {}
+  const merged = { ...previous, ...nextState }
+  fastInputSessionStore.set(win, merged)
+  return merged
+}
+
+function getFastInputSessionState(win) {
+  if (!win || win.isDestroyed()) return null
+  return fastInputSessionStore.get(win) || null
+}
+
+export function cancelFastInputSession(win, reason = 'cancelled') {
+  const state = getFastInputSessionState(win)
+  if (!state || !state.controller) {
+    return { ok: false, reason: 'no_active_session' }
+  }
+
+  try {
+    state.controller.abort(new Error(reason))
+  } catch {
+    // ignore abort race
+  }
+
+  setFastInputSessionState(win, {
+    status: 'cancelled',
+    cancelledAt: Date.now(),
+    cancelReason: reason,
+    active: false,
+    controller: null
+  })
+
+  return { ok: true, reason }
+}
+
+
 async function buildFastInputInitPayload(payload = {}) {
   const configResult = await getConfig()
   const fullConfig =
@@ -431,6 +471,11 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
     throw new Error('fast_input window is not available')
   }
 
+  const previousSession = getFastInputSessionState(win)
+  if (previousSession?.active && previousSession.controller) {
+    cancelFastInputSession(win, 'superseded')
+  }
+
   const initPayload = await buildFastInputInitPayload(payload)
   const userMessageResult = await buildUserMessageFromPayload(payload, initPayload.promptConfig)
   const deferredAttachments = Array.isArray(userMessageResult?.deferredAttachments)
@@ -447,18 +492,34 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
   })
 
   if (userMessageResult?.mode !== 'request' || !userMessageResult?.message) {
+    const status = userMessageResult?.mode === 'input-only' ? 'input-only' : 'empty'
+    const idleText =
+      userMessageResult?.inputText ||
+      (status === 'empty' ? '请先复制或选择文本、文件、图片后再召唤' : '')
+
     emitFastInputEvent(win, 'session:idle', {
-      status: userMessageResult?.mode === 'input-only' ? 'input-only' : 'empty',
-      inputText: userMessageResult?.inputText || '',
+      status,
+      inputText: idleText,
       deferredAttachments,
       canSubmit: false,
-      canPaste: true,
+      canPaste: Boolean(userMessageResult?.inputText),
       canCopy: false
     })
+
+    setFastInputSessionState(win, {
+      active: false,
+      status,
+      completedAt: Date.now(),
+      text: idleText,
+      autoCopied: false,
+      controller: null,
+      requestId: null
+    })
+
     return {
       ok: true,
       status: userMessageResult?.mode || 'noop',
-      inputText: userMessageResult?.inputText || '',
+      inputText: idleText,
       deferredAttachments,
       initPayload
     }
@@ -481,6 +542,18 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
   const requestId = randomUUID()
   let finalText = ''
 
+  setFastInputSessionState(win, {
+    requestId,
+    active: true,
+    status: 'streaming',
+    controller,
+    startedAt: Date.now(),
+    text: '',
+    autoCopied: false,
+    completedAt: 0,
+    cancelReason: ''
+  })
+
   try {
     if (requestParams.stream) {
       const stream = await chatApi.createChatCompletion(requestParams)
@@ -488,6 +561,7 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
         const chunkText = extractChatCompletionChunk(part, requestParams.apiType)
         if (!chunkText) continue
         finalText += chunkText
+        setFastInputSessionState(win, { text: finalText })
         emitFastInputEvent(win, 'session:chunk', {
           requestId,
           chunk: chunkText,
@@ -497,6 +571,7 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
     } else {
       const response = await chatApi.createChatCompletion(requestParams)
       finalText = extractNonStreamText(response, requestParams.apiType)
+      setFastInputSessionState(win, { text: finalText })
       if (finalText) {
         emitFastInputEvent(win, 'session:chunk', {
           requestId,
@@ -506,12 +581,31 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
       }
     }
 
+    try {
+      if (finalText.trim()) {
+        await systemApi.copyText(finalText)
+        setFastInputSessionState(win, { autoCopied: true })
+      }
+    } catch {
+      // ignore auto copy failure
+    }
+
     emitFastInputEvent(win, 'session:done', {
       requestId,
       text: finalText,
+      autoCopied: Boolean(finalText.trim()),
       canSubmit: false,
       canPaste: true,
       canCopy: Boolean(finalText)
+    })
+
+    setFastInputSessionState(win, {
+      active: false,
+      status: 'done',
+      controller: null,
+      completedAt: Date.now(),
+      text: finalText,
+      requestId
     })
 
     if (typeof onCompleted === 'function') {
@@ -533,17 +627,57 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
       inputText: userMessageResult?.inputText || ''
     }
   } catch (error) {
+    const isAbortError = controller.signal.aborted || String(error?.name || '').toLowerCase().includes('abort')
+    const errorText = finalText || (isAbortError ? '已取消快捷输入请求' : error?.message || '快捷输入执行失败')
+
+    try {
+      if (errorText.trim()) {
+        await systemApi.copyText(errorText)
+        setFastInputSessionState(win, { autoCopied: true })
+      }
+    } catch {
+      // ignore auto copy failure
+    }
+
     emitFastInputEvent(win, 'session:error', {
       requestId,
-      message: error?.message || '快捷输入执行失败',
-      text: finalText,
+      message: isAbortError ? '已取消快捷输入请求' : error?.message || '快捷输入执行失败',
+      text: errorText,
+      autoCopied: Boolean(errorText.trim()),
       canSubmit: false,
       canPaste: true,
-      canCopy: Boolean(finalText)
+      canCopy: Boolean(errorText)
     })
+
+    setFastInputSessionState(win, {
+      active: false,
+      status: isAbortError ? 'cancelled' : 'error',
+      controller: null,
+      completedAt: Date.now(),
+      text: errorText,
+      cancelReason: isAbortError ? 'cancelled' : '',
+      requestId
+    })
+
+    if (isAbortError) {
+      return {
+        ok: false,
+        aborted: true,
+        requestId,
+        text: errorText,
+        initPayload,
+        deferredAttachments,
+        inputText: userMessageResult?.inputText || ''
+      }
+    }
+
     throw error
   } finally {
-    controller.abort()
+    try {
+      controller.abort()
+    } catch {
+      // ignore final abort cleanup race
+    }
   }
 }
 

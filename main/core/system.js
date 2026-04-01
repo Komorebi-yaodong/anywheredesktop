@@ -165,6 +165,11 @@ const clipboardTimeline = {
   image: { signature: '', timestamp: 0, value: '' },
   files: { signature: '', timestamp: 0, value: [] }
 }
+const explorerSelectionState = {
+  signature: '',
+  timestamp: 0,
+  filePaths: []
+}
 
 function decodeClipboardPathBuffer(buffer) {
   if (!buffer || buffer.length < 4) return []
@@ -580,6 +585,40 @@ if ($null -eq $target -or @($target.filePaths).Count -eq 0) {
   }
 }
 
+
+function updateExplorerSelectionState(filePaths = []) {
+  const normalized = Array.isArray(filePaths)
+    ? filePaths.map((item) => path.normalize(String(item))).filter(Boolean)
+    : []
+  const signature = JSON.stringify(normalized)
+
+  if (normalized.length === 0) {
+    explorerSelectionState.signature = ''
+    explorerSelectionState.timestamp = 0
+    explorerSelectionState.filePaths = []
+    return {
+      filePaths: [],
+      ageMs: Number.POSITIVE_INFINITY,
+      isFresh: false
+    }
+  }
+
+  if (signature !== explorerSelectionState.signature) {
+    explorerSelectionState.signature = signature
+    explorerSelectionState.timestamp = Date.now()
+    explorerSelectionState.filePaths = [...normalized]
+  }
+
+  const ageMs = Math.max(0, Date.now() - (explorerSelectionState.timestamp || 0))
+  const isFresh = ageMs <= CLIPBOARD_FRESHNESS_MS
+  return {
+    filePaths: [...explorerSelectionState.filePaths],
+    ageMs,
+    isFresh
+  }
+}
+
+
 async function tryCaptureSelectionToClipboard() {
   if (process.platform !== 'win32') {
     return null
@@ -622,23 +661,26 @@ async function tryCaptureSelectionToClipboard() {
 
 export async function captureQuickPayload() {
   const explorerSelection = await tryReadForegroundExplorerSelection()
+  const explorerSelectionStateResult = updateExplorerSelectionState(explorerSelection)
   appendQuickDebugLog('captureQuickPayload:explorerSelection', {
-    count: explorerSelection.length,
-    sample: explorerSelection.slice(0, 5)
+    count: explorerSelectionStateResult.filePaths.length,
+    sample: explorerSelectionStateResult.filePaths.slice(0, 5),
+    ageMs: explorerSelectionStateResult.ageMs,
+    isFresh: explorerSelectionStateResult.isFresh
   })
-  if (explorerSelection.length > 0) {
+  if (explorerSelectionStateResult.isFresh && explorerSelectionStateResult.filePaths.length > 0) {
     return {
       ok: true,
       kind: 'files',
       text: '',
       imageDataUrl: '',
-      filePaths: explorerSelection,
+      filePaths: explorerSelectionStateResult.filePaths,
       hasText: false,
       hasImage: false,
       hasFiles: true,
       formats: ['foreground-explorer-selection'],
-      timestamp: Date.now(),
-      ageMs: 0,
+      timestamp: explorerSelectionState.timestamp,
+      ageMs: explorerSelectionStateResult.ageMs,
       freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
       isFresh: true,
       source: 'selection'

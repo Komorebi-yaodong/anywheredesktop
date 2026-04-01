@@ -317,7 +317,7 @@ const candidateSections = computed(() => {
   }
 
   const sections = hasAttachmentFilter && hasQuery
-    ? [...secondPassNameMatches.sort(sorter), ...secondPassFallback.sort(sorter)]
+    ? secondPassNameMatches.sort(sorter)
     : firstPass.sort(sorter)
 
   const deduped = []

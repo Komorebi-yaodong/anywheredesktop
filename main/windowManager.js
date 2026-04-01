@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import icon from '../resources/icon.png?asset'
 import { getConfig, defaultConfig } from './core/data.js'
+import { startFastInputSession, getFastInputRecommendedBounds } from './core/fastInput.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -29,12 +30,12 @@ const WINDOWS = {
     options: {}
   },
   fast: {
-    title: 'AI Anywhere Desktop - Fast Window',
-    preload: 'fast_preload.js',
-    html: 'fast_window/index.html',
-    devPath: '/fast_window/index.html',
-    width: 560,
-    height: 420,
+    title: 'AI Anywhere Desktop - Fast Input',
+    preload: 'fast_input_preload.js',
+    html: 'fast_input/index.html',
+    devPath: '/fast_input/index.html',
+    width: 520,
+    height: 176,
     options: {
       frame: false,
       transparent: true,
@@ -188,6 +189,16 @@ function resolveWindowConfig(baseConfig, payload) {
     options: {
       ...(baseConfig.options || {})
     }
+  }
+
+  if (baseConfig?.html === 'fast_input/index.html') {
+    const configPayload = payload && typeof payload === 'object' ? payload : {}
+    const fullConfig = defaultConfig.config || {}
+    const promptCode = resolvePromptCode(configPayload)
+    const promptConfig = resolvePromptConfig(fullConfig, configPayload, promptCode)
+    const fastBounds = getFastInputRecommendedBounds(promptConfig)
+    nextConfig.width = fastBounds.width
+    nextConfig.height = fastBounds.height
   }
 
   if (payload && typeof payload === 'object') {
@@ -600,6 +611,9 @@ export async function openWindow(type = 'main', payload = null) {
       if (targetType === 'quick') {
         applyQuickWindowBounds(existing, config)
       }
+      if (targetType === 'fast') {
+        applyQuickWindowBounds(existing, config)
+      }
       activateWindow(existing)
       if (targetType === 'quick' && openPayload) {
         const quickInitMessage = await buildQuickWindowInitMessage(openPayload)
@@ -613,6 +627,31 @@ export async function openWindow(type = 'main', payload = null) {
           // ignore quick re-init delivery failure
         }
       }
+      if (targetType === 'fast' && openPayload) {
+        waitForWindowReady(targetType, 2500)
+          .then(async (isReady) => {
+            if (!isReady || existing.isDestroyed()) return
+            const sessionResult = await startFastInputSession({
+              win: existing,
+              payload: openPayload,
+              onCompleted: (sessionResult) => {
+                try {
+                  existing.__fastInputResult = sessionResult
+                } catch {
+                  // ignore session cache write failure
+                }
+              }
+            })
+            try {
+              existing.__fastInputResult = sessionResult
+            } catch {
+              // ignore session cache write failure
+            }
+          })
+          .catch(() => {
+            // ignore fast_input restart failure; renderer state is driven by session events
+          })
+      }
       return { ok: true, type: targetType, id: targetType, reused: true, payload: openPayload }
     }
 
@@ -621,7 +660,16 @@ export async function openWindow(type = 'main', payload = null) {
       ? await buildWindowInitMessage(openPayload, targetType)
       : targetType === 'quick'
         ? await buildQuickWindowInitMessage(openPayload)
-        : null
+        : targetType === 'fast'
+          ? {
+              code: resolvePromptCode(openPayload || {}),
+              type: typeof openPayload?.type === 'string' && openPayload.type ? openPayload.type : 'empty',
+              payload: openPayload?.payload ?? '',
+              userText: typeof openPayload?.userText === 'string' ? openPayload.userText : '',
+              promptKey: typeof openPayload?.promptKey === 'string' ? openPayload.promptKey : '',
+              triggerMode: typeof openPayload?.triggerMode === 'string' ? openPayload.triggerMode : ''
+            }
+          : null
     const win = createBrowserWindow(targetType, config, '', targetType, initMessage)
     singletonStore.set(targetType, win)
     bindWindowRef(win, targetType)
@@ -636,6 +684,32 @@ export async function openWindow(type = 'main', payload = null) {
       })
       singletonStore.delete(targetType)
     })
+
+    if (targetType === 'fast' && openPayload) {
+      waitForWindowReady(targetType, 2500)
+        .then(async (isReady) => {
+          if (!isReady || win.isDestroyed()) return
+          const sessionResult = await startFastInputSession({
+            win,
+            payload: openPayload,
+            onCompleted: (completed) => {
+              try {
+                win.__fastInputResult = completed
+              } catch {
+                // ignore session cache write failure
+              }
+            }
+          })
+          try {
+            win.__fastInputResult = sessionResult
+          } catch {
+            // ignore session cache write failure
+          }
+        })
+        .catch(() => {
+          // ignore fast_input bootstrap failure here; renderer will receive no-op/error state from session start
+        })
+    }
 
     return { ok: true, type: targetType, id: targetType, reused: false, payload: openPayload }
   }

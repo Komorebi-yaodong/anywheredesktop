@@ -65,6 +65,43 @@ function normalizeDesktopOptions(options = {}) {
   }
 }
 
+
+export async function pasteTextToActiveInput(text) {
+  const normalizedText = normalizeText(text)
+  clipboard.writeText(normalizedText)
+
+  if (process.platform !== 'win32') {
+    return {
+      ok: false,
+      reason: 'unsupported_platform',
+      platform: process.platform
+    }
+  }
+
+  const script = '$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -Milliseconds 80; $wshell.SendKeys("^v"); Start-Sleep -Milliseconds 120'
+
+  try {
+    await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    })
+
+    return {
+      ok: true,
+      action: 'paste',
+      platform: process.platform,
+      textLength: normalizedText.length
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'paste_failed',
+      platform: process.platform,
+      message: error?.message || 'unknown_error'
+    }
+  }
+}
+
 export async function copyText(text) {
   clipboard.writeText(normalizeText(text))
   return { ok: true }

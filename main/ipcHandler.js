@@ -180,6 +180,10 @@ export function registerIpcHandlers({
 
   const getSenderWindow = (event) => BrowserWindow.fromWebContents(event.sender) || undefined
 
+  handleInvoke('system:input:pasteText', async (_event, text = '') => {
+    return systemApi.pasteTextToActiveInput(text)
+  })
+
   handleInvoke('system:clipboard:copyText', async (_event, text = '') => {
     return systemApi.copyText(text)
   })

@@ -489,6 +489,8 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
 
   const browserWindowId = win.id
   const webContentsId = win.webContents?.id ?? null
+  win.__didFinishLoad = false
+  win.__readyToShow = false
 
   debugWindowManagerLog('createBrowserWindow:created', {
     type,
@@ -500,6 +502,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   })
 
   win.on('ready-to-show', () => {
+    win.__readyToShow = true
     try {
       win.__suppressBlurUntil = Date.now() + 260
     } catch {
@@ -566,6 +569,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
 
 
 win.webContents.once('did-finish-load', () => {
+    win.__didFinishLoad = true
     try {
       win.webContents.send(WINDOW_INIT_CHANNEL, {
         senderId: windowRef || null,
@@ -711,6 +715,63 @@ export function getWindowByRef(ref) {
   if (!ref || typeof ref !== 'string') return null
   if (SINGLETON_TYPES.has(ref)) return getSingletonWindow(ref)
   return getWindowById(ref)
+}
+
+
+export function waitForWindowReady(windowRef = '', timeoutMs = 2500) {
+  const resolvedTimeout = Number.isFinite(Number(timeoutMs)) ? Math.max(0, Number(timeoutMs)) : 2500
+  const win = getWindowByRef(windowRef)
+  if (!win || win.isDestroyed()) {
+    return Promise.resolve(false)
+  }
+
+  if (win.__didFinishLoad === true) {
+    return Promise.resolve(true)
+  }
+
+  return new Promise((resolve) => {
+    let settled = false
+    let timer = null
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      try {
+        win.webContents?.removeListener?.('did-finish-load', handleReady)
+      } catch {
+        // ignore listener cleanup failure
+      }
+      try {
+        win.removeListener?.('closed', handleClosed)
+      } catch {
+        // ignore listener cleanup failure
+      }
+    }
+
+    const settle = (value) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }
+
+    const handleReady = () => settle(true)
+    const handleClosed = () => settle(false)
+
+    try {
+      win.webContents?.once?.('did-finish-load', handleReady)
+      win.once?.('closed', handleClosed)
+    } catch {
+      settle(false)
+      return
+    }
+
+    timer = setTimeout(() => {
+      settle(Boolean(win.__didFinishLoad === true && !win.isDestroyed()))
+    }, resolvedTimeout)
+  })
 }
 
 function resolveActionWindow(windowRef = '') {

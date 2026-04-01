@@ -267,6 +267,8 @@ const currentTaskConfig = ref(null);
 
 const isClosingWindow = ref(false);
 const isSavingWindowSettings = ref(false);
+const isWindowBootstrapped = ref(false);
+const pendingWindowPayloadQueue = [];
 
 
 const normalizeWindowEventPayload = (input) => {
@@ -282,6 +284,21 @@ const normalizeWindowEventPayload = (input) => {
 
   return input.payload ?? input;
 };
+
+const enqueueWindowPayload = (payload) => {
+  if (!payload || typeof payload !== 'object') return;
+  pendingWindowPayloadQueue.push(payload);
+};
+
+const flushPendingWindowPayloadQueue = async () => {
+  if (!isWindowBootstrapped.value || pendingWindowPayloadQueue.length === 0) return;
+  while (pendingWindowPayloadQueue.length > 0) {
+    const nextPayload = pendingWindowPayloadQueue.shift();
+    if (!nextPayload) continue;
+    await handleAppendMessageEvent(nextPayload);
+  }
+};
+
 
 const handleAppendMessageEvent = async (data) => {
   if (!data) return;
@@ -1913,6 +1930,9 @@ onMounted(async () => {
 
     await fetchSkillsList();
 
+    isWindowBootstrapped.value = true;
+    await flushPendingWindowPayloadQueue();
+
     if (pendingAgentToolSend) {
       if (isAtBottom.value) scrollToBottom();
       await sendAgentToolMessage(pendingAgentToolSend);
@@ -1954,6 +1974,10 @@ onMounted(async () => {
     window.api.onWindowEvent(async (envelope) => {
       const payload = normalizeWindowEventPayload(envelope);
       if (payload && typeof payload === 'object' && payload.type) {
+        if (!isWindowBootstrapped.value) {
+          enqueueWindowPayload(payload);
+          return;
+        }
         await handleAppendMessageEvent(payload);
       }
     });
@@ -1961,6 +1985,10 @@ onMounted(async () => {
 
   if (window.preload && typeof window.preload.onAppendMessage === 'function') {
     window.preload.onAppendMessage(async (data) => {
+      if (!isWindowBootstrapped.value) {
+        enqueueWindowPayload(data);
+        return;
+      }
       await handleAppendMessageEvent(data);
     });
   }

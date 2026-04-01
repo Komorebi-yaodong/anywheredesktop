@@ -9,6 +9,7 @@ import {
   listWindows,
   getWindowByRef,
   getWindowRefByWebContentsId,
+  waitForWindowReady,
   minimizeWindow,
   maximizeOrRestoreWindow,
   closeWindow,
@@ -232,6 +233,30 @@ const openResult = await openQuickWindowPreservingMain({
   return openResult
 }
 
+async function dispatchShortcutPayloadToWindow(targetWindowId, quickPayload, promptKey = '') {
+  if (typeof targetWindowId !== 'string' || !targetWindowId) return false
+  if (!quickPayload || quickPayload.type === 'empty') return false
+
+  const isReady = await waitForWindowReady(targetWindowId, 2500)
+  if (!isReady) return false
+
+  const dispatchResult = dispatchWindowEvent(
+    {
+      sourceId: 'global-shortcut',
+      target: targetWindowId,
+      event: 'shortcut:append-payload',
+      payload: {
+        code: promptKey,
+        ...quickPayload
+      }
+    },
+    { getWindowByRef, listWindows }
+  )
+
+  return Boolean(dispatchResult?.ok && dispatchResult?.delivered > 0)
+}
+
+
 async function triggerPromptShortcut(promptKey = '') {
   try {
     if (typeof promptKey !== 'string' || !promptKey.trim()) return
@@ -242,16 +267,14 @@ async function triggerPromptShortcut(promptKey = '') {
     const promptConfig = config?.prompts?.[normalizedPromptKey]
     if (!promptConfig || promptConfig.enable === false) return
 
-    const quickPayload = await collectQuickPayloadFast()
-    const hasPayload = quickPayload.type !== 'empty'
-
-    logQuickPayloadSummary('triggerPromptShortcut:payload', {
-      ...quickPayload,
-      promptKey: normalizedPromptKey,
-      triggerMode: 'shortcut'
-    })
-
     if (promptConfig.showMode === 'fastinput') {
+      const quickPayload = await collectQuickPayloadFast()
+      logQuickPayloadSummary('triggerPromptShortcut:payload', {
+        ...quickPayload,
+        promptKey: normalizedPromptKey,
+        triggerMode: 'shortcut'
+      })
+
       await openQuickWindowPreservingMain({
         ...quickPayload,
         promptKey: normalizedPromptKey,
@@ -260,19 +283,33 @@ async function triggerPromptShortcut(promptKey = '') {
       return
     }
 
-    const openPayload = {
+    const openResult = await openWindow('window', {
       code: normalizedPromptKey
-    }
+    })
 
-    if (hasPayload) {
-      openPayload.type = quickPayload.type
-      openPayload.payload = quickPayload.payload
-      if (typeof quickPayload.userText === 'string' && quickPayload.userText.trim()) {
-        openPayload.userText = quickPayload.userText.trim()
-      }
-    }
+    collectQuickPayloadFast()
+      .then(async (quickPayload) => {
+        logQuickPayloadSummary('triggerPromptShortcut:payload', {
+          ...quickPayload,
+          promptKey: normalizedPromptKey,
+          triggerMode: 'shortcut'
+        })
 
-    await openWindow('window', openPayload)
+        if (!quickPayload || quickPayload.type === 'empty') return
+        const delivered = await dispatchShortcutPayloadToWindow(openResult?.id, quickPayload, normalizedPromptKey)
+        if (!delivered) {
+          debugMainError('shortcut:payload-dispatch-timeout', {
+            promptKey: normalizedPromptKey,
+            targetWindowId: openResult?.id || null
+          })
+        }
+      })
+      .catch((error) => {
+        debugMainError('shortcut:payload-collect-failed', {
+          promptKey: normalizedPromptKey,
+          error: error?.message || error
+        })
+      })
   } catch (error) {
     debugMainError('shortcut:prompt-trigger-failed', { promptKey, error: error?.message || error })
   }

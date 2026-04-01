@@ -53,6 +53,20 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
   const trimmedText = rawText.trim()
   const normalizedType = typeof result.kind === 'string' && result.kind ? result.kind : ''
   const textType = /\r?\n/.test(rawText) ? 'multiline-text' : 'over'
+  const imageDataUrl = typeof result.imageDataUrl === 'string' ? result.imageDataUrl : ''
+  const hasRasterImage = Boolean(imageDataUrl && !imageDataUrl.startsWith('data:image/svg+xml'))
+
+  if ((filePaths.length > 0 || normalizedType === 'files') && hasRasterImage) {
+    return {
+      type: 'files',
+      payload: [
+        { name: 'clipboard-image.png', dataUrl: imageDataUrl },
+        ...filePaths.map((filePath) => ({ path: filePath }))
+      ],
+      userText: trimmedText,
+      source: result.source || 'clipboard'
+    }
+  }
 
   if (filePaths.length > 0 || normalizedType === 'files') {
     return {
@@ -63,16 +77,16 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
     }
   }
 
-  if (typeof result.imageDataUrl === 'string' && result.imageDataUrl) {
-    if (!result.imageDataUrl.startsWith('data:image/svg+xml')) {
-      return {
-        type: 'img',
-        payload: result.imageDataUrl,
-        userText: trimmedText,
-        source: result.source || 'clipboard'
-      }
+  if (hasRasterImage) {
+    return {
+      type: 'img',
+      payload: imageDataUrl,
+      userText: trimmedText,
+      source: result.source || 'clipboard'
     }
+  }
 
+  if (imageDataUrl) {
     return {
       type: trimmedText ? textType : 'empty',
       payload: trimmedText ? rawText : '',
@@ -108,11 +122,44 @@ async function collectQuickPayload() {
   }
 }
 
+
+function logQuickPayloadSummary(stage, payload) {
+  try {
+    systemApi.logQuickDebug(stage, {
+      type: payload?.type || 'empty',
+      source: payload?.source || 'unknown',
+      fileCount: Array.isArray(payload?.payload) ? payload.payload.length : 0,
+      fileSample: Array.isArray(payload?.payload)
+        ? payload.payload.slice(0, 5).map((item) => item?.path || item?.name || item)
+        : [],
+      hasUserText: Boolean(payload?.userText),
+      payloadPreview:
+        typeof payload?.payload === 'string'
+          ? String(payload.payload).slice(0, 120)
+          : Array.isArray(payload?.payload)
+            ? `[array:${payload.payload.length}]`
+            : payload?.payload ?? null
+    })
+  } catch {
+    // ignore quick payload debug failure
+  }
+}
+
+
 async function collectQuickPayloadFast() {
   try {
     const result = await systemApi.captureQuickPayload()
-    return buildQuickPayloadFromClipboardResult(result)
-  } catch {
+    const payload = buildQuickPayloadFromClipboardResult(result)
+    logQuickPayloadSummary('collectQuickPayloadFast:result', payload)
+    return payload
+  } catch (error) {
+    try {
+      systemApi.logQuickDebug('collectQuickPayloadFast:error', {
+        message: error?.message || String(error || 'unknown')
+      })
+    } catch {
+      // ignore quick payload error debug failure
+    }
     return {
       type: 'empty',
       payload: '',
@@ -129,6 +176,8 @@ async function openQuickWindowPreservingMain(payload = null) {
 function pushQuickPayloadToVisibleWindow(payload = null) {
   const quickWindow = getWindowByRef('quick')
   if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return false
+
+  logQuickPayloadSummary('pushQuickPayloadToVisibleWindow:payload', payload)
 
   try {
     quickWindow.webContents.send('window:init', {
@@ -157,7 +206,14 @@ async function triggerQuickSummon() {
   }
 
   const token = ++quickSummonToken
-  const openResult = await openQuickWindowPreservingMain({
+  
+  try {
+    systemApi.logQuickDebug('triggerQuickSummon:start', { token })
+  } catch {
+    // ignore quick summon start debug failure
+  }
+
+const openResult = await openQuickWindowPreservingMain({
     type: 'empty',
     payload: '',
     source: 'empty'
@@ -278,6 +334,14 @@ async function syncDesktopRuntimeFromConfig() {
 }
 
 app.whenReady().then(async () => {
+
+  try {
+    systemApi.clearQuickDebugLog()
+    systemApi.logQuickDebug('app:ready', { cwd: process.cwd() })
+  } catch {
+    // ignore quick debug init failure
+  }
+
   electronApp.setAppUserModelId('com.anywhere.desktop')
 
   app.on('browser-window-created', (_, window) => {

@@ -373,6 +373,12 @@ function resolveQuickOpenPayload(prompt) {
     return payload
   }
 
+  if (attachment.value.type === 'text' && attachment.value.rawText.trim()) {
+    payload.type = 'over'
+    payload.payload = attachment.value.rawText.trim()
+    return payload
+  }
+
   if (queryText.value.trim()) {
     payload.type = 'over'
     payload.payload = queryText.value.trim()

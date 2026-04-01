@@ -229,9 +229,10 @@ async function triggerPromptShortcut(promptKey = '') {
     if (!promptConfig || promptConfig.enable === false) return
 
     if (promptConfig.showMode === 'fastinput') {
-      const quickPayload = await collectQuickPayloadFast()
+      const quickPayload = await collectQuickPayloadFast()
 
-      await openQuickWindowPreservingMain({
+      await openWindow('fast', {
+        code: normalizedPromptKey,
         ...quickPayload,
         promptKey: normalizedPromptKey,
         triggerMode: 'shortcut'

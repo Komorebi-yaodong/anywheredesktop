@@ -133,6 +133,19 @@ async function buildUserMessageFromPayload(payload = {}, promptConfig = {}) {
   const directSendFile = Boolean(promptConfig?.isDirectSend_file)
 
   if (payloadType === 'multiline-text') {
+    const textContent = normalizeText(payloadValue).trim()
+    if (!textContent) {
+      return { mode: 'noop', inputText: '' }
+    }
+
+    if (directSendText) {
+      return {
+        mode: 'request',
+        message: { role: 'user', content: textContent },
+        inputText: ''
+      }
+    }
+
     return {
       mode: 'input-only',
       inputText: normalizeText(payloadValue)

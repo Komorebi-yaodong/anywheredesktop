@@ -124,8 +124,7 @@ function getAttachmentPreviewLabel(next = createEmptyAttachment()) {
   if (next.type === 'files') {
     const first = next.previewLabel || next.filePaths[0]?.split(/[/\\]/).pop() || ''
     if (!first) return '文件'
-    if (next.filePaths.length <= 1) return first
-    return `${first} ${next.filePaths.length}`
+    return first
   }
 
   if (next.type === 'img') {
@@ -682,6 +681,14 @@ onMounted(async () => {
   })
 
   window.api?.onWindowInit?.((data) => {
+
+    console.log('[quick-debug:onWindowInit]', {
+      type: data?.type,
+      payloadCount: Array.isArray(data?.payload) ? data.payload.length : 0,
+      payloadSample: Array.isArray(data?.payload) ? data.payload.slice(0, 5) : data?.payload,
+      userText: data?.userText || ''
+    })
+
     hasInitPayloadApplied = false
     if (typeof data?.senderId === 'string' && data.senderId) {
       senderId.value = data.senderId

@@ -1,10 +1,77 @@
-import { clipboard, desktopCapturer, dialog, nativeImage, shell } from 'electron'
+import { app, clipboard, desktopCapturer, dialog, nativeImage, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
+
+
+function getQuickDebugLogTargets() {
+  const targets = new Set()
+
+  try {
+    const cwd = typeof process.cwd === 'function' ? process.cwd() : ''
+    if (cwd) targets.add(path.resolve(cwd, 'quick-debug.log'))
+  } catch {
+    // ignore cwd resolve failure
+  }
+
+  try {
+    if (app?.isReady?.()) {
+      targets.add(path.join(app.getPath('userData'), 'quick-debug.log'))
+    }
+  } catch {
+    // ignore userData resolve failure
+  }
+
+  return [...targets]
+}
+
+function appendQuickDebugLog(event, data = {}) {
+  const safePayload = data && typeof data === 'object' ? data : { value: data }
+  const line = `${new Date().toISOString()} [${event}] ${JSON.stringify(safePayload)}\n`
+
+  for (const target of getQuickDebugLogTargets()) {
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.appendFileSync(target, line, 'utf8')
+    } catch {
+      // ignore log write failure
+    }
+  }
+
+  try {
+    console.log(`[quick-debug] ${event}`, safePayload)
+  } catch {
+    // ignore console logging failure
+  }
+}
+
+export function clearQuickDebugLog() {
+  const targets = getQuickDebugLogTargets()
+  for (const target of targets) {
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, '', 'utf8')
+    } catch {
+      // ignore clear log failure
+    }
+  }
+  return {
+    ok: true,
+    targets
+  }
+}
+
+export function logQuickDebug(event, data = {}) {
+  appendQuickDebugLog(event, data)
+  return {
+    ok: true,
+    targets: getQuickDebugLogTargets()
+  }
+}
+
 
 
 function normalizeText(input) {
@@ -164,6 +231,10 @@ function parseExistingFilePathsFromText(input = '') {
 }
 
 function readClipboardFilePaths() {
+
+  appendQuickDebugLog('readClipboardFilePaths:start', {
+    formats: clipboard.availableFormats()
+  })
   const formats = clipboard.availableFormats()
   const lowerLookup = new Map(formats.map((item) => [String(item).toLowerCase(), item]))
   const candidateFormats = ['CF_HDROP', 'FileNameW', 'fileNameW', 'text/uri-list']
@@ -183,11 +254,22 @@ function readClipboardFilePaths() {
 
       if (lowered === 'cf_hdrop') {
         const dropFiles = decodeWindowsDropFiles(buffer)
-        if (dropFiles.length > 0) return dropFiles
+        
+        appendQuickDebugLog('readClipboardFilePaths:cf_hdrop_hit', {
+          count: dropFiles.length,
+          sample: dropFiles.slice(0, 5)
+        })
+if (dropFiles.length > 0) return dropFiles
       }
 
       const paths = decodeClipboardPathBuffer(buffer)
-      if (paths.length > 0) return paths.filter((item) => item && fs.existsSync(item))
+      
+      appendQuickDebugLog('readClipboardFilePaths:buffer_hit', {
+        format: matchedFormat,
+        count: paths.length,
+        sample: paths.slice(0, 5)
+      })
+if (paths.length > 0) return paths.filter((item) => item && fs.existsSync(item))
     } catch {
       // ignore and try next available format
     }
@@ -370,6 +452,49 @@ export function stopClipboardWatcher() {
 }
 
 
+
+async function tryReadClipboardFileDropListViaPowerShell() {
+  if (process.platform !== 'win32') {
+    return []
+  }
+
+  const script = `Add-Type -AssemblyName System.Windows.Forms;
+try {
+  $list = [System.Windows.Forms.Clipboard]::GetFileDropList();
+  $paths = @();
+  foreach ($item in $list) {
+    if ($item) { $paths += [string]$item }
+  }
+  @{ filePaths = @($paths | Where-Object { $_ } | Select-Object -Unique) } | ConvertTo-Json -Compress
+} catch {
+  '{"filePaths":[]}'
+}`
+
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    })
+    const raw = String(stdout || '').trim()
+    appendQuickDebugLog('tryReadClipboardFileDropListViaPowerShell:raw', { stdout: raw })
+    const parsed = JSON.parse(raw || '{"filePaths":[]}')
+    const filePaths = Array.isArray(parsed?.filePaths)
+      ? parsed.filePaths.map((item) => path.normalize(String(item))).filter((item) => item && fs.existsSync(item))
+      : []
+    appendQuickDebugLog('tryReadClipboardFileDropListViaPowerShell:parsed', {
+      count: filePaths.length,
+      sample: filePaths.slice(0, 5)
+    })
+    return filePaths
+  } catch (error) {
+    appendQuickDebugLog('tryReadClipboardFileDropListViaPowerShell:error', {
+      message: error?.message || String(error || 'unknown')
+    })
+    return []
+  }
+}
+
+
 async function tryReadForegroundExplorerSelection() {
   if (process.platform !== 'win32') {
     return []
@@ -384,43 +509,69 @@ public static class Win32 {
 }
 "@;
 Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;
-$hwnd = [int64][Win32]::GetForegroundWindow();
+$foregroundHwnd = [int64][Win32]::GetForegroundWindow();
 $shell = New-Object -ComObject Shell.Application;
-$target = $null;
+$windows = @();
 foreach ($win in $shell.Windows()) {
   try {
-    if ([int64]$win.HWND -eq $hwnd) {
-      $target = $win;
-      break;
+    $selected = @();
+    try {
+      foreach ($item in @($win.Document.SelectedItems())) {
+        try {
+          if ($item -and $item.Path) { $selected += [string]$item.Path }
+        } catch {}
+      }
+    } catch {}
+    $windows += [pscustomobject]@{
+      hwnd = [int64]$win.HWND
+      selectedCount = @($selected).Count
+      filePaths = @($selected | Where-Object { $_ } | Select-Object -Unique)
+      location = try { [string]$win.LocationURL } catch { '' }
     }
   } catch {}
 }
-if ($null -eq $target) {
-  '{"filePaths":[]}'
-  exit
+$target = $windows | Where-Object { $_.hwnd -eq $foregroundHwnd } | Select-Object -First 1;
+if ($null -eq $target -or @($target.filePaths).Count -eq 0) {
+  $target = $windows | Where-Object { @($_.filePaths).Count -gt 0 } | Sort-Object selectedCount -Descending | Select-Object -First 1;
 }
-$paths = @();
-try {
-  foreach ($item in @($target.Document.SelectedItems())) {
-    try {
-      if ($item -and $item.Path) {
-        $paths += [string]$item.Path
-      }
-    } catch {}
-  }
-} catch {}
-@{ filePaths = @($paths | Where-Object { $_ } | Select-Object -Unique) } | ConvertTo-Json -Compress`
+@{
+  foregroundHwnd = $foregroundHwnd
+  windows = @($windows)
+  filePaths = @($(if ($null -ne $target) { $target.filePaths } else { @() }))
+} | ConvertTo-Json -Compress -Depth 6`
 
   try {
     const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
       windowsHide: true,
       maxBuffer: 1024 * 1024
     })
-    const parsed = JSON.parse(String(stdout || '').trim() || '{"filePaths":[]}')
+    const raw = String(stdout || '').trim()
+    appendQuickDebugLog('tryReadForegroundExplorerSelection:raw', {
+      stdout: raw
+    })
+    const parsed = JSON.parse(raw || '{"filePaths":[]}')
+
+    appendQuickDebugLog('tryReadForegroundExplorerSelection:parsed', {
+      foregroundHwnd: parsed?.foregroundHwnd ?? null,
+      count: Array.isArray(parsed?.filePaths) ? parsed.filePaths.length : 0,
+      sample: Array.isArray(parsed?.filePaths) ? parsed.filePaths.slice(0, 5) : [],
+      windows: Array.isArray(parsed?.windows)
+        ? parsed.windows.slice(0, 8).map((item) => ({
+            hwnd: item?.hwnd ?? null,
+            selectedCount: item?.selectedCount ?? 0,
+            sample: Array.isArray(item?.filePaths) ? item.filePaths.slice(0, 3) : [],
+            location: item?.location || ''
+          }))
+        : []
+    })
+
     return Array.isArray(parsed?.filePaths)
-      ? parsed.filePaths.map((item) => path.normalize(String(item))).filter((item) => item && fs.existsSync(item))
+      ? parsed.filePaths.map((item) => path.normalize(String(item))).filter((item) => item)
       : []
-  } catch {
+  } catch (error) {
+    appendQuickDebugLog('tryReadForegroundExplorerSelection:error', {
+      message: error?.message || String(error || 'unknown')
+    })
     return []
   }
 }
@@ -467,6 +618,10 @@ async function tryCaptureSelectionToClipboard() {
 
 export async function captureQuickPayload() {
   const explorerSelection = await tryReadForegroundExplorerSelection()
+  appendQuickDebugLog('captureQuickPayload:explorerSelection', {
+    count: explorerSelection.length,
+    sample: explorerSelection.slice(0, 5)
+  })
   if (explorerSelection.length > 0) {
     return {
       ok: true,
@@ -486,10 +641,41 @@ export async function captureQuickPayload() {
     }
   }
 
+  const clipboardPowerShellFiles = await tryReadClipboardFileDropListViaPowerShell()
+  appendQuickDebugLog('captureQuickPayload:clipboardPowerShellFiles', {
+    count: clipboardPowerShellFiles.length,
+    sample: clipboardPowerShellFiles.slice(0, 5)
+  })
+  if (clipboardPowerShellFiles.length > 0) {
+    return {
+      ok: true,
+      kind: 'files',
+      text: '',
+      imageDataUrl: '',
+      filePaths: clipboardPowerShellFiles,
+      hasText: false,
+      hasImage: false,
+      hasFiles: true,
+      formats: ['clipboard-file-drop-powershell'],
+      timestamp: Date.now(),
+      ageMs: 0,
+      freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
+      isFresh: true,
+      source: 'clipboard'
+    }
+  }
+
   const raw = readClipboardPayloadRaw()
   updateClipboardTimeline(raw)
   const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (clipboardPayload.kind !== 'empty') {
+    appendQuickDebugLog('captureQuickPayload:clipboardFallback', {
+      kind: clipboardPayload.kind,
+      count: Array.isArray(clipboardPayload.filePaths) ? clipboardPayload.filePaths.length : 0,
+      sample: Array.isArray(clipboardPayload.filePaths) ? clipboardPayload.filePaths.slice(0, 5) : [],
+      isFresh: clipboardPayload.isFresh,
+      source: clipboardPayload.source
+    })
     return clipboardPayload.isFresh
       ? { ...clipboardPayload, source: 'recent-clipboard' }
       : { ...clipboardPayload, source: 'clipboard' }

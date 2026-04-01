@@ -234,7 +234,7 @@ onMounted(async () => {
   <div class="fast-shell">
     <div class="fast-bar" :class="[`status-${sessionStatus}`]">
       <button
-        class="icon-btn left-btn"
+        class="icon-btn left-btn no-drag"
         :class="{ copied: isCopied, copy: leftButtonMode === 'copy' }"
         type="button"
         :title="leftButtonMode === 'copy' ? '复制并关闭' : '关闭'"
@@ -245,9 +245,9 @@ onMounted(async () => {
         <span v-else>⧉</span>
       </button>
 
-      <div class="content-zone">
+      <div class="content-zone drag-region">
         <div class="content-text" :title="displayText">
-          <img v-if="promptIcon" :src="promptIcon" :alt="currentPayload.code || 'AI'" class="inline-icon" />
+          <img v-if="promptIcon" :src="promptIcon" :alt="currentPayload.code || 'AI'" class="inline-icon no-drag" />
           <span>{{ displayText }}</span>
         </div>
       </div>
@@ -256,7 +256,7 @@ onMounted(async () => {
         <div v-if="sessionStatus === 'streaming'" class="stream-spinner" aria-hidden="true"></div>
         <button
           v-else-if="shouldShowTypingButton"
-          class="icon-btn right-btn"
+          class="icon-btn right-btn no-drag"
           :class="{ dragging: isDragging }"
           type="button"
           title="拖拽到输入框 / 点击直接输入"
@@ -285,6 +285,9 @@ onMounted(async () => {
 }
 
 .fast-bar {
+
+  -webkit-app-region: drag;
+
   width: min(100%, 560px);
   min-height: 52px;
   border-radius: 999px;
@@ -307,6 +310,15 @@ html.dark .fast-bar {
 .fast-bar.status-done {
   animation: glow 0.45s ease-out;
 }
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+}
+
 
 .icon-btn {
   width: 30px;
@@ -363,6 +375,9 @@ html.dark .icon-btn:hover:not(:disabled) {
 }
 
 .content-zone {
+
+  -webkit-app-region: drag;
+
   min-width: 0;
   display: flex;
   align-items: center;

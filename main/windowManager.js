@@ -199,6 +199,12 @@ function resolveWindowConfig(baseConfig, payload) {
     const fastBounds = getFastInputRecommendedBounds(promptConfig)
     nextConfig.width = fastBounds.width
     nextConfig.height = fastBounds.height
+
+    const cursorPoint = screen.getCursorScreenPoint()
+    const targetDisplay = screen.getDisplayNearestPoint(cursorPoint) || screen.getPrimaryDisplay()
+    const workArea = getWorkArea(targetDisplay)
+    nextConfig.options.x = Math.round(workArea.x + (workArea.width - nextConfig.width) / 2)
+    nextConfig.options.y = Math.round(workArea.y + Math.max(24, workArea.height * 0.22))
   }
 
   if (payload && typeof payload === 'object') {

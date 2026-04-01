@@ -156,7 +156,7 @@ export async function copyImage(input = {}) {
   }
 }
 
-const CLIPBOARD_FRESHNESS_MS = 5000
+const CLIPBOARD_FRESHNESS_MS = 3000
 const CLIPBOARD_POLL_INTERVAL_MS = 400
 
 let clipboardWatcherTimer = null

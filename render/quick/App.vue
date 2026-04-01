@@ -682,12 +682,6 @@ onMounted(async () => {
 
   window.api?.onWindowInit?.((data) => {
 
-    console.log('[quick-debug:onWindowInit]', {
-      type: data?.type,
-      payloadCount: Array.isArray(data?.payload) ? data.payload.length : 0,
-      payloadSample: Array.isArray(data?.payload) ? data.payload.slice(0, 5) : data?.payload,
-      userText: data?.userText || ''
-    })
 
     hasInitPayloadApplied = false
     if (typeof data?.senderId === 'string' && data.senderId) {

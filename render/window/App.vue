@@ -131,7 +131,6 @@ const applyPromptRuntimeConfig = async (config, options = {}) => {
     favicon.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
   }
 
-  await loadBackground(promptConfig.backgroundImage || '');
   applyZoomFactor(promptConfig.zoom ?? config.zoom ?? 1);
 
   if (!options.skipSystemPromptSync) {
@@ -392,6 +391,8 @@ const cachedBackgroundBlobUrl = ref("");
 const backgroundLoadState = ref('idle');
 const backgroundResolvedSource = ref('');
 let backgroundLoadToken = 0;
+const failedRemoteBackgroundLoads = new Map();
+const BACKGROUND_FAILURE_COOLDOWN_MS = 60 * 1000;
 
 
 const promptBackgroundImage = computed(() => {
@@ -443,6 +444,14 @@ const loadBackground = async (newUrl) => {
 
   backgroundLoadState.value = 'loading';
 
+  const lastFailureAt = failedRemoteBackgroundLoads.get(nextUrl) || 0;
+  if (lastFailureAt > 0 && Date.now() - lastFailureAt < BACKGROUND_FAILURE_COOLDOWN_MS) {
+    backgroundLoadState.value = 'error';
+    backgroundResolvedSource.value = '';
+    clearCachedBackgroundBlobUrl();
+    return;
+  }
+
   try {
     if (nextUrl.startsWith('data:') || nextUrl.startsWith('file:')) {
       await preloadImage(nextUrl);
@@ -468,6 +477,7 @@ const loadBackground = async (newUrl) => {
       cachedBackgroundBlobUrl.value = newBlobUrl;
       backgroundResolvedSource.value = newBlobUrl;
       backgroundLoadState.value = 'ready';
+      failedRemoteBackgroundLoads.delete(nextUrl);
       return;
     }
 
@@ -489,13 +499,16 @@ const loadBackground = async (newUrl) => {
       cachedBackgroundBlobUrl.value = newBlobUrl;
       backgroundResolvedSource.value = newBlobUrl;
       backgroundLoadState.value = 'ready';
+      failedRemoteBackgroundLoads.delete(nextUrl);
       return;
     }
 
     backgroundResolvedSource.value = nextUrl;
     backgroundLoadState.value = 'ready';
+    failedRemoteBackgroundLoads.delete(nextUrl);
   } catch (e) {
     if (token !== backgroundLoadToken) return;
+    failedRemoteBackgroundLoads.set(nextUrl, Date.now());
     console.error("Failed to load cached background:", e);
     backgroundLoadState.value = 'error';
     backgroundResolvedSource.value = '';

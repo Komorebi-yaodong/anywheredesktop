@@ -124,43 +124,13 @@ async function collectQuickPayload() {
 }
 
 
-function logQuickPayloadSummary(stage, payload) {
-  try {
-    systemApi.logQuickDebug(stage, {
-      type: payload?.type || 'empty',
-      source: payload?.source || 'unknown',
-      fileCount: Array.isArray(payload?.payload) ? payload.payload.length : 0,
-      fileSample: Array.isArray(payload?.payload)
-        ? payload.payload.slice(0, 5).map((item) => item?.path || item?.name || item)
-        : [],
-      hasUserText: Boolean(payload?.userText),
-      payloadPreview:
-        typeof payload?.payload === 'string'
-          ? String(payload.payload).slice(0, 120)
-          : Array.isArray(payload?.payload)
-            ? `[array:${payload.payload.length}]`
-            : payload?.payload ?? null
-    })
-  } catch {
-    // ignore quick payload debug failure
-  }
-}
-
 
 async function collectQuickPayloadFast() {
   try {
     const result = await systemApi.captureQuickPayload()
     const payload = buildQuickPayloadFromClipboardResult(result)
-    logQuickPayloadSummary('collectQuickPayloadFast:result', payload)
     return payload
-  } catch (error) {
-    try {
-      systemApi.logQuickDebug('collectQuickPayloadFast:error', {
-        message: error?.message || String(error || 'unknown')
-      })
-    } catch {
-      // ignore quick payload error debug failure
-    }
+  } catch {
     return {
       type: 'empty',
       payload: '',
@@ -176,9 +146,7 @@ async function openQuickWindowPreservingMain(payload = null) {
 
 function pushQuickPayloadToVisibleWindow(payload = null) {
   const quickWindow = getWindowByRef('quick')
-  if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return false
-
-  logQuickPayloadSummary('pushQuickPayloadToVisibleWindow:payload', payload)
+  if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return false
 
   try {
     quickWindow.webContents.send('window:init', {
@@ -207,14 +175,7 @@ async function triggerQuickSummon() {
   }
 
   const token = ++quickSummonToken
-  
-  try {
-    systemApi.logQuickDebug('triggerQuickSummon:start', { token })
-  } catch {
-    // ignore quick summon start debug failure
-  }
-
-const openResult = await openQuickWindowPreservingMain({
+  const openResult = await openQuickWindowPreservingMain({
     type: 'empty',
     payload: '',
     source: 'empty'
@@ -268,12 +229,7 @@ async function triggerPromptShortcut(promptKey = '') {
     if (!promptConfig || promptConfig.enable === false) return
 
     if (promptConfig.showMode === 'fastinput') {
-      const quickPayload = await collectQuickPayloadFast()
-      logQuickPayloadSummary('triggerPromptShortcut:payload', {
-        ...quickPayload,
-        promptKey: normalizedPromptKey,
-        triggerMode: 'shortcut'
-      })
+      const quickPayload = await collectQuickPayloadFast()
 
       await openQuickWindowPreservingMain({
         ...quickPayload,
@@ -288,12 +244,7 @@ async function triggerPromptShortcut(promptKey = '') {
     })
 
     collectQuickPayloadFast()
-      .then(async (quickPayload) => {
-        logQuickPayloadSummary('triggerPromptShortcut:payload', {
-          ...quickPayload,
-          promptKey: normalizedPromptKey,
-          triggerMode: 'shortcut'
-        })
+      .then(async (quickPayload) => {
 
         if (!quickPayload || quickPayload.type === 'empty') return
         const delivered = await dispatchShortcutPayloadToWindow(openResult?.id, quickPayload, normalizedPromptKey)
@@ -381,14 +332,6 @@ async function syncDesktopRuntimeFromConfig() {
 }
 
 app.whenReady().then(async () => {
-
-  try {
-    systemApi.clearQuickDebugLog()
-    systemApi.logQuickDebug('app:ready', { cwd: process.cwd() })
-  } catch {
-    // ignore quick debug init failure
-  }
-
   electronApp.setAppUserModelId('com.anywhere.desktop')
 
   app.on('browser-window-created', (_, window) => {

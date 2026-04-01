@@ -1,77 +1,10 @@
-import { app, clipboard, desktopCapturer, dialog, nativeImage, shell } from 'electron'
+import { clipboard, desktopCapturer, dialog, nativeImage, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
-
-
-function getQuickDebugLogTargets() {
-  const targets = new Set()
-
-  try {
-    const cwd = typeof process.cwd === 'function' ? process.cwd() : ''
-    if (cwd) targets.add(path.resolve(cwd, 'quick-debug.log'))
-  } catch {
-    // ignore cwd resolve failure
-  }
-
-  try {
-    if (app?.isReady?.()) {
-      targets.add(path.join(app.getPath('userData'), 'quick-debug.log'))
-    }
-  } catch {
-    // ignore userData resolve failure
-  }
-
-  return [...targets]
-}
-
-function appendQuickDebugLog(event, data = {}) {
-  const safePayload = data && typeof data === 'object' ? data : { value: data }
-  const line = `${new Date().toISOString()} [${event}] ${JSON.stringify(safePayload)}\n`
-
-  for (const target of getQuickDebugLogTargets()) {
-    try {
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.appendFileSync(target, line, 'utf8')
-    } catch {
-      // ignore log write failure
-    }
-  }
-
-  try {
-    console.log(`[quick-debug] ${event}`, safePayload)
-  } catch {
-    // ignore console logging failure
-  }
-}
-
-export function clearQuickDebugLog() {
-  const targets = getQuickDebugLogTargets()
-  for (const target of targets) {
-    try {
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.writeFileSync(target, '', 'utf8')
-    } catch {
-      // ignore clear log failure
-    }
-  }
-  return {
-    ok: true,
-    targets
-  }
-}
-
-export function logQuickDebug(event, data = {}) {
-  appendQuickDebugLog(event, data)
-  return {
-    ok: true,
-    targets: getQuickDebugLogTargets()
-  }
-}
-
 
 
 function normalizeText(input) {
@@ -241,10 +174,6 @@ function parseExistingFilePathsFromText(input = '') {
 }
 
 function readClipboardFilePaths() {
-
-  appendQuickDebugLog('readClipboardFilePaths:start', {
-    formats: clipboard.availableFormats()
-  })
   const formats = clipboard.availableFormats()
   const lowerLookup = new Map(formats.map((item) => [String(item).toLowerCase(), item]))
   const candidateFormats = ['CF_HDROP', 'FileNameW', 'fileNameW', 'text/uri-list']
@@ -264,22 +193,11 @@ function readClipboardFilePaths() {
 
       if (lowered === 'cf_hdrop') {
         const dropFiles = decodeWindowsDropFiles(buffer)
-        
-        appendQuickDebugLog('readClipboardFilePaths:cf_hdrop_hit', {
-          count: dropFiles.length,
-          sample: dropFiles.slice(0, 5)
-        })
-if (dropFiles.length > 0) return dropFiles
+        if (dropFiles.length > 0) return dropFiles
       }
 
       const paths = decodeClipboardPathBuffer(buffer)
-      
-      appendQuickDebugLog('readClipboardFilePaths:buffer_hit', {
-        format: matchedFormat,
-        count: paths.length,
-        sample: paths.slice(0, 5)
-      })
-if (paths.length > 0) return paths.filter((item) => item && fs.existsSync(item))
+      if (paths.length > 0) return paths.filter((item) => item && fs.existsSync(item))
     } catch {
       // ignore and try next available format
     }
@@ -488,20 +406,11 @@ try {
       maxBuffer: 1024 * 1024
     })
     const raw = String(stdout || '').trim()
-    appendQuickDebugLog('tryReadClipboardFileDropListViaPowerShell:raw', { stdout: raw })
     const parsed = JSON.parse(raw || '{"filePaths":[]}')
-    const filePaths = Array.isArray(parsed?.filePaths)
+    return Array.isArray(parsed?.filePaths)
       ? parsed.filePaths.map((item) => path.normalize(String(item))).filter((item) => item && fs.existsSync(item))
       : []
-    appendQuickDebugLog('tryReadClipboardFileDropListViaPowerShell:parsed', {
-      count: filePaths.length,
-      sample: filePaths.slice(0, 5)
-    })
-    return filePaths
-  } catch (error) {
-    appendQuickDebugLog('tryReadClipboardFileDropListViaPowerShell:error', {
-      message: error?.message || String(error || 'unknown')
-    })
+  } catch {
     return []
   }
 }
@@ -560,32 +469,11 @@ if ($null -eq $target -or @($target.filePaths).Count -eq 0) {
       maxBuffer: 1024 * 1024
     })
     const raw = String(stdout || '').trim()
-    appendQuickDebugLog('tryReadForegroundExplorerSelection:raw', {
-      stdout: raw
-    })
     const parsed = JSON.parse(raw || '{"filePaths":[]}')
-
-    appendQuickDebugLog('tryReadForegroundExplorerSelection:parsed', {
-      foregroundHwnd: parsed?.foregroundHwnd ?? null,
-      count: Array.isArray(parsed?.filePaths) ? parsed.filePaths.length : 0,
-      sample: Array.isArray(parsed?.filePaths) ? parsed.filePaths.slice(0, 5) : [],
-      windows: Array.isArray(parsed?.windows)
-        ? parsed.windows.slice(0, 8).map((item) => ({
-            hwnd: item?.hwnd ?? null,
-            selectedCount: item?.selectedCount ?? 0,
-            sample: Array.isArray(item?.filePaths) ? item.filePaths.slice(0, 3) : [],
-            location: item?.location || ''
-          }))
-        : []
-    })
-
     return Array.isArray(parsed?.filePaths)
       ? parsed.filePaths.map((item) => path.normalize(String(item))).filter((item) => item)
       : []
-  } catch (error) {
-    appendQuickDebugLog('tryReadForegroundExplorerSelection:error', {
-      message: error?.message || String(error || 'unknown')
-    })
+  } catch {
     return []
   }
 }
@@ -701,12 +589,6 @@ async function tryCaptureSelectionToClipboard() {
 export async function captureQuickPayload() {
   const explorerSelection = await tryReadForegroundExplorerSelection()
   const explorerSelectionStateResult = updateExplorerSelectionState(explorerSelection)
-  appendQuickDebugLog('captureQuickPayload:explorerSelection', {
-    count: explorerSelectionStateResult.filePaths.length,
-    sample: explorerSelectionStateResult.filePaths.slice(0, 5),
-    ageMs: explorerSelectionStateResult.ageMs,
-    isFresh: explorerSelectionStateResult.isFresh
-  })
   if (explorerSelectionStateResult.isFresh && explorerSelectionStateResult.filePaths.length > 0) {
     return {
       ok: true,
@@ -728,12 +610,6 @@ export async function captureQuickPayload() {
 
   const clipboardPowerShellFiles = await tryReadClipboardFileDropListViaPowerShell()
   const clipboardFileDropStateResult = updateClipboardFileDropState(clipboardPowerShellFiles)
-  appendQuickDebugLog('captureQuickPayload:clipboardPowerShellFiles', {
-    count: clipboardFileDropStateResult.filePaths.length,
-    sample: clipboardFileDropStateResult.filePaths.slice(0, 5),
-    ageMs: clipboardFileDropStateResult.ageMs,
-    isFresh: clipboardFileDropStateResult.isFresh
-  })
   if (clipboardFileDropStateResult.isFresh && clipboardFileDropStateResult.filePaths.length > 0) {
     return {
       ok: true,
@@ -757,13 +633,6 @@ export async function captureQuickPayload() {
   updateClipboardTimeline(raw)
   const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (clipboardPayload.kind !== 'empty') {
-    appendQuickDebugLog('captureQuickPayload:clipboardFallback', {
-      kind: clipboardPayload.kind,
-      count: Array.isArray(clipboardPayload.filePaths) ? clipboardPayload.filePaths.length : 0,
-      sample: Array.isArray(clipboardPayload.filePaths) ? clipboardPayload.filePaths.slice(0, 5) : [],
-      isFresh: clipboardPayload.isFresh,
-      source: clipboardPayload.source
-    })
     return clipboardPayload.isFresh
       ? { ...clipboardPayload, source: 'recent-clipboard' }
       : { ...clipboardPayload, source: 'clipboard' }

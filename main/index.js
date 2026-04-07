@@ -220,6 +220,37 @@ async function dispatchShortcutPayloadToWindow(targetWindowId, quickPayload, pro
 }
 
 
+
+async function triggerAppendFollowUpShortcut() {
+  try {
+    const windows = (listWindows('window') || []).filter((item) => item && item.type === 'window' && item.id)
+    if (windows.length === 0) {
+      return { ok: false, reason: 'no_window_targets' }
+    }
+
+    const quickPayload = await collectQuickPayloadFast()
+    if (!quickPayload || quickPayload.type === 'empty') {
+      return { ok: false, reason: 'empty_payload' }
+    }
+
+    if (windows.length === 1) {
+      return appendPayloadToWindow(windows[0].id, quickPayload, {
+        sourceId: 'append-shortcut',
+        event: 'quick:append-payload'
+      })
+    }
+
+    return openQuickWindowPreservingMain({
+      ...quickPayload,
+      triggerMode: 'append-only'
+    })
+  } catch (error) {
+    debugMainError('shortcut:append-follow-up-failed', error)
+    return { ok: false, reason: 'append_follow_up_failed', error: error?.message || String(error) }
+  }
+}
+
+
 async function triggerPromptShortcut(promptKey = '') {
   try {
     if (typeof promptKey !== 'string' || !promptKey.trim()) return
@@ -322,6 +353,9 @@ async function syncDesktopRuntimeFromConfig() {
     },
     onQuickSummon: () => {
       triggerQuickSummon()
+    },
+    onAppendFollowUp: () => {
+      triggerAppendFollowUpShortcut()
     },
     onPromptTrigger: (promptKey) => {
       triggerPromptShortcut(promptKey)

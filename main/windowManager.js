@@ -1091,6 +1091,28 @@ export function toggleAlwaysOnTop(windowRef = '', nextState) {
   }
 }
 
+function enrichWindowListWithPromptOrdinals(items = []) {
+  const promptBuckets = new Map()
+
+  for (const item of items) {
+    if (!item || item.type !== 'window') continue
+    const promptCode = typeof item.promptCode === 'string' && item.promptCode ? item.promptCode : ''
+    if (!promptCode) continue
+    const bucket = promptBuckets.get(promptCode) || []
+    bucket.push(item)
+    promptBuckets.set(promptCode, bucket)
+  }
+
+  for (const bucket of promptBuckets.values()) {
+    bucket.forEach((item, index) => {
+      item.promptOrdinal = index + 1
+      item.promptWindowCount = bucket.length
+    })
+  }
+
+  return items
+}
+
 export function listWindows(type = '') {
   const targetType = typeof type === 'string' ? type : ''
   const items = []
@@ -1130,7 +1152,7 @@ export function listWindows(type = '') {
     }
   }
 
-  return items
+  return enrichWindowListWithPromptOrdinals(items)
 }
 
 export function getWindowRefByWebContentsId(webContentsId) {

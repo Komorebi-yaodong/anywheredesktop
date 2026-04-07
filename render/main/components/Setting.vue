@@ -73,6 +73,8 @@ function handleShortcutRecorderKeydown(event) {
     currentConfig.value.desktop.shortcuts.mainToggle = accelerator
   } else if (shortcutRecorder.value.target === 'quickSummon') {
     currentConfig.value.desktop.shortcuts.quickSummon = accelerator
+  } else if (shortcutRecorder.value.target === 'appendFollowUp') {
+    currentConfig.value.desktop.shortcuts.appendFollowUp = accelerator
   } else if (shortcutRecorder.value.target === 'promptBinding' && shortcutRecorder.value.index > -1) {
     currentConfig.value.desktop.shortcuts.promptBindings[shortcutRecorder.value.index].accelerator = accelerator
   }
@@ -259,7 +261,10 @@ function ensureDesktopConfig() {
     currentConfig.value.desktop.shortcuts.mainToggle = 'Ctrl+Space'
   }
   if (!currentConfig.value.desktop.shortcuts.quickSummon) {
-    currentConfig.value.desktop.shortcuts.quickSummon = 'Alt+X'
+    currentConfig.value.desktop.shortcuts.quickSummon = 'Alt+A'
+  }
+  if (!currentConfig.value.desktop.shortcuts.appendFollowUp) {
+    currentConfig.value.desktop.shortcuts.appendFollowUp = 'Alt+S'
   }
 }
 
@@ -339,6 +344,10 @@ function validateDesktopShortcutDraft() {
     {
       label: t('setting.desktop.quickSummon.label'),
       accelerator: currentConfig.value.desktop.shortcuts.quickSummon
+    },
+    {
+      label: '自动追问快捷键',
+      accelerator: currentConfig.value.desktop.shortcuts.appendFollowUp
     }
   ]
 
@@ -374,6 +383,7 @@ function validateDesktopShortcutDraft() {
 
   currentConfig.value.desktop.shortcuts.mainToggle = normalizeShortcutValue(currentConfig.value.desktop.shortcuts.mainToggle).accelerator
   currentConfig.value.desktop.shortcuts.quickSummon = normalizeShortcutValue(currentConfig.value.desktop.shortcuts.quickSummon).accelerator
+  currentConfig.value.desktop.shortcuts.appendFollowUp = normalizeShortcutValue(currentConfig.value.desktop.shortcuts.appendFollowUp).accelerator
   currentConfig.value.desktop.shortcuts.promptBindings = currentConfig.value.desktop.shortcuts.promptBindings.map((item) => ({
     id: item.id,
     promptKey: item.promptKey,

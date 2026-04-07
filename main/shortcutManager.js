@@ -182,7 +182,15 @@ function collectBindings(desktopConfig = {}) {
     id: 'quickSummon',
     kind: 'quickSummon',
     label: '召唤快捷键',
-    accelerator: shortcuts.quickSummon || 'Alt+X',
+    accelerator: shortcuts.quickSummon || 'Alt+A',
+    enabled: true
+  })
+
+  bindings.push({
+    id: 'appendFollowUp',
+    kind: 'appendFollowUp',
+    label: '自动追问快捷键',
+    accelerator: shortcuts.appendFollowUp || 'Alt+S',
     enabled: true
   })
 
@@ -257,7 +265,8 @@ export function validateDesktopShortcuts(desktopConfig = {}) {
       closeToTray: desktopConfig?.closeToTray !== false,
       shortcuts: {
         mainToggle: normalizedBindings.find((item) => item.kind === 'mainToggle')?.accelerator || 'Ctrl+Space',
-        quickSummon: normalizedBindings.find((item) => item.kind === 'quickSummon')?.accelerator || 'Alt+X',
+        quickSummon: normalizedBindings.find((item) => item.kind === 'quickSummon')?.accelerator || 'Alt+A',
+        appendFollowUp: normalizedBindings.find((item) => item.kind === 'appendFollowUp')?.accelerator || 'Alt+S',
         promptBindings: nextPromptBindings
       }
     },
@@ -285,6 +294,13 @@ export function syncDesktopShortcuts(desktopConfig = {}, handlers = {}) {
       if (binding.kind === 'quickSummon') {
         registerManagedShortcut(binding.accelerator, () => {
           handlers?.onQuickSummon?.()
+        })
+        return
+      }
+
+      if (binding.kind === 'appendFollowUp') {
+        registerManagedShortcut(binding.accelerator, () => {
+          handlers?.onAppendFollowUp?.()
         })
         return
       }

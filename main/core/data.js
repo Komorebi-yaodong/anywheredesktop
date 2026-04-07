@@ -149,7 +149,8 @@ export const defaultConfig = {
       closeToTray: true,
       shortcuts: {
         mainToggle: 'Ctrl+Space',
-        quickSummon: 'Alt+X',
+        quickSummon: 'Alt+A',
+        appendFollowUp: 'Alt+S',
         promptBindings: []
       }
     },
@@ -302,7 +303,8 @@ function checkConfig(inputConfig) {
       closeToTray: true,
       shortcuts: {
         mainToggle: 'Ctrl+Space',
-        quickSummon: 'Alt+X',
+        quickSummon: 'Alt+A',
+        appendFollowUp: 'Alt+S',
         promptBindings: []
       }
     },

@@ -51,7 +51,7 @@ const WINDOWS = {
     html: 'quick/index.html',
     devPath: '/quick/index.html',
     width: 980,
-    height: 378,
+    height: 452,
     options: {
       frame: false,
       titleBarStyle: 'hidden',

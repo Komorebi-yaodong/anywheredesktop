@@ -13,6 +13,7 @@ const shouldShowSelection = ref(false)
 const restoreCandidates = ref([])
 const attachment = ref(createEmptyAttachment())
 const inputRef = ref(null)
+const appendTargets = ref([])
 
 function createEmptyAttachment() {
   return {
@@ -191,12 +192,12 @@ function isSvgFilePath(filePath = '') {
   return String(filePath || '').trim().toLowerCase().endsWith('.svg')
 }
 
-function getAttachmentFilterMode(nextAttachment = createEmptyAttachment()) {
+function getAttachmentPriorityMode(nextAttachment = createEmptyAttachment()) {
   if (nextAttachment.type === 'img' && nextAttachment.imageDataUrl) return 'img'
-  if (nextAttachment.type === 'files' && nextAttachment.filePaths.length > 0) {
-    return nextAttachment.filePaths.every((filePath) => isSvgFilePath(filePath)) ? 'files' : 'files'
-  }
-  if (nextAttachment.type === 'multiline-text' && nextAttachment.rawText.trim()) return 'multiline-text'
+  if (nextAttachment.type === 'image-files' && nextAttachment.imageDataUrls.length > 0) return 'img'
+  if (nextAttachment.type === 'files' && nextAttachment.filePaths.length > 0) return 'general'
+  if (nextAttachment.type === 'multiline-text' && nextAttachment.rawText.trim()) return 'text'
+  if (nextAttachment.type === 'text' && nextAttachment.rawText.trim()) return 'text'
   return 'none'
 }
 
@@ -271,13 +272,34 @@ const candidateSections = computed(() => {
   const query = rawQuery.toLowerCase()
   const queryPinyin = getPinyinProfile(rawQuery)
   const hasQuery = Boolean(query)
-  const attachmentMode = getAttachmentFilterMode(attachment.value)
+  const attachmentMode = getAttachmentPriorityMode(attachment.value)
   const hasAttachmentFilter = attachmentMode !== 'none'
 
   const sorter = (a, b) => b.score - a.score || a.key.localeCompare(b.key, 'zh-CN')
   const firstPass = []
   const secondPassNameMatches = []
-  const secondPassFallback = []
+
+  const getAttachmentPriorityScore = (prompt, promptType) => {
+    if (attachmentMode === 'img') {
+      if (promptType === 'img') return 2600
+      if (promptType === 'general') return 1600
+      return 0
+    }
+
+    if (attachmentMode === 'text') {
+      if (promptType === 'general') return 1600
+      return isPromptTextCompatible(prompt, attachment.value.rawText) ? 2600 : 0
+    }
+
+    if (attachmentMode === 'general') {
+      if (promptType === 'general') return 2600
+      if (promptType === 'files') return 1900
+      if (promptType === 'img') return 1500
+      return 0
+    }
+
+    return 0
+  }
 
   for (const prompt of prompts) {
     const promptType = normalizePromptType(prompt.type)
@@ -290,24 +312,15 @@ const candidateSections = computed(() => {
     }
 
     if (hasAttachmentFilter) {
-      const isGeneralFallback = promptType === 'general'
-      const isTypeMatch =
-        (attachmentMode === 'img' && promptType === 'img') ||
-        (attachmentMode === 'files' && promptType === 'files') ||
-        (attachmentMode === 'multiline-text' && isPromptTextCompatible(prompt, attachment.value.rawText))
+      const priorityScore = getAttachmentPriorityScore(prompt, promptType)
+      if (priorityScore <= 0) continue
 
-      if (!isTypeMatch && !isGeneralFallback) continue
-
-      item.score = isTypeMatch ? 2400 : 1200
+      item.score = priorityScore
       firstPass.push(item)
 
-      if (hasQuery) {
-        if (nameScore > 0) {
-          item.score = (isTypeMatch ? 5200 : 4200) + nameScore
-          secondPassNameMatches.push(item)
-        } else {
-          secondPassFallback.push(item)
-        }
+      if (hasQuery && nameScore > 0) {
+        item.score = priorityScore + 2800 + nameScore
+        secondPassNameMatches.push(item)
       }
       continue
     }
@@ -364,9 +377,8 @@ const selectedPrompt = computed(() => {
   return candidateSections.value.find((item) => item.key === selectedPromptKey.value) || candidateSections.value[0] || null
 })
 
-function resolveQuickOpenPayload(prompt) {
-  if (!prompt) return null
-  const payload = { code: prompt.key }
+function resolveQuickDispatchPayload() {
+  const payload = {}
 
   if (attachment.value.type === 'img' && attachment.value.imageDataUrl) {
     payload.type = 'img'
@@ -415,6 +427,14 @@ function resolveQuickOpenPayload(prompt) {
   return payload
 }
 
+function resolveQuickOpenPayload(prompt) {
+  if (!prompt) return null
+  return {
+    code: prompt.key,
+    ...resolveQuickDispatchPayload()
+  }
+}
+
 async function hideQuick() {
   try {
     await window.api.closeWindow('quick')
@@ -432,6 +452,42 @@ async function openPrompt(prompt) {
     await hideQuick()
   } catch (error) {
     ElMessage.error(getErrorMessage(error))
+  }
+}
+
+
+const canAppendPayload = computed(() => resolveQuickDispatchPayload().type !== 'empty')
+
+async function refreshAppendTargets() {
+  try {
+    const targets = await window.api.listAppendTargets?.()
+    appendTargets.value = Array.isArray(targets)
+      ? targets.sort((a, b) => {
+          if (Boolean(a?.visible) !== Boolean(b?.visible)) {
+            return a?.visible ? -1 : 1
+          }
+          return String(a?.displayName || '').localeCompare(String(b?.displayName || ''), 'zh-CN')
+        })
+      : []
+  } catch {
+    appendTargets.value = []
+  }
+}
+
+async function appendToTarget(target) {
+  if (!target?.id) return
+
+  const payload = resolveQuickDispatchPayload()
+  if (!payload || payload.type === 'empty') {
+    ElMessage.warning('当前没有可发送的追问内容')
+    return
+  }
+
+  try {
+    await window.api.appendToWindow?.(target.id, payload)
+    await hideQuick()
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '发送追问失败'))
   }
 }
 
@@ -719,7 +775,7 @@ onMounted(async () => {
   })
 
   window.api?.onWindowInit?.((data) => {
-
+    refreshAppendTargets().catch(() => {})
 
     hasInitPayloadApplied = false
     if (typeof data?.senderId === 'string' && data.senderId) {
@@ -764,6 +820,7 @@ onMounted(async () => {
   }
 
   refreshFromClipboard(true).catch(() => {})
+  refreshAppendTargets().catch(() => {})
 
   requestAnimationFrame(() => {
     focusInputToEnd()
@@ -834,6 +891,26 @@ onBeforeUnmount(() => {
           <div class="tile-name">{{ prompt.key }}</div>
         </button>
       </div>
+
+      <div class="append-row">
+        <div class="append-label">发送追问到</div>
+        <div v-if="appendTargets.length > 0" class="append-targets">
+          <button
+            v-for="target in appendTargets"
+            :key="target.id"
+            type="button"
+            class="append-target-chip"
+            :class="{ disabled: !canAppendPayload }"
+            :title="target.displayName"
+            @click="appendToTarget(target)"
+          >
+            <img v-if="target.icon" :src="target.icon" :alt="target.displayName" class="append-target-icon" />
+            <div v-else class="append-target-fallback">{{ (target.displayName || '?').slice(0, 1).toUpperCase() }}</div>
+            <span class="append-target-name">{{ target.displayName }}</span>
+          </button>
+        </div>
+        <div v-else class="append-empty">暂无已打开窗口</div>
+      </div>
     </div>
   </div>
 </template>
@@ -884,7 +961,10 @@ html.dark .quick-content {
 .prompt-tile,
 .restore-chip,
 .search-input,
-.top-token {
+.top-token,
+.append-row,
+.append-targets,
+.append-target-chip {
   -webkit-app-region: no-drag;
 }
 
@@ -1009,12 +1089,122 @@ html.dark .restore-chip {
 }
 
 .grid-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   grid-template-columns: repeat(10, minmax(0, 1fr));
   grid-auto-rows: 78px;
   gap: 8px;
   overflow: hidden;
   max-height: calc(78px * 3 + 16px);
+}
+
+.append-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding-top: 2px;
+}
+
+.append-label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: #667085;
+}
+
+html.dark .append-label {
+  color: #aeb6c3;
+}
+
+.append-targets {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.append-target-chip {
+  flex: 0 0 auto;
+  max-width: 180px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(244, 247, 251, 0.98);
+  color: #2d2d36;
+  cursor: pointer;
+  transition: transform 0.1s ease, background 0.1s ease, opacity 0.1s ease;
+}
+
+.append-target-chip:hover {
+  background: rgba(235, 240, 246, 1);
+  transform: translateY(-1px);
+}
+
+.append-target-chip.disabled {
+  opacity: 0.5;
+}
+
+html.dark .append-target-chip {
+  background: rgba(36, 39, 46, 0.96);
+  color: #f2f2f6;
+}
+
+html.dark .append-target-chip:hover {
+  background: rgba(49, 54, 63, 0.98);
+}
+
+.append-target-icon,
+.append-target-fallback {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  flex: 0 0 auto;
+}
+
+.append-target-icon {
+  object-fit: cover;
+}
+
+.append-target-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(215, 221, 229, 0.95);
+  color: #525261;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+html.dark .append-target-fallback {
+  background: rgba(64, 69, 79, 0.95);
+  color: #f2f2f6;
+}
+
+.append-target-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.append-empty {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: #98a2b3;
+}
+
+html.dark .append-empty {
+  color: #8f98a6;
 }
 
 .prompt-tile {

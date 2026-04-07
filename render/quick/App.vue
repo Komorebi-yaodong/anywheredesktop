@@ -14,6 +14,7 @@ const restoreCandidates = ref([])
 const attachment = ref(createEmptyAttachment())
 const inputRef = ref(null)
 const appendTargets = ref([])
+const quickMode = ref('default')
 
 function createEmptyAttachment() {
   return {
@@ -481,6 +482,9 @@ async function openPrompt(prompt) {
 
 const canAppendPayload = computed(() => resolveQuickDispatchPayload().type !== 'empty')
 
+const isAppendOnlyMode = computed(() => quickMode.value === 'append-only')
+
+
 async function refreshAppendTargets() {
   try {
     const targets = await window.api.listAppendTargets?.()
@@ -489,7 +493,9 @@ async function refreshAppendTargets() {
           if (Boolean(a?.visible) !== Boolean(b?.visible)) {
             return a?.visible ? -1 : 1
           }
-          return String(a?.displayName || '').localeCompare(String(b?.displayName || ''), 'zh-CN')
+          const promptCodeCompare = String(a?.promptCode || '').localeCompare(String(b?.promptCode || ''), 'zh-CN')
+          if (promptCodeCompare !== 0) return promptCodeCompare
+          return (Number(a?.promptOrdinal || 0) - Number(b?.promptOrdinal || 0)) || String(a?.displayName || '').localeCompare(String(b?.displayName || ''), 'zh-CN')
         })
       : []
   } catch {
@@ -811,6 +817,12 @@ onMounted(async () => {
       senderId.value = data.senderId
     }
 
+    if (typeof data?.triggerMode === 'string' && data.triggerMode) {
+      quickMode.value = data.triggerMode
+    } else {
+      quickMode.value = 'default'
+    }
+
     if (data?.type === 'files' && Array.isArray(data.payload)) {
       const paths = data.payload.map((item) => item?.path).filter(Boolean)
       applyFileAttachment(paths)
@@ -903,7 +915,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div class="grid-wrap">
+      <div v-if="!isAppendOnlyMode" class="grid-wrap">
         <button
           v-for="prompt in candidateSections"
           :key="prompt.key"
@@ -922,7 +934,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="append-row">
-        <div class="append-label">发送追问到</div>
+        <div class="append-label">{{ isAppendOnlyMode ? '自动追问到' : '发送追问到' }}</div>
         <div v-if="appendTargets.length > 0" class="append-targets">
           <button
             v-for="target in appendTargets"
@@ -933,6 +945,7 @@ onBeforeUnmount(() => {
             :title="target.displayName"
             @click="appendToTarget(target)"
           >
+            <span v-if="Number(target.promptWindowCount || 0) > 1" class="append-target-badge">{{ target.promptOrdinal }}</span>
             <img v-if="target.icon" :src="target.icon" :alt="target.displayName" class="append-target-icon" />
             <div v-else class="append-target-fallback">{{ (target.displayName || '?').slice(0, 1).toUpperCase() }}</div>
             <span class="append-target-name">{{ target.displayName }}</span>
@@ -995,6 +1008,10 @@ html.dark .quick-content {
 .append-targets,
 .append-target-chip {
   -webkit-app-region: no-drag;
+}
+
+.append-target-chip {
+  position: relative;
 }
 
 .quick-search-row {
@@ -1188,6 +1205,29 @@ html.dark .append-target-chip {
 
 html.dark .append-target-chip:hover {
   background: rgba(49, 54, 63, 0.98);
+}
+
+
+.append-target-badge {
+  position: absolute;
+  top: -4px;
+  right: -3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+html.dark .append-target-badge {
+  background: #f3f4f6;
+  color: #111827;
 }
 
 .append-target-icon,

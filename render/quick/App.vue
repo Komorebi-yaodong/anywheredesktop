@@ -888,7 +888,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="quick-shell">
-    <div class="quick-content">
+    <div class="quick-content" :class="{ 'append-only': isAppendOnlyMode }">
       <div class="quick-drag-layer"></div>
       <div class="quick-search-row quick-drag-handle">
           <div v-if="hasAttachment" class="top-token" :title="attachmentPreviewLabel">
@@ -996,6 +996,11 @@ onBeforeUnmount(() => {
   -webkit-app-region: drag;
 }
 
+.quick-content.append-only {
+  gap: 6px;
+  padding: 12px 14px 10px;
+}
+
 html.dark .quick-content {
   background: rgba(29, 31, 37, 1);
   box-shadow: none;
@@ -1034,6 +1039,39 @@ html.dark .quick-content {
   background: rgba(248, 250, 252, 0.96);
   overflow: hidden;
   -webkit-app-region: drag;
+}
+
+
+.quick-content.append-only .quick-search-row {
+  min-height: 46px;
+  padding: 6px 10px;
+}
+
+.quick-content.append-only .top-token {
+  max-width: 220px;
+}
+
+.quick-content.append-only .search-input {
+  font-size: 14px;
+}
+
+.quick-content.append-only .append-row {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  padding-top: 0;
+}
+
+.quick-content.append-only .append-targets {
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow: visible;
+}
+
+.quick-content.append-only .append-target-chip {
+  min-height: 34px;
 }
 
 html.dark .quick-search-row {
@@ -1158,7 +1196,7 @@ html.dark .restore-chip {
 .append-row {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   min-height: 42px;
   padding-top: 2px;
@@ -1181,18 +1219,20 @@ html.dark .append-label {
   display: flex;
   align-items: center;
   gap: 8px;
-  overflow: hidden;
+  flex-wrap: wrap;
+  overflow: visible;
 }
 
 .append-target-chip {
   flex: 0 0 auto;
   max-width: 180px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   border: none;
   border-radius: 999px;
-  padding: 6px 10px;
+  padding: 5px 10px 5px 8px;
   background: rgba(244, 247, 251, 0.98);
   color: #2d2d36;
   cursor: pointer;
@@ -1220,17 +1260,17 @@ html.dark .append-target-chip:hover {
 
 .append-target-badge {
   position: absolute;
-  top: -4px;
-  right: -3px;
-  min-width: 16px;
-  height: 16px;
+  top: -5px;
+  right: -2px;
+  min-width: 15px;
+  height: 15px;
   padding: 0 4px;
   border-radius: 999px;
   background: #111827;
   color: #ffffff;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
-  line-height: 16px;
+  line-height: 15px;
   text-align: center;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
@@ -1242,8 +1282,8 @@ html.dark .append-target-badge {
 
 .append-target-icon,
 .append-target-fallback {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 7px;
   flex: 0 0 auto;
 }
@@ -1272,7 +1312,7 @@ html.dark .append-target-fallback {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .append-empty {

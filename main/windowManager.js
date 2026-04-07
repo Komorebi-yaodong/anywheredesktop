@@ -265,6 +265,10 @@ function resolveWindowConfig(baseConfig, payload) {
   }
 
   if (baseConfig?.html === 'quick/index.html') {
+    const triggerMode = typeof payload?.triggerMode === 'string' ? payload.triggerMode : ''
+    nextConfig.width = 980
+    nextConfig.height = triggerMode === 'append-only' ? 164 : 452
+
     const cursorPoint = screen.getCursorScreenPoint()
     const targetDisplay = screen.getDisplayNearestPoint(cursorPoint) || screen.getPrimaryDisplay()
     const workArea = getWorkArea(targetDisplay)

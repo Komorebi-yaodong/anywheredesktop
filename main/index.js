@@ -240,19 +240,38 @@ async function triggerAppendFollowUpShortcut() {
       return { ok: false, reason: 'no_window_targets' }
     }
 
-    const quickPayload = await collectQuickPayloadFast()
-
-    if (windows.length === 1 && quickPayload && quickPayload.type !== 'empty') {
-      return appendPayloadToWindow(windows[0].id, quickPayload, {
-        sourceId: 'append-shortcut',
-        event: 'quick:append-payload'
-      })
+    if (windows.length === 1) {
+      const quickPayload = await collectQuickPayloadFast()
+      if (quickPayload && quickPayload.type !== 'empty') {
+        return appendPayloadToWindow(windows[0].id, quickPayload, {
+          sourceId: 'append-shortcut',
+          event: 'quick:append-payload'
+        })
+      }
     }
 
-    return openQuickWindowPreservingMain({
-      ...(quickPayload && typeof quickPayload === 'object' ? quickPayload : { type: 'empty', payload: '', source: 'empty' }),
+    const token = ++quickSummonToken
+    const openResult = await openQuickWindowPreservingMain({
+      type: 'empty',
+      payload: '',
+      source: 'empty',
       triggerMode: 'append-only'
     })
+
+    collectQuickPayloadFast()
+      .then((quickPayload) => {
+        if (token !== quickSummonToken) return
+        if (!quickPayload || quickPayload.type === 'empty') return
+        pushQuickPayloadToVisibleWindow({
+          ...quickPayload,
+          triggerMode: 'append-only'
+        })
+      })
+      .catch((error) => {
+        debugMainError('append-shortcut:fast-payload-collect-failed', error)
+      })
+
+    return openResult
   } catch (error) {
     debugMainError('shortcut:append-follow-up-failed', error)
     return { ok: false, reason: 'append_follow_up_failed', error: error?.message || String(error) }

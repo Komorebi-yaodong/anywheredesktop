@@ -803,14 +803,7 @@ function handleGlobalKeydown(event) {
 }
 
 
-watch(isAppendOnlyMode, (value) => {
-  try {
-    const targetHeight = value ? 164 : 452
-    window.resizeTo?.(980, targetHeight)
-  } catch {
-    // ignore append-only resize failure
-  }
-}, { immediate: true })
+
 
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown, true)

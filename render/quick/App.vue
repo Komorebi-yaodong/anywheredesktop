@@ -192,13 +192,39 @@ function isSvgFilePath(filePath = '') {
   return String(filePath || '').trim().toLowerCase().endsWith('.svg')
 }
 
-function getAttachmentPriorityMode(nextAttachment = createEmptyAttachment()) {
-  if (nextAttachment.type === 'img' && nextAttachment.imageDataUrl) return 'img'
-  if (nextAttachment.type === 'image-files' && nextAttachment.imageDataUrls.length > 0) return 'img'
-  if (nextAttachment.type === 'files' && nextAttachment.filePaths.length > 0) return 'general'
-  if (nextAttachment.type === 'multiline-text' && nextAttachment.rawText.trim()) return 'text'
-  if (nextAttachment.type === 'text' && nextAttachment.rawText.trim()) return 'text'
-  return 'none'
+function isImageFilePath(filePath = '') {
+  const normalized = String(filePath || '').trim().toLowerCase()
+  if (!normalized) return false
+  return ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'].some((ext) => normalized.endsWith(ext))
+}
+
+function classifyAttachmentInput(nextAttachment = createEmptyAttachment()) {
+  if (nextAttachment.type === 'img' && nextAttachment.imageDataUrl) {
+    return { kind: 'attachment-image', hasAttachment: true }
+  }
+
+  if (nextAttachment.type === 'image-files' && nextAttachment.imageDataUrls.length > 0) {
+    return { kind: 'attachment-image', hasAttachment: true }
+  }
+
+  if (nextAttachment.type === 'files' && nextAttachment.filePaths.length > 0) {
+    const allImageFiles = nextAttachment.filePaths.every((filePath) => isImageFilePath(filePath))
+    return {
+      kind: allImageFiles ? 'attachment-image' : 'attachment-file',
+      hasAttachment: true,
+      allImageFiles
+    }
+  }
+
+  if (nextAttachment.type === 'multiline-text' && nextAttachment.rawText.trim()) {
+    return { kind: 'attachment-text', hasAttachment: true }
+  }
+
+  if (nextAttachment.type === 'text' && nextAttachment.rawText.trim()) {
+    return { kind: 'plain-text', hasAttachment: false }
+  }
+
+  return { kind: 'plain-text', hasAttachment: false }
 }
 
 async function filterSupportedFilePaths(paths = []) {
@@ -272,30 +298,43 @@ const candidateSections = computed(() => {
   const query = rawQuery.toLowerCase()
   const queryPinyin = getPinyinProfile(rawQuery)
   const hasQuery = Boolean(query)
-  const attachmentMode = getAttachmentPriorityMode(attachment.value)
-  const hasAttachmentFilter = attachmentMode !== 'none'
+  const attachmentInput = classifyAttachmentInput(attachment.value)
 
   const sorter = (a, b) => b.score - a.score || a.key.localeCompare(b.key, 'zh-CN')
   const firstPass = []
   const secondPassNameMatches = []
 
-  const getAttachmentPriorityScore = (prompt, promptType) => {
-    if (attachmentMode === 'img') {
-      if (promptType === 'img') return 2600
+  const getTypePriorityScore = (prompt, promptType) => {
+    if (attachmentInput.kind === 'attachment-image') {
+      if (promptType === 'img') return 3200
+      if (promptType === 'files') return 2400
       if (promptType === 'general') return 1600
       return 0
     }
 
-    if (attachmentMode === 'text') {
+    if (attachmentInput.kind === 'attachment-file') {
+      if (promptType === 'files') return 3200
       if (promptType === 'general') return 1600
-      return isPromptTextCompatible(prompt, attachment.value.rawText) ? 2600 : 0
+      return 0
     }
 
-    if (attachmentMode === 'general') {
-      if (promptType === 'general') return 2600
-      if (promptType === 'files') return 1900
-      if (promptType === 'img') return 1500
+    if (attachmentInput.kind === 'attachment-text') {
+      if (promptType === 'over' && isPromptTextCompatible(prompt, attachment.value.rawText)) return 3200
+      if (promptType === 'general') return 1600
       return 0
+    }
+
+    if (promptType === 'over') {
+      if (!rawQuery) return 1800
+      let score = 1800
+      if (isPromptTextCompatible(prompt, rawQuery)) {
+        score += prompt?.matchRegex ? 900 : 400
+      }
+      return score
+    }
+
+    if (promptType === 'general') {
+      return 1200
     }
 
     return 0
@@ -311,50 +350,34 @@ const candidateSections = computed(() => {
       score: 0
     }
 
-    if (hasAttachmentFilter) {
-      const priorityScore = getAttachmentPriorityScore(prompt, promptType)
-      if (priorityScore <= 0) continue
+    if (attachmentInput.hasAttachment) {
+      const typeScore = getTypePriorityScore(prompt, promptType)
+      if (typeScore <= 0) continue
 
-      item.score = priorityScore
+      item.score = typeScore
       firstPass.push(item)
 
       if (hasQuery && nameScore > 0) {
-        item.score = priorityScore + 2800 + nameScore
+        item.score = 6000 + nameScore
         secondPassNameMatches.push(item)
       }
       continue
     }
 
-    if (!hasQuery) {
-      if (isPromptTextCompatible(prompt, rawQuery) && promptType === 'over') {
-        item.score = 1800
-        firstPass.push(item)
-      } else if (promptType === 'general') {
-        item.score = 1200
-        firstPass.push(item)
-      }
-      continue
-    }
-
     if (nameScore > 0) {
-      item.score = 5200 + nameScore
+      item.score = 6000 + nameScore
       firstPass.push(item)
       continue
     }
 
-    if (isPromptTextCompatible(prompt, rawQuery) && promptType === 'over') {
-      item.score = 2600
-      firstPass.push(item)
-      continue
-    }
-
-    if (promptType === 'general') {
-      item.score = 1400
+    const typeScore = getTypePriorityScore(prompt, promptType)
+    if (typeScore > 0) {
+      item.score = typeScore
       firstPass.push(item)
     }
   }
 
-  const sections = hasAttachmentFilter && hasQuery
+  const sections = attachmentInput.hasAttachment && hasQuery
     ? secondPassNameMatches.sort(sorter)
     : firstPass.sort(sorter)
 
@@ -615,13 +638,19 @@ async function applyFileAttachment(paths = [], previewLabel = '') {
     return
   }
 
+  const allImageFiles = supportedPaths.every((filePath) => isImageFilePath(filePath))
+
   setAttachment({
     type: 'files',
     filePaths: supportedPaths,
     previewLabel: previewLabel || supportedPaths[0]?.split(/[/\\]/).pop() || ''
   })
   queryText.value = ''
-  await inspectSessionCandidates(supportedPaths)
+  if (!allImageFiles) {
+    await inspectSessionCandidates(supportedPaths)
+  } else {
+    restoreCandidates.value = []
+  }
   focusInputToEnd()
 }
 

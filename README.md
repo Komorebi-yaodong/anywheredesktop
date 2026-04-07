@@ -1,10 +1,5 @@
 # ✨ AI Anywhere Desktop - 你的定制化全能 AI Agent 🚀
 
-> **基于原 uTools 热门插件 "AI Anywhere" 核心重构的独立 Electron 桌面端程序！**
-> **摆脱底座限制，从零原生构建。随时随地，便捷召唤 AI！支持 MCP、Skill 技能库与定时任务，将 AI 从简单的“聊天机器人”升级为能够自主执行复杂任务的“全能 AI 助手”。**
-
----
-
 ## 📸 软件主要功能
 
 AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。它不仅聚合了各大 AI 模型接口，更是一套完整的本地 AI 自动化系统：

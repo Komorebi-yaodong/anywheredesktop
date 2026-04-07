@@ -12,6 +12,8 @@ files:
   - '!release/**'
   - '!build/icon.iconset/**'
   - '!build/.iconset-tmp/**'
+  - '!.tmp/**'
+  - '!**/*.map'
 asarUnpack:
   - resources/**
 

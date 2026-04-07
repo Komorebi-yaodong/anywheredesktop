@@ -1101,6 +1101,16 @@ async function selectLocalChatPath() {
                       </el-button>
                     </div>
 
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">自动追问快捷键</span>
+                        <span class="setting-option-description">按下后自动追问；仅一个窗口时直接追问，多个窗口时打开追问选择界面。</span>
+                      </div>
+                      <el-button class="shortcut-record-btn" @click="startShortcutRecording('appendFollowUp')">
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'appendFollowUp' ? '请按下快捷键…' : currentConfig.desktop.shortcuts.appendFollowUp || 'Alt+S' }}
+                      </el-button>
+                    </div>
+
                     <div class="desktop-shortcut-list">
                       <div class="desktop-shortcut-list-head">
                         <div>

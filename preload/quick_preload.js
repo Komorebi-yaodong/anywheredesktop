@@ -47,6 +47,8 @@ async function listAppendTargets() {
         (typeof item.promptCode === 'string' && item.promptCode.trim()) ||
         item.id,
       promptCode: typeof item.promptCode === 'string' ? item.promptCode : '',
+      promptOrdinal: Number(item.promptOrdinal || 0),
+      promptWindowCount: Number(item.promptWindowCount || 0),
       icon: typeof item.icon === 'string' ? item.icon : ''
     }))
 }

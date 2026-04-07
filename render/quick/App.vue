@@ -802,6 +802,16 @@ function handleGlobalKeydown(event) {
   }
 }
 
+
+watch(isAppendOnlyMode, (value) => {
+  try {
+    const targetHeight = value ? 164 : 452
+    window.resizeTo?.(980, targetHeight)
+  } catch {
+    // ignore append-only resize failure
+  }
+}, { immediate: true })
+
 onMounted(async () => {
   window.addEventListener('keydown', handleGlobalKeydown, true)
 
@@ -901,9 +911,9 @@ onBeforeUnmount(() => {
           />
       </div>
 
-      <div class="recommend-title">匹配推荐</div>
+      <div v-if="!isAppendOnlyMode" class="recommend-title">匹配推荐</div>
 
-      <div v-if="restoreCandidates.length > 0" class="restore-zone">
+      <div v-if="!isAppendOnlyMode && restoreCandidates.length > 0" class="restore-zone">
         <button
           v-for="candidate in restoreCandidates"
           :key="candidate.filePath"

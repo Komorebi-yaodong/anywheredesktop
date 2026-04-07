@@ -371,28 +371,40 @@ async function syncDesktopRuntimeFromConfig() {
 
   setMainWindowCloseBehavior(desktop.closeToTray === false ? 'close' : 'tray')
 
-  const syncResult = syncDesktopShortcuts(desktop, {
-    onMainToggle: () => {
-      if (isSingletonWindowVisible('main')) {
-        hideMainWindow()
-        return
+  try {
+    const syncResult = syncDesktopShortcuts(desktop, {
+      onMainToggle: () => {
+        if (isSingletonWindowVisible('main')) {
+          hideMainWindow()
+          return
+        }
+        showMainWindow()
+      },
+      onQuickSummon: () => {
+        triggerQuickSummon()
+      },
+      onAppendFollowUp: () => {
+        triggerAppendFollowUpShortcut()
+      },
+      onPromptTrigger: (promptKey) => {
+        triggerPromptShortcut(promptKey)
       }
-      showMainWindow()
-    },
-    onQuickSummon: () => {
-      triggerQuickSummon()
-    },
-    onAppendFollowUp: () => {
-      triggerAppendFollowUpShortcut()
-    },
-    onPromptTrigger: (promptKey) => {
-      triggerPromptShortcut(promptKey)
-    }
-  })
+    })
 
-  return {
-    config,
-    desktop: syncResult.desktop
+    return {
+      config,
+      desktop: syncResult.desktop
+    }
+  } catch (error) {
+    debugMainError('desktop-shortcuts:sync-failed', {
+      error: error?.message || String(error),
+      desktop
+    })
+    clearDesktopShortcuts()
+    return {
+      config,
+      desktop
+    }
   }
 }
 

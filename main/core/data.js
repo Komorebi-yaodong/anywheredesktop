@@ -216,6 +216,55 @@ function ensureObject(value, fallback = {}) {
   return fallback
 }
 
+function sanitizePromptBindings(bindings = []) {
+  if (!Array.isArray(bindings)) {
+    return {
+      value: [],
+      changed: true
+    }
+  }
+
+  let changed = false
+  const nextBindings = []
+
+  bindings.forEach((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      changed = true
+      return
+    }
+
+    const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `prompt-${index}`
+    const promptKey = typeof item.promptKey === 'string' ? item.promptKey.trim() : ''
+    const accelerator = typeof item.accelerator === 'string' ? item.accelerator.trim() : ''
+    const enabled = item.enabled !== false
+
+    if (!promptKey || !accelerator) {
+      changed = true
+      return
+    }
+
+    if (id !== item.id || promptKey !== item.promptKey || accelerator !== item.accelerator || enabled !== item.enabled) {
+      changed = true
+    }
+
+    nextBindings.push({
+      id,
+      promptKey,
+      accelerator,
+      enabled
+    })
+  })
+
+  if (nextBindings.length !== bindings.length) {
+    changed = true
+  }
+
+  return {
+    value: nextBindings,
+    changed
+  }
+}
+
 function splitConfigForStorage(fullConfig) {
   const source = deepClone(fullConfig || {})
   const { prompts, providers, mcpServers, tasks, ...restOfConfig } = source
@@ -415,11 +464,16 @@ function checkConfig(inputConfig) {
         changed = true
       }
       if (typeof config.desktop.shortcuts.quickSummon !== 'string' || !config.desktop.shortcuts.quickSummon.trim()) {
-        config.desktop.shortcuts.quickSummon = 'Alt+X'
+        config.desktop.shortcuts.quickSummon = 'Alt+A'
         changed = true
       }
-      if (!Array.isArray(config.desktop.shortcuts.promptBindings)) {
-        config.desktop.shortcuts.promptBindings = []
+      if (typeof config.desktop.shortcuts.appendFollowUp !== 'string' || !config.desktop.shortcuts.appendFollowUp.trim()) {
+        config.desktop.shortcuts.appendFollowUp = 'Alt+S'
+        changed = true
+      }
+      const sanitizedPromptBindings = sanitizePromptBindings(config.desktop.shortcuts.promptBindings)
+      config.desktop.shortcuts.promptBindings = sanitizedPromptBindings.value
+      if (sanitizedPromptBindings.changed) {
         changed = true
       }
     }

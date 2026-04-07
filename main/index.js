@@ -229,11 +229,8 @@ async function triggerAppendFollowUpShortcut() {
     }
 
     const quickPayload = await collectQuickPayloadFast()
-    if (!quickPayload || quickPayload.type === 'empty') {
-      return { ok: false, reason: 'empty_payload' }
-    }
 
-    if (windows.length === 1) {
+    if (windows.length === 1 && quickPayload && quickPayload.type !== 'empty') {
       return appendPayloadToWindow(windows[0].id, quickPayload, {
         sourceId: 'append-shortcut',
         event: 'quick:append-payload'
@@ -241,7 +238,7 @@ async function triggerAppendFollowUpShortcut() {
     }
 
     return openQuickWindowPreservingMain({
-      ...quickPayload,
+      ...(quickPayload && typeof quickPayload === 'object' ? quickPayload : { type: 'empty', payload: '', source: 'empty' }),
       triggerMode: 'append-only'
     })
   } catch (error) {

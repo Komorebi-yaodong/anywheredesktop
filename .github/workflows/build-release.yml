@@ -58,15 +58,9 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y imagemagick icnsutils libarchive-tools
+          sudo apt-get install -y imagemagick
           cp resources/icon.png build/icon.png
           convert resources/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
-          mkdir -p .github/tmp/iconset
-          for size in 16 32 64 128 256 512; do
-            convert resources/icon.png -resize ${size}x${size} .github/tmp/iconset/icon_${size}x${size}.png
-            convert resources/icon.png -resize $((size * 2))x$((size * 2)) .github/tmp/iconset/icon_${size}x${size}@2x.png
-          done
-          pnpm dlx @fiahfy/icns-cli -i .github/tmp/iconset -o build/icon.icns
 
       - name: Install icon generation tools (macOS)
         if: runner.os == 'macOS'
@@ -87,6 +81,13 @@ jobs:
           cp resources/icon.png .github/tmp/icon.iconset/icon_512x512@2x.png
           iconutil -c icns .github/tmp/icon.iconset -o build/icon.icns
           convert resources/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
+      - name: Inspect generated build assets
+        shell: bash
+        run: |
+          echo "Build directory contents:"
+          ls -R build || true
+
+
 
       - name: Build package
         run: pnpm build:${{ matrix.target }}

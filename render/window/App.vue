@@ -3457,17 +3457,6 @@ const checkAndLoadSessionFromFile = async (file) => {
 };
 
 const file2fileList = async (file, idx) => {
-  console.log('[window:file2fileList] incoming file payload', {
-    name: file?.name,
-    type: file?.type,
-    size: file?.size,
-    hasBase64: Boolean(typeof file?.base64 === 'string' && file.base64),
-    hasBufferString: Boolean(typeof file?.buffer === 'string' && file.buffer),
-    hasUrl: Boolean(typeof file?.url === 'string' && file.url),
-    fileTypeTag: file?.__type || null,
-    isBlob: file instanceof Blob
-  })
-
   const isSessionFile = await checkAndLoadSessionFromFile(file);
   if (isSessionFile) { chatInputRef.value?.focus({ cursor: 'end' }); return; }
 
@@ -3556,6 +3545,14 @@ const processFilePath = async (filePath) => {
     throw error;
   }
   try {
+    const probe = await window.api.probeFilePathSupport?.(filePath);
+    if (probe?.supported === false) {
+      const fileName = filePath.split(/[/\\]/).pop() || filePath;
+      const error = new Error(`不支持的文件类型: ${fileName}`);
+      showDismissibleMessage.warning(error.message);
+      throw error;
+    }
+
     const fileObject = await window.api.handleFilePath(filePath);
     if (!fileObject) {
       const error = new Error('无法读取或访问该文件，请检查路径和权限');

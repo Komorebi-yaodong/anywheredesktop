@@ -754,7 +754,12 @@ handleInvoke('skill:pathJoin', async (_event, ...args) => {
     return fileApi.setFileMtime(filePath, mtime)
   })
 
-  handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
+  
+  handleInvoke('file:probePathSupport', async (_event, filePath = '') => {
+    return fileApi.probeFilePathSupport(filePath)
+  })
+
+handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
     return fileApi.isFileTypeSupported(fileName)
   })
 

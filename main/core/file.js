@@ -37,7 +37,8 @@ const TEXT_EXTENSIONS = [
   '.ini',
   '.bat',
   '.log',
-  '.toml'
+  '.toml',
+  '.svg'
 ]
 
 const DOC_EXTENSIONS = ['.docx']
@@ -122,6 +123,7 @@ const extensionToMimeType = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav'
 }
@@ -272,11 +274,11 @@ export function isFileTypeSupported(fileName) {
   }
 
   // 2) 明确二进制黑名单直接拒绝
-  if (UNSUPPORTED_BINARY_EXTENSIONS.includes(extension)) {
+  if (!extension || UNSUPPORTED_BINARY_EXTENSIONS.includes(extension)) {
     return false
   }
 
-  // 3) 其余未知后缀先放行，后续 parse 阶段做内容探针
+  // 3) 其余未知后缀先交给内容探针进一步判断
   return true
 }
 
@@ -344,6 +346,57 @@ export async function parseFileObject(fileObj) {
   }
 
   throw new Error(`无法解析文件类型: ${normalized.name}`)
+}
+
+
+export async function probeFilePathSupport(filePath = '') {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    return {
+      supported: false,
+      reason: 'invalid_file_path'
+    }
+  }
+
+  const resolvedPath = path.resolve(filePath.trim())
+  const fileName = path.basename(resolvedPath)
+  const extension = getExtension(fileName)
+
+  if (!extension || UNSUPPORTED_BINARY_EXTENSIONS.includes(extension)) {
+    return {
+      supported: false,
+      reason: 'unsupported_extension',
+      fileName,
+      extension
+    }
+  }
+
+  if (getFileCategoryByName(fileName) !== 'unknown') {
+    return {
+      supported: true,
+      reason: 'whitelisted_extension',
+      fileName,
+      extension
+    }
+  }
+
+  try {
+    const probeBuffer = await fs.readFile(resolvedPath)
+    const isBinary = looksLikeBinaryByBase64(probeBuffer.toString('base64'))
+    return {
+      supported: !isBinary,
+      reason: isBinary ? 'binary_probe_rejected' : 'text_probe_passed',
+      fileName,
+      extension
+    }
+  } catch (error) {
+    return {
+      supported: false,
+      reason: 'probe_failed',
+      fileName,
+      extension,
+      error: error?.message || String(error)
+    }
+  }
 }
 
 export async function handleFilePath(filePath) {

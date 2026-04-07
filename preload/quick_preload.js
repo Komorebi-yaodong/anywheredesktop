@@ -69,6 +69,8 @@ const api = {
   readClipboardPayload: () => electronAPI.ipcRenderer.invoke('system:clipboard:readPayload'),
   captureSelectionPayload: () => electronAPI.ipcRenderer.invoke('system:clipboard:captureSelection'),
   getConfig: () => electronAPI.ipcRenderer.invoke('data:getConfig'),
+  isFileTypeSupported: (fileName) => invokeOrThrow('file:isFileTypeSupported', fileName),
+  probeFilePathSupport: (filePath) => invokeOrThrow('file:probePathSupport', filePath),
   readLocalFile: (filePath, options = {}) => invokeOrThrow('file:readLocalFile', filePath, options),
   closeWindow: (windowRef = '') => {
     electronAPI.ipcRenderer.send('window:close', { windowRef })

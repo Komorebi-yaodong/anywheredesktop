@@ -421,6 +421,7 @@ const api = {
   writeLocalFile: (filePath, content, options = {}) => invokeOrThrow('file:writeLocalFile', filePath, content, options),
   setFileMtime: (filePath, mtime) => invokeOrThrow('file:setFileMtime', filePath, mtime),
   isFileTypeSupported: (fileName) => invokeOrThrow('file:isFileTypeSupported', fileName),
+  probeFilePathSupport: (filePath) => invokeOrThrow('file:probePathSupport', filePath),
   parseFileObject: (fileObj) => invokeOrThrow('file:parseFileObject', fileObj),
   copyLocalPath: (srcPath, destPath) => invokeOrThrow('file:copyLocalPath', srcPath, destPath),
 

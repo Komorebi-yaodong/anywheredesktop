@@ -200,6 +200,31 @@ function getAttachmentFilterMode(nextAttachment = createEmptyAttachment()) {
   return 'none'
 }
 
+async function filterSupportedFilePaths(paths = []) {
+  const normalizedPaths = Array.isArray(paths) ? paths.filter(Boolean) : []
+  if (!normalizedPaths.length) {
+    return []
+  }
+
+  const supportedPaths = []
+  for (const filePath of normalizedPaths) {
+    const fileName = filePath.split(/[/\\]/).pop() || filePath
+    try {
+      const probe = await window.api.probeFilePathSupport?.(filePath)
+      if (probe?.supported === false) {
+        ElMessage.warning(`不支持的文件类型: ${fileName}`)
+        continue
+      }
+      supportedPaths.push(filePath)
+    } catch {
+      supportedPaths.push(filePath)
+    }
+  }
+
+  return supportedPaths
+}
+
+
 async function inspectSessionCandidates(paths = []) {
   const candidates = []
   for (const filePath of paths) {
@@ -527,13 +552,20 @@ function applyImageAttachment(dataUrl = '') {
 async function applyFileAttachment(paths = [], previewLabel = '') {
   const normalizedPaths = Array.isArray(paths) ? paths.filter(Boolean) : []
   if (!normalizedPaths.length) return
+
+  const supportedPaths = await filterSupportedFilePaths(normalizedPaths)
+  if (!supportedPaths.length) {
+    clearAttachment()
+    return
+  }
+
   setAttachment({
     type: 'files',
-    filePaths: normalizedPaths,
-    previewLabel: previewLabel || normalizedPaths[0]?.split(/[/\\]/).pop() || ''
+    filePaths: supportedPaths,
+    previewLabel: previewLabel || supportedPaths[0]?.split(/[/\\]/).pop() || ''
   })
   queryText.value = ''
-  await inspectSessionCandidates(normalizedPaths)
+  await inspectSessionCandidates(supportedPaths)
   focusInputToEnd()
 }
 
@@ -730,6 +762,8 @@ onMounted(async () => {
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '加载配置失败'))
   }
+
+  refreshFromClipboard(true).catch(() => {})
 
   requestAnimationFrame(() => {
     focusInputToEnd()

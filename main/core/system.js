@@ -293,8 +293,10 @@ function updateTimelineEntry(entry, nextSignature, nextValue) {
   }
 
   const changed = entry.signature !== nextSignature
-  entry.signature = nextSignature
-  entry.timestamp = Date.now()
+  if (changed) {
+    entry.signature = nextSignature
+    entry.timestamp = Date.now()
+  }
   entry.value = Array.isArray(nextValue) ? [...nextValue] : nextValue
   return changed
 }
@@ -532,9 +534,11 @@ function updateClipboardFileDropState(filePaths = []) {
     }
   }
 
-  clipboardFileDropState.signature = signature
-  clipboardFileDropState.timestamp = Date.now()
-  clipboardFileDropState.filePaths = [...normalized]
+  if (signature !== clipboardFileDropState.signature) {
+    clipboardFileDropState.signature = signature
+    clipboardFileDropState.timestamp = Date.now()
+    clipboardFileDropState.filePaths = [...normalized]
+  }
 
   const ageMs = Math.max(0, Date.now() - (clipboardFileDropState.timestamp || 0))
   const isFresh = ageMs <= CLIPBOARD_FRESHNESS_MS
@@ -563,9 +567,11 @@ function updateExplorerSelectionState(filePaths = []) {
     }
   }
 
-  explorerSelectionState.signature = signature
-  explorerSelectionState.timestamp = Date.now()
-  explorerSelectionState.filePaths = [...normalized]
+  if (signature !== explorerSelectionState.signature) {
+    explorerSelectionState.signature = signature
+    explorerSelectionState.timestamp = Date.now()
+    explorerSelectionState.filePaths = [...normalized]
+  }
 
   const ageMs = Math.max(0, Date.now() - (explorerSelectionState.timestamp || 0))
   const isFresh = ageMs <= CLIPBOARD_FRESHNESS_MS

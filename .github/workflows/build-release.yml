@@ -1,0 +1,101 @@
+name: Build Desktop Packages
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            artifact_name: anywhere-desktop-windows
+          - os: ubuntu-latest
+            target: linux
+            artifact_name: anywhere-desktop-linux
+          - os: macos-latest
+            target: mac
+            artifact_name: anywhere-desktop-macos
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Ensure build directory exists
+        shell: bash
+        run: mkdir -p build .github/tmp
+
+      - name: Install icon generation tools (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install imagemagick -y --no-progress
+          pnpm dlx png-to-ico resources/icon.png > build/icon.ico
+          Copy-Item resources/icon.png build/icon.png -Force
+
+      - name: Install icon generation tools (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick icnsutils libarchive-tools
+          cp resources/icon.png build/icon.png
+          convert resources/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
+          mkdir -p .github/tmp/iconset
+          for size in 16 32 64 128 256 512; do
+            convert resources/icon.png -resize ${size}x${size} .github/tmp/iconset/icon_${size}x${size}.png
+            convert resources/icon.png -resize $((size * 2))x$((size * 2)) .github/tmp/iconset/icon_${size}x${size}@2x.png
+          done
+          pnpm dlx @fiahfy/icns-cli -i .github/tmp/iconset -o build/icon.icns
+
+      - name: Install icon generation tools (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install imagemagick
+          cp resources/icon.png build/icon.png
+          mkdir -p .github/tmp/icon.iconset
+          sips -z 16 16 resources/icon.png --out .github/tmp/icon.iconset/icon_16x16.png
+          sips -z 32 32 resources/icon.png --out .github/tmp/icon.iconset/icon_16x16@2x.png
+          sips -z 32 32 resources/icon.png --out .github/tmp/icon.iconset/icon_32x32.png
+          sips -z 64 64 resources/icon.png --out .github/tmp/icon.iconset/icon_32x32@2x.png
+          sips -z 128 128 resources/icon.png --out .github/tmp/icon.iconset/icon_128x128.png
+          sips -z 256 256 resources/icon.png --out .github/tmp/icon.iconset/icon_128x128@2x.png
+          sips -z 256 256 resources/icon.png --out .github/tmp/icon.iconset/icon_256x256.png
+          sips -z 512 512 resources/icon.png --out .github/tmp/icon.iconset/icon_256x256@2x.png
+          sips -z 512 512 resources/icon.png --out .github/tmp/icon.iconset/icon_512x512.png
+          cp resources/icon.png .github/tmp/icon.iconset/icon_512x512@2x.png
+          iconutil -c icns .github/tmp/icon.iconset -o build/icon.icns
+          convert resources/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
+
+      - name: Build package
+        run: pnpm build:${{ matrix.target }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            dist/**
+            release/**
+          if-no-files-found: warn

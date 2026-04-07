@@ -8,16 +8,27 @@ files:
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!dist/**'
+  - '!release/**'
+  - '!build/icon.iconset/**'
+  - '!build/.iconset-tmp/**'
 asarUnpack:
   - resources/**
+
 win:
   executableName: anywhere-desktop
   icon: build/icon.ico
+  electronLanguages:
+    - zh-CN
+    - en-US
+
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  oneClick: false
+  allowToChangeInstallationDirectory: true
 mac:
   icon: build/icon.icns
   entitlementsInherit: build/entitlements.mac.plist

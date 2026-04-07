@@ -1,9 +1,13 @@
 {
   "name": "anywhere-desktop",
   "version": "1.0.0",
-  "description": "An Electron application with Vue",
+  "description": "AI Anywhere Desktop",
   "main": "./out/main/index.js",
-  "author": "example.com",
+  "author": {
+    "name": "Komorebi",
+    "email": "BY2439213@buaa.edu.cn"
+  },
+  "companyName": "Komorebi",
   "homepage": "https://electron-vite.org",
   "scripts": {
     "format": "prettier --write .",
@@ -21,8 +25,9 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@element-plus/icons-vue": "^2.3.2",
+    "@langchain/core": "^1.1.39",
+    "@langchain/langgraph": "^1.2.7",
     "@langchain/mcp-adapters": "1.0.0",
-    "@langchain/core": "^1.1.32",
     "adm-zip": "0.5.16",
     "dompurify": "^3.3.3",
     "electron-updater": "^6.3.9",

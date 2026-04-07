@@ -1,5 +1,8 @@
 name: Build Desktop Packages
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
 
@@ -24,17 +27,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -48,7 +50,7 @@ jobs:
         shell: powershell
         run: |
           choco install imagemagick -y --no-progress
-          pnpm dlx png-to-ico resources/icon.png > build/icon.ico
+          magick resources/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
           Copy-Item resources/icon.png build/icon.png -Force
 
       - name: Install icon generation tools (Linux)

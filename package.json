@@ -22,6 +22,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@element-plus/icons-vue": "^2.3.2",
     "@langchain/mcp-adapters": "1.0.0",
+    "@langchain/core": "^1.1.32",
     "adm-zip": "0.5.16",
     "dompurify": "^3.3.3",
     "electron-updater": "^6.3.9",

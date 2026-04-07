@@ -49,13 +49,15 @@ Anywhere_desktop/
 │   │   └── system.js       # 系统级 API (全局快捷键、剪贴板 clipboard、通知 Notification)
 │   └── ...
 ├── preload/                # 【桥梁】Electron 预加载脚本 (沙箱安全隔离)
-│   ├── main_preload.js     # 注入到主控制台的 API
-│   ├── window_preload.js   # 注入到独立对话窗口的 API
-│   └── fast_preload.js     # 注入到快捷面板的 API
-├── render/                 # 【前端】Vue 3 渲染进程代码
-│   ├── main/               # 主控制台前端 (设置、服务商、MCP、历史记录管理等)
-│   ├── window/             # 独立对话窗口前端 (气泡、输入框、Markdown 渲染)
-│   └── fast_window/        # 快捷输入与追问前端 (多 HTML 结构，逐步向 Vue 3 重构)
+│   ├── main_preload.js        # 注入到主控制台的 API
+│   ├── window_preload.js      # 注入到独立对话窗口的 API
+│   ├── fast_input_preload.js  # 注入到快捷输入窗口的 API
+│   └── quick_preload.js       # 注入到快捷召唤窗口的 API
+├── render/                    # 【前端】Vue 3 渲染进程代码
+│   ├── main/                  # 主控制台前端 (设置、服务商、MCP、历史记录管理等)
+│   ├── window/                # 独立对话窗口前端 (气泡、输入框、Markdown 渲染)
+│   ├── fast_input/            # 快捷输入悬浮窗前端
+│   └── quick/                 # 快捷召唤前端
 ├── package.json
 └── vite.config.js          # Vite 多页面/主进程构建配置
 ```

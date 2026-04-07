@@ -104,19 +104,7 @@ pnpm install
 pnpm dev
 ```
 
-### 3. API 替代与开发原则
-
-在将原 uTools 代码移植到 Electron 时，请严格遵循以下原则：
-
-1. **禁用任何 `utools.xxx` API**：所有涉及底座能力的调用必须重写。
-   * *例如*：`utools.db.put` -> 主进程封装的 `db.js` 并通过 `window.api.dbPut` 调用。
-   * *例如*：`utools.showSaveDialog` -> 主进程 `dialog.showSaveDialog`。
-   * *例如*：`utools.copyText` -> 主进程 `clipboard.writeText`。
-2. **前后端隔离**：渲染进程（Vue 组件）**绝对不允许**直接引入 `node:fs`、`node:path` 或 `child_process`。所有系统级操作必须通过 `preload.js` 声明的 `window.api` 发送 IPC 请求至主进程处理。
-3. **展位代码禁忌**：按顺序推进开发时，不要在业务逻辑中保留诸如 `// TODO: utools.redirect()` 之类的展位代码，必须先实现基础的窗口路由机制来真实替代该功能，避免遗留技术债务。
-4. **统一主题规范**：复用 `Anywhere_main` 和 `Anywhere_window` 的 Vue 代码时，必须保留其原有的 CSS 变量和深浅色模式切换逻辑（Panda 黑白配色体系）。
-
-### 4. 项目构建
+### 3. 项目构建
 
 开发完成后，打包分发适用于 Windows 的安装包：
 

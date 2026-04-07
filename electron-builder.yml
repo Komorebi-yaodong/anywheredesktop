@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: anywhere-desktop
+appId: com.komorebi.anywhere.desktop
+productName: AI Anywhere Desktop
 directories:
   buildResources: build
 files:

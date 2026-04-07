@@ -61,7 +61,8 @@ export function registerIpcHandlers({
   maximizeOrRestoreWindow,
   closeWindow,
   toggleAlwaysOnTop,
-  handleFastInputWindowEvent
+  handleFastInputWindowEvent,
+  appendPayloadToWindow
 }) {
   ipcMain.on('ping', () => {})
 
@@ -115,6 +116,20 @@ export function registerIpcHandlers({
       { getWindowByRef, listWindows }
     )
   })
+
+  handleInvoke('window:appendToWindow', async (event, input = {}) => {
+    const sourceId = getWindowRefByWebContentsId(event.sender.id)
+    const target = typeof input?.target === 'string' ? input.target.trim() : ''
+    const payload = input?.payload && typeof input.payload === 'object' ? input.payload : null
+    const eventName = typeof input?.event === 'string' && input.event ? input.event : 'quick:append-payload'
+
+    return appendPayloadToWindow(target, payload, {
+      sourceId: typeof input?.sourceId === 'string' && input.sourceId ? input.sourceId : sourceId,
+      event: eventName
+    })
+  })
+
+
 
 
   handleInvoke('window:minimize', async (event, input = {}) => {

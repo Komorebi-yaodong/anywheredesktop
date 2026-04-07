@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import icon from '../resources/icon.png?asset'
 import { getConfig, defaultConfig } from './core/data.js'
 import { startFastInputSession, getFastInputRecommendedBounds, cancelFastInputSession } from './core/fastInput.js'
+import { WINDOW_EVENT_CHANNEL } from './eventBus.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -69,6 +70,7 @@ const SINGLETON_TYPES = new Set(['main', 'fast', 'quick'])
 const singletonStore = new Map()
 const multiStore = new Map()
 const multiTypeIndex = new Map()
+const windowMetadataStore = new Map()
 const webContentsToWindowRef = new Map()
 const WINDOW_INIT_CHANNEL = 'window:init'
 const WINDOW_POSITION_OVERFLOW_ALLOWANCE = 10
@@ -181,6 +183,42 @@ function resolvePromptConfig(fullConfig = {}, payload = null, promptCode = '__DE
       isAlwaysOnTop: true
     }
   )
+}
+
+
+function resolvePromptDisplayName(payload = null, promptCode = '__DEFAULT__') {
+  const explicitDisplayName = typeof payload?.displayName === 'string' ? payload.displayName.trim() : ''
+  if (explicitDisplayName) return explicitDisplayName
+
+  const normalizedPromptCode = typeof promptCode === 'string' ? promptCode.trim() : ''
+  if (normalizedPromptCode && normalizedPromptCode !== '__DEFAULT__') return normalizedPromptCode
+
+  const originalCode = typeof payload?.originalCode === 'string' ? payload.originalCode.trim() : ''
+  if (originalCode) return originalCode
+
+  const taskTitle = typeof payload?.taskConfig?.title === 'string' ? payload.taskConfig.title.trim() : ''
+  if (taskTitle) return taskTitle
+
+  const filename = typeof payload?.filename === 'string' ? payload.filename.trim() : ''
+  if (filename) return filename
+
+  return 'AI'
+}
+
+function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, promptCode = '__DEFAULT__', promptConfig = null) {
+  const resolvedPromptConfig =
+    promptConfig && typeof promptConfig === 'object'
+      ? promptConfig
+      : resolvePromptConfig(fullConfig, payload, promptCode)
+
+  return {
+    id: windowRef,
+    type: 'window',
+    promptCode,
+    displayName: resolvePromptDisplayName(payload, promptCode),
+    icon: typeof resolvedPromptConfig?.icon === 'string' ? resolvedPromptConfig.icon : '',
+    openType: typeof payload?.type === 'string' && payload.type ? payload.type : 'over'
+  }
 }
 
 function resolveWindowConfig(baseConfig, payload) {
@@ -742,6 +780,12 @@ export async function openWindow(type = 'main', payload = null) {
   const win = createBrowserWindow(targetType, config, titleSuffix, id, initMessage)
 
   multiStore.set(id, win)
+  if (targetType === 'window') {
+    windowMetadataStore.set(
+      id,
+      buildWindowMetadata(id, openPayload, fullConfig, dialogWindowConfig?.promptCode || resolvePromptCode(openPayload), dialogWindowConfig?.promptConfig)
+    )
+  }
   bindWindowRef(win, id)
   const webContentsId = win.webContents?.id
   const set = multiTypeIndex.get(targetType) || new Set()
@@ -751,6 +795,7 @@ export async function openWindow(type = 'main', payload = null) {
   win.on('closed', () => {
     unbindWindowRefByWebContentsId(webContentsId)
     multiStore.delete(id)
+    windowMetadataStore.delete(id)
 
     debugWindowManagerLog('multi-window:closed-cleanup', {
       type: targetType,
@@ -881,6 +926,52 @@ function resolveActionWindow(windowRef = '') {
   }
 
   return { ok: true, windowRef: targetRef, win }
+}
+
+
+export async function appendPayloadToWindow(windowRef = '', payload = null, options = {}) {
+  const resolved = resolveActionWindow(windowRef)
+  if (!resolved.ok) {
+    return { ok: false, error: resolved.error, windowRef: resolved.windowRef }
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return { ok: false, error: 'payload_required', windowRef: resolved.windowRef }
+  }
+
+  activateWindow(resolved.win)
+
+  const isReady = await waitForWindowReady(resolved.windowRef, 2500)
+  if (!isReady || resolved.win.isDestroyed()) {
+    return { ok: false, error: 'window_not_ready', windowRef: resolved.windowRef }
+  }
+
+  const envelope = {
+    sourceId: typeof options?.sourceId === 'string' && options.sourceId ? options.sourceId : 'quick',
+    target: resolved.windowRef,
+    event: typeof options?.event === 'string' && options.event ? options.event : 'quick:append-payload',
+    payload,
+    timestamp: Date.now()
+  }
+
+  try {
+    resolved.win.webContents.send(WINDOW_EVENT_CHANNEL, envelope)
+    return {
+      ok: true,
+      action: 'append',
+      windowRef: resolved.windowRef,
+      delivered: 1,
+      event: envelope.event
+    }
+  } catch {
+    return {
+      ok: false,
+      error: 'target_send_failed',
+      windowRef: resolved.windowRef,
+      delivered: 0,
+      event: envelope.event
+    }
+  }
 }
 
 export function minimizeWindow(windowRef = '') {
@@ -1026,12 +1117,15 @@ export function listWindows(type = '') {
       const win = multiStore.get(id)
       if (!win || win.isDestroyed()) continue
 
+      const metadata = multiType === 'window' ? windowMetadataStore.get(id) || {} : {}
+
       items.push({
         id,
         type: multiType,
         singleton: false,
         visible: win.isVisible(),
-        destroyed: false
+        destroyed: false,
+        ...(metadata && typeof metadata === 'object' ? metadata : {})
       })
     }
   }

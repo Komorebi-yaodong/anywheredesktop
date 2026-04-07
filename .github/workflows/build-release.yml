@@ -58,7 +58,7 @@ jobs:
         shell: powershell
         run: |
           choco install imagemagick -y --no-progress
-          magick resources/icon.png -background none -resize 512x512^ -gravity center -extent 512x512 build/icon.png
+          magick -background none resources/icon.svg -resize 512x512 build/icon.png
           magick build/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
 
       - name: Generate Linux build icons
@@ -67,7 +67,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y imagemagick
-          magick resources/icon.png -background none -resize 512x512^ -gravity center -extent 512x512 build/icon.png
+          magick -background none resources/icon.svg -resize 512x512 build/icon.png
           magick build/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
 
       - name: Generate macOS build icons
@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           brew install imagemagick
-          magick resources/icon.png -background none -resize 1024x1024^ -gravity center -extent 1024x1024 build/icon.png
+          magick -background none resources/icon.svg -resize 1024x1024 build/icon.png
           mkdir -p .github/tmp/icon.iconset
           sips -z 16 16 build/icon.png --out .github/tmp/icon.iconset/icon_16x16.png
           sips -z 32 32 build/icon.png --out .github/tmp/icon.iconset/icon_16x16@2x.png

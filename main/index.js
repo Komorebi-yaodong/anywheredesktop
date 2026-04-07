@@ -223,6 +223,18 @@ async function dispatchShortcutPayloadToWindow(targetWindowId, quickPayload, pro
 
 async function triggerAppendFollowUpShortcut() {
   try {
+    const quickWindow = getWindowByRef('quick')
+    if (
+      quickWindow &&
+      !quickWindow.isDestroyed() &&
+      quickWindow.isVisible() &&
+      quickWindow.isFocused() &&
+      String(quickWindow.__quickTriggerMode || '') === 'append-only'
+    ) {
+      quickWindow.hide()
+      return { ok: true, action: 'hide', type: 'quick' }
+    }
+
     const windows = (listWindows('window') || []).filter((item) => item && item.type === 'window' && item.id)
     if (windows.length === 0) {
       return { ok: false, reason: 'no_window_targets' }

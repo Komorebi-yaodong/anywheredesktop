@@ -663,6 +663,11 @@ export async function openWindow(type = 'main', payload = null) {
       if (targetType === 'quick' && openPayload) {
         const quickInitMessage = await buildQuickWindowInitMessage(openPayload)
         try {
+          existing.__quickTriggerMode = quickInitMessage.triggerMode || ''
+        } catch {
+          // ignore quick triggerMode cache write failure
+        }
+        try {
           existing.webContents.send(WINDOW_INIT_CHANNEL, {
             senderId: targetType,
             windowType: targetType,
@@ -716,6 +721,13 @@ export async function openWindow(type = 'main', payload = null) {
             }
           : null
     const win = createBrowserWindow(targetType, config, '', targetType, initMessage)
+    if (targetType === 'quick') {
+      try {
+        win.__quickTriggerMode = typeof initMessage?.triggerMode === 'string' ? initMessage.triggerMode : ''
+      } catch {
+        // ignore quick triggerMode cache write failure
+      }
+    }
     singletonStore.set(targetType, win)
     bindWindowRef(win, targetType)
     const webContentsId = win.webContents?.id

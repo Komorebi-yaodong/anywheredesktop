@@ -32,13 +32,43 @@ electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
   }
 })
 
+
+async function listAppendTargets() {
+  const result = await electronAPI.ipcRenderer.invoke('window:list', 'window')
+  const windows = Array.isArray(result?.windows) ? result.windows : []
+  return windows
+    .filter((item) => item && item.type === 'window' && typeof item.id === 'string' && item.id)
+    .map((item) => ({
+      id: item.id,
+      type: item.type,
+      visible: Boolean(item.visible),
+      displayName:
+        (typeof item.displayName === 'string' && item.displayName.trim()) ||
+        (typeof item.promptCode === 'string' && item.promptCode.trim()) ||
+        item.id,
+      promptCode: typeof item.promptCode === 'string' ? item.promptCode : '',
+      icon: typeof item.icon === 'string' ? item.icon : ''
+    }))
+}
+
+async function appendToWindow(target = '', payload = null, options = {}) {
+  return invokeOrThrow('window:appendToWindow', {
+    target,
+    payload,
+    event: typeof options?.event === 'string' && options.event ? options.event : 'quick:append-payload',
+    sourceId: typeof options?.sourceId === 'string' && options.sourceId ? options.sourceId : windowSenderId
+  })
+}
+
 const api = {
   appWindowType: defaultWindowType,
   openWindow: (type, payload = null) => electronAPI.ipcRenderer.invoke('window:open', type, payload),
   showMainWindow: () => electronAPI.ipcRenderer.invoke('window:showMain'),
   hideMainWindow: () => electronAPI.ipcRenderer.invoke('window:hideMain'),
   listWindows: (type = '') => electronAPI.ipcRenderer.invoke('window:list', type),
+  listAppendTargets,
   emitWindowEvent: (input) => electronAPI.ipcRenderer.invoke('window:event:emit', input),
+  appendToWindow,
   onWindowEvent: (callback) => {
     if (typeof callback !== 'function') return
     electronAPI.ipcRenderer.on('window:event-bus', (_event, data) => callback(data))

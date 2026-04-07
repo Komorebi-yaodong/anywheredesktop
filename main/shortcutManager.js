@@ -38,6 +38,31 @@ const VALID_SPECIAL_KEYS = new Set([
   'PageDown'
 ])
 
+const SYMBOL_KEY_ALIASES = new Map([
+  ['`', 'Backquote'],
+  ['~', 'Backquote'],
+  ['-', 'Minus'],
+  ['_', 'Minus'],
+  ['=', 'Equal'],
+  ['+', 'Equal'],
+  ['[', 'BracketLeft'],
+  ['{', 'BracketLeft'],
+  [']', 'BracketRight'],
+  ['}', 'BracketRight'],
+  ['\\', 'Backslash'],
+  ['|', 'Backslash'],
+  [';', 'Semicolon'],
+  [':', 'Semicolon'],
+  ['\'', 'Quote'],
+  ['"', 'Quote'],
+  [',', 'Comma'],
+  ['<', 'Comma'],
+  ['.', 'Period'],
+  ['>', 'Period'],
+  ['/', 'Slash'],
+  ['?', 'Slash']
+])
+
 function uniq(items = []) {
   return [...new Set(items)]
 }
@@ -47,6 +72,58 @@ function normalizeModifierToken(token = '') {
   return MODIFIER_ALIASES.get(compact) || null
 }
 
+function normalizeKeyTokenFromCode(code = '', fallbackKey = '') {
+  const normalizedCode = String(code || '').trim()
+  if (!normalizedCode) return null
+
+  const codeMap = {
+    Backquote: 'Backquote',
+    Minus: 'Minus',
+    Equal: 'Equal',
+    BracketLeft: 'BracketLeft',
+    BracketRight: 'BracketRight',
+    Backslash: 'Backslash',
+    Semicolon: 'Semicolon',
+    Quote: 'Quote',
+    Comma: 'Comma',
+    Period: 'Period',
+    Slash: 'Slash',
+    Space: 'Space',
+    Tab: 'Tab',
+    Enter: 'Enter',
+    Escape: 'Escape',
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    Delete: 'Delete',
+    Insert: 'Insert',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'PageUp',
+    PageDown: 'PageDown'
+  }
+
+  if (codeMap[normalizedCode]) {
+    return codeMap[normalizedCode]
+  }
+
+  if (/^Key[A-Z]$/.test(normalizedCode)) {
+    return normalizedCode.slice(3)
+  }
+
+  if (/^Digit[0-9]$/.test(normalizedCode)) {
+    return normalizedCode.slice(5)
+  }
+
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(normalizedCode)) {
+    return normalizedCode
+  }
+
+  return normalizeKeyToken(fallbackKey)
+}
+
+
 function normalizeKeyToken(token = '') {
   const trimmed = String(token).trim()
   if (!trimmed) return null
@@ -54,6 +131,7 @@ function normalizeKeyToken(token = '') {
   if (/^[0-9]$/.test(trimmed)) return trimmed
   if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(trimmed)) return trimmed.toUpperCase()
   if (VALID_SPECIAL_KEYS.has(trimmed)) return trimmed
+  if (SYMBOL_KEY_ALIASES.has(trimmed)) return SYMBOL_KEY_ALIASES.get(trimmed)
   const lower = trimmed.toLowerCase()
   if (lower === 'space') return 'Space'
   if (lower === 'esc' || lower === 'escape') return 'Escape'
@@ -71,7 +149,19 @@ function normalizeKeyToken(token = '') {
   if (lower === 'end') return 'End'
   if (lower === 'pageup') return 'PageUp'
   if (lower === 'pagedown') return 'PageDown'
-  return null
+  const normalizedSpecial = {
+    backquote: 'Backquote',
+    equal: 'Equal',
+    bracketleft: 'BracketLeft',
+    bracketright: 'BracketRight',
+    backslash: 'Backslash',
+    semicolon: 'Semicolon',
+    quote: 'Quote',
+    comma: 'Comma',
+    period: 'Period',
+    slash: 'Slash'
+  }
+  return normalizedSpecial[lower] || null
 }
 
 export function normalizeAccelerator(input = '') {

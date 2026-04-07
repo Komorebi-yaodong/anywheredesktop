@@ -1,4 +1,5 @@
 import { createClient } from 'webdav'
+import { fetchWithProxy } from './net.js'
 
 function normalizeText(value, fallback = '') {
   if (typeof value === 'string') return value
@@ -51,7 +52,8 @@ function createWebdavClient(webdavConfig = {}) {
 
   const client = createClient(url, {
     username,
-    password
+    password,
+    fetch: (input, init) => fetchWithProxy(input, init)
   })
 
   return {

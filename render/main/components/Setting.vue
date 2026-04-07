@@ -43,13 +43,82 @@ function normalizeRecordedAccelerator(event) {
   if (event.altKey) modifiers.push('Alt')
   if (event.shiftKey) modifiers.push('Shift')
 
-  const key = String(event.key || '').trim()
-  if (!key || ['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
+  const rawKey = String(event.key || '').trim()
+  if (!rawKey || ['Control', 'Shift', 'Alt', 'Meta'].includes(rawKey)) {
     return ''
   }
 
-  const normalizedKey = key.length === 1 ? key.toUpperCase() : (key === ' ' ? 'Space' : key)
-  if (!modifiers.length) {
+  const code = String(event.code || '').trim()
+  const codeMap = {
+    Backquote: 'Backquote',
+    Minus: 'Minus',
+    Equal: 'Equal',
+    BracketLeft: 'BracketLeft',
+    BracketRight: 'BracketRight',
+    Backslash: 'Backslash',
+    Semicolon: 'Semicolon',
+    Quote: 'Quote',
+    Comma: 'Comma',
+    Period: 'Period',
+    Slash: 'Slash',
+    Space: 'Space',
+    Tab: 'Tab',
+    Enter: 'Enter',
+    Escape: 'Escape',
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    Delete: 'Delete',
+    Insert: 'Insert',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'PageUp',
+    PageDown: 'PageDown'
+  }
+
+  let normalizedKey = ''
+  if (codeMap[code]) {
+    normalizedKey = codeMap[code]
+  } else if (/^Key[A-Z]$/.test(code)) {
+    normalizedKey = code.slice(3)
+  } else if (/^Digit[0-9]$/.test(code)) {
+    normalizedKey = code.slice(5)
+  } else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) {
+    normalizedKey = code
+  } else if (rawKey === ' ') {
+    normalizedKey = 'Space'
+  } else if (rawKey.length === 1) {
+    const symbolMap = {
+      '`': 'Backquote',
+      '~': 'Backquote',
+      '-': 'Minus',
+      '_': 'Minus',
+      '=': 'Equal',
+      '+': 'Equal',
+      '[': 'BracketLeft',
+      '{': 'BracketLeft',
+      ']': 'BracketRight',
+      '}': 'BracketRight',
+      '\\': 'Backslash',
+      '|': 'Backslash',
+      ';': 'Semicolon',
+      ':': 'Semicolon',
+      "'": 'Quote',
+      '"': 'Quote',
+      ',': 'Comma',
+      '<': 'Comma',
+      '.': 'Period',
+      '>': 'Period',
+      '/': 'Slash',
+      '?': 'Slash'
+    }
+    normalizedKey = symbolMap[rawKey] || rawKey.toUpperCase()
+  } else {
+    normalizedKey = rawKey === 'Escape' ? 'Escape' : rawKey
+  }
+
+  if (!modifiers.length || !normalizedKey) {
     return ''
   }
   return [...modifiers, normalizedKey].join('+')
@@ -292,13 +361,49 @@ function normalizeKeyToken(token = '') {
   if (/^[a-zA-Z]$/.test(value)) return value.toUpperCase()
   if (/^[0-9]$/.test(value)) return value
   if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(value)) return value.toUpperCase()
+  const symbolMap = {
+    '`': 'Backquote',
+    '~': 'Backquote',
+    '-': 'Minus',
+    '_': 'Minus',
+    '=': 'Equal',
+    '+': 'Equal',
+    '[': 'BracketLeft',
+    '{': 'BracketLeft',
+    ']': 'BracketRight',
+    '}': 'BracketRight',
+    '\\': 'Backslash',
+    '|': 'Backslash',
+    ';': 'Semicolon',
+    ':': 'Semicolon',
+    "'": 'Quote',
+    '"': 'Quote',
+    ',': 'Comma',
+    '<': 'Comma',
+    '.': 'Period',
+    '>': 'Period',
+    '/': 'Slash',
+    '?': 'Slash'
+  }
+  if (symbolMap[value]) return symbolMap[value]
   const aliasMap = {
     space: 'Space',
     enter: 'Enter',
     return: 'Enter',
     esc: 'Escape',
     escape: 'Escape',
-    tab: 'Tab'
+    tab: 'Tab',
+    backquote: 'Backquote',
+    minus: 'Minus',
+    equal: 'Equal',
+    bracketleft: 'BracketLeft',
+    bracketright: 'BracketRight',
+    backslash: 'Backslash',
+    semicolon: 'Semicolon',
+    quote: 'Quote',
+    comma: 'Comma',
+    period: 'Period',
+    slash: 'Slash'
   }
   return aliasMap[value.toLowerCase()] || value
 }

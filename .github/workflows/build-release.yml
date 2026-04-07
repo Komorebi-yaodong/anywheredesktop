@@ -3,6 +3,7 @@ name: Build Desktop Packages
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ELECTRON_BUILDER_DISABLE_AUTO_PUBLISH: true
+  ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
 
 on:
   workflow_dispatch:
@@ -49,52 +50,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Ensure build directory exists
-        shell: bash
-        run: mkdir -p build .github/tmp
-
-      - name: Generate Windows build icons
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          choco install imagemagick -y --no-progress
-          magick -background none resources/icon.svg -resize 512x512 build/icon.png
-          magick build/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
-
-      - name: Generate Linux build icons
-        if: runner.os == 'Linux'
+      - name: Verify build icon assets
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y imagemagick
-          magick -background none resources/icon.svg -resize 512x512 build/icon.png
-          magick build/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
-
-      - name: Generate macOS build icons
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew install imagemagick
-          magick -background none resources/icon.svg -resize 1024x1024 build/icon.png
-          mkdir -p .github/tmp/icon.iconset
-          sips -z 16 16 build/icon.png --out .github/tmp/icon.iconset/icon_16x16.png
-          sips -z 32 32 build/icon.png --out .github/tmp/icon.iconset/icon_16x16@2x.png
-          sips -z 32 32 build/icon.png --out .github/tmp/icon.iconset/icon_32x32.png
-          sips -z 64 64 build/icon.png --out .github/tmp/icon.iconset/icon_32x32@2x.png
-          sips -z 128 128 build/icon.png --out .github/tmp/icon.iconset/icon_128x128.png
-          sips -z 256 256 build/icon.png --out .github/tmp/icon.iconset/icon_128x128@2x.png
-          sips -z 256 256 build/icon.png --out .github/tmp/icon.iconset/icon_256x256.png
-          sips -z 512 512 build/icon.png --out .github/tmp/icon.iconset/icon_256x256@2x.png
-          sips -z 512 512 build/icon.png --out .github/tmp/icon.iconset/icon_512x512.png
-          cp build/icon.png .github/tmp/icon.iconset/icon_512x512@2x.png
-          iconutil -c icns .github/tmp/icon.iconset -o build/icon.icns
-          magick build/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 build/icon.ico
-
-      - name: Inspect generated build assets
-        shell: bash
-        run: |
-          echo "Build directory contents:"
-          ls -R build || true
+          test -f build/icon.png
+          test -f build/icon.ico
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            test -f build/icon.icns
+          fi
+          echo "Using checked-in icon assets from build/:"
+          ls -R build
 
       - name: Build package
         run: pnpm build:${{ matrix.target }}
@@ -102,6 +67,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_BUILDER_DISABLE_AUTO_PUBLISH: true
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v5

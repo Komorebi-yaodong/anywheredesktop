@@ -34,7 +34,8 @@
     "marked": "^17.0.4",
     "openai": "6.18.0",
     "pinyin-pro": "^3.28.0",
-    "webdav": "^5.9.0"
+    "webdav": "^5.9.0",
+    "data-uri-to-buffer": "^4.0.1"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config": "^2.1.0",

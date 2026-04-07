@@ -26,6 +26,9 @@ importers:
       adm-zip:
         specifier: 0.5.16
         version: 0.5.16
+      data-uri-to-buffer:
+        specifier: ^4.0.1
+        version: 4.0.1
       dompurify:
         specifier: ^3.3.3
         version: 3.3.3

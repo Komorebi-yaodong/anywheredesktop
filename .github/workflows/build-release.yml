@@ -4,6 +4,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ELECTRON_BUILDER_DISABLE_AUTO_PUBLISH: true
   ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+  npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
 
 on:
   workflow_dispatch:
@@ -28,7 +29,7 @@ jobs:
             target: mac
             artifact_name: anywhere-desktop-macos
             artifact_glob: |
-              dist/*.dmg
+              dist/*-mac.zip
 
     runs-on: ${{ matrix.os }}
 
@@ -61,6 +62,12 @@ jobs:
           echo "Using checked-in icon assets from build/:"
           ls -R build
 
+      - name: Print builder mirror envs
+        shell: bash
+        run: |
+          echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR"
+          echo "npm_config_electron_builder_binaries_mirror=$npm_config_electron_builder_binaries_mirror"
+
       - name: Build package
         run: pnpm build:${{ matrix.target }}
         env:
@@ -68,6 +75,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_BUILDER_DISABLE_AUTO_PUBLISH: true
           ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+          npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v5

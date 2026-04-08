@@ -63,6 +63,20 @@ const SYMBOL_KEY_ALIASES = new Map([
   ['?', 'Slash']
 ])
 
+const ELECTRON_ACCELERATOR_KEY_MAP = new Map([
+  ['Backquote', '`'],
+  ['Minus', '-'],
+  ['Equal', '='],
+  ['BracketLeft', '['],
+  ['BracketRight', ']'],
+  ['Backslash', '\\'],
+  ['Semicolon', ';'],
+  ['Quote', "'"],
+  ['Comma', ','],
+  ['Period', '.'],
+  ['Slash', '/']
+])
+
 function uniq(items = []) {
   return [...new Set(items)]
 }
@@ -236,6 +250,21 @@ export function normalizeAccelerator(input = '') {
   }
 }
 
+function toElectronAccelerator(input = '') {
+  const normalized = normalizeAccelerator(input)
+  if (!normalized.ok) {
+    return normalized
+  }
+
+  const tokens = normalized.accelerator.split('+').map((item) => item.trim()).filter(Boolean)
+  const keyToken = tokens[tokens.length - 1] || ''
+  const electronKey = ELECTRON_ACCELERATOR_KEY_MAP.get(keyToken) || keyToken
+  return {
+    ok: true,
+    accelerator: [...tokens.slice(0, -1), electronKey].join('+')
+  }
+}
+
 function unregisterManagedShortcuts() {
   for (const accelerator of MANAGED_ACCELERATORS.values()) {
     globalShortcut.unregister(accelerator)
@@ -372,48 +401,54 @@ export function syncDesktopShortcuts(desktopConfig = {}, handlers = {}) {
 
   unregisterManagedShortcuts()
 
-  try {
-    validated.bindings.forEach((binding) => {
+  const warnings = []
+  const registeredBindings = []
+
+  validated.bindings.forEach((binding) => {
+    const electronAccelerator = toElectronAccelerator(binding.accelerator)
+    if (!electronAccelerator.ok) {
+      warnings.push(`${binding.label}：${electronAccelerator.error}`)
+      return
+    }
+
+    try {
       if (binding.kind === 'mainToggle') {
-        registerManagedShortcut(binding.accelerator, () => {
+        registerManagedShortcut(electronAccelerator.accelerator, () => {
           handlers?.onMainToggle?.()
         })
-        return
-      }
-
-      if (binding.kind === 'quickSummon') {
-        registerManagedShortcut(binding.accelerator, () => {
+      } else if (binding.kind === 'quickSummon') {
+        registerManagedShortcut(electronAccelerator.accelerator, () => {
           handlers?.onQuickSummon?.()
         })
-        return
-      }
-
-      if (binding.kind === 'appendFollowUp') {
-        registerManagedShortcut(binding.accelerator, () => {
+      } else if (binding.kind === 'appendFollowUp') {
+        registerManagedShortcut(electronAccelerator.accelerator, () => {
           handlers?.onAppendFollowUp?.()
         })
-        return
-      }
-
-      if (binding.kind === 'promptBinding') {
-        registerManagedShortcut(binding.accelerator, () => {
+      } else if (binding.kind === 'promptBinding') {
+        registerManagedShortcut(electronAccelerator.accelerator, () => {
           handlers?.onPromptTrigger?.(binding.promptKey)
         })
       }
-    })
-  } catch (error) {
-    unregisterManagedShortcuts()
-    throw error
-  }
+
+      registeredBindings.push({
+        ...binding,
+        electronAccelerator: electronAccelerator.accelerator
+      })
+    } catch (error) {
+      warnings.push(error?.message || `${binding.label}：快捷键注册失败`)
+    }
+  })
 
   return {
     ok: true,
     desktop: validated.normalizedDesktop,
-    bindings: validated.bindings.map((item) => ({
+    bindings: registeredBindings.map((item) => ({
       kind: item.kind,
       accelerator: item.accelerator,
+      electronAccelerator: item.electronAccelerator,
       promptKey: item.promptKey || null
-    }))
+    })),
+    warnings
   }
 }
 

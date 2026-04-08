@@ -37,6 +37,85 @@ function stopShortcutRecording() {
   shortcutRecorder.value = { target: '', index: -1, active: false }
 }
 
+const DISPLAY_SHORTCUT_KEY_BY_CODE = {
+  Backquote: '`',
+  Minus: '-',
+  Equal: '=',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  Space: 'Space',
+  Tab: 'Tab',
+  Enter: 'Enter',
+  Escape: 'Escape',
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  Delete: 'Delete',
+  Insert: 'Insert',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'PageUp',
+  PageDown: 'PageDown'
+}
+
+const DISPLAY_SHORTCUT_ALIASES = {
+  backquote: '`',
+  minus: '-',
+  equal: '=',
+  bracketleft: '[',
+  bracketright: ']',
+  backslash: '\\',
+  semicolon: ';',
+  quote: "'",
+  comma: ',',
+  period: '.',
+  slash: '/',
+  space: 'Space',
+  enter: 'Enter',
+  return: 'Enter',
+  esc: 'Escape',
+  escape: 'Escape',
+  tab: 'Tab',
+  up: 'Up',
+  down: 'Down',
+  left: 'Left',
+  right: 'Right',
+  delete: 'Delete',
+  del: 'Delete',
+  insert: 'Insert',
+  ins: 'Insert',
+  home: 'Home',
+  end: 'End',
+  pageup: 'PageUp',
+  pagedown: 'PageDown'
+}
+
+function normalizeShortcutDisplayToken(value = '') {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return ''
+  if (/^[a-zA-Z]$/.test(trimmed)) return trimmed.toUpperCase()
+  if (/^[0-9]$/.test(trimmed)) return trimmed
+  if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(trimmed)) return trimmed.toUpperCase()
+  return DISPLAY_SHORTCUT_ALIASES[trimmed.toLowerCase()] || trimmed
+}
+
+function toDisplayShortcut(value = '') {
+  const tokens = String(value || '').split('+').map((item) => item.trim()).filter(Boolean)
+  if (!tokens.length) return ''
+  return tokens.map((token) => {
+    const modifier = normalizeModifierToken(token)
+    if (modifier) return modifier
+    return normalizeShortcutDisplayToken(token)
+  }).filter(Boolean).join('+')
+}
+
 function normalizeRecordedAccelerator(event) {
   const modifiers = []
   if (event.ctrlKey || event.metaKey) modifiers.push('Ctrl')
@@ -49,37 +128,10 @@ function normalizeRecordedAccelerator(event) {
   }
 
   const code = String(event.code || '').trim()
-  const codeMap = {
-    Backquote: 'Backquote',
-    Minus: 'Minus',
-    Equal: 'Equal',
-    BracketLeft: 'BracketLeft',
-    BracketRight: 'BracketRight',
-    Backslash: 'Backslash',
-    Semicolon: 'Semicolon',
-    Quote: 'Quote',
-    Comma: 'Comma',
-    Period: 'Period',
-    Slash: 'Slash',
-    Space: 'Space',
-    Tab: 'Tab',
-    Enter: 'Enter',
-    Escape: 'Escape',
-    ArrowUp: 'Up',
-    ArrowDown: 'Down',
-    ArrowLeft: 'Left',
-    ArrowRight: 'Right',
-    Delete: 'Delete',
-    Insert: 'Insert',
-    Home: 'Home',
-    End: 'End',
-    PageUp: 'PageUp',
-    PageDown: 'PageDown'
-  }
 
   let normalizedKey = ''
-  if (codeMap[code]) {
-    normalizedKey = codeMap[code]
+  if (DISPLAY_SHORTCUT_KEY_BY_CODE[code]) {
+    normalizedKey = DISPLAY_SHORTCUT_KEY_BY_CODE[code]
   } else if (/^Key[A-Z]$/.test(code)) {
     normalizedKey = code.slice(3)
   } else if (/^Digit[0-9]$/.test(code)) {
@@ -89,33 +141,9 @@ function normalizeRecordedAccelerator(event) {
   } else if (rawKey === ' ') {
     normalizedKey = 'Space'
   } else if (rawKey.length === 1) {
-    const symbolMap = {
-      '`': 'Backquote',
-      '~': 'Backquote',
-      '-': 'Minus',
-      '_': 'Minus',
-      '=': 'Equal',
-      '+': 'Equal',
-      '[': 'BracketLeft',
-      '{': 'BracketLeft',
-      ']': 'BracketRight',
-      '}': 'BracketRight',
-      '\\': 'Backslash',
-      '|': 'Backslash',
-      ';': 'Semicolon',
-      ':': 'Semicolon',
-      "'": 'Quote',
-      '"': 'Quote',
-      ',': 'Comma',
-      '<': 'Comma',
-      '.': 'Period',
-      '>': 'Period',
-      '/': 'Slash',
-      '?': 'Slash'
-    }
-    normalizedKey = symbolMap[rawKey] || rawKey.toUpperCase()
+    normalizedKey = normalizeShortcutDisplayToken(rawKey)
   } else {
-    normalizedKey = rawKey === 'Escape' ? 'Escape' : rawKey
+    normalizedKey = normalizeShortcutDisplayToken(rawKey)
   }
 
   if (!modifiers.length || !normalizedKey) {
@@ -335,6 +363,16 @@ function ensureDesktopConfig() {
   if (!currentConfig.value.desktop.shortcuts.appendFollowUp) {
     currentConfig.value.desktop.shortcuts.appendFollowUp = 'Alt+S'
   }
+
+  currentConfig.value.desktop.shortcuts.mainToggle = toDisplayShortcut(currentConfig.value.desktop.shortcuts.mainToggle) || 'Ctrl+Space'
+  currentConfig.value.desktop.shortcuts.quickSummon = toDisplayShortcut(currentConfig.value.desktop.shortcuts.quickSummon) || 'Alt+A'
+  currentConfig.value.desktop.shortcuts.appendFollowUp = toDisplayShortcut(currentConfig.value.desktop.shortcuts.appendFollowUp) || 'Alt+S'
+  currentConfig.value.desktop.shortcuts.promptBindings = currentConfig.value.desktop.shortcuts.promptBindings.map((item, index) => ({
+    id: item?.id || `binding_${index}`,
+    promptKey: item?.promptKey || '',
+    enabled: item?.enabled !== false,
+    accelerator: toDisplayShortcut(item?.accelerator || '')
+  }))
 }
 
 function normalizeModifierToken(token = '') {
@@ -362,28 +400,28 @@ function normalizeKeyToken(token = '') {
   if (/^[0-9]$/.test(value)) return value
   if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(value)) return value.toUpperCase()
   const symbolMap = {
-    '`': 'Backquote',
-    '~': 'Backquote',
-    '-': 'Minus',
-    '_': 'Minus',
-    '=': 'Equal',
-    '+': 'Equal',
-    '[': 'BracketLeft',
-    '{': 'BracketLeft',
-    ']': 'BracketRight',
-    '}': 'BracketRight',
-    '\\': 'Backslash',
-    '|': 'Backslash',
-    ';': 'Semicolon',
-    ':': 'Semicolon',
-    "'": 'Quote',
-    '"': 'Quote',
-    ',': 'Comma',
-    '<': 'Comma',
-    '.': 'Period',
-    '>': 'Period',
-    '/': 'Slash',
-    '?': 'Slash'
+    '`': '`',
+    '~': '`',
+    '-': '-',
+    '_': '-',
+    '=': '=',
+    '+': '=',
+    '[': '[',
+    '{': '[',
+    ']': ']',
+    '}': ']',
+    '\\': '\\',
+    '|': '\\',
+    ';': ';',
+    ':': ';',
+    "'": "'",
+    '"': "'",
+    ',': ',',
+    '<': ',',
+    '.': '.',
+    '>': '.',
+    '/': '/',
+    '?': '/'
   }
   if (symbolMap[value]) return symbolMap[value]
   const aliasMap = {
@@ -393,17 +431,29 @@ function normalizeKeyToken(token = '') {
     esc: 'Escape',
     escape: 'Escape',
     tab: 'Tab',
-    backquote: 'Backquote',
-    minus: 'Minus',
-    equal: 'Equal',
-    bracketleft: 'BracketLeft',
-    bracketright: 'BracketRight',
-    backslash: 'Backslash',
-    semicolon: 'Semicolon',
-    quote: 'Quote',
-    comma: 'Comma',
-    period: 'Period',
-    slash: 'Slash'
+    backquote: '`',
+    minus: '-',
+    equal: '=',
+    bracketleft: '[',
+    bracketright: ']',
+    backslash: '\\',
+    semicolon: ';',
+    quote: "'",
+    comma: ',',
+    period: '.',
+    slash: '/',
+    up: 'Up',
+    down: 'Down',
+    left: 'Left',
+    right: 'Right',
+    delete: 'Delete',
+    del: 'Delete',
+    insert: 'Insert',
+    ins: 'Insert',
+    home: 'Home',
+    end: 'End',
+    pageup: 'PageUp',
+    pagedown: 'PageDown'
   }
   return aliasMap[value.toLowerCase()] || value
 }
@@ -1164,7 +1214,7 @@ async function selectLocalChatPath() {
                         <span class="setting-option-description">{{ t('setting.desktop.mainToggle.description') }}</span>
                       </div>
                       <el-button class="shortcut-record-btn" @click="startShortcutRecording('mainToggle')">
-                        {{ shortcutRecorder.active && shortcutRecorder.target === 'mainToggle' ? '请按下快捷键…' : currentConfig.desktop.shortcuts.mainToggle || t('setting.desktop.mainToggle.placeholder') }}
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'mainToggle' ? '请按下快捷键…' : toDisplayShortcut(currentConfig.desktop.shortcuts.mainToggle) || t('setting.desktop.mainToggle.placeholder') }}
                       </el-button>
                     </div>
 
@@ -1174,7 +1224,7 @@ async function selectLocalChatPath() {
                         <span class="setting-option-description">{{ t('setting.desktop.quickSummon.description') }}</span>
                       </div>
                       <el-button class="shortcut-record-btn" @click="startShortcutRecording('quickSummon')">
-                        {{ shortcutRecorder.active && shortcutRecorder.target === 'quickSummon' ? '请按下快捷键…' : currentConfig.desktop.shortcuts.quickSummon || t('setting.desktop.quickSummon.placeholder') }}
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'quickSummon' ? '请按下快捷键…' : toDisplayShortcut(currentConfig.desktop.shortcuts.quickSummon) || t('setting.desktop.quickSummon.placeholder') }}
                       </el-button>
                     </div>
 
@@ -1184,7 +1234,7 @@ async function selectLocalChatPath() {
                         <span class="setting-option-description">按下后自动追问；仅一个窗口时直接追问，多个窗口时打开追问选择界面。</span>
                       </div>
                       <el-button class="shortcut-record-btn" @click="startShortcutRecording('appendFollowUp')">
-                        {{ shortcutRecorder.active && shortcutRecorder.target === 'appendFollowUp' ? '请按下快捷键…' : currentConfig.desktop.shortcuts.appendFollowUp || 'Alt+S' }}
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'appendFollowUp' ? '请按下快捷键…' : toDisplayShortcut(currentConfig.desktop.shortcuts.appendFollowUp) || 'Alt+S' }}
                       </el-button>
                     </div>
 
@@ -1206,7 +1256,7 @@ async function selectLocalChatPath() {
                           <el-option v-for="prompt in availableWindowPrompts" :key="prompt.key" :label="prompt.key" :value="prompt.key" />
                         </el-select>
                         <el-button class="shortcut-record-btn small" @click="startShortcutRecording('promptBinding', index)">
-                          {{ shortcutRecorder.active && shortcutRecorder.target === 'promptBinding' && shortcutRecorder.index === index ? '请按下快捷键…' : (binding.accelerator || t('setting.desktop.promptShortcuts.shortcutPlaceholder')) }}
+                          {{ shortcutRecorder.active && shortcutRecorder.target === 'promptBinding' && shortcutRecorder.index === index ? '请按下快捷键…' : (toDisplayShortcut(binding.accelerator) || t('setting.desktop.promptShortcuts.shortcutPlaceholder')) }}
                         </el-button>
                         <el-switch v-model="binding.enabled" @change="handleDesktopShortcutChange" />
                         <el-button text type="danger" :icon="Remove" @click="removePromptShortcutBinding(index)" />

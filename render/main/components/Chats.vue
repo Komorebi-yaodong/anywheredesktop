@@ -20,7 +20,7 @@ const cloudChatFiles = ref([]);
 const isTableLoading = ref(false);
 const selectedFiles = ref([]);
 const currentPage = ref(1);
-const pageSize = ref(10);
+const pageSize = ref(20);
 const singleFileSyncing = ref({});
 const isDeletingFiles = ref(false);
 

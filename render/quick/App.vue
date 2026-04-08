@@ -115,6 +115,28 @@ function getNameMatchScore(searchProfile, query = '', queryPinyin = { compact: '
   return 0
 }
 
+function isPromptNameLookupQuery(prompt, rawQuery = '') {
+  const normalizedRawQuery = String(rawQuery || '').trim()
+  const query = normalizedRawQuery.toLowerCase()
+  if (!query) return false
+
+  const searchProfile = buildPromptSearchProfile(prompt)
+  if (searchProfile.lowerName === query) return true
+  if (searchProfile.lowerName.startsWith(query)) return true
+  if (searchProfile.pinyinInitials && searchProfile.pinyinInitials === query) return true
+  if (searchProfile.pinyinInitials && searchProfile.pinyinInitials.startsWith(query)) return true
+  if (searchProfile.pinyinCompact && searchProfile.pinyinCompact === query) return true
+  if (searchProfile.pinyinCompact && searchProfile.pinyinCompact.startsWith(query)) return true
+
+  const normalizedPinyinFull = String(searchProfile.pinyinFull || '').replace(/\s+/g, '')
+  const normalizedQueryNoSpaces = query.replace(/\s+/g, '')
+  if (normalizedPinyinFull && normalizedQueryNoSpaces && normalizedPinyinFull.startsWith(normalizedQueryNoSpaces)) {
+    return true
+  }
+
+  return false
+}
+
 function classifyTextAttachment(text = '') {
   const normalized = String(text || '')
   const trimmed = normalized.trim()
@@ -401,13 +423,14 @@ const selectedPrompt = computed(() => {
   return candidateSections.value.find((item) => item.key === selectedPromptKey.value) || candidateSections.value[0] || null
 })
 
-function resolveQuickDispatchPayload() {
+function resolveQuickDispatchPayload(prompt = null) {
   const payload = {}
+  const trimmedQueryText = queryText.value.trim()
 
   if (attachment.value.type === 'img' && attachment.value.imageDataUrl) {
     payload.type = 'img'
     payload.payload = attachment.value.imageDataUrl
-    if (queryText.value.trim()) payload.userText = queryText.value.trim()
+    if (trimmedQueryText) payload.userText = trimmedQueryText
     return payload
   }
 
@@ -417,14 +440,14 @@ function resolveQuickDispatchPayload() {
       name: `clipboard-image-${index + 1}.png`,
       dataUrl
     }))
-    if (queryText.value.trim()) payload.userText = queryText.value.trim()
+    if (trimmedQueryText) payload.userText = trimmedQueryText
     return payload
   }
 
   if (attachment.value.type === 'files' && attachment.value.filePaths.length > 0) {
     payload.type = 'files'
     payload.payload = attachment.value.filePaths.map((filePath) => ({ path: filePath }))
-    if (queryText.value.trim()) payload.userText = queryText.value.trim()
+    if (trimmedQueryText) payload.userText = trimmedQueryText
     return payload
   }
 
@@ -440,9 +463,15 @@ function resolveQuickDispatchPayload() {
     return payload
   }
 
-  if (queryText.value.trim()) {
+  if (trimmedQueryText) {
+    if (attachment.value.type === 'none' && isPromptNameLookupQuery(prompt, trimmedQueryText)) {
+      payload.type = 'empty'
+      payload.payload = ''
+      return payload
+    }
+
     payload.type = 'over'
-    payload.payload = queryText.value.trim()
+    payload.payload = trimmedQueryText
     return payload
   }
 
@@ -455,7 +484,7 @@ function resolveQuickOpenPayload(prompt) {
   if (!prompt) return null
   return {
     code: prompt.key,
-    ...resolveQuickDispatchPayload()
+    ...resolveQuickDispatchPayload(prompt)
   }
 }
 

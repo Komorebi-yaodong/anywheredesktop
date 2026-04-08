@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import * as chatApi from './chat.js'
 import * as fileApi from './file.js'
 import * as systemApi from './system.js'
-import { defaultConfig, getConfig } from './data.js'
+import { defaultConfig, getConfig, resolveDefaultAssistantModel } from './data.js'
 
 const FAST_INPUT_EVENT_CHANNEL = 'fast-input:event'
 const fastInputSessionStore = new WeakMap()
@@ -47,9 +47,12 @@ function pickPromptModel(fullConfig = {}, promptConfig = {}) {
   if (typeof promptConfig?.model === 'string' && promptConfig.model.trim()) {
     return promptConfig.model.trim()
   }
-  if (typeof fullConfig?.defaultTaskModel === 'string' && fullConfig.defaultTaskModel.trim()) {
-    return fullConfig.defaultTaskModel.trim()
+
+  const resolvedDefaultModel = resolveDefaultAssistantModel(fullConfig)
+  if (typeof resolvedDefaultModel === 'string' && resolvedDefaultModel.trim()) {
+    return resolvedDefaultModel.trim()
   }
+
   return ''
 }
 

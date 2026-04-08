@@ -6,7 +6,7 @@ import { exec, execSync, spawn } from 'node:child_process'
 import { handleFilePath, parseFileObject } from './file.js'
 import { createChatCompletion } from './chat.js'
 import { get as dbGet, put as dbPut, remove as dbRemove, allDocs as dbAllDocs } from './db.js'
-import { getConfig, updateConfigWithoutFeatures } from './data.js'
+import { getConfig, updateConfigWithoutFeatures, resolveDefaultAssistantModel } from './data.js'
 import { fetchWithProxy } from './net.js'
 import { openWindow, getWindowByRef, listWindows } from '../windowManager.js'
 import { dispatchWindowEvent } from '../eventBus.js'
@@ -2430,7 +2430,7 @@ ${agentStr}`;
                     type: 'general',
                     prompt: '',
                     showMode: 'window',
-                    model: windowConfig.defaultTaskModel || '',
+                    model: resolveDefaultAssistantModel(windowConfig),
                     stream: true,
                     isAlwaysOnTop: windowConfig.isAlwaysOnTop_global ?? true,
                     autoCloseOnBlur: false,

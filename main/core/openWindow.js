@@ -14,6 +14,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import icon from '../../resources/icon.png?asset'
+import { resolveDefaultAssistantModel } from './data.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -283,7 +284,7 @@ export async function createDialogWindow(config, msg) {
           type: 'general',
           prompt: '',
           showMode: 'window',
-          model: config?.defaultTaskModel || '',
+          model: resolveDefaultAssistantModel(config),
           stream: true,
           isAlwaysOnTop: true,
           autoCloseOnBlur: config?.autoCloseOnBlur_global ?? true,

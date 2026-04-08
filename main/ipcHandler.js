@@ -412,7 +412,7 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
             type: 'general',
             prompt: '',
             showMode: 'window',
-            model: fullConfig.defaultTaskModel || '',
+            model: dataApi.resolveDefaultAssistantModel(fullConfig),
             stream: true,
             isAlwaysOnTop: fullConfig.isAlwaysOnTop_global ?? true,
             autoCloseOnBlur: fullConfig.autoCloseOnBlur_global ?? true,

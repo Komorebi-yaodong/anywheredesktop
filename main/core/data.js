@@ -92,7 +92,7 @@ export const defaultConfig = {
         type: 'over',
         prompt: '你是一个AI助手',
         showMode: 'window',
-        model: '0|gpt-4o',
+        model: '',
         enable: true,
         icon: '',
         stream: true,
@@ -203,6 +203,83 @@ voiceList: [
 
 function deepClone(value) {
   return safeClone(value)
+}
+
+
+export function isValidProviderModelKey(config = {}, modelKey = '') {
+  if (!modelKey || typeof modelKey !== 'string') return false
+  const separatorIndex = modelKey.indexOf('|')
+  if (separatorIndex <= 0) return false
+
+  const providerId = modelKey.slice(0, separatorIndex)
+  const modelName = modelKey.slice(separatorIndex + 1)
+  if (!providerId || !modelName) return false
+
+  const provider = config?.providers?.[providerId]
+  if (!provider || provider.enable === false) return false
+  return Array.isArray(provider.modelList) && provider.modelList.includes(modelName)
+}
+
+export function getOrderedProviderIds(config = {}) {
+  const providers = config?.providers || {}
+  const folders = config?.providerFolders || {}
+  const order = Array.isArray(config?.providerOrder) ? config.providerOrder.map(String) : []
+  const orderedProviderIds = []
+  const seen = new Set()
+
+  const sortedFolderIds = Object.keys(folders).sort((a, b) =>
+    String(folders[a]?.name || '').localeCompare(String(folders[b]?.name || ''), 'zh-CN')
+  )
+
+  sortedFolderIds.forEach((folderId) => {
+    order.forEach((id) => {
+      const provider = providers[id]
+      if (provider && provider.folderId === folderId && !seen.has(id)) {
+        orderedProviderIds.push(id)
+        seen.add(id)
+      }
+    })
+  })
+
+  order.forEach((id) => {
+    const provider = providers[id]
+    if (provider && (!provider.folderId || !folders[provider.folderId]) && !seen.has(id)) {
+      orderedProviderIds.push(id)
+      seen.add(id)
+    }
+  })
+
+  Object.keys(providers).forEach((id) => {
+    if (!seen.has(id)) {
+      orderedProviderIds.push(id)
+      seen.add(id)
+    }
+  })
+
+  return orderedProviderIds
+}
+
+export function getFirstAvailableProviderModel(config = {}) {
+  const providers = config?.providers || {}
+  const orderedProviderIds = getOrderedProviderIds(config)
+
+  for (const providerId of orderedProviderIds) {
+    const provider = providers[providerId]
+    if (!provider || provider.enable === false || !Array.isArray(provider.modelList)) continue
+    const firstModel = provider.modelList.find((modelName) => typeof modelName === 'string' && modelName.trim())
+    if (firstModel) {
+      return `${providerId}|${firstModel}`
+    }
+  }
+
+  return ''
+}
+
+export function resolveDefaultAssistantModel(config = {}) {
+  if (isValidProviderModelKey(config, config?.defaultTaskModel)) {
+    return config.defaultTaskModel
+  }
+  return getFirstAvailableProviderModel(config)
 }
 
 function getLocalConfigId() {
@@ -497,17 +574,18 @@ function checkConfig(inputConfig) {
     }
   }
 
-  if (!config.defaultTaskModel) {
-    const firstProviderId = config.providerOrder[0]
-    const firstProvider = config.providers[firstProviderId]
-    const firstModel = firstProvider?.modelList?.[0]
-    if (firstProviderId && firstModel) {
-      config.defaultTaskModel = `${firstProviderId}|${firstModel}`
+  for (const promptConfig of Object.values(config.prompts)) {
+    if (!promptConfig || typeof promptConfig !== 'object' || Array.isArray(promptConfig)) continue
+    const resolvedPromptModel = isValidProviderModelKey(config, promptConfig.model)
+      ? promptConfig.model
+      : resolveDefaultAssistantModel(config)
+    if (promptConfig.model !== resolvedPromptModel) {
+      promptConfig.model = resolvedPromptModel
       changed = true
     }
   }
 
-  const builtinServers = getBuiltinServers()
+const builtinServers = getBuiltinServers()
   if (builtinServers && typeof builtinServers === 'object') {
     const mergedMcpServers = { ...config.mcpServers }
     for (const [id, server] of Object.entries(builtinServers)) {

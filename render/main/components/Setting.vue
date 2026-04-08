@@ -663,20 +663,6 @@ async function importConfig() {
       throw new Error("Imported file is not a valid configuration object.");
     }
 
-    const currentLocalChatPath = currentConfig.value.webdav?.localChatPath;
-    const currentSkillPath = currentConfig.value.skillPath;
-
-    if (currentLocalChatPath) {
-      if (!importedData.webdav) {
-        importedData.webdav = {};
-      }
-      importedData.webdav.localChatPath = currentLocalChatPath;
-    }
-
-    if (currentSkillPath) {
-      importedData.skillPath = currentSkillPath;
-    }
-
     if (importedData.memories && window.api && window.api.importMemoryData) {
       const memoryResult = await window.api.importMemoryData(importedData.memories);
       if (memoryResult && memoryResult.ok === false) {
@@ -685,8 +671,8 @@ async function importConfig() {
       delete importedData.memories;
     }
 
-    if (window.api && window.api.updateConfig) {
-      const configResult = await window.api.updateConfig({ config: importedData });
+    if (window.api && window.api.restoreImportedConfig) {
+      const configResult = await window.api.restoreImportedConfig(importedData);
       if (configResult && configResult.ok === false) {
         throw new Error(getErrorMessage(configResult, 'update config failed'));
       }
@@ -935,9 +921,6 @@ async function restoreFromWebdav(file) {
 
     ElMessage.info(t('setting.webdav.alerts.restoreInProgress'));
 
-    const currentLocalChatPath = currentConfig.value.webdav?.localChatPath;
-    const currentSkillPath = currentConfig.value.skillPath;
-
     const readResult = await window.api?.readWebdavBackup?.(
       buildWebdavInput({ filename: file.basename })
     )
@@ -952,17 +935,6 @@ async function restoreFromWebdav(file) {
       throw new Error("Downloaded file is not a valid configuration object.");
     }
 
-    if (currentLocalChatPath) {
-      if (!importedData.webdav) {
-        importedData.webdav = {};
-      }
-      importedData.webdav.localChatPath = currentLocalChatPath;
-    }
-
-    if (currentSkillPath) {
-      importedData.skillPath = currentSkillPath;
-    }
-
     if (importedData.memories && window.api && window.api.importMemoryData) {
       const memoryResult = await window.api.importMemoryData(importedData.memories);
       if (memoryResult && memoryResult.ok === false) {
@@ -971,8 +943,8 @@ async function restoreFromWebdav(file) {
       delete importedData.memories;
     }
 
-    if (window.api && window.api.updateConfig) {
-      const configResult = await window.api.updateConfig({ config: importedData });
+    if (window.api && window.api.restoreImportedConfig) {
+      const configResult = await window.api.restoreImportedConfig(importedData);
       if (configResult && configResult.ok === false) {
         throw new Error(getErrorMessage(configResult, 'update config failed'));
       }

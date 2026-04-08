@@ -756,6 +756,65 @@ export async function updateConfig(newConfig) {
   return updateConfigWithoutFeatures(newConfig)
 }
 
+export async function restoreImportedConfig(importedConfig = {}) {
+  const importedRoot = ensureObject(deepClone(importedConfig), {})
+  const currentResult = await getConfig()
+  const currentConfig = ensureObject(currentResult?.config, {})
+
+  const mergedConfig = {
+    ...currentConfig,
+    ...importedRoot
+  }
+
+  if (Object.prototype.hasOwnProperty.call(importedRoot, 'desktop')) {
+    mergedConfig.desktop = importedRoot.desktop
+  } else {
+    mergedConfig.desktop = deepClone(currentConfig.desktop)
+  }
+
+  if (Object.prototype.hasOwnProperty.call(importedRoot, 'settingsCardOrder')) {
+    mergedConfig.settingsCardOrder = importedRoot.settingsCardOrder
+  } else {
+    mergedConfig.settingsCardOrder = deepClone(currentConfig.settingsCardOrder)
+  }
+
+  if (Object.prototype.hasOwnProperty.call(importedRoot, 'settingsCardCollapsed')) {
+    mergedConfig.settingsCardCollapsed = importedRoot.settingsCardCollapsed
+  } else {
+    mergedConfig.settingsCardCollapsed = deepClone(currentConfig.settingsCardCollapsed)
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(importedRoot, 'skillPath')) {
+    mergedConfig.skillPath = currentConfig.skillPath
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(importedRoot, 'webdav') &&
+    importedRoot.webdav &&
+    typeof importedRoot.webdav === 'object' &&
+    !Array.isArray(importedRoot.webdav)
+  ) {
+    mergedConfig.webdav = {
+      ...(currentConfig.webdav && typeof currentConfig.webdav === 'object' ? currentConfig.webdav : {}),
+      ...importedRoot.webdav
+    }
+  }
+
+  if (
+    !importedRoot.webdav ||
+    typeof importedRoot.webdav !== 'object' ||
+    Array.isArray(importedRoot.webdav) ||
+    !Object.prototype.hasOwnProperty.call(importedRoot.webdav, 'localChatPath')
+  ) {
+    if (!mergedConfig.webdav || typeof mergedConfig.webdav !== 'object' || Array.isArray(mergedConfig.webdav)) {
+      mergedConfig.webdav = {}
+    }
+    mergedConfig.webdav.localChatPath = currentConfig?.webdav?.localChatPath || ''
+  }
+
+  return updateConfigWithoutFeatures({ config: mergedConfig })
+}
+
 export async function exportMemoryData() {
   const result = await dbAllDocs({ includeDocs: true })
   const rows = Array.isArray(result?.rows) ? result.rows : []

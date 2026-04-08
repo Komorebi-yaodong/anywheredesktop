@@ -326,6 +326,10 @@ export function registerIpcHandlers({
     return dataApi.updateConfigWithoutFeatures(nextConfig)
   })
 
+  handleInvoke('data:restoreImportedConfig', async (_event, importedConfig = {}) => {
+    return dataApi.restoreImportedConfig(importedConfig)
+  })
+
   handleInvoke('data:exportMemoryData', async () => {
     return dataApi.exportMemoryData()
   })

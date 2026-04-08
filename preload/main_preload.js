@@ -95,6 +95,8 @@ const api = {
   updateConfig: (nextConfig) => electronAPI.ipcRenderer.invoke('data:updateConfig', nextConfig),
   updateConfigWithoutFeatures: (nextConfig) =>
     electronAPI.ipcRenderer.invoke('data:updateConfigWithoutFeatures', nextConfig),
+  restoreImportedConfig: (importedConfig) =>
+    electronAPI.ipcRenderer.invoke('data:restoreImportedConfig', importedConfig),
   exportMemoryData: () => electronAPI.ipcRenderer.invoke('data:exportMemoryData'),
   importMemoryData: (memories) => electronAPI.ipcRenderer.invoke('data:importMemoryData', memories),
 

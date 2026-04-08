@@ -83,10 +83,22 @@ const getErrorMessage = (input, fallback = '未知错误') => {
   return String(input);
 };
 
+const normalizeZoomLevel = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return null;
+  return Math.max(0.5, Math.min(2.0, numericValue));
+};
+
+const resolveWindowZoomLevel = (...candidates) => {
+  for (const candidate of candidates) {
+    const normalizedZoom = normalizeZoomLevel(candidate);
+    if (normalizedZoom !== null) return normalizedZoom;
+  }
+  return 1;
+};
+
 const applyZoomFactor = (factor) => {
-  const numericFactor = Number(factor);
-  const finalFactor = Number.isFinite(numericFactor) && numericFactor > 0 ? numericFactor : 1;
-  zoomLevel.value = Math.max(0.5, Math.min(2.0, finalFactor));
+  zoomLevel.value = resolveWindowZoomLevel(factor);
   if (window.api && typeof window.api.setZoomFactor === 'function') {
     window.api.setZoomFactor(zoomLevel.value);
   }
@@ -144,7 +156,10 @@ const applyPromptRuntimeConfig = async (config, options = {}) => {
     favicon.value = defaultAiAvatarUrl;
   }
 
-  applyZoomFactor(promptConfig.zoom ?? config.zoom ?? 1);
+  const nextZoomLevel = options.preserveCurrentZoom
+    ? resolveWindowZoomLevel(zoomLevel.value, promptConfig.zoom, config.zoom, 1)
+    : resolveWindowZoomLevel(promptConfig.zoom, config.zoom, 1);
+  applyZoomFactor(nextZoomLevel);
 
   if (!options.skipSystemPromptSync) {
     const nextSystemPrompt = promptConfig.prompt || '';
@@ -2110,7 +2125,10 @@ onMounted(async () => {
       if (!newConfig || isClosingWindow.value) return;
 
       currentConfig.value = newConfig;
-      await applyPromptRuntimeConfig(newConfig, { skipIfSavingWindowSettings: true });
+      await applyPromptRuntimeConfig(newConfig, {
+        skipIfSavingWindowSettings: true,
+        preserveCurrentZoom: true
+      });
 
       if (newConfig.mcpServers) {
         let mcpChanged = false;
@@ -3411,7 +3429,12 @@ const loadSession = async (jsonData) => {
     const configData = await window.api.getConfig();
     currentConfig.value = configData.config;
 
-    zoomLevel.value = currentConfig.value.zoom || 1;
+    zoomLevel.value = resolveWindowZoomLevel(
+      jsonData.currentPromptConfig?.zoom,
+      currentConfig.value.prompts?.[CODE.value]?.zoom,
+      currentConfig.value.zoom,
+      1
+    );
     if (window.api && typeof window.api.setZoomFactor === 'function') window.api.setZoomFactor(zoomLevel.value);
 
     if (currentConfig.value.isDarkMode) { document.documentElement.classList.add('dark'); }

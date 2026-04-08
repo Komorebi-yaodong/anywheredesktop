@@ -1293,7 +1293,13 @@ const handleCancel = () => cancelAskAI();
 const handleClearHistory = () => clearHistory();
 const handleRemoveFile = (index) => fileList.value.splice(index, 1);
 const handleUpload = async ({ fileList: newFiles }) => {
-  for (const file of newFiles) await file2fileList(file, fileList.value.length + 1);
+  for (const file of newFiles) {
+    try {
+      await file2fileList(file, fileList.value.length + 1);
+    } catch {
+      // 单文件失败时已在前置校验阶段提示，这里不中断剩余文件继续处理
+    }
+  }
   chatInputRef.value?.focus({ cursor: 'end' });
 };
 const handleOpenMcpDialog = () => toggleMcpDialog();
@@ -3502,6 +3508,20 @@ const checkAndLoadSessionFromFile = async (file) => {
   return false;
 };
 
+const validateDraftFileBeforeAppend = async ({ name = '', url = '' } = {}) => {
+  const fileName = typeof name === 'string' ? name.trim() : '';
+  const fileUrl = typeof url === 'string' ? url : '';
+
+  if (!fileName || !fileUrl) {
+    throw new Error(`读取文件 ${fileName || 'unknown'} 失败：无可用的文件数据`);
+  }
+
+  await window.api.parseFileObject({
+    name: fileName,
+    url: fileUrl
+  });
+};
+
 const file2fileList = async (file, idx) => {
   const isSessionFile = await checkAndLoadSessionFromFile(file);
   if (isSessionFile) { chatInputRef.value?.focus({ cursor: 'end' }); return; }
@@ -3513,6 +3533,18 @@ const file2fileList = async (file, idx) => {
   }
 
   const mimeType = file.type || 'application/octet-stream';
+  const appendDraftFile = async (fileUrl) => {
+    await validateDraftFileBeforeAppend({ name: file.name, url: fileUrl });
+    fileList.value.push({
+      uid: idx,
+      name: file.name,
+      size: file.size,
+      type: mimeType,
+      url: fileUrl,
+      path: file.path || ''
+    });
+  };
+
   const normalizedBase64 =
     typeof file?.base64 === 'string' && file.base64
       ? file.base64
@@ -3521,42 +3553,30 @@ const file2fileList = async (file, idx) => {
         : '';
 
   if (normalizedBase64) {
-    fileList.value.push({
-      uid: idx,
-      name: file.name,
-      size: file.size,
-      type: mimeType,
-      url: `data:${mimeType};base64,${normalizedBase64}`,
-      path: file.path || ''
-    });
+    await appendDraftFile(`data:${mimeType};base64,${normalizedBase64}`);
     return;
   }
 
   if (typeof file?.url === 'string' && file.url.startsWith('data:')) {
-    fileList.value.push({
-      uid: idx,
-      name: file.name,
-      size: file.size,
-      type: mimeType,
-      url: file.url,
-      path: file.path || ''
-    });
+    await appendDraftFile(file.url);
     return;
   }
 
   if (file instanceof Blob) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (e) => {
-        fileList.value.push({
-          uid: idx,
-          name: file.name,
-          size: file.size,
-          type: mimeType,
-          url: e.target.result,
-          path: file.path || ''
-        });
-        resolve();
+      reader.onload = async (e) => {
+        try {
+          await appendDraftFile(e.target.result);
+          resolve();
+        } catch (error) {
+          if (error?.message?.includes('不支持的文件类型')) {
+            showDismissibleMessage.warning(error.message);
+          } else {
+            showDismissibleMessage.error(`处理文件 ${file.name} 失败: ${error.message}`);
+          }
+          reject(error);
+        }
       };
       reader.onerror = () => {
         const errorMsg = `读取文件 ${file.name} 失败`;
@@ -3568,14 +3588,7 @@ const file2fileList = async (file, idx) => {
   }
 
   if (file?.__type === 'File' && typeof file?.buffer === 'string' && file.buffer) {
-    fileList.value.push({
-      uid: idx,
-      name: file.name,
-      size: file.size,
-      type: mimeType,
-      url: `data:${mimeType};base64,${file.buffer}`,
-      path: file.path || ''
-    });
+    await appendDraftFile(`data:${mimeType};base64,${file.buffer}`);
     return;
   }
 
@@ -3610,7 +3623,12 @@ const processFilePath = async (filePath) => {
   } catch (error) {
     console.error('调用 handleFilePath 时发生意外错误:', error);
     const normalizedError = error instanceof Error ? error : new Error(error?.message || '处理文件路径时发生未知错误');
-    showDismissibleMessage.error(normalizedError.message);
+    const shouldSkipDuplicateToast =
+      normalizedError.message.includes('不支持的文件类型') ||
+      normalizedError.message.includes('无法读取或访问该文件，请检查路径和权限');
+    if (!shouldSkipDuplicateToast) {
+      showDismissibleMessage.error(normalizedError.message);
+    }
     throw normalizedError;
   }
 };

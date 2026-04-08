@@ -786,6 +786,15 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
     return fileApi.copyLocalPath(srcPath, destPath)
   })
 
+  handleInvoke('file:readRemoteText', async (_event, url = '', options = {}) => {
+    return fileApi.readRemoteText(url, options)
+  })
+
+  handleInvoke('file:readRemoteBinary', async (_event, url = '', options = {}) => {
+    return fileApi.readRemoteBinary(url, options)
+  })
+
+
 
   handleInvoke('webdav:listBackups', async (_event, input = {}) => {
     return webdavApi.listBackups(input)

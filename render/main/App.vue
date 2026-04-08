@@ -235,26 +235,19 @@ const GITEE_BASE = 'https://gitee.com/Komorebi-yaodong/Anywhere/raw/main/';
  * @returns {Promise<{text: string, source: 'github'|'gitee'}>}
  */
 const fetchWithFallback = async (relativePath) => {
-  // 1. 尝试 GitHub (设置 3秒 超时，避免国内网络长时间卡顿)
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
-    
-    const response = await fetch(`${GITHUB_BASE}${relativePath}`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    
-    if (response.ok) {
-      return { text: await response.text(), source: 'github' };
+    const githubResult = await window.api.readRemoteText(`${GITHUB_BASE}${relativePath}`);
+    if (githubResult?.ok !== false && typeof githubResult?.text === 'string') {
+      return { text: githubResult.text, source: 'github' };
     }
   } catch (e) {
     console.warn(`GitHub fetch failed for ${relativePath}, trying Gitee...`, e);
   }
 
-  // 2. 尝试 Gitee (无特殊超时，作为兜底)
   try {
-    const response = await fetch(`${GITEE_BASE}${relativePath}`);
-    if (response.ok) {
-      return { text: await response.text(), source: 'gitee' };
+    const giteeResult = await window.api.readRemoteText(`${GITEE_BASE}${relativePath}`);
+    if (giteeResult?.ok !== false && typeof giteeResult?.text === 'string') {
+      return { text: giteeResult.text, source: 'gitee' };
     }
   } catch (e) {
     console.warn(`Gitee fetch failed for ${relativePath}`, e);

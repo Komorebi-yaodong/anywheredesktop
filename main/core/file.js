@@ -1,4 +1,7 @@
 import fs from 'node:fs/promises'
+
+import { fetchWithProxy } from './net.js'
+
 import path from 'node:path'
 import { dialog } from 'electron'
 
@@ -498,6 +501,49 @@ export async function selectDirectory() {
   }
 
   return result.filePaths[0]
+}
+
+
+export async function readRemoteBinary(url = '', options = {}) {
+  const targetUrl = typeof url === 'string' ? url.trim() : ''
+  if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
+    return {
+      ok: false,
+      message: 'invalid_remote_url'
+    }
+  }
+
+  const response = await fetchWithProxy(targetUrl, {
+    signal: options?.signal,
+    headers: options?.headers && typeof options.headers === 'object' ? options.headers : undefined
+  })
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      message: `remote_request_failed: ${response.status} ${response.statusText}`
+    }
+  }
+
+  const arrayBuffer = await response.arrayBuffer()
+  return {
+    ok: true,
+    url: targetUrl,
+    contentType: response.headers.get('content-type') || 'application/octet-stream',
+    data: Buffer.from(arrayBuffer)
+  }
+}
+
+export async function readRemoteText(url = '', options = {}) {
+  const result = await readRemoteBinary(url, options)
+  if (!result?.ok) return result
+
+  return {
+    ok: true,
+    url: result.url,
+    contentType: result.contentType,
+    text: result.data.toString(typeof options?.encoding === 'string' && options.encoding ? options.encoding : 'utf8')
+  }
 }
 
 export async function listJsonFiles(dirPath) {

@@ -172,6 +172,15 @@ const api = {
   copyLocalPath: (srcPath, destPath) =>
     invokeOrThrow('file:copyLocalPath', srcPath, destPath),
 
+  readRemoteText: (url, options = {}) => invokeOrThrow('file:readRemoteText', url, options),
+  readRemoteBinary: (url, options = {}) => invokeOrThrow('file:readRemoteBinary', url, options),
+
+  readRemoteText: (url, options = {}) => invokeOrThrow('file:readRemoteText', url, options),
+  readRemoteBinary: (url, options = {}) => invokeOrThrow('file:readRemoteBinary', url, options),
+
+  readRemoteText: (url, options = {}) => invokeOrThrow('file:readRemoteText', url, options),
+  readRemoteBinary: (url, options = {}) => invokeOrThrow('file:readRemoteBinary', url, options),
+
   listWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listBackups', input),
   writeWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackup', input),
   readWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:readBackup', input),

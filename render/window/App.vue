@@ -1,7 +1,6 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, nextTick, watch, h, computed, defineAsyncComponent } from 'vue';
 import { ElContainer, ElMain, ElDialog, ElImageViewer, ElMessage, ElMessageBox, ElInput, ElButton, ElCheckbox, ElButtonGroup, ElTag, ElTooltip, ElIcon, ElAvatar, ElSwitch } from 'element-plus';
-import { createClient } from "webdav/web";
 import { DocumentCopy, QuestionFilled, Download, Search, Tools, CaretRight, Collection, Warning, Cpu, ArrowUp, ArrowDown, Refresh } from '@element-plus/icons-vue';
 
 import TitleBar from './components/TitleBar.vue';
@@ -1339,9 +1338,12 @@ const handleCopyImageFromViewer = (url) => {
   if (!url) return;
   (async () => {
     try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`网络错误: ${response.statusText}`);
-      const blob = await response.blob();
+      const response = await window.api.readRemoteBinary(url);
+      if (!response?.ok) throw new Error(response?.message || '远程读取失败');
+
+      const contentType = typeof response.contentType === 'string' && response.contentType ? response.contentType : 'image/png';
+      const uint8 = response.data instanceof Uint8Array ? response.data : new Uint8Array(response.data || []);
+      const blob = new Blob([uint8], { type: contentType });
 
       try {
         if (['image/png', 'image/jpeg'].includes(blob.type)) {
@@ -1362,10 +1364,8 @@ const handleCopyImageFromViewer = (url) => {
       });
 
       await new Promise(resolve => setTimeout(resolve, 50));
-
       await window.api.copyImage(base64Data);
       showDismissibleMessage.success('图片已复制到剪贴板');
-
     } catch (error) {
       console.error('复制图片失败:', error);
       showDismissibleMessage.error(`复制失败: ${error.message}`);
@@ -1376,11 +1376,12 @@ const handleCopyImageFromViewer = (url) => {
 const handleDownloadImageFromViewer = async (url) => {
   if (!url) return;
   try {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    const arrayBuffer = await blob.arrayBuffer();
-    const defaultFilename = `image_${Date.now()}.${blob.type.split('/')[1] || 'png'}`;
-    await window.api.saveFile({ title: '保存图片', defaultPath: defaultFilename, buttonLabel: '保存', fileContent: new Uint8Array(arrayBuffer) });
+    const response = await window.api.readRemoteBinary(url);
+    if (!response?.ok) throw new Error(response?.message || '远程读取失败');
+    const contentType = typeof response.contentType === 'string' && response.contentType ? response.contentType : 'image/png';
+    const uint8 = response.data instanceof Uint8Array ? response.data : new Uint8Array(response.data || []);
+    const defaultFilename = `image_${Date.now()}.${contentType.split('/')[1] || 'png'}`;
+    await window.api.saveFile({ title: '保存图片', defaultPath: defaultFilename, buttonLabel: '保存', fileContent: uint8 });
     showDismissibleMessage.success('图片保存成功！');
   } catch (error) {
     if (!error.message.includes('User cancelled') && !error.message.includes('用户取消')) {
@@ -2333,11 +2334,22 @@ const saveSessionToCloud = async () => {
             const sessionData = getSessionDataAsObject();
             const jsonString = JSON.stringify(sessionData, null, 2);
             const { url, username, password, data_path } = currentConfig.value.webdav;
-            const client = createClient(url, { username, password });
             const remoteDir = data_path.endsWith('/') ? data_path.slice(0, -1) : data_path;
-            const remoteFilePath = `${remoteDir}/${filename}`;
-            if (!(await client.exists(remoteDir))) await client.createDirectory(remoteDir, { recursive: true });
-            await client.putFileContents(remoteFilePath, jsonString, { overwrite: true });
+            const writeResult = await window.api.writeWebdavBackup({
+              webdavConfig: {
+                url,
+                username,
+                password,
+                path: remoteDir
+              },
+              filename,
+              content: jsonString,
+              overwrite: true,
+              ensureDirectory: true
+            });
+            if (writeResult?.ok === false) {
+              throw new Error(writeResult.message || '保存到云端失败');
+            }
             defaultConversationName.value = finalBasename;
             showDismissibleMessage.success('会话已成功保存到云端！');
             done();
@@ -2988,21 +3000,26 @@ const handleRenameSession = async () => {
     const { url, username, password, data_path } = currentConfig.value.webdav || {};
     if (url && data_path) {
       try {
-        const client = createClient(url, { username, password });
         const remoteDir = data_path.endsWith('/') ? data_path.slice(0, -1) : data_path;
-        const oldRemotePath = `${remoteDir}/${oldFilename}`;
-        const newRemotePath = `${remoteDir}/${newFilename}`;
-
-        // 检查云端是否存在该文件
-        if (await client.exists(oldRemotePath)) {
-          await ElMessageBox.confirm(
-            '云端也存在同名文件，是否同步重命名？',
-            '同步操作提示',
-            { confirmButtonText: '是', cancelButtonText: '否', type: 'info' }
-          );
-          await client.moveFile(oldRemotePath, newRemotePath);
-          showDismissibleMessage.success('云端同步重命名成功');
+        await ElMessageBox.confirm(
+          '云端也存在同名文件，是否同步重命名？',
+          '同步操作提示',
+          { confirmButtonText: '是', cancelButtonText: '否', type: 'info' }
+        );
+        const moveResult = await window.api.moveWebdavFile({
+          webdavConfig: {
+            url,
+            username,
+            password,
+            path: remoteDir
+          },
+          fromFilename: oldFilename,
+          toFilename: newFilename
+        });
+        if (moveResult?.ok === false) {
+          throw new Error(moveResult.message || '云端同步重命名失败');
         }
+        showDismissibleMessage.success('云端同步重命名成功');
       } catch (e) {
         if (e !== 'cancel' && e !== 'close') {
           console.warn('Cloud rename skipped:', e);

@@ -8,6 +8,7 @@ import ChatHeader from './components/ChatHeader.vue';
 const ChatMessage = defineAsyncComponent(() => import('./components/ChatMessage.vue'));
 import ChatInput from './components/ChatInput.vue';
 import ModelSelectionDialog from './components/ModelSelectionDialog.vue';
+import defaultAiAvatarUrl from '../../resources/icon.png?asset';
 
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -139,8 +140,8 @@ const applyPromptRuntimeConfig = async (config, options = {}) => {
     AIAvart.value = promptConfig.icon;
     favicon.value = promptConfig.icon;
   } else {
-    AIAvart.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
-    favicon.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
+    AIAvart.value = defaultAiAvatarUrl;
+    favicon.value = defaultAiAvatarUrl;
   }
 
   applyZoomFactor(promptConfig.zoom ?? config.zoom ?? 1);
@@ -255,8 +256,8 @@ if (isDarkInit) {
 
 const defaultConfig = window.api.defaultConfig;
 const UserAvart = ref("file:///E:/Programming/Anywhere_desktop/resources/user.png");
-const AIAvart = ref("file:///E:/Programming/Anywhere_desktop/resources/icon.png");
-const favicon = ref("file:///E:/Programming/Anywhere_desktop/resources/icon.png");
+const AIAvart = ref(defaultAiAvatarUrl);
+const favicon = ref(defaultAiAvatarUrl);
 const CODE = ref("");
 
 const isInit = ref(false);
@@ -3376,8 +3377,8 @@ const loadSession = async (jsonData) => {
       AIAvart.value = currentPromptConfigFromLoad.icon;
       favicon.value = currentPromptConfigFromLoad.icon;
     } else {
-      AIAvart.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
-      favicon.value = "file:///E:/Programming/Anywhere_desktop/resources/icon.png";
+      AIAvart.value = defaultAiAvatarUrl;
+      favicon.value = defaultAiAvatarUrl;
     }
 
     updateModelListAndMap(currentConfig.value);

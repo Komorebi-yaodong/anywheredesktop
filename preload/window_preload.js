@@ -3,6 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { electronAPI } from '@electron-toolkit/preload'
+import defaultAiAvatarUrl from '../resources/icon.png?asset'
 import { createChatCompletion, getRandomItem, listProviderModels } from '../main/core/chat.js'
 
 const defaultWindowType = 'window'
@@ -230,7 +231,7 @@ const api = {
   getUser: () => invokeOrThrow('data:getUser'),
 
   getDefaultUserAvatar: () => invokeOrThrow('data:getUser').then((user) => user?.avatar || ''),
-  getDefaultAiAvatar: () => 'file:///E:/Programming/Anywhere_desktop/resources/icon.png',
+  getDefaultAiAvatar: () => defaultAiAvatarUrl,
 
   openWindow: (type, payload = null) => electronAPI.ipcRenderer.invoke('window:open', type, payload),
   showMainWindow: () => electronAPI.ipcRenderer.invoke('window:showMain'),

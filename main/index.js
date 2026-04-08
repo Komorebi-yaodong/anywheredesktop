@@ -210,6 +210,7 @@ async function dispatchShortcutPayloadToWindow(targetWindowId, quickPayload, pro
       event: 'shortcut:append-payload',
       payload: {
         code: promptKey,
+        triggerMode: 'shortcut',
         ...quickPayload
       }
     },

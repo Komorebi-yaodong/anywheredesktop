@@ -322,22 +322,48 @@ const handleAppendMessageEvent = async (data) => {
   }
 
   let isFileDirectSend = false;
+  let shouldAutoSend = true;
   const nowTime = new Date().toLocaleString('sv-SE');
   const normalizedUserText = typeof data?.userText === 'string' ? data.userText.trim() : '';
+  const shouldRespectDirectSendConfig = data?.triggerMode === 'shortcut';
+  const directSendConfig = resolveDirectSendConfig(
+    typeof data?.code === 'string' && currentConfig.value?.prompts?.[data.code]
+      ? currentConfig.value.prompts[data.code]
+      : null
+  );
 
   if (data.type === "multiline-text" && data.payload) {
     const multilineText = String(data.payload);
-    history.value.push({ role: "user", content: multilineText });
-    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }], timestamp: nowTime });
+    if (shouldRespectDirectSendConfig && !directSendConfig.normal) {
+      prompt.value = multilineText;
+      shouldAutoSend = false;
+    } else {
+      history.value.push({ role: "user", content: multilineText });
+      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }], timestamp: nowTime });
+    }
   } else if (data.type === "over" && data.payload) {
-    history.value.push({ role: "user", content: data.payload });
-    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
+    const overText = String(data.payload);
+    if (shouldRespectDirectSendConfig && !directSendConfig.normal) {
+      prompt.value = overText;
+      shouldAutoSend = false;
+    } else {
+      history.value.push({ role: "user", content: overText });
+      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: overText }], timestamp: nowTime });
+    }
   } else if (data.type === "img" && data.payload) {
-    const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
-    history.value.push({ role: "user", content: imageContent });
-    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: imageContent, timestamp: nowTime });
-    if (normalizedUserText) {
-      prompt.value = normalizedUserText;
+    if (shouldRespectDirectSendConfig && !directSendConfig.image) {
+      fileList.value.push({ uid: fileList.value.length + 1, name: "截图.png", size: 0, type: "image/png", url: String(data.payload) });
+      if (normalizedUserText) {
+        prompt.value = normalizedUserText;
+      }
+      shouldAutoSend = false;
+    } else {
+      const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
+      history.value.push({ role: "user", content: imageContent });
+      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: imageContent, timestamp: nowTime });
+      if (normalizedUserText) {
+        prompt.value = normalizedUserText;
+      }
     }
   } else if (data.type === "files" && data.payload) {
     try {
@@ -360,7 +386,15 @@ const handleAppendMessageEvent = async (data) => {
       if (normalizedUserText) {
         prompt.value = normalizedUserText;
       }
-      isFileDirectSend = true;
+      if (shouldRespectDirectSendConfig) {
+        if (directSendConfig.file) {
+          isFileDirectSend = true;
+        } else {
+          shouldAutoSend = false;
+        }
+      } else {
+        isFileDirectSend = true;
+      }
     } catch (error) {
       console.error(error);
       showDismissibleMessage.error("处理文件失败: " + error.message);
@@ -370,6 +404,10 @@ const handleAppendMessageEvent = async (data) => {
     history.value.push({ role: "user", content: data.payload });
     chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
   } else {
+    return;
+  }
+
+  if (!shouldAutoSend) {
     return;
   }
 
@@ -1784,6 +1822,7 @@ onMounted(async () => {
     CODE.value = code;
     document.title = code;
     const currentPromptConfig = currentConfig.value.prompts[code] || defaultConfig.config.prompts.AI;
+    const directSendConfig = resolveDirectSendConfig(currentPromptConfig);
     await applyPromptRuntimeConfig(currentConfig.value, { skipSystemPromptSync: true });
 
 
@@ -1880,7 +1919,7 @@ onMounted(async () => {
         }
       }
       if (data.type === "multiline-text" && data.payload) {
-        if (currentPromptConfig.isDirectSend_normal ?? true) {
+        if (directSendConfig.normal) {
           const multilineText = String(data.payload);
           history.value.push({ role: "user", content: multilineText });
           chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }] });
@@ -1902,7 +1941,7 @@ onMounted(async () => {
         if (!sessionLoaded) {
           if (CODE.value.trim().toLowerCase().includes(data.payload.trim().toLowerCase())) { /* do nothing */ }
           else {
-            if (currentPromptConfig.isDirectSend_normal) {
+            if (directSendConfig.normal) {
               history.value.push({ role: "user", content: data.payload });
               chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }] });
               shouldDirectSend = true;
@@ -1910,7 +1949,7 @@ onMounted(async () => {
           }
         }
       } else if (data.type === "img" && data.payload) {
-        if (currentPromptConfig.isDirectSend_image ?? true) {
+        if (directSendConfig.image) {
           history.value.push({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
           chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
           if (normalizedUserText) {
@@ -1953,7 +1992,7 @@ onMounted(async () => {
             if (normalizedUserText) {
               prompt.value = normalizedUserText;
             }
-            if (currentPromptConfig.isDirectSend_file) {
+            if (directSendConfig.file) {
               shouldDirectSend = true;
               isFileDirectSend = true;
             }

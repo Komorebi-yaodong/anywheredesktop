@@ -602,11 +602,12 @@ function applyRuntimeConfig(config = null) {
 
 
 async function refreshFromClipboard(forceOverride = false) {
+  if (forceOverride && hasInitPayloadApplied) {
+    return
+  }
+
   try {
-    const result = await window.api.captureSelectionPayload?.() || await window.api.readClipboardPayload()
-    if (forceOverride && hasInitPayloadApplied) {
-      return
-    }
+    const result = await window.api.readClipboardPayload()
     await handleClipboardPayload(result, forceOverride)
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '读取剪贴板失败'))

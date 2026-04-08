@@ -145,6 +145,10 @@ const clipboardFileDropState = {
   timestamp: 0,
   filePaths: []
 }
+const clipboardSequenceState = {
+  value: 0,
+  checkedAt: 0
+}
 
 function decodeClipboardPathBuffer(buffer) {
   if (!buffer || buffer.length < 4) return []
@@ -301,6 +305,17 @@ function updateTimelineEntry(entry, nextSignature, nextValue) {
   return changed
 }
 
+function touchTimelineEntry(entry, nextSignature, nextValue, timestamp = Date.now()) {
+  const hasValue = Array.isArray(nextValue) ? nextValue.length > 0 : Boolean(nextValue)
+  if (!hasValue || entry.signature !== nextSignature) {
+    return false
+  }
+
+  entry.timestamp = timestamp
+  entry.value = Array.isArray(nextValue) ? [...nextValue] : nextValue
+  return true
+}
+
 function updateClipboardTimeline(raw = {}) {
   const normalized = buildFieldSignatures(raw)
   const changedKinds = []
@@ -363,9 +378,80 @@ function getFreshClipboardPayload(source = 'clipboard', preferredKinds = ['files
   return payload.isFresh ? payload : buildClipboardPayloadFromKind('empty', 'empty', formats)
 }
 
+
+async function readClipboardSequenceNumber() {
+  if (process.platform !== 'win32') {
+    return 0
+  }
+
+  const script = `$sig = @"
+using System;
+using System.Runtime.InteropServices;
+public static class Win32 {
+  [DllImport("user32.dll")]
+  public static extern uint GetClipboardSequenceNumber();
+}
+"@;
+Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue | Out-Null;
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+$OutputEncoding = [Console]::OutputEncoding;
+[uint32][Win32]::GetClipboardSequenceNumber()`
+
+  try {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+      windowsHide: true,
+      maxBuffer: 1024 * 256
+    })
+    const parsed = Number.parseInt(String(stdout || '').trim(), 10)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+  } catch {
+    return 0
+  }
+}
+
+async function primeClipboardSequenceState() {
+  const sequence = await readClipboardSequenceNumber()
+  if (sequence > 0) {
+    clipboardSequenceState.value = sequence
+    clipboardSequenceState.checkedAt = Date.now()
+  }
+  return clipboardSequenceState.value
+}
+
+async function refreshClipboardTimelineFromSequence(raw = {}) {
+  const sequence = await readClipboardSequenceNumber()
+  if (!(sequence > 0)) {
+    return false
+  }
+
+  if (!(clipboardSequenceState.value > 0)) {
+    clipboardSequenceState.value = sequence
+    clipboardSequenceState.checkedAt = Date.now()
+    return false
+  }
+
+  if (sequence === clipboardSequenceState.value) {
+    clipboardSequenceState.checkedAt = Date.now()
+    return false
+  }
+
+  clipboardSequenceState.value = sequence
+  clipboardSequenceState.checkedAt = Date.now()
+
+  const normalized = buildFieldSignatures(raw)
+  const now = Date.now()
+
+  return [
+    touchTimelineEntry(clipboardTimeline.text, normalized.signatures.text, normalized.text, now),
+    touchTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageDataUrl, now),
+    touchTimelineEntry(clipboardTimeline.files, normalized.signatures.files, normalized.filePaths, now)
+  ].some(Boolean)
+}
+
 function primeClipboardWatcherState() {
   const raw = readClipboardPayloadRaw()
   updateClipboardTimeline(raw)
+  void primeClipboardSequenceState()
   return getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
 }
 
@@ -624,6 +710,26 @@ async function tryCaptureSelectionToClipboard() {
 
 
 export async function captureQuickPayload() {
+  const raw = readClipboardPayloadRaw()
+  updateClipboardTimeline(raw)
+
+  let clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
+  if (clipboardPayload.kind !== 'empty') {
+    return {
+      ...clipboardPayload,
+      source: 'recent-clipboard'
+    }
+  }
+
+  await refreshClipboardTimelineFromSequence(raw)
+  clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
+  if (clipboardPayload.kind !== 'empty') {
+    return {
+      ...clipboardPayload,
+      source: 'recent-clipboard'
+    }
+  }
+
   const explorerSelection = await tryReadForegroundExplorerSelection()
   const explorerSelectionStateResult = updateExplorerSelectionState(explorerSelection)
   if (explorerSelectionStateResult.isFresh && explorerSelectionStateResult.filePaths.length > 0) {
@@ -666,15 +772,6 @@ export async function captureQuickPayload() {
     }
   }
 
-  const raw = readClipboardPayloadRaw()
-  updateClipboardTimeline(raw)
-  const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
-  if (clipboardPayload.kind !== 'empty') {
-    return clipboardPayload.isFresh
-      ? { ...clipboardPayload, source: 'recent-clipboard' }
-      : { ...clipboardPayload, source: 'clipboard' }
-  }
-
   return clipboardPayload
 }
 
@@ -708,7 +805,15 @@ export async function captureSelectionPayload() {
 export async function readClipboardPayload() {
   const raw = readClipboardPayloadRaw()
   updateClipboardTimeline(raw)
-  return getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
+
+  let payload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
+  if (payload.kind !== 'empty') {
+    return payload
+  }
+
+  await refreshClipboardTimelineFromSequence(raw)
+  payload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
+  return payload
 }
 
 export async function readClipboardText() {

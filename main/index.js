@@ -463,6 +463,7 @@ app.whenReady().then(async () => {
     appendPayloadToWindow
   })
 
+  systemApi.startClipboardWatcher()
   await syncDesktopRuntimeFromConfig()
   ensureTray()
   await openWindow('main')

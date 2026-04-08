@@ -305,6 +305,21 @@ function updateTimelineEntry(entry, nextSignature, nextValue) {
   return changed
 }
 
+function primeTimelineEntry(entry, nextSignature, nextValue) {
+  const hasValue = Array.isArray(nextValue) ? nextValue.length > 0 : Boolean(nextValue)
+  if (!hasValue) {
+    entry.signature = ''
+    entry.timestamp = 0
+    entry.value = Array.isArray(nextValue) ? [] : ''
+    return false
+  }
+
+  entry.signature = nextSignature
+  entry.timestamp = 0
+  entry.value = Array.isArray(nextValue) ? [...nextValue] : nextValue
+  return true
+}
+
 function touchTimelineEntry(entry, nextSignature, nextValue, timestamp = Date.now()) {
   const hasValue = Array.isArray(nextValue) ? nextValue.length > 0 : Boolean(nextValue)
   if (!hasValue || entry.signature !== nextSignature) {
@@ -334,6 +349,17 @@ function updateClipboardTimeline(raw = {}) {
     normalized,
     changedKinds
   }
+}
+
+
+function primeClipboardTimeline(raw = {}) {
+  const normalized = buildFieldSignatures(raw)
+
+  primeTimelineEntry(clipboardTimeline.text, normalized.signatures.text, normalized.text)
+  primeTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageDataUrl)
+  primeTimelineEntry(clipboardTimeline.files, normalized.signatures.files, normalized.filePaths)
+
+  return normalized
 }
 
 function resolveLatestKind(preferredKinds = ['files', 'image', 'text']) {
@@ -450,7 +476,7 @@ async function refreshClipboardTimelineFromSequence(raw = {}) {
 
 function primeClipboardWatcherState() {
   const raw = readClipboardPayloadRaw()
-  updateClipboardTimeline(raw)
+  primeClipboardTimeline(raw)
   void primeClipboardSequenceState()
   return getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
 }
@@ -603,11 +629,12 @@ if ($null -eq $target -or @($target.filePaths).Count -eq 0) {
 
 
 
-function updateClipboardFileDropState(filePaths = []) {
+function updateClipboardFileDropState(filePaths = [], options = {}) {
   const normalized = Array.isArray(filePaths)
     ? filePaths.map((item) => path.normalize(String(item))).filter(Boolean)
     : []
   const signature = JSON.stringify(normalized)
+  const shouldPrimeOnly = options?.primeOnly === true
 
   if (normalized.length === 0) {
     clipboardFileDropState.signature = ''
@@ -622,12 +649,12 @@ function updateClipboardFileDropState(filePaths = []) {
 
   if (signature !== clipboardFileDropState.signature) {
     clipboardFileDropState.signature = signature
-    clipboardFileDropState.timestamp = Date.now()
+    clipboardFileDropState.timestamp = shouldPrimeOnly ? 0 : Date.now()
     clipboardFileDropState.filePaths = [...normalized]
   }
 
   const ageMs = Math.max(0, Date.now() - (clipboardFileDropState.timestamp || 0))
-  const isFresh = ageMs <= CLIPBOARD_FRESHNESS_MS
+  const isFresh = clipboardFileDropState.timestamp > 0 && ageMs <= CLIPBOARD_FRESHNESS_MS
   return {
     filePaths: [...clipboardFileDropState.filePaths],
     ageMs,
@@ -636,11 +663,12 @@ function updateClipboardFileDropState(filePaths = []) {
 }
 
 
-function updateExplorerSelectionState(filePaths = []) {
+function updateExplorerSelectionState(filePaths = [], options = {}) {
   const normalized = Array.isArray(filePaths)
     ? filePaths.map((item) => path.normalize(String(item))).filter(Boolean)
     : []
   const signature = JSON.stringify(normalized)
+  const shouldPrimeOnly = options?.primeOnly === true
 
   if (normalized.length === 0) {
     explorerSelectionState.signature = ''
@@ -655,12 +683,12 @@ function updateExplorerSelectionState(filePaths = []) {
 
   if (signature !== explorerSelectionState.signature) {
     explorerSelectionState.signature = signature
-    explorerSelectionState.timestamp = Date.now()
+    explorerSelectionState.timestamp = shouldPrimeOnly ? 0 : Date.now()
     explorerSelectionState.filePaths = [...normalized]
   }
 
   const ageMs = Math.max(0, Date.now() - (explorerSelectionState.timestamp || 0))
-  const isFresh = ageMs <= CLIPBOARD_FRESHNESS_MS
+  const isFresh = explorerSelectionState.timestamp > 0 && ageMs <= CLIPBOARD_FRESHNESS_MS
   return {
     filePaths: [...explorerSelectionState.filePaths],
     ageMs,
@@ -731,7 +759,9 @@ export async function captureQuickPayload() {
   }
 
   const explorerSelection = await tryReadForegroundExplorerSelection()
-  const explorerSelectionStateResult = updateExplorerSelectionState(explorerSelection)
+  const explorerSelectionStateResult = updateExplorerSelectionState(explorerSelection, {
+    primeOnly: !explorerSelectionState.signature
+  })
   if (explorerSelectionStateResult.isFresh && explorerSelectionStateResult.filePaths.length > 0) {
     return {
       ok: true,
@@ -752,7 +782,9 @@ export async function captureQuickPayload() {
   }
 
   const clipboardPowerShellFiles = await tryReadClipboardFileDropListViaPowerShell()
-  const clipboardFileDropStateResult = updateClipboardFileDropState(clipboardPowerShellFiles)
+  const clipboardFileDropStateResult = updateClipboardFileDropState(clipboardPowerShellFiles, {
+    primeOnly: !clipboardFileDropState.signature
+  })
   if (clipboardFileDropStateResult.isFresh && clipboardFileDropStateResult.filePaths.length > 0) {
     return {
       ok: true,

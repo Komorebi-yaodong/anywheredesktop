@@ -15,12 +15,39 @@ const webdavConfig = ref(null);
 const isWebdavConfigValid = ref(false);
 const isCloudDataLoaded = ref(false);
 
+const CHAT_HISTORY_PAGE_SIZE_STORAGE_KEY = 'chats-page-size';
+const CHAT_HISTORY_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+const CHAT_HISTORY_DEFAULT_PAGE_SIZE = 20;
+
+function normalizeChatHistoryPageSize(value) {
+    const numericValue = Number(value);
+    return CHAT_HISTORY_PAGE_SIZE_OPTIONS.includes(numericValue)
+        ? numericValue
+        : CHAT_HISTORY_DEFAULT_PAGE_SIZE;
+}
+
+function loadChatHistoryPageSize() {
+    try {
+        return normalizeChatHistoryPageSize(localStorage.getItem(CHAT_HISTORY_PAGE_SIZE_STORAGE_KEY));
+    } catch {
+        return CHAT_HISTORY_DEFAULT_PAGE_SIZE;
+    }
+}
+
+function persistChatHistoryPageSize(value) {
+    try {
+        localStorage.setItem(CHAT_HISTORY_PAGE_SIZE_STORAGE_KEY, String(normalizeChatHistoryPageSize(value)));
+    } catch {
+        // ignore localStorage persistence failure
+    }
+}
+
 const localChatFiles = ref([]);
 const cloudChatFiles = ref([]);
 const isTableLoading = ref(false);
 const selectedFiles = ref([]);
 const currentPage = ref(1);
-const pageSize = ref(20);
+const pageSize = ref(loadChatHistoryPageSize());
 const singleFileSyncing = ref({});
 const isDeletingFiles = ref(false);
 
@@ -414,6 +441,26 @@ const handleKeyDown = (e) => {
         }
     }
 };
+
+watch(pageSize, (newValue, oldValue) => {
+    const normalizedValue = normalizeChatHistoryPageSize(newValue);
+    if (normalizedValue !== newValue) {
+        pageSize.value = normalizedValue;
+        return;
+    }
+    if (normalizedValue !== oldValue) {
+        currentPage.value = 1;
+    }
+    persistChatHistoryPageSize(normalizedValue);
+});
+
+watch(currentFiles, (files) => {
+    const totalPages = Math.max(1, Math.ceil((Array.isArray(files) ? files.length : 0) / pageSize.value));
+    if (currentPage.value > totalPages) {
+        currentPage.value = totalPages;
+    }
+});
+
 
 watch(activeView, async (newView) => {
     if (newView === 'cloud' && !isCloudDataLoaded.value && isWebdavConfigValid.value) {

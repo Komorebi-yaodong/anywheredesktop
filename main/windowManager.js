@@ -1077,7 +1077,19 @@ export function closeWindow(windowRef = '') {
     return result
   }
 
-  if (isFastSingleton || isDialogWindow) {
+  if (isFastSingleton) {
+    try {
+      cancelFastInputSession(resolved.win, 'window_closed')
+    } catch {
+      // ignore fast session cancellation failure during teardown
+    }
+    resolved.win.destroy()
+    const result = { ok: true, action: 'destroy', windowRef: resolved.windowRef }
+    debugWindowManagerLog('closeWindow:after-destroy-call', result)
+    return result
+  }
+
+  if (isDialogWindow) {
     resolved.win.destroy()
     const result = { ok: true, action: 'destroy', windowRef: resolved.windowRef }
     debugWindowManagerLog('closeWindow:after-destroy-call', result)

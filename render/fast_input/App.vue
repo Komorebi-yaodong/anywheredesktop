@@ -82,7 +82,7 @@ function scheduleBlurAutoClose() {
   if (!isFinishedState.value) return
   blurAutoCloseTimer = setTimeout(() => {
     closeFastInput()
-  }, 5000)
+  }, 3000)
 }
 
 function resetCopiedStateSoon() {
@@ -289,9 +289,7 @@ onMounted(async () => {
           event: 'fast-input:cancel-request',
           payload: { reason: 'user_cancelled' }
         }).catch(() => {})
-        lastError.value = '已取消快捷输入请求'
-        sessionStatus.value = 'cancelled'
-        scheduleBlurAutoClose()
+        closeFastInput()
         return
       }
       closeFastInput()

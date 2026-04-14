@@ -634,7 +634,7 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
     const errorText = finalText || (isAbortError ? '已取消快捷输入请求' : error?.message || '快捷输入执行失败')
 
     try {
-      if (errorText.trim()) {
+      if (!isAbortError && errorText.trim()) {
         await systemApi.copyText(errorText)
         setFastInputSessionState(win, { autoCopied: true })
       }
@@ -646,7 +646,7 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
       requestId,
       message: isAbortError ? '已取消快捷输入请求' : error?.message || '快捷输入执行失败',
       text: errorText,
-      autoCopied: Boolean(errorText.trim()),
+      autoCopied: !isAbortError && Boolean(errorText.trim()),
       canSubmit: false,
       canPaste: true,
       canCopy: Boolean(errorText)

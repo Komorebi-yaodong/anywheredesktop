@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import icon from '../resources/icon.png?asset'
-import { getConfig, defaultConfig } from './core/data.js'
+import { getConfig, defaultConfig, saveSetting } from './core/data.js'
 import { startFastInputSession, getFastInputRecommendedBounds, cancelFastInputSession } from './core/fastInput.js'
 import { WINDOW_EVENT_CHANNEL } from './eventBus.js'
 
@@ -84,6 +84,178 @@ let appQuitting = false
 
 const debugWindowManagerLog = () => {}
 const debugWindowManagerError = () => {}
+
+const FAST_INPUT_DEFAULT_VERTICAL_RATIO = 0.85
+const FAST_INPUT_POSITION_SAVE_DEBOUNCE_MS = 120
+
+function clamp(value, min, max) {
+  if (!Number.isFinite(value)) return min
+  if (value < min) return min
+  if (value > max) return max
+  return value
+}
+
+function normalizeFastInputPositionRecord(record = null) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null
+
+  const relativeX = resolveNumber(record.relativeX)
+  const relativeY = resolveNumber(record.relativeY)
+  const displayId = resolveNumber(record.displayId)
+  const width = resolveNumber(record.width)
+  const height = resolveNumber(record.height)
+
+  if (relativeX !== null || relativeY !== null) {
+    return {
+      version: 2,
+      displayId,
+      relativeX: clamp(relativeX ?? 0.5, 0, 1),
+      relativeY: clamp(relativeY ?? FAST_INPUT_DEFAULT_VERTICAL_RATIO, 0, 1),
+      width: width !== null && width > 0 ? Math.round(width) : null,
+      height: height !== null && height > 0 ? Math.round(height) : null
+    }
+  }
+
+  const legacyX = resolveNumber(record.x)
+  const legacyY = resolveNumber(record.y)
+  if (legacyX === null || legacyY === null) return null
+
+  return {
+    version: 1,
+    x: Math.round(legacyX),
+    y: Math.round(legacyY)
+  }
+}
+
+function getDisplayById(displayId = null) {
+  if (displayId === null) return null
+  return screen.getAllDisplays().find((display) => Number(display?.id) === Number(displayId)) || null
+}
+
+function clampWindowBoundsToArea(bounds = {}, area = null) {
+  const fallbackArea = area || getWorkArea(screen.getPrimaryDisplay())
+  const nextWidth = Math.max(1, Math.min(Math.round(bounds.width || 0), Math.round(fallbackArea.width || 1)))
+  const nextHeight = Math.max(1, Math.min(Math.round(bounds.height || 0), Math.round(fallbackArea.height || 1)))
+  const maxX = fallbackArea.x + fallbackArea.width - nextWidth
+  const maxY = fallbackArea.y + fallbackArea.height - nextHeight
+
+  return {
+    x: Math.round(clamp(Math.round(bounds.x || fallbackArea.x), fallbackArea.x, maxX)),
+    y: Math.round(clamp(Math.round(bounds.y || fallbackArea.y), fallbackArea.y, maxY)),
+    width: nextWidth,
+    height: nextHeight
+  }
+}
+
+function getFastInputDefaultBounds(width, height, targetDisplay = null) {
+  const display = targetDisplay || screen.getDisplayNearestPoint(screen.getCursorScreenPoint()) || screen.getPrimaryDisplay()
+  const workArea = getWorkArea(display)
+  const availableWidth = Math.max(1, workArea.width - width)
+  const availableHeight = Math.max(1, workArea.height - height)
+
+  return clampWindowBoundsToArea({
+    x: Math.round(workArea.x + availableWidth / 2),
+    y: Math.round(workArea.y + availableHeight * FAST_INPUT_DEFAULT_VERTICAL_RATIO),
+    width,
+    height
+  }, workArea)
+}
+
+function resolveFastInputPlacement(fullConfig = {}, width = 520, height = 176) {
+  const normalizedRecord = normalizeFastInputPositionRecord(fullConfig?.fastWindowPosition)
+  const primaryDisplay = screen.getPrimaryDisplay()
+  const cursorDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()) || primaryDisplay
+
+  if (!normalizedRecord) {
+    return getFastInputDefaultBounds(width, height, cursorDisplay)
+  }
+
+  if (normalizedRecord.version === 1) {
+    const point = { x: normalizedRecord.x, y: normalizedRecord.y }
+    const targetDisplay = screen.getDisplayNearestPoint(point) || cursorDisplay || primaryDisplay
+    return clampWindowBoundsToArea({ x: normalizedRecord.x, y: normalizedRecord.y, width, height }, getWorkArea(targetDisplay))
+  }
+
+  const preferredDisplay = getDisplayById(normalizedRecord.displayId) || cursorDisplay || primaryDisplay
+  const workArea = getWorkArea(preferredDisplay)
+  const availableWidth = Math.max(1, workArea.width - width)
+  const availableHeight = Math.max(1, workArea.height - height)
+
+  return clampWindowBoundsToArea({
+    x: Math.round(workArea.x + availableWidth * clamp(normalizedRecord.relativeX ?? 0.5, 0, 1)),
+    y: Math.round(workArea.y + availableHeight * clamp(normalizedRecord.relativeY ?? FAST_INPUT_DEFAULT_VERTICAL_RATIO, 0, 1)),
+    width,
+    height
+  }, workArea)
+}
+
+function serializeFastInputPosition(bounds = null) {
+  if (!bounds || typeof bounds !== 'object') return null
+  const point = {
+    x: Math.round(resolveNumber(bounds.x, 0) || 0),
+    y: Math.round(resolveNumber(bounds.y, 0) || 0)
+  }
+  const display = screen.getDisplayNearestPoint(point) || screen.getPrimaryDisplay()
+  const workArea = getWorkArea(display)
+  const width = Math.max(1, Math.round(resolveNumber(bounds.width, 0) || 1))
+  const height = Math.max(1, Math.round(resolveNumber(bounds.height, 0) || 1))
+  const availableWidth = Math.max(1, workArea.width - width)
+  const availableHeight = Math.max(1, workArea.height - height)
+
+  return {
+    displayId: Number(display?.id),
+    relativeX: clamp((point.x - workArea.x) / availableWidth, 0, 1),
+    relativeY: clamp((point.y - workArea.y) / availableHeight, 0, 1),
+    width,
+    height
+  }
+}
+
+function scheduleFastInputPositionSave(win) {
+  if (!win || win.isDestroyed()) return
+  try {
+    if (win.__fastInputPositionSaveTimer) {
+      clearTimeout(win.__fastInputPositionSaveTimer)
+    }
+    win.__fastInputPositionSaveTimer = setTimeout(async () => {
+      win.__fastInputPositionSaveTimer = null
+      if (!win || win.isDestroyed()) return
+      try {
+        const record = serializeFastInputPosition(win.getBounds())
+        if (!record) return
+        await saveSetting('fastWindowPosition', record)
+      } catch {
+        // ignore fast_input position save failure
+      }
+    }, FAST_INPUT_POSITION_SAVE_DEBOUNCE_MS)
+  } catch {
+    // ignore fast_input position save scheduling failure
+  }
+}
+
+function clearFastInputPositionSaveTimer(win) {
+  if (!win) return
+  try {
+    if (win.__fastInputPositionSaveTimer) {
+      clearTimeout(win.__fastInputPositionSaveTimer)
+      win.__fastInputPositionSaveTimer = null
+    }
+  } catch {
+    // ignore fast_input position timer cleanup failure
+  }
+}
+
+async function persistFastInputPositionNow(win) {
+  if (!win || win.isDestroyed()) return
+  clearFastInputPositionSaveTimer(win)
+  try {
+    const record = serializeFastInputPosition(win.getBounds())
+    if (!record) return
+    await saveSetting('fastWindowPosition', record)
+  } catch {
+    // ignore fast_input position immediate save failure
+  }
+}
+
 
 
 function bindWindowRef(win, ref) {
@@ -221,7 +393,7 @@ function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, pr
   }
 }
 
-function resolveWindowConfig(baseConfig, payload) {
+function resolveWindowConfig(baseConfig, payload, fullConfig = defaultConfig.config) {
   const nextConfig = {
     ...baseConfig,
     options: {
@@ -231,18 +403,16 @@ function resolveWindowConfig(baseConfig, payload) {
 
   if (baseConfig?.html === 'fast_input/index.html') {
     const configPayload = payload && typeof payload === 'object' ? payload : {}
-    const fullConfig = defaultConfig.config || {}
+    const resolvedFullConfig = fullConfig && typeof fullConfig === 'object' ? fullConfig : defaultConfig.config || {}
     const promptCode = resolvePromptCode(configPayload)
-    const promptConfig = resolvePromptConfig(fullConfig, configPayload, promptCode)
+    const promptConfig = resolvePromptConfig(resolvedFullConfig, configPayload, promptCode)
     const fastBounds = getFastInputRecommendedBounds(promptConfig)
     nextConfig.width = fastBounds.width
     nextConfig.height = fastBounds.height
 
-    const cursorPoint = screen.getCursorScreenPoint()
-    const targetDisplay = screen.getDisplayNearestPoint(cursorPoint) || screen.getPrimaryDisplay()
-    const workArea = getWorkArea(targetDisplay)
-    nextConfig.options.x = Math.round(workArea.x + (workArea.width - nextConfig.width) / 2)
-    nextConfig.options.y = Math.round(workArea.y + workArea.height - nextConfig.height - Math.max(20, Math.round(workArea.height * 0.15)))
+    const placement = resolveFastInputPlacement(resolvedFullConfig, nextConfig.width, nextConfig.height)
+    nextConfig.options.x = placement.x
+    nextConfig.options.y = placement.y
     nextConfig.options.alwaysOnTop = true
   }
 
@@ -603,6 +773,16 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
     })
   }
 
+  if (type === 'fast') {
+    win.on('moved', () => {
+      scheduleFastInputPositionSave(win)
+    })
+
+    win.on('closed', () => {
+      clearFastInputPositionSaveTimer(win)
+    })
+  }
+
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
@@ -659,6 +839,11 @@ export async function openWindow(type = 'main', payload = null) {
   const targetType = typeof type === 'string' ? type : 'main'
   const openPayload = normalizeWindowOpenPayload(payload)
   const baseConfig = WINDOWS[targetType]
+  const configResult = (targetType === 'window' || targetType === 'fast') ? await getConfig() : null
+  const fullConfig =
+    configResult?.config && typeof configResult.config === 'object'
+      ? configResult.config
+      : defaultConfig.config
 
   if (!baseConfig) {
     throw new Error(`[window] unknown window type: ${targetType}`)
@@ -667,7 +852,7 @@ export async function openWindow(type = 'main', payload = null) {
   if (SINGLETON_TYPES.has(targetType)) {
     const existing = getSingletonWindow(targetType)
     if (existing) {
-      const config = resolveWindowConfig(baseConfig, openPayload)
+      const config = resolveWindowConfig(baseConfig, openPayload, fullConfig)
       if (targetType === 'quick') {
         applyQuickWindowBounds(existing, config)
       }
@@ -720,7 +905,7 @@ export async function openWindow(type = 'main', payload = null) {
       return { ok: true, type: targetType, id: targetType, reused: true, payload: openPayload }
     }
 
-    const config = resolveWindowConfig(baseConfig, openPayload)
+    const config = resolveWindowConfig(baseConfig, openPayload, fullConfig)
     const initMessage = targetType === 'window'
       ? await buildWindowInitMessage(openPayload, targetType)
       : targetType === 'quick'
@@ -785,12 +970,6 @@ export async function openWindow(type = 'main', payload = null) {
 
     return { ok: true, type: targetType, id: targetType, reused: false, payload: openPayload }
   }
-
-  const configResult = targetType === 'window' ? await getConfig() : null
-  const fullConfig =
-    configResult?.config && typeof configResult.config === 'object'
-      ? configResult.config
-      : defaultConfig.config
 
   const dialogWindowConfig =
     targetType === 'window'
@@ -1078,6 +1257,11 @@ export function closeWindow(windowRef = '') {
   }
 
   if (isFastSingleton) {
+    try {
+      void persistFastInputPositionNow(resolved.win)
+    } catch {
+      // ignore fast position persistence failure during teardown
+    }
     try {
       cancelFastInputSession(resolved.win, 'window_closed')
     } catch {

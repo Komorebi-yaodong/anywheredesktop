@@ -123,7 +123,7 @@ export const defaultConfig = {
       data: false,
       webdav: false
     },
-    fastWindowPosition: { x: 0, y: 0 },
+    fastWindowPosition: null,
     mcpServers: {},
     skillPath: '',
     language: 'zh',

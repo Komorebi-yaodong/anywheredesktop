@@ -85,6 +85,21 @@ function scheduleBlurAutoClose() {
   }, 3000)
 }
 
+function syncFinishedAutoCloseByFocus() {
+  if (!isFinishedState.value) {
+    clearBlurAutoCloseTimer()
+    return
+  }
+
+  if (document.hasFocus()) {
+    clearBlurAutoCloseTimer()
+    return
+  }
+
+  scheduleBlurAutoClose()
+}
+
+
 function resetCopiedStateSoon() {
   if (copiedResetTimer) clearTimeout(copiedResetTimer)
   copiedResetTimer = setTimeout(() => {
@@ -215,6 +230,7 @@ function handleFastInputEvent(event = {}) {
     streamText.value = typeof payload?.text === 'string' ? payload.text : streamText.value
     autoCopied.value = Boolean(payload?.autoCopied)
     markFinishedState()
+    syncFinishedAutoCloseByFocus()
     return
   }
 
@@ -226,6 +242,7 @@ function handleFastInputEvent(event = {}) {
     }
     autoCopied.value = Boolean(payload?.autoCopied)
     markFinishedState()
+    syncFinishedAutoCloseByFocus()
   }
 }
 

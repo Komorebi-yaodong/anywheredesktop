@@ -588,6 +588,72 @@ watch(promptBackgroundImage, async (newUrl) => {
 const inputLayout = computed(() => currentConfig.value.inputLayout || 'horizontal');
 const currentSystemPrompt = ref("");
 
+const normalizeSessionTimestamp = (value) => {
+  if (value == null || value === '') return '';
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) || date.getTime() <= 0 ? '' : date.toISOString();
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return '';
+
+  if (/^\d+$/.test(raw)) {
+    const numericValue = Number(raw);
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+      const normalizedNumber = raw.length <= 10 ? numericValue * 1000 : numericValue;
+      const numericDate = new Date(normalizedNumber);
+      if (!Number.isNaN(numericDate.getTime()) && numericDate.getTime() > 0) {
+        return numericDate.toISOString();
+      }
+    }
+  }
+
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) || date.getTime() <= 0 ? '' : date.toISOString();
+};
+
+const getConversationDisplayName = () => {
+  const normalizedTitle = typeof defaultConversationName.value === 'string' ? defaultConversationName.value.trim() : '';
+  if (normalizedTitle) return normalizedTitle;
+
+  const firstUserMsg = chat_show.value.find(msg => msg.role === 'user');
+  if (!firstUserMsg) return CODE.value || 'AI';
+
+  const content = firstUserMsg.content;
+  if (Array.isArray(content)) {
+    const textPart = content.find(part => part?.type === 'text' && typeof part.text === 'string' && part.text.trim());
+    if (textPart?.text) return textPart.text.trim().slice(0, 50);
+    if (content.some(part => part?.type === 'image_url')) return '图片对话';
+    if (content.some(part => part?.type === 'file' || part?.type === 'input_file')) return '文件对话';
+  }
+
+  if (typeof content === 'string' && content.trim()) return content.trim().slice(0, 50);
+  return CODE.value || 'AI';
+};
+
+const getSessionMetadata = () => {
+  const timestamps = [];
+
+  chat_show.value.forEach((message) => {
+    [message?.timestamp, message?.completedTimestamp, message?.updatedAt, message?.createdAt].forEach((candidate) => {
+      const normalized = normalizeSessionTimestamp(candidate);
+      if (normalized) timestamps.push(normalized);
+    });
+  });
+
+  timestamps.sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+
+  const nowIso = new Date().toISOString();
+  return {
+    title: getConversationDisplayName(),
+    createdAt: timestamps[0] || nowIso,
+    updatedAt: timestamps[timestamps.length - 1] || nowIso
+  };
+};
+
+
 const changeModel_page = ref(false);
 const systemPromptDialogVisible = ref(false);
 const systemPromptContent = ref('');
@@ -2348,6 +2414,7 @@ const getSessionDataAsObject = () => {
   return {
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
     autoCloseOnBlur: autoCloseOnBlur.value, model: model.value,
+    sessionMetadata: getSessionMetadata(),
     currentPromptConfig: currentPromptConfig, history: history.value, chat_show: chat_show.value, selectedVoice: selectedVoice.value,
     activeMcpServerIds: sessionMcpServerIds.value || [],
     activeSkillIds: sessionSkillIds.value || [],

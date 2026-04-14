@@ -546,6 +546,90 @@ export async function readRemoteText(url = '', options = {}) {
   }
 }
 
+const normalizeSessionTimestamp = (value) => {
+  if (value == null || value === '') return ''
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) || date.getTime() <= 0 ? '' : date.toISOString()
+  }
+
+  const raw = String(value).trim()
+  if (!raw) return ''
+
+  if (/^\d+$/.test(raw)) {
+    const numericValue = Number(raw)
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+      const normalizedNumber = raw.length <= 10 ? numericValue * 1000 : numericValue
+      const numericDate = new Date(normalizedNumber)
+      if (!Number.isNaN(numericDate.getTime()) && numericDate.getTime() > 0) {
+        return numericDate.toISOString()
+      }
+    }
+  }
+
+  const date = new Date(raw)
+  return Number.isNaN(date.getTime()) || date.getTime() <= 0 ? '' : date.toISOString()
+}
+
+const collectSessionTimestamps = (sessionData) => {
+  const timestamps = []
+  const messageLists = [sessionData?.chat_show, sessionData?.history]
+
+  messageLists.forEach((messages) => {
+    if (!Array.isArray(messages)) return
+    messages.forEach((message) => {
+      ;[
+        message?.timestamp,
+        message?.completedTimestamp,
+        message?.updatedAt,
+        message?.createdAt
+      ].forEach((candidate) => {
+        const normalized = normalizeSessionTimestamp(candidate)
+        if (normalized) timestamps.push(normalized)
+      })
+    })
+  })
+
+  return timestamps.sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+}
+
+const resolveFallbackTitle = (basename, sessionData) => {
+  const sessionMetadataTitle =
+    typeof sessionData?.sessionMetadata?.title === 'string' ? sessionData.sessionMetadata.title.trim() : ''
+  if (sessionMetadataTitle) return sessionMetadataTitle
+
+  const normalizedBasename = typeof basename === 'string' ? basename.trim() : ''
+  if (normalizedBasename.toLowerCase().endsWith('.json')) {
+    return normalizedBasename.slice(0, -5)
+  }
+  return normalizedBasename
+}
+
+const readSessionMetadata = async (filePath, basename) => {
+  try {
+    const rawContent = await fs.readFile(filePath, 'utf-8')
+    const sessionData = JSON.parse(rawContent)
+    if (!sessionData || sessionData.anywhere_history !== true) {
+      return null
+    }
+
+    const timestamps = collectSessionTimestamps(sessionData)
+    const metadata = sessionData.sessionMetadata && typeof sessionData.sessionMetadata === 'object'
+      ? sessionData.sessionMetadata
+      : {}
+
+    return {
+      title: resolveFallbackTitle(basename, sessionData),
+      createdAt: normalizeSessionTimestamp(metadata.createdAt) || timestamps[0] || '',
+      updatedAt:
+        normalizeSessionTimestamp(metadata.updatedAt) || timestamps[timestamps.length - 1] || ''
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function listJsonFiles(dirPath) {
   if (typeof dirPath !== 'string' || !dirPath.trim()) {
     return []
@@ -563,10 +647,21 @@ export async function listJsonFiles(dirPath) {
       const fullPath = path.join(resolvedDirPath, entry.name)
       try {
         const stats = await fs.stat(fullPath)
+        const sessionMetadata = await readSessionMetadata(fullPath, entry.name)
+        const createdAt =
+          sessionMetadata?.createdAt ||
+          normalizeSessionTimestamp(stats.birthtime) ||
+          normalizeSessionTimestamp(stats.mtime)
+        const updatedAt =
+          sessionMetadata?.updatedAt || normalizeSessionTimestamp(stats.mtime) || createdAt
+
         return {
           basename: entry.name,
           path: fullPath,
           lastmod: stats.mtime.toISOString(),
+          createdAt,
+          updatedAt,
+          title: sessionMetadata?.title || resolveFallbackTitle(entry.name),
           size: stats.size,
           type: 'file'
         }
@@ -579,7 +674,10 @@ export async function listJsonFiles(dirPath) {
 
   const normalizedDetails = fileDetails
     .filter(Boolean)
-    .sort((a, b) => new Date(b.lastmod).getTime() - new Date(a.lastmod).getTime())
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt || b.lastmod).getTime() - new Date(a.createdAt || a.lastmod).getTime()
+    )
 
   return normalizedDetails
 }

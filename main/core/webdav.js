@@ -149,6 +149,88 @@ function toSerializableFileInfo(item = {}) {
   }
 }
 
+function normalizeSessionTimestamp(value) {
+  if (value == null || value === '') return ''
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value < 1e12 ? value * 1000 : value)
+    return !Number.isNaN(date.getTime()) && date.getTime() > 0 ? date.toISOString() : ''
+  }
+
+  const raw = normalizeText(value).trim()
+  if (!raw) return ''
+
+  if (/^\d+$/.test(raw)) {
+    const numericValue = Number(raw)
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+      const date = new Date(raw.length <= 10 ? numericValue * 1000 : numericValue)
+      if (!Number.isNaN(date.getTime()) && date.getTime() > 0) {
+        return date.toISOString()
+      }
+    }
+  }
+
+  const date = new Date(raw)
+  return !Number.isNaN(date.getTime()) && date.getTime() > 0 ? date.toISOString() : ''
+}
+
+function collectSessionTimestamps(sessionData) {
+  const timestamps = []
+  const messageLists = [sessionData?.chat_show, sessionData?.history]
+
+  messageLists.forEach((messages) => {
+    if (!Array.isArray(messages)) return
+    messages.forEach((message) => {
+      ;[
+        message?.timestamp,
+        message?.completedTimestamp,
+        message?.updatedAt,
+        message?.createdAt
+      ].forEach((candidate) => {
+        const normalized = normalizeSessionTimestamp(candidate)
+        if (normalized) timestamps.push(normalized)
+      })
+    })
+  })
+
+  return timestamps.sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+}
+
+function resolveSessionFallbackTitle(basename = '', sessionData = null) {
+  const metadataTitle = normalizeText(sessionData?.sessionMetadata?.title).trim()
+  if (metadataTitle) return metadataTitle
+
+  const normalizedBasename = normalizeText(basename).trim()
+  if (normalizedBasename.toLowerCase().endsWith('.json')) {
+    return normalizedBasename.slice(0, -5)
+  }
+  return normalizedBasename
+}
+
+async function readRemoteSessionMetadata(client, remoteFilePath, basename) {
+  try {
+    const content = await client.getFileContents(remoteFilePath, { format: 'text' })
+    const rawText = typeof content === 'string' ? content : normalizeText(content)
+    const sessionData = JSON.parse(rawText)
+    if (!sessionData || sessionData.anywhere_history !== true) {
+      return null
+    }
+
+    const timestamps = collectSessionTimestamps(sessionData)
+    const metadata = sessionData.sessionMetadata && typeof sessionData.sessionMetadata === 'object'
+      ? sessionData.sessionMetadata
+      : {}
+
+    return {
+      title: resolveSessionFallbackTitle(basename, sessionData),
+      createdAt: normalizeSessionTimestamp(metadata.createdAt) || timestamps[0] || '',
+      updatedAt: normalizeSessionTimestamp(metadata.updatedAt) || timestamps[timestamps.length - 1] || ''
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function listBackups(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig)
   const remoteDir = config.path
@@ -168,16 +250,36 @@ export async function listBackups(input = {}) {
   }
 
   const normalizedContents = normalizeDirectoryContents(contents)
-  const files = normalizedContents
-    .filter((item) => item?.type === 'file')
-    .map(toSerializableFileInfo)
-    .filter((item) => item.basename.toLowerCase().endsWith('.json'))
-    .sort((a, b) => new Date(b.lastmod).getTime() - new Date(a.lastmod).getTime())
+  const files = await Promise.all(
+    normalizedContents
+      .filter((item) => item?.type === 'file')
+      .map(async (item) => {
+        const serialized = toSerializableFileInfo(item)
+        if (!serialized.basename.toLowerCase().endsWith('.json')) {
+          return null
+        }
+
+        const remotePath = `${remoteDir}/${serialized.basename}`
+        const sessionMetadata = await readRemoteSessionMetadata(client, remotePath, serialized.basename)
+        return {
+          ...serialized,
+          title: sessionMetadata?.title || resolveSessionFallbackTitle(serialized.basename),
+          createdAt: sessionMetadata?.createdAt || '',
+          updatedAt: sessionMetadata?.updatedAt || serialized.lastmod || ''
+        }
+      })
+  )
 
   return {
     ok: true,
     exists: true,
-    files
+    files: files
+      .filter(Boolean)
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt || b.updatedAt || b.lastmod).getTime() -
+          new Date(a.createdAt || a.updatedAt || a.lastmod).getTime()
+      )
   }
 }
 

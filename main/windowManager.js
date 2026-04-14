@@ -132,7 +132,7 @@ function getDisplayById(displayId = null) {
 }
 
 function clampWindowBoundsToArea(bounds = {}, area = null) {
-  const fallbackArea = area || getWorkArea(screen.getPrimaryDisplay())
+  const fallbackArea = area || getDisplayBounds(screen.getPrimaryDisplay())
   const nextWidth = Math.max(1, Math.min(Math.round(bounds.width || 0), Math.round(fallbackArea.width || 1)))
   const nextHeight = Math.max(1, Math.min(Math.round(bounds.height || 0), Math.round(fallbackArea.height || 1)))
   const maxX = fallbackArea.x + fallbackArea.width - nextWidth
@@ -148,16 +148,16 @@ function clampWindowBoundsToArea(bounds = {}, area = null) {
 
 function getFastInputDefaultBounds(width, height, targetDisplay = null) {
   const display = targetDisplay || screen.getDisplayNearestPoint(screen.getCursorScreenPoint()) || screen.getPrimaryDisplay()
-  const workArea = getWorkArea(display)
-  const availableWidth = Math.max(1, workArea.width - width)
-  const availableHeight = Math.max(1, workArea.height - height)
+  const displayBounds = getDisplayBounds(display)
+  const availableWidth = Math.max(1, displayBounds.width - width)
+  const availableHeight = Math.max(1, displayBounds.height - height)
 
   return clampWindowBoundsToArea({
-    x: Math.round(workArea.x + availableWidth / 2),
-    y: Math.round(workArea.y + availableHeight * FAST_INPUT_DEFAULT_VERTICAL_RATIO),
+    x: Math.round(displayBounds.x + availableWidth / 2),
+    y: Math.round(displayBounds.y + availableHeight * FAST_INPUT_DEFAULT_VERTICAL_RATIO),
     width,
     height
-  }, workArea)
+  }, displayBounds)
 }
 
 function resolveFastInputPlacement(fullConfig = {}, width = 520, height = 176) {
@@ -172,20 +172,20 @@ function resolveFastInputPlacement(fullConfig = {}, width = 520, height = 176) {
   if (normalizedRecord.version === 1) {
     const point = { x: normalizedRecord.x, y: normalizedRecord.y }
     const targetDisplay = screen.getDisplayNearestPoint(point) || cursorDisplay || primaryDisplay
-    return clampWindowBoundsToArea({ x: normalizedRecord.x, y: normalizedRecord.y, width, height }, getWorkArea(targetDisplay))
+    return clampWindowBoundsToArea({ x: normalizedRecord.x, y: normalizedRecord.y, width, height }, getDisplayBounds(targetDisplay))
   }
 
   const preferredDisplay = getDisplayById(normalizedRecord.displayId) || cursorDisplay || primaryDisplay
-  const workArea = getWorkArea(preferredDisplay)
-  const availableWidth = Math.max(1, workArea.width - width)
-  const availableHeight = Math.max(1, workArea.height - height)
+  const displayBounds = getDisplayBounds(preferredDisplay)
+  const availableWidth = Math.max(1, displayBounds.width - width)
+  const availableHeight = Math.max(1, displayBounds.height - height)
 
   return clampWindowBoundsToArea({
-    x: Math.round(workArea.x + availableWidth * clamp(normalizedRecord.relativeX ?? 0.5, 0, 1)),
-    y: Math.round(workArea.y + availableHeight * clamp(normalizedRecord.relativeY ?? FAST_INPUT_DEFAULT_VERTICAL_RATIO, 0, 1)),
+    x: Math.round(displayBounds.x + availableWidth * clamp(normalizedRecord.relativeX ?? 0.5, 0, 1)),
+    y: Math.round(displayBounds.y + availableHeight * clamp(normalizedRecord.relativeY ?? FAST_INPUT_DEFAULT_VERTICAL_RATIO, 0, 1)),
     width,
     height
-  }, workArea)
+  }, displayBounds)
 }
 
 function serializeFastInputPosition(bounds = null) {
@@ -195,16 +195,16 @@ function serializeFastInputPosition(bounds = null) {
     y: Math.round(resolveNumber(bounds.y, 0) || 0)
   }
   const display = screen.getDisplayNearestPoint(point) || screen.getPrimaryDisplay()
-  const workArea = getWorkArea(display)
+  const displayBounds = getDisplayBounds(display)
   const width = Math.max(1, Math.round(resolveNumber(bounds.width, 0) || 1))
   const height = Math.max(1, Math.round(resolveNumber(bounds.height, 0) || 1))
-  const availableWidth = Math.max(1, workArea.width - width)
-  const availableHeight = Math.max(1, workArea.height - height)
+  const availableWidth = Math.max(1, displayBounds.width - width)
+  const availableHeight = Math.max(1, displayBounds.height - height)
 
   return {
     displayId: Number(display?.id),
-    relativeX: clamp((point.x - workArea.x) / availableWidth, 0, 1),
-    relativeY: clamp((point.y - workArea.y) / availableHeight, 0, 1),
+    relativeX: clamp((point.x - displayBounds.x) / availableWidth, 0, 1),
+    relativeY: clamp((point.y - displayBounds.y) / availableHeight, 0, 1),
     width,
     height
   }

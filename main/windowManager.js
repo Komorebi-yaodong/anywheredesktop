@@ -608,6 +608,17 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
     return { action: 'deny' }
   })
 
+  win.webContents.on('will-navigate', (event, url) => {
+    const isLocal = url.startsWith('file://') || 
+                   (process.env.ELECTRON_RENDERER_URL && url.startsWith(process.env.ELECTRON_RENDERER_URL)) ||
+                   url.startsWith('http://localhost')
+    
+    if (!isLocal) {
+      event.preventDefault()
+      shell.openExternal(url)
+    }
+  })
+
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${config.devPath}`)
   } else {

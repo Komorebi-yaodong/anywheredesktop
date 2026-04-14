@@ -7,6 +7,9 @@ env:
   npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -17,17 +20,17 @@ jobs:
         include:
           - os: windows-latest
             target: win
-            artifact_name: anywhere-desktop-windows
+            artifact_name: anywhere-windows
             artifact_glob: |
               dist/*-setup.exe
           - os: ubuntu-latest
             target: linux
-            artifact_name: anywhere-desktop-linux
+            artifact_name: anywhere-linux
             artifact_glob: |
               dist/*.AppImage
           - os: macos-latest
             target: mac
-            artifact_name: anywhere-desktop-macos
+            artifact_name: anywhere-macos
             artifact_glob: |
               dist/*-mac.zip
 
@@ -36,6 +39,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Resolve build channel
+        shell: bash
+        run: |
+          echo "BUILD_ARTIFACT_NAME=anywhere" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "BUILD_SUFFIX=-preview.${{ github.run_number }}" >> "$GITHUB_ENV"
+            echo "ARTIFACT_FLAVOR=preview" >> "$GITHUB_ENV"
+          else
+            echo "BUILD_SUFFIX=" >> "$GITHUB_ENV"
+            echo "ARTIFACT_FLAVOR=release" >> "$GITHUB_ENV"
+          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v5
@@ -62,9 +77,12 @@ jobs:
           echo "Using checked-in icon assets from build/:"
           ls -R build
 
-      - name: Print builder mirror envs
+      - name: Print builder envs
         shell: bash
         run: |
+          echo "BUILD_ARTIFACT_NAME=$BUILD_ARTIFACT_NAME"
+          echo "BUILD_SUFFIX=$BUILD_SUFFIX"
+          echo "ARTIFACT_FLAVOR=$ARTIFACT_FLAVOR"
           echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR"
           echo "npm_config_electron_builder_binaries_mirror=$npm_config_electron_builder_binaries_mirror"
 
@@ -76,10 +94,12 @@ jobs:
           ELECTRON_BUILDER_DISABLE_AUTO_PUBLISH: true
           ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
           npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+          BUILD_ARTIFACT_NAME: ${{ env.BUILD_ARTIFACT_NAME }}
+          BUILD_SUFFIX: ${{ env.BUILD_SUFFIX }}
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: ${{ matrix.artifact_name }}
+          name: ${{ matrix.artifact_name }}-${{ env.ARTIFACT_FLAVOR }}
           path: ${{ matrix.artifact_glob }}
           if-no-files-found: error

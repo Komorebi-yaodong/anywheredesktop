@@ -389,8 +389,8 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
   border-radius: 999px;
-  background: rgba(18, 18, 20, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow: none;
   display: grid;
   grid-template-columns: 32px 1fr 32px;
@@ -428,7 +428,7 @@ html.dark .fast-bar {
   align-items: center;
   justify-content: center;
   background: transparent;
-  color: #f3f4f6;
+  color: #1f2937;
   cursor: pointer;
   font-size: 14px;
   transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
@@ -487,7 +487,7 @@ html.dark .icon-btn:hover:not(:disabled) {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #f3f4f6;
+  color: #1f2937;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -532,6 +532,11 @@ html.dark .content-text {
 html.dark .stream-spinner {
   border-color: rgba(209, 213, 219, 0.2);
   border-top-color: #e5e7eb;
+}
+
+.stream-spinner {
+  border-color: rgba(107, 114, 128, 0.18);
+  border-top-color: #6b7280;
 }
 
 @keyframes spin {

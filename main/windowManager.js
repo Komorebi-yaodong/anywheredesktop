@@ -36,7 +36,7 @@ const WINDOWS = {
     html: 'fast_input/index.html',
     devPath: '/fast_input/index.html',
     width: 520,
-    height: 176,
+    height: 68,
     options: {
       frame: false,
       transparent: true,

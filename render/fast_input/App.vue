@@ -376,19 +376,18 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .fast-shell {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
+  width: 100%;
+  height: 100%;
   background: transparent;
   user-select: none;
 }
 
 .fast-bar {
   -webkit-app-region: drag;
-  width: min(100%, 560px);
-  min-height: 52px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid rgba(0, 0, 0, 0.08);

@@ -35,14 +35,15 @@ const WINDOWS = {
     preload: 'fast_input_preload.js',
     html: 'fast_input/index.html',
     devPath: '/fast_input/index.html',
-    width: 520,
-    height: 68,
+    width: 460,
+    height: 60,
     options: {
       frame: false,
       transparent: true,
       alwaysOnTop: true,
       resizable: false,
-      skipTaskbar: true
+      skipTaskbar: true,
+      hasShadow: false
     }
   },
   quick: {

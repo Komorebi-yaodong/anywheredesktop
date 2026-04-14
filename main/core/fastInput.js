@@ -384,8 +384,8 @@ async function buildFastInputInitPayload(payload = {}) {
 function resolveFastWindowBounds(promptConfig = {}) {
   const width = Number(promptConfig?.window_width)
   return {
-    width: Number.isFinite(width) && width > 0 ? Math.max(360, Math.min(720, width)) : 520,
-    height: 68
+    width: Number.isFinite(width) && width > 0 ? Math.max(340, Math.min(680, width)) : 460,
+    height: 60
   }
 }
 

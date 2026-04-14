@@ -389,20 +389,20 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+  background: rgba(18, 18, 20, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: none;
   display: grid;
-  grid-template-columns: 36px 1fr 36px;
+  grid-template-columns: 32px 1fr 32px;
   align-items: center;
-  gap: 8px;
-  padding: 6px;
+  gap: 6px;
+  padding: 5px 7px;
 }
 
 html.dark .fast-bar {
-  background: rgba(30, 30, 30, 0.98);
-  border-color: rgba(255, 255, 255, 0.12);
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
+  background: rgba(18, 18, 20, 0.96);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
 }
 
 .fast-bar.status-done,
@@ -420,17 +420,17 @@ html.dark .fast-bar {
 }
 
 .icon-btn {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border: none;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: transparent;
-  color: #1f2937;
+  color: #f3f4f6;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 14px;
   transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
 }
 
@@ -485,9 +485,9 @@ html.dark .icon-btn:hover:not(:disabled) {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 14px;
-  color: #1f2937;
+  gap: 8px;
+  font-size: 13px;
+  color: #f3f4f6;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -505,24 +505,24 @@ html.dark .content-text {
 }
 
 .inline-icon {
-  width: 24px;
-  height: 24px;
-  border-radius: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 7px;
   object-fit: cover;
   flex-shrink: 0;
 }
 
 .right-zone {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .stream-spinner {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border: 2px solid rgba(107, 114, 128, 0.2);
   border-top-color: #6b7280;
   border-radius: 50%;

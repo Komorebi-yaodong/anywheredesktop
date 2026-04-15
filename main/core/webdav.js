@@ -362,6 +362,49 @@ export async function readBackup(input = {}) {
   }
 }
 
+
+function resolveRenamedSessionTitleFromFilename(filename = '') {
+  const normalizedFilename = normalizeFileName(filename)
+  return normalizedFilename.toLowerCase().endsWith('.json')
+    ? normalizedFilename.slice(0, -5)
+    : normalizedFilename
+}
+
+async function syncRemoteSessionMetadataTitleAfterMove(client, remoteFilePath, title) {
+  const normalizedTitle = normalizeText(title).trim()
+  if (!normalizedTitle) return false
+
+  try {
+    const content = await client.getFileContents(remoteFilePath, { format: 'text' })
+    const rawText = typeof content === 'string' ? content : normalizeText(content)
+    const sessionData = JSON.parse(rawText)
+    if (!sessionData || sessionData.anywhere_history !== true || typeof sessionData !== 'object') {
+      return false
+    }
+
+    const sessionMetadata =
+      sessionData.sessionMetadata && typeof sessionData.sessionMetadata === 'object'
+        ? sessionData.sessionMetadata
+        : {}
+
+    if (normalizeText(sessionMetadata.title).trim() === normalizedTitle) {
+      return false
+    }
+
+    sessionData.sessionMetadata = {
+      ...sessionMetadata,
+      title: normalizedTitle
+    }
+
+    await client.putFileContents(remoteFilePath, JSON.stringify(sessionData, null, 2), {
+      overwrite: true
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function moveFile(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig)
   const fromFilename = normalizeFileName(input?.fromFilename || input?.filename)
@@ -382,12 +425,19 @@ export async function moveFile(input = {}) {
     throw new Error(toErrorMessage(error, 'webdav_move_failed'))
   }
 
+  const metadataSynced = await syncRemoteSessionMetadataTitleAfterMove(
+    client,
+    toPath,
+    resolveRenamedSessionTitleFromFilename(toFilename)
+  )
+
   return {
     ok: true,
     fromFilename,
     toFilename,
     fromPath,
-    toPath
+    toPath,
+    metadataSynced
   }
 }
 

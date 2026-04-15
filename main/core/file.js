@@ -688,10 +688,64 @@ export async function readLocalFile(filePath, options = {}) {
   return fs.readFile(resolvedPath, { encoding })
 }
 
+
+function resolveRenamedSessionTitleFromPath(filePath = '') {
+  const normalizedBasename = path.basename(String(filePath || '').trim())
+  if (!normalizedBasename) return ''
+  return normalizedBasename.toLowerCase().endsWith('.json')
+    ? normalizedBasename.slice(0, -5)
+    : normalizedBasename
+}
+
+async function syncLocalSessionMetadataTitleAfterRename(filePath, title) {
+  const normalizedTitle = typeof title === 'string' ? title.trim() : ''
+  if (!normalizedTitle) return false
+
+  try {
+    const rawContent = await fs.readFile(filePath, 'utf-8')
+    const sessionData = JSON.parse(rawContent)
+    if (!sessionData || sessionData.anywhere_history !== true || typeof sessionData !== 'object') {
+      return false
+    }
+
+    const sessionMetadata =
+      sessionData.sessionMetadata && typeof sessionData.sessionMetadata === 'object'
+        ? sessionData.sessionMetadata
+        : {}
+
+    if (typeof sessionMetadata.title === 'string' && sessionMetadata.title.trim() === normalizedTitle) {
+      return false
+    }
+
+    sessionData.sessionMetadata = {
+      ...sessionMetadata,
+      title: normalizedTitle
+    }
+
+    await fs.writeFile(filePath, JSON.stringify(sessionData, null, 2), { encoding: 'utf-8' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function renameLocalFile(oldPath, newPath) {
   const sourcePath = path.resolve(String(oldPath || ''))
   const targetPath = path.resolve(String(newPath || ''))
-  return fs.rename(sourcePath, targetPath)
+
+  await fs.rename(sourcePath, targetPath)
+
+  const metadataSynced = await syncLocalSessionMetadataTitleAfterRename(
+    targetPath,
+    resolveRenamedSessionTitleFromPath(targetPath)
+  )
+
+  return {
+    ok: true,
+    oldPath: sourcePath,
+    newPath: targetPath,
+    metadataSynced
+  }
 }
 
 export async function deleteLocalFile(filePath) {

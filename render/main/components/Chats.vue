@@ -633,7 +633,7 @@ async function renameFile(file) {
         return;
     }
 
-    const defaultInputValue = basename.endsWith('.json') ? basename.slice(0, -5) : basename;
+    const defaultInputValue = normalizeTitleValue(file) || (basename.endsWith('.json') ? basename.slice(0, -5) : basename);
     try {
         const { value: userInput } = await ElMessageBox.prompt(t('chats.rename.promptMessage'), t('chats.rename.promptTitle'), { inputValue: defaultInputValue });
         let finalFilename = (userInput || "").trim();

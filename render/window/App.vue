@@ -4084,25 +4084,41 @@ const askAI = async (forceSend = false) => {
   if (!forceSend) {
     isPreparingSend.value = true;
     try {
-      let file_content = await sendFile();
       const promptText = prompt.value.trim();
-      if ((file_content && file_content.length > 0) || promptText) {
-        const userContentList = [];
-        if (promptText) userContentList.push({ type: "text", text: promptText });
-        if (file_content && file_content.length > 0) userContentList.push(...file_content);
-        const userTimestamp = new Date().toLocaleString('sv-SE');
-        if (userContentList.length > 0) {
-          const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
-            ? userContentList[0].text
-            : userContentList;
-          history.value.push({ role: "user", content: contentForHistory });
-          chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
+      const hasPendingFiles = fileList.value.length > 0;
+      const userTimestamp = new Date().toLocaleString('sv-SE');
 
-          autoSaveSession();
-
-        } else return;
-      } else return;
-      prompt.value = "";
+      if (!hasPendingFiles && promptText) {
+        history.value.push({ role: "user", content: promptText });
+        chat_show.value.push({
+          id: messageIdCounter.value++,
+          role: "user",
+          content: [{ type: "text", text: promptText }],
+          timestamp: userTimestamp
+        });
+        autoSaveSession();
+        prompt.value = "";
+      } else {
+        let file_content = await sendFile();
+        if ((file_content && file_content.length > 0) || promptText) {
+          const userContentList = [];
+          if (promptText) userContentList.push({ type: "text", text: promptText });
+          if (file_content && file_content.length > 0) userContentList.push(...file_content);
+          if (userContentList.length > 0) {
+            const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
+              ? userContentList[0].text
+              : userContentList;
+            history.value.push({ role: "user", content: contentForHistory });
+            chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
+            autoSaveSession();
+          } else {
+            return;
+          }
+        } else {
+          return;
+        }
+        prompt.value = "";
+      }
     } finally {
       isPreparingSend.value = false;
     }

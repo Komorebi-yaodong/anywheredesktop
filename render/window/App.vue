@@ -6303,6 +6303,9 @@ html.dark .app-container {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+  --window-nav-raise: 52px;
+  --window-nav-safe-bottom: 156px;
+  --window-nav-height: 46vh;
 }
 
 .chat-main {
@@ -6320,9 +6323,11 @@ html.dark .app-container {
 .unified-nav-sidebar {
   position: absolute;
   right: 10px;
-  top: 50%;
+  top: calc(50% - var(--window-nav-raise));
   transform: translateY(-50%);
-  height: min(62vh, calc(100% - 56px));
+  height: min(var(--window-nav-height), calc(100% - var(--window-nav-safe-bottom)));
+  max-height: calc(100% - var(--window-nav-safe-bottom));
+  min-height: 180px;
   width: 30px;
   z-index: 90;
   display: flex;
@@ -6405,7 +6410,7 @@ html.dark .app-container {
   flex-direction: column;
   align-items: center;
   gap: 7px;
-  padding: calc(50% - 15px) 0;
+  padding: 6px 0;
   scroll-behavior: smooth;
 
   &::-webkit-scrollbar {
@@ -6763,4 +6768,13 @@ html.dark .app-container :deep(.tool-call-details .tool-detail-section pre) {
 html.dark .app-container :deep(.tool-collapse .el-collapse-item__wrap) {
   border-color: rgba(255, 255, 255, 0.08);
 }
+
+@media (max-height: 760px) {
+  .main-area-wrapper {
+    --window-nav-raise: 64px;
+    --window-nav-safe-bottom: 170px;
+    --window-nav-height: 40vh;
+  }
+}
+
 </style>

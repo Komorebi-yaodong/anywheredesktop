@@ -908,6 +908,15 @@ const tempSessionSkillIds = ref([]); // 弹窗内的临时选择状态
 const allSkillsList = ref([]);
 const skillSearchQuery = ref('');
 const skillFilter = ref('all'); // 新增筛选状态
+const expandedSkillDescriptions = ref(new Set());
+
+const toggleSkillDescriptionExpansion = (skillName) => {
+  if (expandedSkillDescriptions.value.has(skillName)) {
+    expandedSkillDescriptions.value.delete(skillName);
+  } else {
+    expandedSkillDescriptions.value.add(skillName);
+  }
+};
 
 const filteredSkillsList = computed(() => {
   let list = allSkillsList.value;
@@ -945,6 +954,7 @@ const toggleSkillDialog = async () => {
     tempSessionSkillIds.value = [...sessionSkillIds.value];
     skillFilter.value = 'all';
     skillSearchQuery.value = '';
+    expandedSkillDescriptions.value = new Set();
 
     if (currentConfig.value?.skillPath || (window.api?.getConfig && (await window.api.getConfig())?.config?.skillPath)) {
       // 重新获取 config 以防路径变更
@@ -5609,10 +5619,10 @@ const scrollToMessageByIndex = (index) => {
           暂无匹配的技能
         </div>
         <div v-else v-for="skill in filteredSkillsList" :key="skill.name" class="mcp-server-item-wrapper">
-          <div class="mcp-server-item" :class="{ 'is-checked': tempSessionSkillIds.includes(skill.name) }"
+          <div class="mcp-server-item skill-dialog-item"
+            :class="{ 'is-checked': tempSessionSkillIds.includes(skill.name), 'is-description-expanded': expandedSkillDescriptions.has(skill.name) }"
             @click="toggleSkillSelection(skill.name)">
 
-            <!-- 单行布局结构 -->
             <div class="skill-single-row">
               <el-checkbox :model-value="tempSessionSkillIds.includes(skill.name)" size="large"
                 @change="() => toggleSkillSelection(skill.name)" @click.stop class="header-checkbox" />
@@ -5624,14 +5634,28 @@ const scrollToMessageByIndex = (index) => {
                 </el-icon>
               </el-avatar>
 
-              <span class="mcp-server-name skill-name-fixed">{{ skill.name }}</span>
+              <div class="skill-summary-block">
+                <div class="skill-summary-line">
+                  <span class="mcp-server-name skill-name-fixed">{{ skill.name }}</span>
+                  <span v-if="skill.description" class="skill-desc-inline"
+                    :class="{ 'is-expanded': expandedSkillDescriptions.has(skill.name) }"
+                    :title="expandedSkillDescriptions.has(skill.name) ? '' : skill.description">
+                    {{ skill.description }}
+                  </span>
+                </div>
+              </div>
 
-              <!-- 描述显示在同一行 -->
-              <span class="skill-desc-inline" :title="skill.description">{{ skill.description }}</span>
+              <div class="mcp-header-right-group skill-header-actions">
+                <el-tooltip :content="expandedSkillDescriptions.has(skill.name) ? '收起描述' : '展开描述'" placement="top">
+                  <div class="mcp-tools-toggle skill-description-toggle"
+                    :class="{ 'is-expanded': expandedSkillDescriptions.has(skill.name) }"
+                    @click.stop="toggleSkillDescriptionExpansion(skill.name)">
+                    <el-icon :class="{ 'is-expanded': expandedSkillDescriptions.has(skill.name) }">
+                      <CaretRight />
+                    </el-icon>
+                  </div>
+                </el-tooltip>
 
-              <!-- 标签靠右 -->
-              <div class="mcp-header-right-group">
-                <!-- Sub-Agent 切换按钮 -->
                 <el-tooltip :content="skill.context === 'fork' ? 'Sub-Agent 模式已开启' : 'Sub-Agent 模式已关闭'" placement="top">
                   <div class="subagent-toggle-btn-small" :class="{ 'is-active': skill.context === 'fork' }"
                     @click.stop="handleSkillForkToggle(skill)">
@@ -6065,6 +6089,86 @@ html.dark .mcp-server-icon {
   text-overflow: ellipsis;
   display: block;
 }
+
+.skill-dialog-item {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.skill-single-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.skill-summary-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-summary-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.skill-name-fixed {
+  flex-shrink: 0;
+  max-width: 180px;
+}
+
+.skill-desc-inline {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  opacity: 0.82;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.45;
+}
+
+.skill-desc-inline.is-expanded {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: unset;
+}
+
+.skill-header-actions {
+  gap: 6px;
+}
+
+.skill-description-toggle {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  justify-content: center;
+}
+
+.skill-description-toggle .el-icon {
+  font-size: 10px;
+}
+
+.skill-dialog-item.is-description-expanded {
+  align-items: stretch;
+}
+
+.skill-dialog-item.is-description-expanded .skill-single-row {
+  align-items: flex-start;
+}
+
+.skill-dialog-item.is-description-expanded .skill-summary-line {
+  align-items: flex-start;
+}
+
 
 .mcp-dialog-footer-search {
   flex-shrink: 0;

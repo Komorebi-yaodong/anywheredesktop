@@ -2328,7 +2328,6 @@ html.dark .icon-action-button {
 
 :deep(.backup-manager-dialog .el-dialog__footer) {
   padding: 0px 20px 12px;
-  background-color: var(--panda-bg);
   border-top: 1px solid var(--panda-border);
 }
 

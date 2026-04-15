@@ -680,12 +680,12 @@ const truncateFilename = (filename, maxLength = 30) => {
 <style scoped lang="less">
 /* 使用与原文件相同的样式 */
 .chat-message {
-  margin: 15px 0 0 0;
+  margin: 18px 0 0 0;
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
-  padding: 0px;
-  --bubble-radius: 12px;
+  padding: 0;
+  --bubble-radius: 22px;
 }
 
 .message-wrapper {
@@ -712,21 +712,21 @@ const truncateFilename = (filename, maxLength = 30) => {
 .message-meta-header {
   display: flex;
   align-items: center;
-  gap: 0px;
-  margin-bottom: 4px;
+  gap: 0;
+  margin-bottom: 8px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
 .user-meta-header {
   flex-direction: row;
-  margin-bottom: 8px;
+  margin-bottom: 9px;
 }
 
 .ai-meta-header {
   flex-direction: row;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 
 .meta-info-column {
@@ -734,7 +734,7 @@ const truncateFilename = (filename, maxLength = 30) => {
   flex-direction: column;
   justify-content: center;
   line-height: 1.2;
-  gap: 0px;
+  gap: 0;
 }
 
 .meta-name-row {
@@ -745,19 +745,20 @@ const truncateFilename = (filename, maxLength = 30) => {
 
 .timestamp-row {
   font-size: 11px;
-  color: var(--el-text-color-primary);
+  color: color-mix(in srgb, var(--el-text-color-primary) 72%, transparent);
   margin-top: 2px;
 }
 
 .chat-avatar-top {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   cursor: pointer;
   object-fit: cover;
-  transition: transform 0.2s;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 8px 20px rgba(89, 69, 38, 0.12);
 
   &:hover {
-    transform: scale(1.1);
+    transform: scale(1.06);
   }
 }
 
@@ -766,9 +767,10 @@ const truncateFilename = (filename, maxLength = 30) => {
 }
 
 .ai-avatar {
-  border-radius: 6px;
+  border-radius: 10px;
   margin-right: 10px;
 }
+
 .ai-name {
   font-weight: 700;
   font-size: 13px;
@@ -781,37 +783,33 @@ const truncateFilename = (filename, maxLength = 30) => {
 .chat-message .user-bubble {
   :deep(.el-bubble-content-wrapper .el-bubble-content) {
     border-radius: var(--bubble-radius);
-    background-color: var(--el-bg-color-userbubble);
-    padding-top: 10px;
-    padding-bottom: 10px;
-    margin-bottom: 0px;
-    padding-right: 14px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.58) 0%, rgba(248, 246, 241, 0.42) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 20px 40px rgba(104, 81, 45, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    backdrop-filter: blur(24px) saturate(165%);
+    -webkit-backdrop-filter: blur(24px) saturate(165%);
+    padding: 12px 16px 11px 16px;
+    margin-bottom: 0;
   }
 
   :deep(.el-bubble-content-wrapper .el-bubble-footer) {
-    margin-top: 0;
-  }
-}
-
-html.dark .chat-message .user-bubble {
-  :deep(.el-bubble-content-wrapper .el-bubble-content) {
-    background: #393939;
-    border: #383838 0px solid;
+    margin-top: 4px;
   }
 }
 
 .chat-message .ai-bubble {
   :deep(.el-bubble-content-wrapper .el-bubble-content) {
-    border-radius: var(--bubble-radius);
-    background-color: transparent;
-    padding-left: 4px;
-    padding-right: 0px;
-    padding-bottom: 2px;
-    padding-top: 4px;
+    border-radius: calc(var(--bubble-radius) + 2px);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0.18) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 22px 44px rgba(104, 81, 45, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(26px) saturate(170%);
+    -webkit-backdrop-filter: blur(26px) saturate(170%);
+    padding: 14px 16px 12px 16px;
   }
 
   :deep(.el-bubble-content-wrapper .el-bubble-footer) {
-    margin-top: 0;
+    margin-top: 4px;
   }
 }
 
@@ -821,9 +819,29 @@ html.dark .chat-message .user-bubble {
   }
 }
 
+html.dark .chat-message {
+  .timestamp-row {
+    color: rgba(221, 225, 235, 0.68);
+  }
+
+  .chat-avatar-top {
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+  }
+}
+
+html.dark .chat-message .user-bubble {
+  :deep(.el-bubble-content-wrapper .el-bubble-content) {
+    background: linear-gradient(180deg, rgba(52, 56, 64, 0.6) 0%, rgba(31, 34, 40, 0.48) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 22px 44px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+}
+
 html.dark .chat-message .ai-bubble {
   :deep(.el-bubble-content-wrapper .el-bubble-content) {
-    background: var(--el-bg-color);
+    background: linear-gradient(180deg, rgba(29, 31, 36, 0.5) 0%, rgba(17, 18, 22, 0.36) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 24px 50px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 }
 

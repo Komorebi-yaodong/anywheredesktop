@@ -9,6 +9,8 @@ const ChatMessage = defineAsyncComponent(() => import('./components/ChatMessage.
 import ChatInput from './components/ChatInput.vue';
 import ModelSelectionDialog from './components/ModelSelectionDialog.vue';
 import defaultAiAvatarUrl from '../../resources/icon.png?asset';
+import defaultUserAvatarUrl from '../../build/user.png?asset';
+
 
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -201,6 +203,29 @@ const showScrollToBottomButton = ref(false);
 const isForcingScroll = ref(false);
 const messageRefs = new Map();
 const focusedMessageIndex = ref(null);
+const navTimelineScrollerRef = ref(null);
+
+const getLastNavigableMessageIndex = () => {
+  for (let i = chat_show.value.length - 1; i >= 0; i--) {
+    if (chat_show.value[i]?.role !== 'system') return i;
+  }
+  return null;
+};
+
+const centerActiveNavNode = async (targetIndex = focusedMessageIndex.value) => {
+  if (targetIndex === null || targetIndex === undefined) return;
+  await nextTick();
+  const scroller = navTimelineScrollerRef.value;
+  if (!scroller) return;
+  const activeNode = scroller.querySelector(`.timeline-node-wrapper[data-original-index="${targetIndex}"]`);
+  if (!activeNode) return;
+  const targetScrollTop = activeNode.offsetTop - (scroller.clientHeight / 2) + (activeNode.offsetHeight / 2);
+  scroller.scrollTo({
+    top: Math.max(0, targetScrollTop),
+    behavior: 'smooth'
+  });
+};
+
 
 // 核心状态：是否粘滞在底部
 const isSticky = ref(true);
@@ -270,7 +295,7 @@ if (isDarkInit) {
 }
 
 const defaultConfig = window.api.defaultConfig;
-const UserAvart = ref("file:///E:/Programming/Anywhere_desktop/resources/user.png");
+const UserAvart = ref(defaultUserAvatarUrl);
 const AIAvart = ref(defaultAiAvatarUrl);
 const favicon = ref(defaultAiAvatarUrl);
 const CODE = ref("");
@@ -1090,10 +1115,11 @@ const forceScrollToBottom = () => {
   isSticky.value = true; // 强制激活粘滞
   isAtBottom.value = true;
   showScrollToBottomButton.value = false;
-  focusedMessageIndex.value = null;
+  focusedMessageIndex.value = getLastNavigableMessageIndex();
 
   // 点击按钮时，为了视觉反馈，可以使用平滑滚动
   scrollToBottom('smooth');
+  centerActiveNavNode(focusedMessageIndex.value);
 
   setTimeout(() => { isForcingScroll.value = false; }, 500);
 };
@@ -1120,6 +1146,7 @@ const findFocusedMessageIndex = () => {
     }
   }
   if (closestIndex !== -1) focusedMessageIndex.value = closestIndex;
+  else if (isSticky.value || isAtBottom.value) focusedMessageIndex.value = getLastNavigableMessageIndex();
 };
 
 // 滚动监听：仅负责更新 isSticky 状态和 UI 按钮显示
@@ -1140,7 +1167,7 @@ const handleScroll = (event) => {
     if (!isSticky.value) isSticky.value = true;
     if (!isAtBottom.value) isAtBottom.value = true;
     showScrollToBottomButton.value = false;
-    focusedMessageIndex.value = null;
+    focusedMessageIndex.value = getLastNavigableMessageIndex();
   } else {
     if (isSticky.value) isSticky.value = false; // 用户主动离开了底部
     if (isAtBottom.value) isAtBottom.value = false;
@@ -1158,8 +1185,10 @@ const navigateToPreviousMessage = () => {
   if (!targetComponent || !container) return;
   const element = targetComponent.$el;
   const scrollDifference = container.scrollTop - element.offsetTop;
-  if (scrollDifference > 5) element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  else if (currentIndex > 0) {
+  if (scrollDifference > 5) {
+    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    centerActiveNavNode(currentIndex);
+  } else if (currentIndex > 0) {
     const newIndex = currentIndex - 1;
     focusedMessageIndex.value = newIndex;
     const previousComponent = getMessageComponentByIndex(newIndex);
@@ -1177,6 +1206,22 @@ const navigateToNextMessage = () => {
     forceScrollToBottom();
   }
 };
+
+watch(focusedMessageIndex, (value) => {
+  if (value === null || value === undefined) return;
+  centerActiveNavNode(value);
+});
+watch(() => navMessages.value.length, () => {
+  if (!navMessages.value.length) {
+    focusedMessageIndex.value = null;
+    return;
+  }
+  if (isSticky.value || isAtBottom.value) {
+    focusedMessageIndex.value = getLastNavigableMessageIndex();
+  }
+});
+
+
 
 const isCollapsed = (index) => collapsedMessages.value.has(index);
 
@@ -5105,6 +5150,7 @@ const scrollToMessageByIndex = (index) => {
   if (component && component.$el && component.$el.nodeType === 1) {
     component.$el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     focusedMessageIndex.value = index;
+    centerActiveNavNode(index);
   }
 };
 </script>
@@ -5168,9 +5214,9 @@ const scrollToMessageByIndex = (index) => {
 
           <div class="nav-timeline-area">
             <div class="timeline-track"></div>
-            <div class="timeline-scroller no-scrollbar">
+            <div ref="navTimelineScrollerRef" class="timeline-scroller no-scrollbar">
               <div v-for="msg in navMessages" :key="msg.id" class="timeline-node-wrapper"
-                @click="scrollToMessageByIndex(msg.originalIndex)">
+                :data-original-index="msg.originalIndex" @click="scrollToMessageByIndex(msg.originalIndex)">
                 <el-tooltip :content="getMessagePreviewText(msg)" placement="left" :show-after="200" :enterable="false"
                   effect="dark">
                   <div class="timeline-node" :class="[
@@ -6228,17 +6274,20 @@ html.dark .mcp-dialog-footer .el-checkbox__input.is-checked .el-checkbox__inner:
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background-color: var(--el-bg-color);
   color: var(--el-text-color-primary);
   font-family: ui-sans-serif, -apple-system, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   box-sizing: border-box;
-  border-radius: 8px;
   position: relative;
   z-index: 1;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 38%),
+    linear-gradient(180deg, rgba(251, 248, 242, 0.96) 0%, rgba(245, 240, 232, 0.94) 100%);
 }
 
 html.dark .app-container {
-  background-color: var(--el-bg-color);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 36%),
+    linear-gradient(180deg, rgba(28, 29, 33, 0.97) 0%, rgba(20, 21, 24, 0.985) 100%);
 }
 
 .main-area-wrapper {
@@ -6247,11 +6296,12 @@ html.dark .app-container {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
 }
 
 .chat-main {
   flex-grow: 1;
-  padding: 0 10px;
+  padding: 8px 18px 0 12px;
   margin: 0;
   overflow-y: auto;
   scroll-behavior: auto !important;
@@ -6263,65 +6313,85 @@ html.dark .app-container {
 
 .unified-nav-sidebar {
   position: absolute;
-  right: 12px;
-  top: 40%;
+  right: 10px;
+  top: 50%;
   transform: translateY(-50%);
-  max-height: 60vh;
-  width: 24px;
+  height: min(62vh, calc(100% - 56px));
+  width: 30px;
   z-index: 90;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   pointer-events: none;
 }
 
-/* 上下控制按钮组 */
 .nav-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   pointer-events: auto;
-  border-radius: 12px;
-  padding: 2px 0;
   flex-shrink: 0;
+  padding: 4px 0;
 }
 
 .nav-mini-btn {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-
-  color: #2c2c2c;
-  background-color: transparent !important;
-  border: none;
-  box-shadow: none;
-
+  color: rgba(46, 41, 34, 0.72);
+  background: rgba(255, 255, 255, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  box-shadow: 0 8px 24px rgba(111, 92, 61, 0.12);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
   transition: all 0.2s ease;
   font-size: 14px;
-  border-radius: 4px;
+  border-radius: 999px;
 
   &:hover {
-    color: #000;
-    background-color: transparent;
-    transform: scale(1.2);
+    color: rgba(28, 25, 22, 0.96);
+    background: rgba(255, 255, 255, 0.46);
+    transform: scale(1.08);
+    box-shadow: 0 12px 30px rgba(111, 92, 61, 0.18);
+  }
+
+  &.highlight-bottom {
+    color: var(--el-color-primary);
+    border-color: rgba(64, 158, 255, 0.28);
+    background: rgba(64, 158, 255, 0.16);
   }
 }
 
-/* 中间时间轴区域 */
 .nav-timeline-area {
   flex: 1;
   position: relative;
   width: 100%;
+  min-height: 0;
   display: flex;
   justify-content: center;
   overflow: hidden;
-  flex-direction: column;
-  min-height: 0;
   pointer-events: auto;
+}
+
+.nav-timeline-area::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.44);
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  box-shadow: 0 10px 24px rgba(111, 92, 61, 0.12);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  pointer-events: none;
 }
 
 .timeline-track {
@@ -6329,12 +6399,10 @@ html.dark .app-container {
   top: 0;
   bottom: 0;
   left: 50%;
-  width: 2px;
-  background-color: var(--el-border-color-lighter);
-  transform: translateX(-1px);
+  width: 1px;
+  background: linear-gradient(180deg, rgba(125, 114, 95, 0) 0%, rgba(125, 114, 95, 0.38) 14%, rgba(125, 114, 95, 0.38) 86%, rgba(125, 114, 95, 0) 100%);
+  transform: translateX(-0.5px);
   z-index: -1;
-  border-radius: 2px;
-  opacity: 0.6;
 }
 
 .timeline-scroller {
@@ -6345,8 +6413,9 @@ html.dark .app-container {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 4px 0;
+  gap: 7px;
+  padding: calc(50% - 15px) 0;
+  scroll-behavior: smooth;
 
   &::-webkit-scrollbar {
     display: none;
@@ -6355,126 +6424,83 @@ html.dark .app-container {
   scrollbar-width: none;
 }
 
-/* 消息节点 */
 .timeline-node-wrapper {
   width: 100%;
-  height: 8px;
-  /* 减小高度，让横线更紧凑 */
+  min-height: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
   position: relative;
-
-  /* 增加悬浮热区高度 */
-  padding: 2px 0;
+  padding: 3px 0;
 
   &:hover .timeline-node {
-    transform: scaleX(1.5) scaleY(1.2);
-    /* 横向拉长效果 */
-  }
-
-  &:hover .node-tooltip {
-    opacity: 1;
-    transform: translateX(0) scale(1);
-    visibility: visible;
+    transform: scaleX(1.35) scaleY(1.15);
+    opacity: 0.9;
   }
 }
 
 .timeline-node {
-  /* 变成短横线 */
   width: 10px;
   height: 3px;
-  border-radius: 2px;
-  /* 微圆角 */
-
-  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  border-radius: 999px;
+  transition: all 0.22s cubic-bezier(0.22, 1, 0.36, 1);
   box-shadow: none;
   border: none;
-  opacity: 0.6;
-  /* 默认半透明，不抢眼 */
+  opacity: 0.42;
 
   &.user {
-    background-color: var(--el-color-primary);
+    background: linear-gradient(90deg, rgba(84, 171, 255, 0.78), rgba(64, 158, 255, 1));
   }
 
   &.assistant {
-    background-color: #000000;
+    background: linear-gradient(90deg, rgba(28, 25, 22, 0.55), rgba(28, 25, 22, 0.88));
   }
 
-  /* 当前聚焦的消息：高亮、变宽、完全不透明 */
   &.active {
     opacity: 1;
-    width: 16px;
-    /* 激活时变长 */
-    box-shadow: 0 0 4px rgba(255, 215, 0, 0.5);
+    width: 18px;
+    height: 5px;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.18), 0 8px 18px rgba(64, 158, 255, 0.28);
   }
-}
-
-/* 悬浮提示框 (Tooltip) */
-.node-tooltip {
-  position: absolute;
-  right: 28px;
-  /* 点的左侧 */
-  top: 50%;
-  transform: translateY(-50%) translateX(10px) scale(0.9);
-  background-color: var(--el-color-black);
-  color: #fff;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1.2;
-  white-space: nowrap;
-  opacity: 0;
-  visibility: hidden;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  z-index: 100;
 }
 
 html.dark {
   .nav-mini-btn {
-    background-color: #2c2c2c;
-    border-color: #4c4c4c;
-    color: #a3a6ad;
+    color: rgba(235, 236, 240, 0.75);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.26);
 
     &:hover {
-      background-color: transparent;
-      color: #fff;
+      color: rgba(255, 255, 255, 0.96);
+      background: rgba(255, 255, 255, 0.16);
+      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
     }
 
     &.highlight-bottom {
-      background-color: rgba(64, 158, 255, 0.2);
-      color: #409eff;
-      border-color: #409eff;
+      border-color: rgba(64, 158, 255, 0.38);
+      background: rgba(64, 158, 255, 0.22);
     }
   }
 
-  /* 强制区分颜色 */
-  .timeline-node.user {
-    background-color: #409eff;
-    /* 用户：强制蓝色 */
-    border-color: #409eff;
-  }
-
-  .timeline-node.assistant {
-    background-color: #ffffff;
-    /* AI：强制纯白 */
-    border-color: #ffffff;
+  .nav-timeline-area::before {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
   }
 
   .timeline-track {
-    background-color: #4c4c4c;
+    background: linear-gradient(180deg, rgba(140, 149, 168, 0) 0%, rgba(140, 149, 168, 0.34) 14%, rgba(140, 149, 168, 0.34) 86%, rgba(140, 149, 168, 0) 100%);
   }
 
-  .node-tooltip {
-    background-color: #E5EAF3;
-    color: #000;
+  .timeline-node.assistant {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.95));
+  }
+
+  .timeline-node.active {
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08), 0 8px 20px rgba(64, 158, 255, 0.3);
   }
 }
 
@@ -6489,23 +6515,24 @@ html.dark {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--el-text-color-disabled, #c0c4cc);
-  border-radius: 4px;
+  background: rgba(154, 145, 129, 0.45);
+  border-radius: 999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--el-text-color-secondary, #909399);
+  background: rgba(118, 110, 96, 0.68);
+  background-clip: content-box;
 }
 
 html.dark .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #6b6b6b;
+  background: rgba(138, 142, 156, 0.52);
   background-clip: content-box;
 }
 
 html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #999;
+  background: rgba(168, 173, 190, 0.72);
   background-clip: content-box;
 }
 
@@ -6536,19 +6563,21 @@ html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   align-items: center;
   gap: 8px;
   padding: 10px 15px;
-  border: 1px dashed var(--el-border-color);
-  border-radius: 8px;
-  background-color: var(--el-fill-color-light);
+  border: 1px dashed rgba(154, 145, 129, 0.42);
+  border-radius: 14px;
+  background-color: rgba(255, 255, 255, 0.48);
   color: var(--el-text-color-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 14px;
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
 }
 
 :deep(.image-error-container:hover) {
-  border-color: var(--el-color-primary);
+  border-color: rgba(64, 158, 255, 0.42);
   color: var(--el-color-primary);
-  background-color: var(--el-color-primary-light-9);
+  background-color: rgba(255, 255, 255, 0.62);
 }
 
 :deep(.image-error-container svg) {
@@ -6582,460 +6611,175 @@ html.dark .persistent-btn:hover {
 
 .window-bg-base {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
+  inset: 0;
   z-index: 0;
-  background-color: var(--el-bg-color);
-  transition: background-color 0.3s ease;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0) 32%),
+    linear-gradient(180deg, rgba(251, 248, 242, 0.97) 0%, rgba(245, 240, 232, 0.95) 100%);
+  transition: background 0.3s ease;
   pointer-events: none;
-  will-change: background-color;
+  will-change: background;
 }
 
 .window-bg-layer {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
+  inset: 0;
   z-index: 0;
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
   pointer-events: none;
   will-change: transform, opacity;
-  transform: translateZ(0);
-
-  /* 核心优化：默认透明，且具有过渡效果 */
+  transform: translateZ(0) scale(1.03);
   opacity: 0;
-  transition: opacity 0.18s ease-out, filter 0.2s ease;
+  transition: opacity 0.2s ease-out, filter 0.24s ease, transform 0.35s ease;
+}
+
+.window-bg-layer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(248, 244, 235, 0.24) 0%, rgba(248, 244, 235, 0.34) 100%),
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 44%);
+}
+
+html.dark .window-bg-base {
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 30%),
+    linear-gradient(180deg, rgba(27, 28, 32, 0.98) 0%, rgba(19, 20, 23, 0.99) 100%);
+}
+
+html.dark .window-bg-layer::after {
+  background:
+    linear-gradient(180deg, rgba(15, 16, 20, 0.4) 0%, rgba(15, 16, 20, 0.58) 100%),
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 44%);
 }
 
 .app-container.has-bg,
 html.dark .app-container.has-bg,
 body .app-container.has-bg {
-  background-color: transparent !important;
-  background: none !important;
+  background: transparent !important;
 }
 
-.app-container.has-bg :deep(.title-bar),
-.app-container.has-bg :deep(.model-header),
-.app-container.has-bg :deep(.input-footer) {
-  background-color: transparent !important;
+.app-container :deep(.title-bar),
+.app-container :deep(.model-header),
+.app-container :deep(.input-footer) {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
-.app-container.has-bg :deep(.chat-input-area-vertical) {
-  background-color: rgba(255, 255, 255, 0.45) !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+.app-container :deep(.chat-input-area-vertical) {
+  background: rgba(255, 255, 255, 0.18) !important;
+  border: 1px solid rgba(255, 255, 255, 0.32) !important;
+  box-shadow: 0 18px 40px rgba(99, 80, 52, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.34);
+  backdrop-filter: blur(26px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(26px) saturate(160%) !important;
 }
 
-.app-container.has-bg :deep(.chat-input-area-vertical .el-textarea__inner) {
-  background-color: transparent !important;
+html.dark .app-container :deep(.chat-input-area-vertical) {
+  background: rgba(19, 20, 24, 0.34) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-html.dark .app-container.has-bg :deep(.chat-input-area-vertical) {
-  background-color: rgba(30, 30, 30, 0.45) !important;
+.app-container :deep(.el-dialog),
+.app-container :deep(.el-message-box),
+.app-container :deep(.option-selector-wrapper),
+.app-container :deep(.waveform-display-area),
+.app-container :deep(.mcp-quick-select) {
+  background: rgba(255, 255, 255, 0.68) !important;
+  border: 1px solid rgba(255, 255, 255, 0.4) !important;
+  box-shadow: 0 20px 44px rgba(99, 80, 52, 0.14) !important;
+  backdrop-filter: blur(24px) saturate(155%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(155%) !important;
 }
 
-html.dark .app-container.has-bg :deep(.title-bar) {
-
-  /* 强制功能按钮（Pin, Top）和 Mac红绿灯图标变亮 */
-  .func-btn,
-  .traffic-icon {
-    color: rgba(255, 255, 255, 0.9) !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-    /* 增加文字阴影提高对比度 */
-  }
-
-  .func-btn:hover {
-    background-color: rgba(255, 255, 255, 0.15);
-  }
-
-  /* 强制 Windows/Linux 窗口控制按钮变亮 */
-  .win-btn,
-  .linux-btn {
-    color: rgba(255, 255, 255, 0.9) !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-  }
-
-  .win-btn:hover,
-  .linux-btn:hover {
-    background-color: rgba(255, 255, 255, 0.15);
-  }
-
-  /* Windows 关闭按钮悬浮仍保持红色 */
-  .win-btn.close:hover {
-    background-color: #E81123 !important;
-    color: white !important;
-  }
-
-  /* Linux 关闭按钮悬浮仍保持红色 */
-  .linux-btn.close:hover {
-    background-color: #E95420 !important;
-    color: white !important;
-  }
-
-  /* 标题和文字颜色增强 */
-  .app-title,
-  .conversation-title,
-  .download-icon {
-    color: rgba(255, 255, 255, 0.95);
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-  }
-
-  .app-info-inner:hover,
-  .conversation-inner:hover {
-    background-color: rgba(255, 255, 255, 0.15);
-  }
-
-  .divider-vertical {
-    background-color: rgba(255, 255, 255, 0.3);
-  }
+html.dark .app-container :deep(.el-dialog),
+html.dark .app-container :deep(.el-message-box),
+html.dark .app-container :deep(.option-selector-wrapper),
+html.dark .app-container :deep(.waveform-display-area),
+html.dark .app-container :deep(.mcp-quick-select) {
+  background: rgba(20, 21, 25, 0.72) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 24px 54px rgba(0, 0, 0, 0.34) !important;
 }
 
-.app-container.has-bg :deep(.el-dialog),
-.app-container.has-bg :deep(.el-message-box) {
-  background-color: rgba(255, 255, 255, 0.9) !important;
-  backdrop-filter: none !important;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
-}
-
-.app-container.has-bg :deep(.el-dialog__header),
-.app-container.has-bg :deep(.el-dialog__body),
-.app-container.has-bg :deep(.el-dialog__footer),
-.app-container.has-bg :deep(.el-message-box__header),
-.app-container.has-bg :deep(.el-message-box__content),
-.app-container.has-bg :deep(.el-message-box__btns) {
+.app-container :deep(.el-dialog__header),
+.app-container :deep(.el-dialog__body),
+.app-container :deep(.el-dialog__footer),
+.app-container :deep(.el-message-box__header),
+.app-container :deep(.el-message-box__content),
+.app-container :deep(.el-message-box__btns),
+.app-container :deep(.option-selector-wrapper .el-scrollbar__view) {
   background-color: transparent !important;
 }
 
-html.dark .app-container.has-bg :deep(.el-dialog),
-html.dark .app-container.has-bg :deep(.el-message-box) {
-  background-color: rgba(40, 40, 40, 0.9) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+.app-container :deep(.el-dialog .el-textarea__inner),
+.app-container :deep(.el-dialog .el-input__wrapper) {
+  background-color: rgba(255, 255, 255, 0.36) !important;
+  backdrop-filter: blur(16px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(150%) !important;
 }
 
-/* 弹窗内输入框 */
-.app-container.has-bg :deep(.el-dialog .el-textarea__inner),
-.app-container.has-bg :deep(.el-dialog .el-input__wrapper) {
-  background-color: rgba(240, 240, 240, 0.45) !important;
-  backdrop-filter: none !important;
+html.dark .app-container :deep(.el-dialog .el-textarea__inner),
+html.dark .app-container :deep(.el-dialog .el-input__wrapper) {
+  background-color: rgba(0, 0, 0, 0.28) !important;
 }
 
-html.dark .app-container.has-bg :deep(.el-dialog .el-textarea__inner),
-html.dark .app-container.has-bg :deep(.el-dialog .el-input__wrapper) {
-  background-color: rgba(20, 20, 20, 0.45) !important;
+.app-container :deep(.recording-status-text) {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.7);
 }
 
-.app-container.has-bg :deep(.option-selector-wrapper),
-.app-container.has-bg :deep(.waveform-display-area) {
-  background-color: rgba(255, 255, 255, 0.45) !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+html.dark .app-container :deep(.recording-status-text) {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
 }
 
-html.dark .app-container.has-bg :deep(.option-selector-wrapper),
-html.dark .app-container.has-bg :deep(.waveform-display-area) {
-  background-color: rgba(30, 30, 30, 0.45) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+.app-container :deep(.model-pill) {
+  background-color: rgba(255, 255, 255, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  backdrop-filter: blur(14px) saturate(145%);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
 }
 
-.app-container.has-bg :deep(.option-selector-wrapper .el-scrollbar__view) {
-  /* 确保滚动内容区域背景透明，继承父级 */
-  background-color: transparent !important;
+.app-container :deep(.model-pill:hover) {
+  background-color: rgba(255, 255, 255, 0.68);
 }
 
-.app-container.has-bg :deep(.recording-status-text) {
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+html.dark .app-container :deep(.model-pill) {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
-html.dark .app-container.has-bg :deep(.recording-status-text) {
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+html.dark .app-container :deep(.model-pill:hover) {
+  background-color: rgba(255, 255, 255, 0.14);
 }
 
-/* 模型选择药丸 */
-.app-container.has-bg :deep(.model-pill) {
-  background-color: rgba(255, 255, 255, 0.6);
-  backdrop-filter: none !important;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+.app-container :deep(.footer-actions .el-button.is-circle),
+.app-container :deep(.el-thinking .trigger),
+.app-container :deep(.tool-collapse .el-collapse-item__header),
+.app-container :deep(.tool-call-details .tool-detail-section pre) {
+  background-color: rgba(255, 255, 255, 0.42) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  backdrop-filter: blur(16px) saturate(145%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(145%) !important;
 }
 
-.app-container.has-bg :deep(.model-pill:hover) {
-  background-color: #fff;
-}
-
-html.dark .app-container.has-bg :deep(.model-pill) {
-  background-color: rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-html.dark .app-container.has-bg :deep(.model-pill:hover) {
-  background-color: rgba(0, 0, 0, 0.7);
-}
-
-.app-container.has-bg :deep(.user-bubble .el-bubble-content) {
-  background-color: rgba(245, 244, 237, 0.7) !important;
-  /* 用户指定 */
-  backdrop-filter: none !important;
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-/* AI 气泡 */
-.app-container.has-bg :deep(.ai-bubble .el-bubble-content) {
-  background-color: rgba(255, 255, 255, 0.45) !important;
-  /* 用户指定 */
-  backdrop-filter: none !important;
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  /* 用户指定 Padding */
-  padding: 10px !important;
-}
-
-/* 深色模式气泡 */
-html.dark .app-container.has-bg :deep(.user-bubble .el-bubble-content) {
-  background-color: rgba(47, 47, 47, 0.7) !important;
-  border-color: rgba(255, 255, 255, 0.1);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-}
-
-html.dark .app-container.has-bg :deep(.ai-bubble .el-bubble-content) {
-  background-color: rgba(33, 33, 33, 0.45) !important;
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-/* 功能按钮 */
-.app-container.has-bg :deep(.footer-actions .el-button.is-circle) {
-  background-color: rgba(255, 255, 255, 0.6);
-  backdrop-filter: none !important;
-}
-
-.app-container.has-bg :deep(.footer-actions .el-button.is-circle:hover) {
-  background-color: #fff;
-}
-
-html.dark .app-container.has-bg :deep(.footer-actions .el-button.is-circle) {
-  background-color: rgba(0, 0, 0, 0.5);
-  color: #e0e0e0;
-}
-
-html.dark .app-container.has-bg :deep(.footer-actions .el-button.is-circle:hover) {
-  background-color: rgba(60, 60, 60, 1);
-}
-
-/* 思考模式 */
-.app-container.has-bg :deep(.el-thinking .trigger) {
-  background-color: rgba(255, 255, 255, 0.7) !important;
-  backdrop-filter: none !important;
-}
-
-.app-container.has-bg :deep(.el-thinking .content pre) {
-  background-color: rgba(255, 255, 255, 0.3) !important;
-}
-
-html.dark .app-container.has-bg :deep(.el-thinking .trigger) {
-  background-color: rgba(44, 46, 51, 0.7) !important;
-}
-
-html.dark .app-container.has-bg :deep(.el-thinking .content pre) {
+html.dark .app-container :deep(.footer-actions .el-button.is-circle),
+html.dark .app-container :deep(.el-thinking .trigger),
+html.dark .app-container :deep(.tool-collapse .el-collapse-item__header),
+html.dark .app-container :deep(.tool-call-details .tool-detail-section pre) {
   background-color: rgba(0, 0, 0, 0.3) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
 }
 
-.app-container.has-bg :deep(.tool-collapse .el-collapse-item__header) {
-  background-color: rgba(255, 255, 255, 0.45) !important;
-  backdrop-filter: none !important;
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
-.app-container.has-bg :deep(.tool-collapse .el-collapse-item__wrap) {
+.app-container :deep(.tool-collapse .el-collapse-item__wrap) {
   background-color: transparent !important;
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.14);
 }
 
-.app-container.has-bg :deep(.tool-call-details .tool-detail-section pre) {
-  background-color: rgba(255, 255, 255, 0.7) !important;
-}
-
-html.dark .app-container.has-bg :deep(.tool-collapse .el-collapse-item__header) {
-  background-color: rgba(0, 0, 0, 0.7) !important;
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-html.dark .app-container.has-bg :deep(.tool-collapse .el-collapse-item__wrap) {
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-html.dark .app-container.has-bg :deep(.tool-call-details .tool-detail-section pre) {
-  background-color: rgba(0, 0, 0, 0.5) !important;
-  border-color: rgba(255, 255, 255, 0.05);
-}
-
-.skill-single-row {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  gap: 8px;
-  padding: 4px 10px 0px 0px;
-}
-
-.skill-name-fixed {
-  flex-shrink: 0;
-  font-weight: 600;
-  max-width: 200px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.skill-desc-inline {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  /* 自动占据中间剩余空间 */
-  min-width: 0;
-  opacity: 0.8;
-  margin-top: 1px;
-}
-
-.subagent-toggle-btn-small {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: var(--el-text-color-secondary);
-  transition: all 0.2s;
-  background-color: transparent;
-  margin-left: 8px;
-}
-
-.subagent-toggle-btn-small:hover {
-  background-color: var(--el-fill-color-dark);
-  color: var(--el-text-color-primary);
-}
-
-.subagent-toggle-btn-small.is-active {
-  color: #E6A23C;
-  background-color: rgba(230, 162, 60, 0.15);
-}
-
-/* 确保深色模式下样式正常 */
-html.dark .subagent-toggle-btn-small:hover {
-  background-color: rgba(255, 255, 255, 0.1);
-}
-
-.bw-btn.el-button--primary {
-  /* 浅色下变黑底，深色下变白底 */
-  background-color: var(--el-text-color-primary) !important;
-  border-color: var(--el-text-color-primary) !important;
-  /* 浅色下变白字，深色下变黑字 */
-  color: var(--el-bg-color) !important;
-  font-weight: 600;
-  transition: opacity 0.2s, transform 0.1s;
-}
-
-.bw-btn.el-button--primary:hover {
-  opacity: 0.85;
-}
-
-.bw-btn.el-button--primary:active {
-  transform: scale(0.96);
-}
-
-.bw-checkbox :deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
-  background-color: var(--el-text-color-primary) !important;
-  border-color: var(--el-text-color-primary) !important;
-}
-
-.bw-checkbox :deep(.el-checkbox__input.is-checked .el-checkbox__inner::after) {
-  border-color: var(--el-bg-color) !important;
-}
-
-.bw-checkbox :deep(.el-checkbox__input.is-checked + .el-checkbox__label) {
-  color: var(--el-text-color-primary) !important;
-  font-weight: 600;
-}
-
-.bw-checkbox :deep(.el-checkbox__inner:hover) {
-  border-color: var(--el-text-color-primary) !important;
-}
-
-.mcp-server-item-wrapper:has(.mcp-server-item.is-checked) {
-  border-color: var(--el-text-color-primary) !important;
-  /* 黑/白边框 */
-  background-color: var(--el-fill-color-light) !important;
-  /* 浅灰背景 */
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  /* 轻微浮起感 */
-}
-
-.mcp-server-item-wrapper:hover {
-  border-color: var(--el-text-color-primary) !important;
-  background-color: var(--el-fill-color) !important;
-}
-
-.mcp-server-item.is-checked {
-  background-color: transparent !important;
-  /* 让位给外层容器 */
-}
-
-.mcp-server-item :deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
-  background-color: var(--el-text-color-primary) !important;
-  border-color: var(--el-text-color-primary) !important;
-}
-
-.mcp-server-item :deep(.el-checkbox__input.is-checked .el-checkbox__inner::after) {
-  border-color: var(--el-bg-color) !important;
-}
-
-.mcp-server-item .el-tag {
-  background-color: transparent !important;
-  border-color: var(--el-border-color-darker) !important;
-  color: var(--el-text-color-secondary) !important;
-  transition: all 0.2s;
-}
-
-.mcp-server-item :deep(.el-checkbox__input.is-focus .el-checkbox__inner),
-.mcp-server-item :deep(.el-checkbox__inner:hover) {
-  border-color: var(--el-text-color-primary) !important;
-}
-
-.mcp-server-item :deep(.el-checkbox__input.is-indeterminate .el-checkbox__inner) {
-  background-color: var(--el-text-color-primary) !important;
-  border-color: var(--el-text-color-primary) !important;
-}
-
-.mcp-server-item :deep(.el-checkbox__input.is-indeterminate .el-checkbox__inner::before) {
-  background-color: var(--el-bg-color) !important;
-}
-
-.mcp-server-item.is-checked .el-tag,
-.mcp-server-item-wrapper:hover .el-tag {
-  border-color: var(--el-text-color-primary) !important;
-  color: var(--el-text-color-primary) !important;
-  font-weight: 500;
-}
-
-.mcp-server-item .el-tag.type-tag {
-  background-color: var(--el-fill-color) !important;
-}
-
-html.dark .mcp-server-item-wrapper:has(.mcp-server-item.is-checked) {
-  background-color: rgba(255, 255, 255, 0.05) !important;
-  box-shadow: none;
-}
-
-html.dark .mcp-server-item .el-tag {
-  border-color: #4C4D4F !important;
+html.dark .app-container :deep(.tool-collapse .el-collapse-item__wrap) {
+  border-color: rgba(255, 255, 255, 0.08);
 }
 </style>

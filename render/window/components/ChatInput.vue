@@ -1453,17 +1453,20 @@ html.dark .el-divider--vertical {
 .chat-input-area-vertical {
     display: flex;
     flex-direction: column;
-    background-color: var(--el-bg-color-input);
-    border-radius: 12px;
-    padding: 10px 12px;
-    border: 1px solid #E4E7ED;
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 24px;
+    padding: 12px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.34);
     position: relative;
-    /* 确保绝对定位的 mcp 列表相对此定位 */
+    box-shadow: 0 22px 44px rgba(101, 80, 50, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.34);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
 }
 
 html.dark .chat-input-area-vertical {
-    background-color: var(--el-bg-color-input);
-    border: 1px solid #414243;
+    background: rgba(18, 20, 24, 0.34);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .chat-textarea-vertical {
@@ -1478,7 +1481,7 @@ html.dark .chat-input-area-vertical {
     padding: 0;
     color: var(--el-text-color-primary);
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.6;
     resize: none;
 }
 
@@ -1486,7 +1489,7 @@ html.dark .chat-input-area-vertical {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 8px;
+    margin-top: 10px;
     flex-shrink: 0;
 }
 
@@ -1504,22 +1507,28 @@ html.dark .chat-input-area-vertical {
 }
 
 .chat-input-area-vertical .action-buttons-left {
-    margin-left: 0px;
+    margin-left: 0;
 }
 
 .chat-input-area-vertical .action-buttons-right {
-    margin-right: 0px;
+    margin-right: 0;
 }
 
 .chat-input-area-vertical .el-button {
     width: 32px;
     height: 32px;
-    background: none;
+    background: transparent;
     border: none;
+    border-radius: 999px;
+    transition: all 0.2s ease;
 }
 
 .chat-input-area-vertical .el-button:hover {
-    background-color: rgba(0, 0, 0, 0.05);
+    background-color: rgba(255, 255, 255, 0.26);
+}
+
+html.dark .chat-input-area-vertical .el-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
 }
 
 .chat-input-area-vertical .action-buttons-left .el-button.is-active-special {
@@ -1528,7 +1537,7 @@ html.dark .chat-input-area-vertical {
 
 .chat-input-area-vertical .action-buttons-left .el-button:hover {
     color: var(--text-on-accent);
-    background-color: var(--el-color-primary-light-8);
+    background-color: rgba(64, 158, 255, 0.18);
 }
 
 .chat-input-area-vertical .action-buttons-right .el-button:hover {

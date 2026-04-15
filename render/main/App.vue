@@ -642,29 +642,93 @@ watch(locale, () => {
 <style scoped>
 .common-layout,
 .el-container {
+  position: relative;
   width: 100%;
   height: 100%;
-  padding: 0;
+  padding: 18px;
   margin: 0;
   overflow: hidden;
-  background-color: var(--bg-primary);
   display: flex;
   flex-direction: column;
+  background:
+    radial-gradient(circle at 12% 14%, rgba(255, 255, 255, 0.98) 0, rgba(255, 255, 255, 0) 32%),
+    radial-gradient(circle at 88% 84%, rgba(24, 24, 27, 0.08) 0, rgba(24, 24, 27, 0) 30%),
+    linear-gradient(180deg, rgba(250, 250, 250, 0.92) 0%, rgba(244, 244, 245, 0.98) 100%);
+}
+
+.common-layout::before,
+.common-layout::after {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+  filter: blur(18px);
+  opacity: 0.9;
+}
+
+.common-layout::before {
+  width: 280px;
+  height: 280px;
+  top: -110px;
+  left: -90px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.9) 0%, rgba(228, 228, 231, 0.1) 70%, rgba(228, 228, 231, 0) 100%);
+}
+
+.common-layout::after {
+  width: 360px;
+  height: 360px;
+  right: -140px;
+  bottom: -170px;
+  background: radial-gradient(circle, rgba(39, 39, 42, 0.1) 0%, rgba(39, 39, 42, 0.04) 45%, rgba(39, 39, 42, 0) 100%);
+}
+
+html.dark .common-layout,
+html.dark .el-container {
+  background:
+    radial-gradient(circle at 12% 14%, rgba(255, 255, 255, 0.04) 0, rgba(255, 255, 255, 0) 30%),
+    radial-gradient(circle at 88% 84%, rgba(255, 255, 255, 0.05) 0, rgba(255, 255, 255, 0) 24%),
+    linear-gradient(180deg, rgba(9, 9, 11, 0.98) 0%, rgba(24, 24, 27, 0.98) 100%);
+}
+
+html.dark .common-layout::before {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0) 72%);
+}
+
+html.dark .common-layout::after {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0) 70%);
 }
 
 .el-header {
-  padding: 0px 20px 0px 0px;
-  height: 50px;
+  position: relative;
+  height: 68px;
+  padding: 0 18px;
+  margin-bottom: 14px;
   display: flex;
   align-items: center;
-  background-color: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-primary);
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow: 0 16px 40px -28px rgba(24, 24, 27, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
   flex-shrink: 0;
   z-index: 10;
 }
 
+html.dark .el-header {
+  border-color: rgba(82, 82, 91, 0.45);
+  background: rgba(24, 24, 27, 0.72);
+  box-shadow: 0 20px 50px -28px rgba(0, 0, 0, 0.78), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
 .header-row {
   width: 100%;
+}
+
+.left-actions-col {
+  display: flex;
+  align-items: center;
+  padding-left: 0;
 }
 
 .header-title-col {
@@ -674,10 +738,11 @@ watch(locale, () => {
 }
 
 .header-title-text {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: 0.5px;
+  letter-spacing: -0.03em;
+  line-height: 1;
   transition: color 0.3s ease;
 }
 
@@ -687,75 +752,132 @@ watch(locale, () => {
 }
 
 .tabs-container {
-  display: flex;
-  gap: 0px;
-  background-color: var(--bg-tertiary);
-  padding: 4px;
-  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 999px;
+  background: rgba(244, 244, 245, 0.78);
+  border: 1px solid rgba(228, 228, 231, 0.8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+html.dark .tabs-container {
+  background: rgba(39, 39, 42, 0.78);
+  border-color: rgba(82, 82, 91, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .tab-button {
-  padding: 8px;
+  padding: 0;
   border: none;
   background-color: transparent;
   color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  transition: background-color 0.2s, color 0.2s;
-  height: 32px;
-  width: 32px;
+  border-radius: 999px;
+  transition: transform 0.22s ease, background-color 0.22s ease, color 0.22s ease, box-shadow 0.22s ease;
+  height: 40px;
+  width: 40px;
+}
+
+.tab-button :deep(.el-icon),
+.tab-button svg {
+  transition: transform 0.22s ease;
 }
 
 .tab-button:hover {
-  background-color: var(--bg-secondary);
+  transform: translateY(-1px);
+  background-color: rgba(255, 255, 255, 0.82);
   color: var(--text-primary);
+  box-shadow: 0 10px 18px -14px rgba(24, 24, 27, 0.35);
+}
+
+html.dark .tab-button:hover {
+  background-color: rgba(63, 63, 70, 0.9);
+}
+
+.tab-button:hover svg,
+.tab-button:hover :deep(.el-icon) {
+  transform: scale(1.04);
 }
 
 .active-tab {
-  background-color: var(--bg-secondary);
-  color: var(--text-accent);
-  box-shadow: var(--shadow-sm);
+  background: var(--bg-accent);
+  color: var(--text-on-accent);
+  box-shadow: 0 14px 24px -18px rgba(24, 24, 27, 0.6);
+}
+
+.active-tab:hover {
+  color: var(--text-on-accent);
+  background: var(--bg-accent-light);
 }
 
 .el-main {
-  padding: 0;
+  position: relative;
+  padding: 16px;
   flex-grow: 1;
-  overflow-y: auto;
-  background-color: var(--bg-primary);
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  border-radius: 30px;
+  box-shadow: 0 28px 60px -38px rgba(24, 24, 27, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+}
+
+.el-main::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+html.dark .el-main {
+  background: rgba(18, 18, 20, 0.78);
+  border-color: rgba(63, 63, 70, 0.58);
+  box-shadow: 0 28px 60px -34px rgba(0, 0, 0, 0.82), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .blank-col {
   min-width: 32px;
 }
 
-.left-actions-col {
-  display: flex;
-  align-items: center;
-  padding-left: 20px;
-}
-
-/* 修复双重 Border 问题：移除上边框，仅保留其他三边 */
 .doc-container {
   display: flex;
   height: 60vh;
   border: 1px solid var(--border-primary);
-  border-top: none;
-  /* 关键修复 */
-  border-bottom-left-radius: 4px;
-  border-bottom-right-radius: 4px;
+  border-radius: 20px;
   overflow: hidden;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
-/* 铃铛徽章样式微调 */
+html.dark .doc-container {
+  background: rgba(24, 24, 27, 0.74);
+}
+
 .bell-badge :deep(.el-badge__content.is-fixed.is-dot) {
-  right: 2px;
-  top: 2px;
+  right: 3px;
+  top: 3px;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.92);
+}
+
+html.dark .bell-badge :deep(.el-badge__content.is-fixed.is-dot) {
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.92);
 }
 
 .doc-sidebar {
-  width: 150px;
+  width: 180px;
   border-right: 1px solid var(--border-primary);
-  background-color: var(--bg-secondary);
+  background: rgba(250, 250, 250, 0.88);
   flex-shrink: 0;
+  padding: 10px;
+}
+
+html.dark .doc-sidebar {
+  background: rgba(9, 9, 11, 0.5);
 }
 
 .doc-menu {
@@ -764,24 +886,28 @@ watch(locale, () => {
 }
 
 .doc-menu :deep(.el-menu-item) {
-  height: 40px;
-  line-height: 40px;
+  height: 42px;
+  line-height: 42px;
   color: var(--text-secondary);
   font-size: 14px;
+  border-radius: 12px;
+  margin-bottom: 4px;
 }
 
 .doc-menu :deep(.el-menu-item:hover) {
-  background-color: var(--bg-tertiary);
+  background-color: rgba(244, 244, 245, 0.95);
+}
+
+html.dark .doc-menu :deep(.el-menu-item:hover) {
+  background-color: rgba(39, 39, 42, 0.92);
 }
 
 .doc-menu :deep(.el-menu-item.is-active) {
-  color: var(--text-accent);
-  background-color: var(--bg-tertiary);
+  color: var(--text-on-accent);
+  background-color: var(--bg-accent);
   font-weight: 600;
-  border-right: 2px solid var(--text-accent);
 }
 
-/* 侧边栏菜单项布局：文字与红点分离 */
 .menu-item-text {
   display: flex;
   align-items: center;
@@ -789,7 +915,6 @@ watch(locale, () => {
   width: 100%;
 }
 
-/* 文档更新红点样式 */
 .doc-update-dot {
   width: 6px;
   height: 6px;
@@ -801,35 +926,29 @@ watch(locale, () => {
 
 .doc-content {
   flex: 1;
-  background-color: var(--bg-primary);
+  background-color: transparent;
   padding: 0;
   overflow: hidden;
 }
 
 .markdown-body {
-  padding: 0px 40px;
+  padding: 18px 34px 28px;
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
   font-size: 15px;
-  /* 稍微调大字号更易阅读 */
-  line-height: 1.75;
-  /* 增加行高，增加呼吸感 */
+  line-height: 1.8;
   -webkit-font-smoothing: antialiased;
-  /* 让字体在 Mac 上更清晰 */
 }
 
-/* 标题样式优化 */
 .markdown-body :deep(h1),
 .markdown-body :deep(h2) {
   border-bottom: 1px solid var(--border-primary);
-  padding-bottom: 0.4em;
+  padding-bottom: 0.42em;
   margin-top: 1.5em;
   margin-bottom: 1em;
   color: var(--text-primary);
   font-weight: 700;
-  /* 强制加粗 */
-  letter-spacing: -0.01em;
-  /* 标题字间距微调 */
+  letter-spacing: -0.02em;
   line-height: 1.3;
 }
 
@@ -839,18 +958,14 @@ watch(locale, () => {
   margin-bottom: 0.8em;
   color: var(--text-primary);
   font-weight: 600;
-  /* 强制加粗 */
   line-height: 1.4;
 }
 
-/* 正文段落 */
 .markdown-body :deep(p) {
-  margin-bottom: 1.2em;
+  margin-bottom: 1.15em;
   text-align: justify;
-  /* 两端对齐，使大段文字更整齐 */
 }
 
-/* 列表优化 */
 .markdown-body :deep(ul),
 .markdown-body :deep(ol) {
   padding-left: 24px;
@@ -859,34 +974,28 @@ watch(locale, () => {
 
 .markdown-body :deep(li) {
   margin-bottom: 0.4em;
-  /* 列表项之间增加一点间距 */
 }
 
-/* 粗体优化 */
 .markdown-body :deep(strong),
 .markdown-body :deep(b) {
   font-weight: 700;
   color: var(--text-primary);
 }
 
-/* 行内代码块优化 */
 .markdown-body :deep(code) {
   background-color: var(--bg-tertiary);
   padding: 2px 6px;
-  border-radius: 4px;
-  /* 等宽字体栈 */
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
   font-size: 0.85em;
   color: var(--el-color-primary);
-  /* 使用主题色，让代码更显眼 */
   margin: 0 2px;
 }
 
-/* 多行代码块 */
 .markdown-body :deep(pre) {
   background-color: var(--bg-tertiary);
   padding: 16px;
-  border-radius: 8px;
+  border-radius: 14px;
   overflow-x: auto;
   margin-bottom: 1.2em;
   line-height: 1.5;
@@ -899,39 +1008,31 @@ watch(locale, () => {
   color: var(--text-primary);
   margin: 0;
   font-size: 13px;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
-/* 引用块优化 */
 .markdown-body :deep(blockquote) {
   margin: 1.2em 0;
-  padding: 8px 16px;
+  padding: 10px 16px;
   color: var(--text-secondary);
   border-left: 4px solid var(--el-color-primary);
-  /* 使用主题色作为边框 */
   background-color: var(--bg-tertiary);
-  /* 改用浅色背景而不是纯灰 */
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 10px 10px 0;
 }
 
 .markdown-body :deep(blockquote p) {
   margin-bottom: 0;
-  /* 引用块内的段落去掉底部间距 */
 }
 
-/* 图片优化 */
 .markdown-body :deep(img) {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: 14px;
   margin: 12px 0;
   border: 1px solid var(--border-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  /* 增加轻微阴影 */
+  box-shadow: 0 14px 24px -20px rgba(0, 0, 0, 0.25);
   display: block;
-  /* 防止图片底部有空隙 */
 }
 
-/* 链接优化 */
 .markdown-body :deep(a) {
   color: var(--el-color-primary);
   text-decoration: none;
@@ -943,16 +1044,18 @@ watch(locale, () => {
 
 .markdown-body :deep(a:hover) {
   border-bottom-color: var(--el-color-primary);
-  /* 悬浮时显示下划线效果 */
 }
 
-/* 弹窗样式微调 */
+:deep(.doc-dialog .el-dialog) {
+  overflow: hidden;
+}
+
 :deep(.doc-dialog .el-dialog__body) {
   padding: 0 !important;
 }
 
 :deep(.doc-dialog .el-dialog__header) {
-  padding: 5px 15px 15px 15px !important;
+  padding: 10px 16px 14px !important;
   margin-right: 0;
   border-bottom: 1px solid var(--border-primary);
 }

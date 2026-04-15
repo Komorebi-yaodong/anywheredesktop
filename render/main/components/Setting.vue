@@ -1920,9 +1920,10 @@ html.dark .icon-action-button {
 }
 
 .desktop-profile-avatar-editor {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 46px auto;
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
   flex-shrink: 0;
   padding: 0;
   border: none;
@@ -1935,8 +1936,8 @@ html.dark .icon-action-button {
 
 .desktop-avatar-uploader :deep(.el-upload),
 .desktop-avatar-uploader :deep(.el-upload-dragger) {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   border-radius: 12px;
 }
 
@@ -1967,8 +1968,10 @@ html.dark .icon-action-button {
 }
 
 .desktop-avatar-button-group {
-  flex-direction: row;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(2, 24px);
+  justify-content: start;
+  gap: 6px;
   padding-left: 0;
   align-items: center;
   flex-shrink: 0;
@@ -1993,7 +1996,7 @@ html.dark .icon-action-button {
 
 .icon-button-group {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .icon-action-button {

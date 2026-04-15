@@ -1143,8 +1143,15 @@ html.dark .bottom-actions-container {
   right: 20px;
   z-index: 21;
   width: 24px;
+  min-width: 24px;
   height: 24px;
+  padding: 0 !important;
+  aspect-ratio: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 16px;
+  border-radius: 50% !important;
   box-shadow: var(--el-box-shadow-light);
 }
 

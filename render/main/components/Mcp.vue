@@ -1011,32 +1011,28 @@ html.dark .main-content-scrollbar :deep(.el-scrollbar__thumb:hover) {
     z-index: 12;
     padding: 4px 0 16px;
     margin: 0 0 12px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(255, 255, 255, 0.82) 72%, rgba(255, 255, 255, 0) 100%);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.88) 72%, rgba(255, 255, 255, 0) 100%);
 }
 
 html.dark .search-bar-container {
-    background: linear-gradient(180deg, rgba(24, 24, 27, 0.94) 0%, rgba(24, 24, 27, 0.82) 72%, rgba(24, 24, 27, 0) 100%);
+    background: linear-gradient(180deg, rgba(24, 24, 27, 0.96) 0%, rgba(24, 24, 27, 0.88) 72%, rgba(24, 24, 27, 0) 100%);
 }
 
 .search-bar-container :deep(.el-input__wrapper) {
     min-height: 54px;
     padding: 0 18px;
     border-radius: 20px;
-    background: rgba(255, 255, 255, 0.78) !important;
-    box-shadow: 0 0 0 1px rgba(228, 228, 231, 0.95) inset, 0 16px 30px -28px rgba(24, 24, 27, 0.28) !important;
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+    background: rgba(255, 255, 255, 0.92) !important;
+    box-shadow: 0 0 0 1px rgba(228, 228, 231, 0.95) inset, 0 10px 20px -18px rgba(24, 24, 27, 0.16) !important;
 }
 
 html.dark .search-bar-container :deep(.el-input__wrapper) {
-    background: rgba(39, 39, 42, 0.82) !important;
-    box-shadow: 0 0 0 1px rgba(82, 82, 91, 0.7) inset, 0 18px 36px -28px rgba(0, 0, 0, 0.62) !important;
+    background: rgba(39, 39, 42, 0.92) !important;
+    box-shadow: 0 0 0 1px rgba(82, 82, 91, 0.66) inset, 0 12px 22px -18px rgba(0, 0, 0, 0.46) !important;
 }
 
 .search-bar-container :deep(.el-input__wrapper.is-focus) {
-    box-shadow: 0 0 0 1px var(--bg-accent) inset, 0 20px 36px -28px rgba(24, 24, 27, 0.35) !important;
+    box-shadow: 0 0 0 1px var(--bg-accent) inset, 0 12px 22px -18px rgba(24, 24, 27, 0.22) !important;
 }
 
 .search-bar-container :deep(.el-input__inner) {
@@ -1071,41 +1067,38 @@ html.dark .empty-state {
 .mcp-card {
     position: relative;
     overflow: hidden;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(250, 250, 250, 0.82) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.9);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(250, 250, 250, 0.9) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.88);
     border-radius: 24px;
     padding: 18px 18px 16px;
     display: flex;
     flex-direction: column;
     min-height: 210px;
-    transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
-    box-shadow: 0 20px 38px -30px rgba(24, 24, 27, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.88);
-    backdrop-filter: blur(22px);
-    -webkit-backdrop-filter: blur(22px);
+    transition: box-shadow 0.18s ease, border-color 0.18s ease;
+    box-shadow: 0 12px 28px -24px rgba(24, 24, 27, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.88);
 }
 
 .mcp-card::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0) 40%);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 36%);
     pointer-events: none;
 }
 
 html.dark .mcp-card {
-    background: linear-gradient(180deg, rgba(24, 24, 27, 0.9) 0%, rgba(18, 18, 20, 0.88) 100%);
-    border-color: rgba(82, 82, 91, 0.42);
-    box-shadow: 0 22px 44px -30px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    background: linear-gradient(180deg, rgba(24, 24, 27, 0.94) 0%, rgba(18, 18, 20, 0.92) 100%);
+    border-color: rgba(82, 82, 91, 0.4);
+    box-shadow: 0 14px 30px -24px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .mcp-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 28px 52px -32px rgba(24, 24, 27, 0.34);
-    border-color: rgba(39, 39, 42, 0.2);
+    box-shadow: 0 18px 34px -24px rgba(24, 24, 27, 0.22);
+    border-color: rgba(39, 39, 42, 0.18);
 }
 
 html.dark .mcp-card:hover {
-    border-color: rgba(161, 161, 170, 0.34);
+    border-color: rgba(161, 161, 170, 0.28);
 }
 
 .mcp-card-header {
@@ -1293,18 +1286,16 @@ html.dark .mcp-actions .el-button:hover {
     gap: 12px;
     padding: 10px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(24px) saturate(150%);
-    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    background: rgba(255, 255, 255, 0.88);
     border: 1px solid rgba(255, 255, 255, 0.86);
-    box-shadow: 0 26px 48px -30px rgba(24, 24, 27, 0.42);
+    box-shadow: 0 14px 26px -22px rgba(24, 24, 27, 0.2);
     z-index: 20;
 }
 
 html.dark .bottom-actions-container {
-    background: rgba(24, 24, 27, 0.78);
+    background: rgba(24, 24, 27, 0.9);
     border-color: rgba(82, 82, 91, 0.46);
-    box-shadow: 0 26px 48px -28px rgba(0, 0, 0, 0.72);
+    box-shadow: 0 16px 28px -22px rgba(0, 0, 0, 0.48);
 }
 
 .bottom-actions-container .action-btn {
@@ -1407,10 +1398,16 @@ html.dark .advanced-collapse {
     right: 28px;
     z-index: 21;
     width: 42px;
+    min-width: 42px;
     height: 42px;
+    padding: 0 !important;
+    aspect-ratio: 1 / 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-size: 16px;
-    border-radius: 999px;
-    box-shadow: 0 20px 36px -24px rgba(24, 24, 27, 0.45);
+    border-radius: 50% !important;
+    box-shadow: 0 14px 28px -20px rgba(24, 24, 27, 0.28);
 }
 
 .item-scrollbar {

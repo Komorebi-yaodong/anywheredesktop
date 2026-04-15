@@ -662,24 +662,24 @@ watch(locale, () => {
   position: absolute;
   border-radius: 999px;
   pointer-events: none;
-  filter: blur(18px);
-  opacity: 0.9;
+  filter: blur(12px);
+  opacity: 0.7;
 }
 
 .common-layout::before {
-  width: 280px;
-  height: 280px;
-  top: -110px;
-  left: -90px;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.9) 0%, rgba(228, 228, 231, 0.1) 70%, rgba(228, 228, 231, 0) 100%);
+  width: 220px;
+  height: 220px;
+  top: -90px;
+  left: -70px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.85) 0%, rgba(228, 228, 231, 0.08) 68%, rgba(228, 228, 231, 0) 100%);
 }
 
 .common-layout::after {
-  width: 360px;
-  height: 360px;
-  right: -140px;
-  bottom: -170px;
-  background: radial-gradient(circle, rgba(39, 39, 42, 0.1) 0%, rgba(39, 39, 42, 0.04) 45%, rgba(39, 39, 42, 0) 100%);
+  width: 280px;
+  height: 280px;
+  right: -110px;
+  bottom: -130px;
+  background: radial-gradient(circle, rgba(39, 39, 42, 0.08) 0%, rgba(39, 39, 42, 0.03) 42%, rgba(39, 39, 42, 0) 100%);
 }
 
 html.dark .common-layout,
@@ -707,18 +707,18 @@ html.dark .common-layout::after {
   align-items: center;
   border: 1px solid rgba(255, 255, 255, 0.78);
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.68);
-  box-shadow: 0 16px 40px -28px rgba(24, 24, 27, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 10px 24px -20px rgba(24, 24, 27, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(14px) saturate(135%);
+  -webkit-backdrop-filter: blur(14px) saturate(135%);
   flex-shrink: 0;
   z-index: 10;
 }
 
 html.dark .el-header {
-  border-color: rgba(82, 82, 91, 0.45);
-  background: rgba(24, 24, 27, 0.72);
-  box-shadow: 0 20px 50px -28px rgba(0, 0, 0, 0.78), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  border-color: rgba(82, 82, 91, 0.4);
+  background: rgba(24, 24, 27, 0.84);
+  box-shadow: 0 12px 26px -18px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .header-row {
@@ -774,41 +774,32 @@ html.dark .tabs-container {
   background-color: transparent;
   color: var(--text-secondary);
   border-radius: 999px;
-  transition: transform 0.22s ease, background-color 0.22s ease, color 0.22s ease, box-shadow 0.22s ease;
+  transition: background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
   height: 40px;
   width: 40px;
 }
 
-.tab-button :deep(.el-icon),
-.tab-button svg {
-  transition: transform 0.22s ease;
-}
-
 .tab-button:hover {
-  transform: translateY(-1px);
-  background-color: rgba(255, 255, 255, 0.82);
+  background-color: rgba(244, 244, 245, 0.96);
   color: var(--text-primary);
-  box-shadow: 0 10px 18px -14px rgba(24, 24, 27, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(228, 228, 231, 0.92);
 }
 
 html.dark .tab-button:hover {
-  background-color: rgba(63, 63, 70, 0.9);
-}
-
-.tab-button:hover svg,
-.tab-button:hover :deep(.el-icon) {
-  transform: scale(1.04);
+  background-color: rgba(63, 63, 70, 0.88);
+  box-shadow: inset 0 0 0 1px rgba(82, 82, 91, 0.65);
 }
 
 .active-tab {
   background: var(--bg-accent);
   color: var(--text-on-accent);
-  box-shadow: 0 14px 24px -18px rgba(24, 24, 27, 0.6);
+  box-shadow: 0 8px 18px -14px rgba(24, 24, 27, 0.45);
 }
 
 .active-tab:hover {
   color: var(--text-on-accent);
-  background: var(--bg-accent-light);
+  background: var(--bg-accent);
+  box-shadow: 0 8px 18px -14px rgba(24, 24, 27, 0.45);
 }
 
 .el-main {
@@ -816,12 +807,12 @@ html.dark .tab-button:hover {
   padding: 16px;
   flex-grow: 1;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.84);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.82);
   border-radius: 30px;
-  box-shadow: 0 28px 60px -38px rgba(24, 24, 27, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(24px) saturate(140%);
-  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: 0 8px 26px -22px rgba(24, 24, 27, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
 }
 
 .el-main::before {
@@ -829,14 +820,14 @@ html.dark .tab-button:hover {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0));
   pointer-events: none;
 }
 
 html.dark .el-main {
-  background: rgba(18, 18, 20, 0.78);
-  border-color: rgba(63, 63, 70, 0.58);
-  box-shadow: 0 28px 60px -34px rgba(0, 0, 0, 0.82), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: rgba(18, 18, 20, 0.9);
+  border-color: rgba(63, 63, 70, 0.52);
+  box-shadow: 0 10px 28px -20px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .blank-col {
@@ -849,13 +840,13 @@ html.dark .el-main {
   border: 1px solid var(--border-primary);
   border-radius: 20px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.84);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 html.dark .doc-container {
-  background: rgba(24, 24, 27, 0.74);
+  background: rgba(24, 24, 27, 0.86);
 }
 
 .bell-badge :deep(.el-badge__content.is-fixed.is-dot) {

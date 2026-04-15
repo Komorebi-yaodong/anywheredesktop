@@ -797,9 +797,11 @@ html.dark .tab-button:hover {
 }
 
 .active-tab:hover {
-  color: var(--text-on-accent);
-  background: var(--bg-accent);
-  box-shadow: 0 8px 18px -14px rgba(24, 24, 27, 0.45);
+  color: var(--text-on-accent) !important;
+  background: var(--bg-accent) !important;
+  box-shadow: 0 8px 18px -14px rgba(24, 24, 27, 0.45) !important;
+  border: none !important;
+  outline: none !important;
 }
 
 .el-main {

@@ -1277,10 +1277,9 @@ const toggleSelectAll = () => {
     width: 100%;
     display: flex;
     flex-direction: column;
-    padding: 21px;
+    padding: 2px;
     box-sizing: border-box;
     overflow: hidden;
-    background-color: var(--bg-primary);
 }
 
 .config-prompt {

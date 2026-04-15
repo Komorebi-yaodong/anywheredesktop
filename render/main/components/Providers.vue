@@ -797,7 +797,6 @@ const apiKeyCount = computed(() => {
   width: 100%;
   padding: 0;
   box-sizing: border-box;
-  background-color: var(--bg-primary);
   display: flex;
 }
 
@@ -807,7 +806,7 @@ const apiKeyCount = computed(() => {
   background-color: transparent;
   overflow: hidden;
   display: flex;
-  padding: 20px;
+  padding: 2px;
   gap: 20px;
 }
 

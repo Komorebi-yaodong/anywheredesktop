@@ -348,9 +348,11 @@ function logSkillDrag(stage, payload = null) {
 
 function onDialogDragOver(e) {
   e.preventDefault();
-  isDialogDragOver.value = true;
+  isDialogDragOver.value = true;
+
 }
-function onDialogDragLeave(e) {
+function onDialogDragLeave(e) {
+
   if (e.relatedTarget === null || !e.currentTarget.contains(e.relatedTarget)) {
     isDialogDragOver.value = false;
   }
@@ -462,16 +464,20 @@ function parseFrontmatterSimple(text) {
 async function onDialogDrop(e) {
   e.preventDefault();
   isDialogDragOver.value = false;
-  const files = e.dataTransfer.files;
+  const files = e.dataTransfer.files;
 
-  if (!files || files.length === 0) {
+
+  if (!files || files.length === 0) {
+
     return;
   }
 
   const item = files[0];
-  const resolvedItemPath = item?.path || window.api.getDroppedFilePath?.(item) || '';
+  const resolvedItemPath = item?.path || window.api.getDroppedFilePath?.(item) || '';
 
-  if (!resolvedItemPath) {
+
+  if (!resolvedItemPath) {
+
     ElMessage.warning('无法获取拖拽文件的本地路径，请尝试通过系统文件管理器直接拖入，或改用文件夹/压缩包导入。');
     return;
   }
@@ -481,22 +487,29 @@ async function onDialogDrop(e) {
     let importContent = '';
     let importPath = '';
 
-    if (item.name === 'SKILL.md' || item.name.toLowerCase() === 'skill.md') {
+    if (item.name === 'SKILL.md' || item.name.toLowerCase() === 'skill.md') {
+
       importContent = await window.api.readLocalFile(resolvedItemPath);
       importPath = window.api.pathJoin(resolvedItemPath, '..');
-      isSkillPackage = true;
-    } else if (item.name.toLowerCase().endsWith('.skill') || item.name.toLowerCase().endsWith('.zip')) {
+      isSkillPackage = true;
+
+    } else if (item.name.toLowerCase().endsWith('.skill') || item.name.toLowerCase().endsWith('.zip')) {
+
       const loadingInstance = ElMessage.info({ message: t('skills.alerts.extracting'), duration: 0 });
       try {
-        const tempDir = await window.api.extractSkillPackage(resolvedItemPath);
-        const skillMdPath = window.api.pathJoin(tempDir, 'SKILL.md');
+        const tempDir = await window.api.extractSkillPackage(resolvedItemPath);
 
-        if (await window.api.readLocalFile(skillMdPath).then(() => true).catch((error) => {
+        const skillMdPath = window.api.pathJoin(tempDir, 'SKILL.md');
+
+
+        if (await window.api.readLocalFile(skillMdPath).then(() => true).catch((error) => {
+
           return false;
         })) {
           importContent = await window.api.readLocalFile(skillMdPath);
           importPath = tempDir;
-          isSkillPackage = true;
+          isSkillPackage = true;
+
         } else {
           throw new Error(t('skills.alerts.invalidPackage'));
         }
@@ -504,42 +517,50 @@ async function onDialogDrop(e) {
         loadingInstance.close();
       }
     } else {
-      const skillMdPath = window.api.pathJoin(resolvedItemPath, 'SKILL.md');
+      const skillMdPath = window.api.pathJoin(resolvedItemPath, 'SKILL.md');
+
       try {
         importContent = await window.api.readLocalFile(skillMdPath);
         importPath = resolvedItemPath;
-        isSkillPackage = true;
-      } catch (err) {
+        isSkillPackage = true;
+
+      } catch (err) {
+
         isSkillPackage = false;
       }
-    }
+    }
+
 
     if (isSkillPackage) {
       if (importPath) {
         pendingImportPath.value = importPath;
       }
 
-      const { metadata, body } = parseFrontmatterSimple(importContent);
+      const { metadata, body } = parseFrontmatterSimple(importContent);
+
       applyImportedMetadata(metadata, body);
 
       if (!editingSkill.name) {
         if (metadata.name) editingSkill.name = metadata.name;
         else editingSkill.name = item.name.replace(/\.skill$/i, '');
-      }
+      }
+
 
       const actionText = activeEditTab.value === 'files' ? ' (已准备替换当前 Skill)' : ' (检测到完整 Skill 包)';
       ElMessage.success(t('skills.alerts.parseSuccess') + actionText + '，请点击保存以应用');
       return;
     }
 
-    if (activeEditTab.value === 'files') {
+    if (activeEditTab.value === 'files') {
+
       if (!isNewSkill.value) {
         handleBatchUpload(files);
       } else {
         ElMessage.warning(t('skills.alerts.saveFirstHint') || '请先保存 Skill 后再上传文件');
       }
       return;
-    }
+    }
+
     ElMessage.warning(t('skills.alerts.noSkillMd'));
     if (isNewSkill.value) {
       editingSkill.name = item.name;
@@ -904,7 +925,6 @@ async function handleExportSkills() {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background-color: var(--bg-primary);
   position: relative;
 }
 
@@ -922,7 +942,6 @@ async function handleExportSkills() {
   position: sticky;
   top: 0;
   z-index: 10;
-  background-color: var(--bg-primary);
   padding: 8px 0px 8px 0px;
   margin: 0px 0px 5px 0px;
 }

@@ -1361,7 +1361,6 @@ async function refreshPromptsConfig() {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background-color: var(--bg-primary);
 }
 
 .prompts-header {
@@ -1524,7 +1523,6 @@ async function refreshPromptsConfig() {
   position: sticky;
   top: 0;
   z-index: 10;
-  background-color: var(--bg-primary);
   padding: 8px 0px 8px 0px;
   margin: 0px 0px 5px 0px;
 }

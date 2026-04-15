@@ -1433,7 +1433,6 @@ async function selectLocalChatPath() {
   
   height: 100%;
   width: 100%;
-  background-color: var(--panda-bg);
   display: flex;
   justify-content: center;
   overflow: hidden;
@@ -1454,7 +1453,7 @@ html.dark .settings-page-container {
 .settings-scrollbar-wrapper {
   height: 100%;
   width: 100%;
-  max-width: 900px;
+  max-width: 1000px;
 }
 
 .settings-content {

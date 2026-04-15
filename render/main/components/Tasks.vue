@@ -821,7 +821,6 @@ async function openTaskChat(logFile) {
     width: 100%;
     padding: 0;
     box-sizing: border-box;
-    background-color: var(--bg-primary);
     display: flex;
     position: relative;
 }
@@ -830,7 +829,7 @@ async function openTaskChat(logFile) {
     flex-grow: 1;
     width: 100%;
     display: flex;
-    padding: 20px;
+    padding: 2px;
     gap: 20px;
     overflow: hidden;
     box-sizing: border-box;

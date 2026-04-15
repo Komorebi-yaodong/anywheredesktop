@@ -1385,21 +1385,6 @@ async function selectLocalChatPath() {
                   <div v-if="element.id === 'desktop'" class="card-body">
                     <div class="setting-option-item desktop-profile-item">
                       <div class="setting-text-content">
-                        <span class="setting-option-label">{{ t('setting.desktop.profile.nickname.label') }}</span>
-                        <span class="setting-option-description">{{ t('setting.desktop.profile.nickname.description') }}</span>
-                      </div>
-                      <el-input
-                        v-model="currentConfig.desktop.profile.nickname"
-                        maxlength="12"
-                        show-word-limit
-                        class="desktop-profile-input"
-                        :placeholder="t('setting.desktop.profile.nickname.placeholder')"
-                        @blur="handleDesktopNicknameBlur"
-                      />
-                    </div>
-
-                    <div class="setting-option-item desktop-profile-item">
-                      <div class="setting-text-content">
                         <span class="setting-option-label">{{ t('setting.desktop.profile.avatar.label') }}</span>
                         <span class="setting-option-description">{{ t('setting.desktop.profile.avatar.description') }}</span>
                       </div>
@@ -1415,15 +1400,15 @@ async function selectLocalChatPath() {
                           @dragover.prevent
                         >
                           <template v-if="currentConfig.desktop.profile.avatar">
-                            <el-avatar :src="currentConfig.desktop.profile.avatar" shape="square" :size="64" class="desktop-avatar-preview" />
+                            <el-avatar :src="currentConfig.desktop.profile.avatar" shape="square" :size="48" class="desktop-avatar-preview" />
                             <div class="icon-hover-mask" @click.stop.prevent="openProfileAvatarEditor(currentConfig.desktop.profile.avatar)">
                               <el-icon><Edit /></el-icon>
                             </div>
                           </template>
                           <template v-else>
                             <div class="icon-uploader-placeholder">
-                              <el-icon :size="20"><UploadFilled /></el-icon>
-                              <div class="icon-upload-text" style="font-size: 10px; margin-top: 4px; color: var(--panda-text-sub); line-height: 1.2; white-space: pre-line;">
+                              <el-icon :size="18"><UploadFilled /></el-icon>
+                              <div class="icon-upload-text" style="font-size: 9px; margin-top: 3px; color: var(--panda-text-sub); line-height: 1.15; white-space: pre-line;">
                                 {{ t('setting.desktop.profile.avatar.uploadText') }}
                               </div>
                             </div>
@@ -1439,6 +1424,21 @@ async function selectLocalChatPath() {
                           </el-button>
                         </div>
                       </div>
+                    </div>
+
+                    <div class="setting-option-item desktop-profile-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.desktop.profile.nickname.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.desktop.profile.nickname.description') }}</span>
+                      </div>
+                      <el-input
+                        v-model="currentConfig.desktop.profile.nickname"
+                        maxlength="12"
+                        show-word-limit
+                        class="desktop-profile-input"
+                        :placeholder="t('setting.desktop.profile.nickname.placeholder')"
+                        @blur="handleDesktopNicknameBlur"
+                      />
                     </div>
 
                     <div class="setting-option-item">
@@ -1917,7 +1917,7 @@ html.dark .icon-action-button {
 
 
 .desktop-profile-item {
-  align-items: center;
+  align-items: flex-start;
 }
 
 .desktop-profile-input {
@@ -1927,10 +1927,11 @@ html.dark .icon-action-button {
 .desktop-profile-avatar-editor {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  gap: 8px;
   flex-shrink: 0;
-  padding: 8px 10px;
-  border-radius: 16px;
+  padding: 6px 8px;
+  border-radius: 14px;
   background: var(--panda-bg);
   border: 1px solid var(--panda-border);
 }
@@ -1941,12 +1942,15 @@ html.dark .icon-action-button {
 
 .desktop-avatar-uploader :deep(.el-upload),
 .desktop-avatar-uploader :deep(.el-upload-dragger) {
-  width: 64px;
-  height: 64px;
-  border-radius: 16px;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
 }
 
 .desktop-avatar-uploader :deep(.el-upload-dragger) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: 1px dashed color-mix(in srgb, var(--panda-border) 88%, transparent);
   background: color-mix(in srgb, var(--panda-card-bg) 82%, var(--panda-bg));
@@ -1960,17 +1964,19 @@ html.dark .icon-action-button {
 }
 
 .desktop-avatar-preview {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: block;
   box-shadow: 0 10px 22px -16px rgba(24, 24, 27, 0.28);
 }
 
 .desktop-avatar-button-group {
   flex-direction: row;
-  gap: 6px;
+  gap: 4px;
   padding-left: 0;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .icon-hover-mask {
@@ -1983,7 +1989,7 @@ html.dark .icon-action-button {
   color: #fff;
   opacity: 0;
   transition: opacity 0.2s ease;
-  border-radius: 16px;
+  border-radius: 14px;
 }
 
 .desktop-avatar-uploader:hover .icon-hover-mask {

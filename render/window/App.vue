@@ -231,7 +231,13 @@ const centerActiveNavNode = async (targetIndex = focusedMessageIndex.value) => {
 const isSticky = ref(true);
 let chatObserver = null;    // DOM 观察器实例
 
-let autoSaveInterval = null;
+const AUTO_SAVE_INPUT_DEBOUNCE_MS = 800;
+const AUTO_SAVE_LOADING_THROTTLE_MS = 2500;
+let autoSaveTimer = null;
+let scheduledAutoSaveRequest = null;
+let queuedAutoSaveRequest = null;
+let autoSaveExecutionPromise = null;
+let lastAutoSaveAt = 0;
 
 let textSearchInstance = null;
 
@@ -482,6 +488,8 @@ const cachedBackgroundBlobUrl = ref("");
 const backgroundLoadState = ref('idle');
 const backgroundResolvedSource = ref('');
 let backgroundLoadToken = 0;
+
+let isRestoringSessionSnapshot = false;
 const failedRemoteBackgroundLoads = new Map();
 const BACKGROUND_FAILURE_COOLDOWN_MS = 60 * 1000;
 
@@ -1718,7 +1726,7 @@ const closePage = async (force_save = false) => {
   try {
     if (currentConfig.value?.webdav?.localChatPath && (defaultConversationName.value || shouldForceSave)) {
       try {
-        await autoSaveSession(shouldForceSave);
+        await executeAutoSaveRequest({ reason: 'window-close', force: shouldForceSave });
       } catch (e) {
         console.error("关闭时自动保存失败:", e);
       }
@@ -1735,6 +1743,17 @@ const closePage = async (force_save = false) => {
 const handlePickFileStart = () => {
   isFilePickerOpen.value = true;
 };
+
+watch(prompt, () => {
+  if (isRestoringSessionSnapshot) return;
+  scheduleInputDraftAutoSave('prompt-draft');
+});
+
+watch(fileList, () => {
+  if (isRestoringSessionSnapshot) return;
+  scheduleInputDraftAutoSave('file-draft');
+}, { deep: true });
+
 
 watch(zoomLevel, (newZoom) => {
   if (window.api && typeof window.api.setZoomFactor === 'function') window.api.setZoomFactor(newZoom);
@@ -2230,8 +2249,6 @@ onMounted(async () => {
     });
   }
 
-  if (autoSaveInterval) clearInterval(autoSaveInterval);
-  autoSaveInterval = setInterval(autoSaveSession, 15000);
   window.addEventListener('error', handleGlobalImageError, true);
   window.addEventListener('keydown', handleGlobalKeyDown);
 
@@ -2304,8 +2321,8 @@ onMounted(async () => {
 });
 
 const autoSaveSession = async (force = false) => {
-  if ((loading.value && !force) || !currentConfig.value?.webdav?.localChatPath) {
-    return;
+  if (!currentConfig.value?.webdav?.localChatPath) {
+    return false;
   }
 
   // 2. 获取当前快捷助手的配置
@@ -2313,7 +2330,7 @@ const autoSaveSession = async (force = false) => {
   const isAutoSaveConfigEnabled = promptConfig?.autoSaveChat ?? false;
 
   if (!defaultConversationName.value && !isAutoSaveConfigEnabled && !force) {
-    return;
+    return false;
   }
 
   // 自动命名逻辑：
@@ -2365,7 +2382,7 @@ const autoSaveSession = async (force = false) => {
 
   // 5. 如果经过尝试后仍然没有对话名称（例如空对话），则不保存
   if (!defaultConversationName.value) {
-    return;
+    return false;
   }
 
   // 6. 执行写入操作
@@ -2374,10 +2391,99 @@ const autoSaveSession = async (force = false) => {
     const jsonString = JSON.stringify(sessionData, null, 2);
     const filePath = `${currentConfig.value.webdav.localChatPath}/${defaultConversationName.value}.json`;
     await window.api.writeLocalFile(filePath, jsonString);
+    lastAutoSaveAt = Date.now();
+    return true;
   } catch (error) {
     console.error('Auto-save failed:', error);
+    return false;
   }
 };
+
+const clearScheduledAutoSave = () => {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
+  scheduledAutoSaveRequest = null;
+};
+
+const executeAutoSaveRequest = async (request = {}) => {
+  if (!request || !request.force) {
+    const promptConfig = currentConfig.value?.prompts?.[CODE.value];
+    const isAutoSaveConfigEnabled = promptConfig?.autoSaveChat ?? false;
+    if (!defaultConversationName.value && !isAutoSaveConfigEnabled) {
+      return false;
+    }
+  }
+
+  if (autoSaveExecutionPromise) {
+    queuedAutoSaveRequest = {
+      force: queuedAutoSaveRequest?.force || request.force || false,
+      reason: request.reason || queuedAutoSaveRequest?.reason || 'queued'
+    };
+    return autoSaveExecutionPromise;
+  }
+
+  autoSaveExecutionPromise = (async () => {
+    try {
+      return await autoSaveSession(Boolean(request.force));
+    } finally {
+      autoSaveExecutionPromise = null;
+      if (queuedAutoSaveRequest) {
+        const nextRequest = queuedAutoSaveRequest;
+        queuedAutoSaveRequest = null;
+        await executeAutoSaveRequest(nextRequest);
+      }
+    }
+  })();
+
+  return autoSaveExecutionPromise;
+};
+
+const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false, delay = 0 } = {}) => {
+  const promptConfig = currentConfig.value?.prompts?.[CODE.value];
+  const isAutoSaveConfigEnabled = promptConfig?.autoSaveChat ?? false;
+  if (!force && !defaultConversationName.value && !isAutoSaveConfigEnabled) {
+    return;
+  }
+
+  const request = { reason, force };
+
+  if (immediate || force || delay <= 0) {
+    clearScheduledAutoSave();
+    executeAutoSaveRequest(request);
+    return;
+  }
+
+  if (scheduledAutoSaveRequest?.force) {
+    request.force = true;
+  }
+  scheduledAutoSaveRequest = request;
+
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+  }
+  autoSaveTimer = setTimeout(() => {
+    const pendingRequest = scheduledAutoSaveRequest || request;
+    autoSaveTimer = null;
+    scheduledAutoSaveRequest = null;
+    executeAutoSaveRequest(pendingRequest);
+  }, delay);
+};
+
+const scheduleInputDraftAutoSave = (reason = 'input-draft') => {
+  scheduleAutoSave({ reason, delay: AUTO_SAVE_INPUT_DEBOUNCE_MS });
+};
+
+const scheduleLoadingAutoSave = (reason = 'loading-progress') => {
+  const elapsed = Date.now() - lastAutoSaveAt;
+  if (elapsed >= AUTO_SAVE_LOADING_THROTTLE_MS) {
+    scheduleAutoSave({ reason, immediate: true });
+  } else {
+    scheduleAutoSave({ reason, delay: Math.max(120, AUTO_SAVE_LOADING_THROTTLE_MS - elapsed) });
+  }
+};
+
 
 onBeforeUnmount(() => {
   window.removeEventListener('wheel', handleWheel);
@@ -2388,11 +2494,7 @@ onBeforeUnmount(() => {
   
   window.removeEventListener('error', handleGlobalImageError, true);
   window.removeEventListener('keydown', handleGlobalKeyDown);
-  
-  if (autoSaveInterval) {
-    clearInterval(autoSaveInterval);
-    autoSaveInterval = null;
-  }
+  clearScheduledAutoSave();
 });
 
 const saveWindowSize = async () => {
@@ -2476,6 +2578,8 @@ const getSessionDataAsObject = () => {
     autoCloseOnBlur: autoCloseOnBlur.value, model: model.value,
     sessionMetadata: getSessionMetadata(),
     currentPromptConfig: currentPromptConfig, history: history.value, chat_show: chat_show.value, selectedVoice: selectedVoice.value,
+    promptDraft: prompt.value,
+    draftFileList: fileList.value,
     activeMcpServerIds: sessionMcpServerIds.value || [],
     activeSkillIds: sessionSkillIds.value || [],
     isAutoApproveTools: isAutoApproveTools.value
@@ -3504,6 +3608,7 @@ const handleSaveAction = async () => {
 
 const loadSession = async (jsonData) => {
   loading.value = true;
+  isRestoringSessionSnapshot = true;
   collapsedMessages.value.clear();
   messageRefs.clear();
   focusedMessageIndex.value = null;
@@ -3517,6 +3622,8 @@ const loadSession = async (jsonData) => {
 
     history.value = Array.isArray(jsonData.history) ? jsonData.history : [];
     chat_show.value = Array.isArray(jsonData.chat_show) ? jsonData.chat_show : [];
+    prompt.value = typeof jsonData.promptDraft === 'string' ? jsonData.promptDraft : '';
+    fileList.value = Array.isArray(jsonData.draftFileList) ? jsonData.draftFileList : [];
 
     while (
       history.value.length > 0 &&
@@ -3678,6 +3785,8 @@ const loadSession = async (jsonData) => {
     showDismissibleMessage.error(`加载会话失败: ${error.message}`);
     loading.value = false;
     syncAutoCloseOnBlurListener();
+  } finally {
+    isRestoringSessionSnapshot = false;
   }
 };
 
@@ -3908,10 +4017,10 @@ const sendAgentToolMessage = async ({ text, filePaths, source = 'agent_tool' } =
     content: contentList,
     timestamp: userTimestamp
   });
-  autoSaveSession();
 
   prompt.value = '';
   fileList.value = [];
+  scheduleAutoSave({ reason: 'agent-tool-message', immediate: true });
 
   askAI(true).catch((err) => console.error('Background generation error:', err));
   return `Message sent successfully${Array.isArray(attachedFiles) && attachedFiles.length > 0 ? ` (${attachedFiles.length} files attached)` : ''}. Agent is now generating response...`;
@@ -4105,8 +4214,8 @@ const askAI = async (forceSend = false) => {
           content: [{ type: "text", text: promptText }],
           timestamp: userTimestamp
         });
-        autoSaveSession();
         prompt.value = "";
+        scheduleAutoSave({ reason: 'user-message', immediate: true });
       } else {
         let file_content = await sendFile();
         if ((file_content && file_content.length > 0) || promptText) {
@@ -4119,7 +4228,6 @@ const askAI = async (forceSend = false) => {
               : userContentList;
             history.value.push({ role: "user", content: contentForHistory });
             chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
-            autoSaveSession();
           } else {
             return;
           }
@@ -4127,6 +4235,7 @@ const askAI = async (forceSend = false) => {
           return;
         }
         prompt.value = "";
+        scheduleAutoSave({ reason: 'user-message', immediate: true });
       }
     } finally {
       isPreparingSend.value = false;
@@ -4305,6 +4414,7 @@ const askAI = async (forceSend = false) => {
           }
           lastUpdateTime = Date.now();
           syncStickyScrollAfterRender();
+          scheduleLoadingAutoSave('assistant-stream');
         };
 
         for await (const part of stream) {
@@ -4681,6 +4791,7 @@ const askAI = async (forceSend = false) => {
         );
 
         history.value.push(...toolMessages);
+        scheduleAutoSave({ reason: 'tool-calls-completed', immediate: true });
       } else {
         if (isVoiceReply && responseMessage.audio) {
           currentBubble.content = currentBubble.content || [];
@@ -4702,6 +4813,7 @@ const askAI = async (forceSend = false) => {
             }
           });
         }
+        scheduleAutoSave({ reason: 'assistant-response-completed', immediate: true });
         break;
       }
     }
@@ -4747,6 +4859,7 @@ const askAI = async (forceSend = false) => {
         reasoning_content: currentBubble.reasoning_content || null
       });
     }
+    scheduleAutoSave({ reason: 'assistant-error', immediate: true });
 
   } finally {
     loading.value = false;
@@ -4800,12 +4913,18 @@ const askAI = async (forceSend = false) => {
       }
       currentTaskConfig.value = null; // 清空标记，避免后续手动问答也触发
     } else {
-      autoSaveSession(); // 普通对话的自动保存
+      scheduleAutoSave({ reason: 'assistant-turn-finalized', immediate: true }); // 普通对话的自动保存
     }
   }
 };
 
-const cancelAskAI = () => { if (loading.value && signalController.value) { signalController.value.abort(); chatInputRef.value?.focus(); } };
+const cancelAskAI = () => {
+  if (loading.value && signalController.value) {
+    signalController.value.abort();
+    scheduleAutoSave({ reason: 'assistant-cancelled', immediate: true });
+    chatInputRef.value?.focus();
+  }
+};
 const copyText = async (content, index) => { if (loading.value && index === chat_show.value.length - 1) return; await window.api.copyText(content); };
 const reaskAI = async () => {
   if (loading.value) return;

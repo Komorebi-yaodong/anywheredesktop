@@ -1458,9 +1458,9 @@ html.dark .el-divider--vertical {
     padding: 12px 14px;
     border: 1px solid rgba(255, 255, 255, 0.34);
     position: relative;
-    box-shadow: 0 22px 44px rgba(101, 80, 50, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.34);
-    backdrop-filter: blur(24px) saturate(160%);
-    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    box-shadow: 0 8px 20px rgba(101, 80, 50, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+    backdrop-filter: blur(8px) saturate(118%);
+    -webkit-backdrop-filter: blur(8px) saturate(118%);
 }
 
 html.dark .chat-input-area-vertical {

@@ -1934,9 +1934,14 @@ onMounted(async () => {
 
     try {
       const userInfo = await window.api.getUser();
-      UserAvart.value = userInfo.avatar;
+      const nextAvatar = typeof userInfo?.avatar === 'string' ? userInfo.avatar.trim() : '';
+      if (!nextAvatar || nextAvatar.includes('/resources/user.png') || nextAvatar.startsWith('file:///')) {
+        UserAvart.value = defaultUserAvatarUrl;
+      } else {
+        UserAvart.value = nextAvatar;
+      }
     } catch (err) {
-      UserAvart.value = "file:///E:/Programming/Anywhere_desktop/resources/user.png";
+      UserAvart.value = defaultUserAvatarUrl;
     }
 
     if (data?.os) {
@@ -6344,20 +6349,20 @@ html.dark .app-container {
   justify-content: center;
   cursor: pointer;
   color: rgba(46, 41, 34, 0.72);
-  background: rgba(255, 255, 255, 0.28);
-  border: 1px solid rgba(255, 255, 255, 0.38);
-  box-shadow: 0 8px 24px rgba(111, 92, 61, 0.12);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: none;
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
   transition: all 0.2s ease;
   font-size: 14px;
   border-radius: 999px;
 
   &:hover {
     color: rgba(28, 25, 22, 0.96);
-    background: rgba(255, 255, 255, 0.46);
-    transform: scale(1.08);
-    box-shadow: 0 12px 30px rgba(111, 92, 61, 0.18);
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+    box-shadow: none;
   }
 
   &.highlight-bottom {
@@ -6378,22 +6383,7 @@ html.dark .app-container {
   pointer-events: auto;
 }
 
-.nav-timeline-area::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 26px;
-  height: 30px;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.44);
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  box-shadow: 0 10px 24px rgba(111, 92, 61, 0.12);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
-  pointer-events: none;
-}
+
 
 .timeline-track {
   position: absolute;
@@ -6437,8 +6427,8 @@ html.dark .app-container {
   padding: 3px 0;
 
   &:hover .timeline-node {
-    transform: scaleX(1.35) scaleY(1.15);
-    opacity: 0.9;
+    transform: scaleX(1.18);
+    opacity: 0.82;
   }
 }
 
@@ -6446,62 +6436,52 @@ html.dark .app-container {
   width: 10px;
   height: 3px;
   border-radius: 999px;
-  transition: all 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: all 0.18s ease;
   box-shadow: none;
   border: none;
-  opacity: 0.42;
+  opacity: 0.38;
 
   &.user {
-    background: linear-gradient(90deg, rgba(84, 171, 255, 0.78), rgba(64, 158, 255, 1));
+    background: linear-gradient(90deg, rgba(84, 171, 255, 0.72), rgba(64, 158, 255, 0.92));
   }
 
   &.assistant {
-    background: linear-gradient(90deg, rgba(28, 25, 22, 0.55), rgba(28, 25, 22, 0.88));
+    background: linear-gradient(90deg, rgba(28, 25, 22, 0.42), rgba(28, 25, 22, 0.72));
   }
 
   &.active {
     opacity: 1;
-    width: 18px;
-    height: 5px;
-    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.18), 0 8px 18px rgba(64, 158, 255, 0.28);
+    width: 16px;
+    height: 4px;
+    box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.16);
   }
 }
 
 html.dark {
   .nav-mini-btn {
     color: rgba(235, 236, 240, 0.75);
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.26);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: none;
 
     &:hover {
       color: rgba(255, 255, 255, 0.96);
-      background: rgba(255, 255, 255, 0.16);
-      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
+      background: rgba(255, 255, 255, 0.12);
+      box-shadow: none;
     }
 
     &.highlight-bottom {
-      border-color: rgba(64, 158, 255, 0.38);
-      background: rgba(64, 158, 255, 0.22);
+      border-color: rgba(64, 158, 255, 0.32);
+      background: rgba(64, 158, 255, 0.18);
     }
   }
 
-  .nav-timeline-area::before {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
-  }
-
-  .timeline-track {
-    background: linear-gradient(180deg, rgba(140, 149, 168, 0) 0%, rgba(140, 149, 168, 0.34) 14%, rgba(140, 149, 168, 0.34) 86%, rgba(140, 149, 168, 0) 100%);
-  }
-
   .timeline-node.assistant {
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.95));
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.84));
   }
 
   .timeline-node.active {
-    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08), 0 8px 20px rgba(64, 158, 255, 0.3);
+    box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.2);
   }
 }
 
@@ -6571,8 +6551,8 @@ html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 14px;
-  backdrop-filter: blur(18px) saturate(145%);
-  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  backdrop-filter: blur(8px) saturate(118%);
+  -webkit-backdrop-filter: blur(8px) saturate(118%);
 }
 
 :deep(.image-error-container:hover) {
@@ -6672,17 +6652,17 @@ body .app-container.has-bg {
 }
 
 .app-container :deep(.chat-input-area-vertical) {
-  background: rgba(255, 255, 255, 0.18) !important;
-  border: 1px solid rgba(255, 255, 255, 0.32) !important;
-  box-shadow: 0 18px 40px rgba(99, 80, 52, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.34);
-  backdrop-filter: blur(26px) saturate(160%) !important;
-  -webkit-backdrop-filter: blur(26px) saturate(160%) !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  box-shadow: 0 10px 24px rgba(99, 80, 52, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  backdrop-filter: blur(10px) saturate(120%) !important;
+  -webkit-backdrop-filter: blur(10px) saturate(120%) !important;
 }
 
 html.dark .app-container :deep(.chat-input-area-vertical) {
-  background: rgba(19, 20, 24, 0.34) !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background: rgba(19, 20, 24, 0.26) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .app-container :deep(.el-dialog),
@@ -6690,11 +6670,11 @@ html.dark .app-container :deep(.chat-input-area-vertical) {
 .app-container :deep(.option-selector-wrapper),
 .app-container :deep(.waveform-display-area),
 .app-container :deep(.mcp-quick-select) {
-  background: rgba(255, 255, 255, 0.68) !important;
-  border: 1px solid rgba(255, 255, 255, 0.4) !important;
-  box-shadow: 0 20px 44px rgba(99, 80, 52, 0.14) !important;
-  backdrop-filter: blur(24px) saturate(155%) !important;
-  -webkit-backdrop-filter: blur(24px) saturate(155%) !important;
+  background: rgba(255, 255, 255, 0.62) !important;
+  border: 1px solid rgba(255, 255, 255, 0.32) !important;
+  box-shadow: 0 12px 28px rgba(99, 80, 52, 0.08) !important;
+  backdrop-filter: blur(12px) saturate(125%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(125%) !important;
 }
 
 html.dark .app-container :deep(.el-dialog),
@@ -6720,8 +6700,8 @@ html.dark .app-container :deep(.mcp-quick-select) {
 .app-container :deep(.el-dialog .el-textarea__inner),
 .app-container :deep(.el-dialog .el-input__wrapper) {
   background-color: rgba(255, 255, 255, 0.36) !important;
-  backdrop-filter: blur(16px) saturate(150%) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(150%) !important;
+  backdrop-filter: blur(8px) saturate(118%) !important;
+  -webkit-backdrop-filter: blur(8px) saturate(118%) !important;
 }
 
 html.dark .app-container :deep(.el-dialog .el-textarea__inner),

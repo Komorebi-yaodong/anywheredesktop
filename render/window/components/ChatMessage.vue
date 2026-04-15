@@ -785,9 +785,9 @@ const truncateFilename = (filename, maxLength = 30) => {
     border-radius: var(--bubble-radius);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.58) 0%, rgba(248, 246, 241, 0.42) 100%);
     border: 1px solid rgba(255, 255, 255, 0.4);
-    box-shadow: 0 20px 40px rgba(104, 81, 45, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.4);
-    backdrop-filter: blur(24px) saturate(165%);
-    -webkit-backdrop-filter: blur(24px) saturate(165%);
+    box-shadow: 0 8px 20px rgba(104, 81, 45, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.26);
+    backdrop-filter: blur(8px) saturate(118%);
+    -webkit-backdrop-filter: blur(8px) saturate(118%);
     padding: 12px 16px 11px 16px;
     margin-bottom: 0;
   }
@@ -802,9 +802,9 @@ const truncateFilename = (filename, maxLength = 30) => {
     border-radius: calc(var(--bubble-radius) + 2px);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0.18) 100%);
     border: 1px solid rgba(255, 255, 255, 0.3);
-    box-shadow: 0 22px 44px rgba(104, 81, 45, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.3);
-    backdrop-filter: blur(26px) saturate(170%);
-    -webkit-backdrop-filter: blur(26px) saturate(170%);
+    box-shadow: 0 8px 20px rgba(104, 81, 45, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    backdrop-filter: blur(8px) saturate(118%);
+    -webkit-backdrop-filter: blur(8px) saturate(118%);
     padding: 14px 16px 12px 16px;
   }
 

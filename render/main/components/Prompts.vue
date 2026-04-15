@@ -1522,7 +1522,7 @@ async function refreshPromptsConfig() {
     position: sticky;
     top: 0;
     z-index: 12;
-    padding: 4px 0 16px;
+    padding: 4px 0px 0px 0px;
     margin: 0 0 12px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.88) 72%, rgba(255, 255, 255, 0) 100%);
 }

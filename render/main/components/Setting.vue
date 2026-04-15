@@ -1719,17 +1719,12 @@ html.dark .settings-page-container {
 }
 
 
-html.dark .desktop-profile-avatar-editor {
-  background: color-mix(in srgb, var(--panda-card-bg) 88%, #000);
-  border-color: color-mix(in srgb, var(--panda-border) 88%, transparent);
-}
-
 html.dark .desktop-avatar-uploader :deep(.el-upload-dragger) {
-  background: color-mix(in srgb, var(--panda-card-bg) 94%, #000);
+  background: color-mix(in srgb, var(--panda-card-bg) 98%, #000);
 }
 
 html.dark .icon-action-button {
-  background: color-mix(in srgb, var(--panda-card-bg) 90%, #000);
+  background: color-mix(in srgb, var(--panda-card-bg) 96%, #000);
   border-color: color-mix(in srgb, var(--panda-border) 82%, transparent);
   color: var(--panda-text-sub);
 }
@@ -1927,13 +1922,11 @@ html.dark .icon-action-button {
 .desktop-profile-avatar-editor {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 8px;
   flex-shrink: 0;
-  padding: 6px 8px;
-  border-radius: 14px;
-  background: var(--panda-bg);
-  border: 1px solid var(--panda-border);
+  padding: 0;
+  border: none;
+  background: transparent;
 }
 
 .desktop-avatar-uploader {
@@ -1942,9 +1935,9 @@ html.dark .icon-action-button {
 
 .desktop-avatar-uploader :deep(.el-upload),
 .desktop-avatar-uploader :deep(.el-upload-dragger) {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
 }
 
 .desktop-avatar-uploader :deep(.el-upload-dragger) {
@@ -1952,23 +1945,25 @@ html.dark .icon-action-button {
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 1px dashed color-mix(in srgb, var(--panda-border) 88%, transparent);
-  background: color-mix(in srgb, var(--panda-card-bg) 82%, var(--panda-bg));
+  border: 1px solid color-mix(in srgb, var(--panda-border) 84%, transparent);
+  background: color-mix(in srgb, var(--panda-card-bg) 96%, var(--panda-bg));
   overflow: hidden;
-  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 6px 14px -12px rgba(24, 24, 27, 0.3);
 }
 
 .desktop-avatar-uploader:hover :deep(.el-upload-dragger) {
   border-color: color-mix(in srgb, var(--panda-accent) 24%, var(--panda-border));
-  background: color-mix(in srgb, var(--panda-card-bg) 92%, var(--panda-bg));
+  background: var(--panda-card-bg);
+  box-shadow: 0 8px 18px -12px rgba(24, 24, 27, 0.34);
 }
 
 .desktop-avatar-preview {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
   display: block;
-  box-shadow: 0 10px 22px -16px rgba(24, 24, 27, 0.28);
+  box-shadow: 0 8px 18px -14px rgba(24, 24, 27, 0.28);
 }
 
 .desktop-avatar-button-group {
@@ -2002,13 +1997,13 @@ html.dark .icon-action-button {
 }
 
 .icon-action-button {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
   padding: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   border: 1px solid var(--panda-border);
-  background: color-mix(in srgb, var(--panda-card-bg) 88%, var(--panda-bg));
+  background: color-mix(in srgb, var(--panda-card-bg) 96%, var(--panda-bg));
   color: var(--panda-text-sub);
 }
 
@@ -2022,17 +2017,13 @@ html.dark .icon-action-button {
   width: 100%;
   height: 100%;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   color: var(--panda-text-sub);
-  gap: 4px;
 }
 
 .icon-upload-text {
-  text-align: center;
-  font-size: 10px;
-  line-height: 1.2;
+  display: none;
 }
 
 

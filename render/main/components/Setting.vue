@@ -1927,10 +1927,10 @@ html.dark .icon-action-button {
 .desktop-profile-avatar-editor {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-shrink: 0;
-  padding: 10px 12px;
-  border-radius: 18px;
+  padding: 8px 10px;
+  border-radius: 16px;
   background: var(--panda-bg);
   border: 1px solid var(--panda-border);
 }
@@ -1941,9 +1941,9 @@ html.dark .icon-action-button {
 
 .desktop-avatar-uploader :deep(.el-upload),
 .desktop-avatar-uploader :deep(.el-upload-dragger) {
-  width: 76px;
-  height: 76px;
-  border-radius: 18px;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
 }
 
 .desktop-avatar-uploader :deep(.el-upload-dragger) {
@@ -1960,16 +1960,17 @@ html.dark .icon-action-button {
 }
 
 .desktop-avatar-preview {
-  width: 56px;
-  height: 56px;
-  border-radius: 18px;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
   box-shadow: 0 10px 22px -16px rgba(24, 24, 27, 0.28);
 }
 
 .desktop-avatar-button-group {
-  flex-direction: column;
-  gap: 8px;
-  padding-left: 2px;
+  flex-direction: row;
+  gap: 6px;
+  padding-left: 0;
+  align-items: center;
 }
 
 .icon-hover-mask {
@@ -1982,7 +1983,7 @@ html.dark .icon-action-button {
   color: #fff;
   opacity: 0;
   transition: opacity 0.2s ease;
-  border-radius: 18px;
+  border-radius: 16px;
 }
 
 .desktop-avatar-uploader:hover .icon-hover-mask {
@@ -1995,11 +1996,11 @@ html.dark .icon-action-button {
 }
 
 .icon-action-button {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
   padding: 0;
-  border-radius: 10px;
+  border-radius: 9px;
   border: 1px solid var(--panda-border);
   background: color-mix(in srgb, var(--panda-card-bg) 88%, var(--panda-bg));
   color: var(--panda-text-sub);

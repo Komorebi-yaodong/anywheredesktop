@@ -1718,6 +1718,23 @@ html.dark .settings-page-container {
   --panda-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
 }
 
+
+html.dark .desktop-profile-avatar-editor {
+  background: color-mix(in srgb, var(--panda-card-bg) 88%, #000);
+  border-color: color-mix(in srgb, var(--panda-border) 88%, transparent);
+}
+
+html.dark .desktop-avatar-uploader :deep(.el-upload-dragger) {
+  background: color-mix(in srgb, var(--panda-card-bg) 94%, #000);
+}
+
+html.dark .icon-action-button {
+  background: color-mix(in srgb, var(--panda-card-bg) 90%, #000);
+  border-color: color-mix(in srgb, var(--panda-border) 82%, transparent);
+  color: var(--panda-text-sub);
+}
+
+
 .settings-scrollbar-wrapper {
   height: 100%;
   width: 100%;
@@ -1900,7 +1917,7 @@ html.dark .settings-page-container {
 
 
 .desktop-profile-item {
-  align-items: flex-start;
+  align-items: center;
 }
 
 .desktop-profile-input {
@@ -1908,36 +1925,52 @@ html.dark .settings-page-container {
 }
 
 .desktop-profile-avatar-editor {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-shrink: 0;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: var(--panda-bg);
+  border: 1px solid var(--panda-border);
 }
 
 .desktop-avatar-uploader {
   position: relative;
 }
 
+.desktop-avatar-uploader :deep(.el-upload),
 .desktop-avatar-uploader :deep(.el-upload-dragger) {
-  width: 96px;
-  height: 96px;
-  padding: 0;
+  width: 76px;
+  height: 76px;
   border-radius: 18px;
-  border: 1px dashed var(--panda-border);
-  background: var(--panda-bg);
+}
+
+.desktop-avatar-uploader :deep(.el-upload-dragger) {
+  padding: 0;
+  border: 1px dashed color-mix(in srgb, var(--panda-border) 88%, transparent);
+  background: color-mix(in srgb, var(--panda-card-bg) 82%, var(--panda-bg));
   overflow: hidden;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.desktop-avatar-uploader:hover :deep(.el-upload-dragger) {
+  border-color: color-mix(in srgb, var(--panda-accent) 24%, var(--panda-border));
+  background: color-mix(in srgb, var(--panda-card-bg) 92%, var(--panda-bg));
 }
 
 .desktop-avatar-preview {
-  width: 64px;
-  height: 64px;
-  border-radius: 20px;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  box-shadow: 0 10px 22px -16px rgba(24, 24, 27, 0.28);
 }
 
 .desktop-avatar-button-group {
   flex-direction: column;
+  gap: 8px;
+  padding-left: 2px;
 }
-
 
 .icon-hover-mask {
   position: absolute;
@@ -1945,10 +1978,11 @@ html.dark .settings-page-container {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(24, 24, 27, 0.36);
+  background: rgba(24, 24, 27, 0.42);
   color: #fff;
   opacity: 0;
   transition: opacity 0.2s ease;
+  border-radius: 18px;
 }
 
 .desktop-avatar-uploader:hover .icon-hover-mask {
@@ -1961,9 +1995,20 @@ html.dark .settings-page-container {
 }
 
 .icon-action-button {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
   padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--panda-border);
+  background: color-mix(in srgb, var(--panda-card-bg) 88%, var(--panda-bg));
+  color: var(--panda-text-sub);
+}
+
+.icon-action-button:hover {
+  color: var(--panda-text-main);
+  border-color: color-mix(in srgb, var(--panda-accent) 18%, var(--panda-border));
+  background: var(--panda-card-bg);
 }
 
 .icon-uploader-placeholder {
@@ -1974,10 +2019,13 @@ html.dark .settings-page-container {
   align-items: center;
   justify-content: center;
   color: var(--panda-text-sub);
+  gap: 4px;
 }
 
 .icon-upload-text {
   text-align: center;
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 

@@ -745,6 +745,24 @@
         "description": "Opens the desktop quick summon panel.",
         "placeholder": "Click to record shortcut"
       },
+      "profile": {
+        "nickname": {
+          "label": "User name",
+          "description": "Set the displayed name on the user side of the standalone chat window, up to 12 characters.",
+          "placeholder": "Enter user name"
+        },
+        "avatar": {
+          "label": "User avatar",
+          "description": "Set the user avatar shown in the standalone chat window. Supports upload, drag-and-drop, paste and crop.",
+          "uploadText": "Click, drag\nor paste avatar",
+          "editTooltip": "Edit avatar",
+          "removeTooltip": "Remove avatar",
+          "dialogTitle": "Edit user avatar",
+          "editorHint": "Drag to move, wheel to zoom",
+          "scale": "Scale",
+          "radius": "Radius"
+        }
+      },
       "promptShortcuts": {
         "title": "Prompt shortcut list",
         "description": "Bind a global shortcut to a prompt and launch it directly.",

@@ -745,6 +745,24 @@
         "description": "按下后打开桌面端 quick 召唤面板。",
         "placeholder": "点击开始录制快捷键"
       },
+      "profile": {
+        "nickname": {
+          "label": "用户名",
+          "description": "设置独立对话窗口中用户侧显示名称，最多 12 个字符。",
+          "placeholder": "请输入用户名"
+        },
+        "avatar": {
+          "label": "用户头像",
+          "description": "设置独立对话窗口中的用户头像，支持上传、拖拽、粘贴与裁剪。",
+          "uploadText": "点击、拖拽\n或粘贴头像",
+          "editTooltip": "编辑头像",
+          "removeTooltip": "移除头像",
+          "dialogTitle": "编辑用户头像",
+          "editorHint": "拖拽移动，滚轮缩放",
+          "scale": "缩放",
+          "radius": "圆角"
+        }
+      },
       "promptShortcuts": {
         "title": "快捷助手快捷键",
         "description": "可为指定快捷助手配置全局快捷键，触发后直接召唤。",

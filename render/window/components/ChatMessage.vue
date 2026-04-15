@@ -15,6 +15,7 @@ const props = defineProps({
   isLastMessage: Boolean,
   isLoading: Boolean,
   userAvatar: String,
+  userNickname: String,
   aiAvatar: String,
   isCollapsed: Boolean,
   isDarkMode: Boolean,
@@ -498,7 +499,12 @@ const truncateFilename = (filename, maxLength = 30) => {
     <!-- 用户消息 -->
     <div v-if="message.role === 'user'" class="message-wrapper user-wrapper" ref="messageWrapperRef">
       <div class="message-meta-header user-meta-header">
-        <span class="timestamp" v-if="message.timestamp">{{ formatTimestamp(message.timestamp) }}</span>
+        <div class="meta-info-column user-meta-info-column">
+          <div class="meta-name-row user-meta-name-row">
+            <span class="user-name">{{ userNickname || 'User' }}</span>
+          </div>
+          <span class="timestamp-row" v-if="message.timestamp">{{ formatTimestamp(message.timestamp) }}</span>
+        </div>
         <img :src="userAvatar" alt="User Avatar" @click="onAvatarClick('user', $event)"
           class="chat-avatar-top user-avatar">
       </div>
@@ -722,6 +728,31 @@ const truncateFilename = (filename, maxLength = 30) => {
   flex-direction: row;
   margin-bottom: 9px;
 }
+
+.user-meta-header {
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-meta-info-column {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.user-meta-name-row {
+  justify-content: flex-end;
+}
+
+.user-name {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 
 .ai-meta-header {
   flex-direction: row;
@@ -1438,6 +1469,12 @@ html.dark .message-files-vertical-list {
 html.dark .ai-name {
   color: var(--el-text-color-regular);
 }
+
+
+html.dark .user-name {
+  color: var(--el-text-color-regular);
+}
+
 
 .voice-name {
   opacity: 0.8;

@@ -1,8 +1,9 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, computed, inject, h, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Upload, FolderOpened, Refresh, Delete as DeleteIcon, Download, Plus, ArrowRight, Check, Warning, Remove } from '@element-plus/icons-vue'
+import { Upload, UploadFilled, FolderOpened, Refresh, Delete as DeleteIcon, Download, Plus, ArrowRight, Check, Warning, Remove, Edit } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
+import { reactive, nextTick } from 'vue'
 import draggable from 'vuedraggable'
 
 const { t, locale } = useI18n()
@@ -313,6 +314,7 @@ onMounted(() => {
   
   if (currentConfig.value) {
     ensureDesktopConfig();
+    ensureDesktopProfileConfig();
     initCardOrder();
   }
 });
@@ -320,6 +322,7 @@ onMounted(() => {
 watch(() => currentConfig.value, (newVal) => {
   if (newVal) {
     ensureDesktopConfig();
+    ensureDesktopProfileConfig();
     initCardOrder();
   }
 }, { once: true });
@@ -339,6 +342,186 @@ async function saveSingleSetting(keyPath, value) {
     console.error(`Error saving setting for ${keyPath}:`, error);
     ElMessage.error(`${t('setting.alerts.saveFailedPrefix')} ${keyPath}`);
   }
+}
+
+const DEFAULT_USER_NICKNAME = 'User'
+const USER_NICKNAME_MAX_LENGTH = 12
+const showAvatarEditDialog = ref(false)
+const avatarEditorState = reactive({
+  imgUrl: '',
+  scale: 1,
+  radius: 50,
+  offsetX: 0,
+  offsetY: 0
+})
+const avatarEditorCanvasRef = ref(null)
+let avatarEditorImageObj = null
+let isDraggingAvatarImage = false
+let avatarLastMouseX = 0
+let avatarLastMouseY = 0
+
+function normalizeDesktopNickname(value = '') {
+  const raw = typeof value === 'string' ? value : String(value || '')
+  const trimmed = raw.trim()
+  return trimmed.slice(0, USER_NICKNAME_MAX_LENGTH)
+}
+
+function ensureDesktopProfileConfig() {
+  ensureDesktopConfig()
+  if (!currentConfig.value.desktop.profile || typeof currentConfig.value.desktop.profile !== 'object') {
+    currentConfig.value.desktop.profile = {
+      nickname: DEFAULT_USER_NICKNAME,
+      avatar: ''
+    }
+  }
+
+  if (typeof currentConfig.value.desktop.profile.nickname !== 'string') {
+    currentConfig.value.desktop.profile.nickname = DEFAULT_USER_NICKNAME
+  }
+  currentConfig.value.desktop.profile.nickname = normalizeDesktopNickname(currentConfig.value.desktop.profile.nickname) || DEFAULT_USER_NICKNAME
+
+  if (typeof currentConfig.value.desktop.profile.avatar !== 'string') {
+    currentConfig.value.desktop.profile.avatar = ''
+  }
+}
+
+async function saveDesktopProfileConfig() {
+  ensureDesktopProfileConfig()
+  const normalizedNickname = normalizeDesktopNickname(currentConfig.value.desktop.profile.nickname)
+  if (!normalizedNickname) {
+    currentConfig.value.desktop.profile.nickname = DEFAULT_USER_NICKNAME
+  } else {
+    currentConfig.value.desktop.profile.nickname = normalizedNickname
+  }
+
+  await saveSingleSetting('desktop.profile', JSON.parse(JSON.stringify(currentConfig.value.desktop.profile)))
+  ElMessage.success(t('setting.alerts.saveSuccess'))
+}
+
+async function handleDesktopNicknameBlur() {
+  await saveDesktopProfileConfig()
+}
+
+function processProfileAvatarFile(file) {
+  const isImage = file?.type?.startsWith('image/')
+  if (!isImage) {
+    ElMessage.error('头像仅支持 JPG、PNG、WEBP 等图片格式')
+    return
+  }
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    openProfileAvatarEditor(e.target?.result || '')
+  }
+  reader.readAsDataURL(file)
+}
+
+function openProfileAvatarEditor(dataUrl) {
+  if (!dataUrl) return
+  avatarEditorState.imgUrl = dataUrl
+  avatarEditorState.scale = 1
+  avatarEditorState.radius = 50
+  avatarEditorState.offsetX = 0
+  avatarEditorState.offsetY = 0
+
+  avatarEditorImageObj = new Image()
+  avatarEditorImageObj.onload = () => {
+    showAvatarEditDialog.value = true
+    nextTick(() => drawProfileAvatarCanvas())
+  }
+  avatarEditorImageObj.src = dataUrl
+}
+
+function drawProfileAvatarCanvas() {
+  const canvas = avatarEditorCanvasRef.value
+  if (!canvas || !avatarEditorImageObj) return
+  const ctx = canvas.getContext('2d')
+  const size = 256
+
+  ctx.clearRect(0, 0, size, size)
+  ctx.save()
+  ctx.beginPath()
+  const r = (avatarEditorState.radius / 100) * size
+  ctx.roundRect(0, 0, size, size, r)
+  ctx.clip()
+
+  const imgAspect = avatarEditorImageObj.width / avatarEditorImageObj.height
+  let drawW = size * avatarEditorState.scale
+  let drawH = size * avatarEditorState.scale
+
+  if (imgAspect > 1) {
+    drawH = size * avatarEditorState.scale
+    drawW = drawH * imgAspect
+  } else {
+    drawW = size * avatarEditorState.scale
+    drawH = drawW / imgAspect
+  }
+
+  const x = (size - drawW) / 2 + avatarEditorState.offsetX
+  const y = (size - drawH) / 2 + avatarEditorState.offsetY
+  ctx.drawImage(avatarEditorImageObj, x, y, drawW, drawH)
+  ctx.restore()
+}
+
+async function saveEditedProfileAvatar() {
+  const canvas = avatarEditorCanvasRef.value
+  if (!canvas) return
+  ensureDesktopProfileConfig()
+  currentConfig.value.desktop.profile.avatar = canvas.toDataURL('image/png')
+  showAvatarEditDialog.value = false
+  await saveDesktopProfileConfig()
+}
+
+function handleProfileAvatarUploadChange(file) {
+  processProfileAvatarFile(file)
+  return false
+}
+
+function handleProfileAvatarDrop(event) {
+  const file = event.dataTransfer?.files?.[0]
+  if (file) processProfileAvatarFile(file)
+}
+
+function handleProfileAvatarPaste(event) {
+  const items = (event.clipboardData || event.originalEvent?.clipboardData)?.items || []
+  for (const item of items) {
+    if (item.kind === 'file') {
+      const blob = item.getAsFile()
+      if (blob) processProfileAvatarFile(blob)
+      return
+    }
+  }
+}
+
+function handleProfileAvatarCanvasMouseDown(event) {
+  isDraggingAvatarImage = true
+  avatarLastMouseX = event.clientX
+  avatarLastMouseY = event.clientY
+}
+
+function handleProfileAvatarCanvasMouseMove(event) {
+  if (!isDraggingAvatarImage) return
+  const dx = event.clientX - avatarLastMouseX
+  const dy = event.clientY - avatarLastMouseY
+  avatarEditorState.offsetX += dx
+  avatarEditorState.offsetY += dy
+  avatarLastMouseX = event.clientX
+  avatarLastMouseY = event.clientY
+  drawProfileAvatarCanvas()
+}
+
+function handleProfileAvatarCanvasMouseUp() {
+  isDraggingAvatarImage = false
+}
+
+function handleProfileAvatarCanvasWheel(event) {
+  event.preventDefault()
+  const delta = event.deltaY > 0 ? -0.1 : 0.1
+  let newScale = avatarEditorState.scale + delta
+  if (newScale < 0.1) newScale = 0.1
+  if (newScale > 5) newScale = 5
+  avatarEditorState.scale = newScale
+  drawProfileAvatarCanvas()
 }
 
 function ensureDesktopConfig() {
@@ -1200,6 +1383,64 @@ async function selectLocalChatPath() {
 
                   
                   <div v-if="element.id === 'desktop'" class="card-body">
+                    <div class="setting-option-item desktop-profile-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.desktop.profile.nickname.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.desktop.profile.nickname.description') }}</span>
+                      </div>
+                      <el-input
+                        v-model="currentConfig.desktop.profile.nickname"
+                        maxlength="12"
+                        show-word-limit
+                        class="desktop-profile-input"
+                        :placeholder="t('setting.desktop.profile.nickname.placeholder')"
+                        @blur="handleDesktopNicknameBlur"
+                      />
+                    </div>
+
+                    <div class="setting-option-item desktop-profile-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.desktop.profile.avatar.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.desktop.profile.avatar.description') }}</span>
+                      </div>
+                      <div class="desktop-profile-avatar-editor" @paste="handleProfileAvatarPaste" tabindex="0" style="outline: none;">
+                        <el-upload
+                          class="desktop-avatar-uploader"
+                          action="#"
+                          drag
+                          :show-file-list="false"
+                          :before-upload="handleProfileAvatarUploadChange"
+                          accept="image/png, image/jpeg, image/webp"
+                          @drop.prevent="handleProfileAvatarDrop"
+                          @dragover.prevent
+                        >
+                          <template v-if="currentConfig.desktop.profile.avatar">
+                            <el-avatar :src="currentConfig.desktop.profile.avatar" shape="square" :size="64" class="desktop-avatar-preview" />
+                            <div class="icon-hover-mask" @click.stop.prevent="openProfileAvatarEditor(currentConfig.desktop.profile.avatar)">
+                              <el-icon><Edit /></el-icon>
+                            </div>
+                          </template>
+                          <template v-else>
+                            <div class="icon-uploader-placeholder">
+                              <el-icon :size="20"><UploadFilled /></el-icon>
+                              <div class="icon-upload-text" style="font-size: 10px; margin-top: 4px; color: var(--panda-text-sub); line-height: 1.2; white-space: pre-line;">
+                                {{ t('setting.desktop.profile.avatar.uploadText') }}
+                              </div>
+                            </div>
+                          </template>
+                        </el-upload>
+
+                        <div class="icon-button-group desktop-avatar-button-group">
+                          <el-button class="icon-action-button" size="small" @click="currentConfig.desktop.profile.avatar && openProfileAvatarEditor(currentConfig.desktop.profile.avatar)" :disabled="!currentConfig.desktop.profile.avatar" :title="t('setting.desktop.profile.avatar.editTooltip')">
+                            <el-icon><Edit /></el-icon>
+                          </el-button>
+                          <el-button class="icon-action-button" size="small" @click="currentConfig.desktop.profile.avatar = ''; saveDesktopProfileConfig()" :disabled="!currentConfig.desktop.profile.avatar" :title="t('setting.desktop.profile.avatar.removeTooltip')">
+                            <el-icon><DeleteIcon /></el-icon>
+                          </el-button>
+                        </div>
+                      </div>
+                    </div>
+
                     <div class="setting-option-item">
                       <div class="setting-text-content">
                         <span class="setting-option-label">{{ t('setting.desktop.closeToTray.label') }}</span>
@@ -1370,7 +1611,34 @@ async function selectLocalChatPath() {
       </div>
     </el-scrollbar>
 
-    <el-dialog v-model="isBackupManagerVisible" :title="t('setting.webdav.manager.title')" width="700px" top="10vh"
+    
+    <el-dialog v-model="showAvatarEditDialog" :title="t('setting.desktop.profile.avatar.dialogTitle')" width="400px" :close-on-click-modal="false" append-to-body>
+      <div class="icon-edit-container">
+        <div class="canvas-wrapper">
+          <canvas ref="avatarEditorCanvasRef" width="256" height="256" @mousedown="handleProfileAvatarCanvasMouseDown"
+            @mousemove="handleProfileAvatarCanvasMouseMove" @mouseup="handleProfileAvatarCanvasMouseUp" @mouseleave="handleProfileAvatarCanvasMouseUp"
+            @wheel="handleProfileAvatarCanvasWheel"></canvas>
+          <div class="canvas-hint">{{ t('setting.desktop.profile.avatar.editorHint') }}</div>
+        </div>
+
+        <div class="editor-controls">
+          <div class="control-row">
+            <span class="label">{{ t('setting.desktop.profile.avatar.scale') }}</span>
+            <el-slider v-model="avatarEditorState.scale" :min="0.1" :max="3" :step="0.1" @input="drawProfileAvatarCanvas" />
+          </div>
+          <div class="control-row">
+            <span class="label">{{ t('setting.desktop.profile.avatar.radius') }}</span>
+            <el-slider v-model="avatarEditorState.radius" :min="0" :max="50" :step="1" @input="drawProfileAvatarCanvas" :format-tooltip="val => val + '%'" />
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showAvatarEditDialog = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="saveEditedProfileAvatar">{{ t('common.confirm') }}</el-button>
+      </template>
+    </el-dialog>
+
+<el-dialog v-model="isBackupManagerVisible" :title="t('setting.webdav.manager.title')" width="700px" top="10vh"
       :destroy-on-close="true" style="max-width: 90vw;" class="backup-manager-dialog">
       <el-table :data="paginatedFiles" v-loading="isTableLoading" @selection-change="handleSelectionChange"
         style="width: 100%" max-height="50vh" border stripe>
@@ -1629,6 +1897,139 @@ html.dark .settings-page-container {
 .shortcut-record-btn.small {
   min-width: 180px;
 }
+
+
+.desktop-profile-item {
+  align-items: flex-start;
+}
+
+.desktop-profile-input {
+  width: 220px;
+}
+
+.desktop-profile-avatar-editor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.desktop-avatar-uploader {
+  position: relative;
+}
+
+.desktop-avatar-uploader :deep(.el-upload-dragger) {
+  width: 96px;
+  height: 96px;
+  padding: 0;
+  border-radius: 18px;
+  border: 1px dashed var(--panda-border);
+  background: var(--panda-bg);
+  overflow: hidden;
+}
+
+.desktop-avatar-preview {
+  width: 64px;
+  height: 64px;
+  border-radius: 20px;
+}
+
+.desktop-avatar-button-group {
+  flex-direction: column;
+}
+
+
+.icon-hover-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(24, 24, 27, 0.36);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.desktop-avatar-uploader:hover .icon-hover-mask {
+  opacity: 1;
+}
+
+.icon-button-group {
+  display: flex;
+  gap: 8px;
+}
+
+.icon-action-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.icon-uploader-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--panda-text-sub);
+}
+
+.icon-upload-text {
+  text-align: center;
+}
+
+
+.icon-edit-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.canvas-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.canvas-wrapper canvas {
+  width: 256px;
+  height: 256px;
+  border-radius: 20px;
+  background: var(--panda-bg);
+  border: 1px solid var(--panda-border);
+  cursor: grab;
+}
+
+.canvas-wrapper canvas:active {
+  cursor: grabbing;
+}
+
+.canvas-hint {
+  font-size: 12px;
+  color: var(--panda-text-sub);
+}
+
+.editor-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.control-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.control-row .label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--panda-text-main);
+}
+
 
 
 .desktop-shortcut-empty {

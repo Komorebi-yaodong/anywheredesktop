@@ -152,6 +152,10 @@ export const defaultConfig = {
         quickSummon: 'Alt+A',
         appendFollowUp: 'Alt+S',
         promptBindings: []
+      },
+      profile: {
+        nickname: 'User',
+        avatar: ''
       }
     },
 
@@ -432,6 +436,10 @@ function checkConfig(inputConfig) {
         quickSummon: 'Alt+A',
         appendFollowUp: 'Alt+S',
         promptBindings: []
+      },
+      profile: {
+        nickname: 'User',
+        avatar: ''
       }
     },
     settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],
@@ -554,6 +562,31 @@ function checkConfig(inputConfig) {
         changed = true
       }
     }
+
+    if (!config.desktop.profile || typeof config.desktop.profile !== 'object') {
+      config.desktop.profile = deepClone(rootDefaults.desktop.profile)
+      changed = true
+    } else {
+      if (typeof config.desktop.profile.nickname !== 'string') {
+        config.desktop.profile.nickname = rootDefaults.desktop.profile.nickname
+        changed = true
+      } else {
+        const normalizedNickname = config.desktop.profile.nickname.trim().slice(0, 12)
+        if (config.desktop.profile.nickname !== normalizedNickname) {
+          config.desktop.profile.nickname = normalizedNickname
+          changed = true
+        }
+        if (!config.desktop.profile.nickname) {
+          config.desktop.profile.nickname = rootDefaults.desktop.profile.nickname
+          changed = true
+        }
+      }
+
+      if (typeof config.desktop.profile.avatar !== 'string') {
+        config.desktop.profile.avatar = rootDefaults.desktop.profile.avatar
+        changed = true
+      }
+    }
   }
 
   if (!config.settingsCardCollapsed || typeof config.settingsCardCollapsed !== 'object') {
@@ -585,7 +618,7 @@ function checkConfig(inputConfig) {
     }
   }
 
-const builtinServers = getBuiltinServers()
+  const builtinServers = getBuiltinServers()
   if (builtinServers && typeof builtinServers === 'object') {
     const mergedMcpServers = { ...config.mcpServers }
     for (const [id, server] of Object.entries(builtinServers)) {
@@ -963,9 +996,20 @@ export function notifySkillsUpdated() {
 }
 
 export async function getUser() {
+  const configResult = await getConfig()
+  const config = configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
+  const profile = config?.desktop?.profile && typeof config.desktop.profile === 'object'
+    ? config.desktop.profile
+    : {}
+
+  const rawNickname = typeof profile.nickname === 'string' ? profile.nickname.trim() : ''
+  const nickname = rawNickname.slice(0, 12) || 'User'
+  const rawAvatar = typeof profile.avatar === 'string' ? profile.avatar.trim() : ''
+  const avatar = rawAvatar || getResourceFileUrl('user.png')
+
   return {
-    avatar: getResourceFileUrl('user.png'),
-    nickname: 'User'
+    avatar,
+    nickname
   }
 }
 

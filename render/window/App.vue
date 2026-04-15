@@ -296,6 +296,7 @@ if (isDarkInit) {
 
 const defaultConfig = window.api.defaultConfig;
 const UserAvart = ref(defaultUserAvatarUrl);
+const userNickname = ref('User');
 const AIAvart = ref(defaultAiAvatarUrl);
 const favicon = ref(defaultAiAvatarUrl);
 const CODE = ref("");
@@ -1918,6 +1919,23 @@ onMounted(async () => {
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener('blur', handleWindowBlur);
 
+  const refreshUserProfile = async () => {
+    try {
+      const userInfo = await window.api.getUser();
+      const nextAvatar = typeof userInfo?.avatar === 'string' ? userInfo.avatar.trim() : '';
+      const nextNickname = typeof userInfo?.nickname === 'string' ? userInfo.nickname.trim() : '';
+      if (!nextAvatar || nextAvatar.includes('/resources/user.png') || nextAvatar.startsWith('file:///')) {
+        UserAvart.value = defaultUserAvatarUrl;
+      } else {
+        UserAvart.value = nextAvatar;
+      }
+      userNickname.value = nextNickname || 'User';
+    } catch (err) {
+      UserAvart.value = defaultUserAvatarUrl;
+      userNickname.value = 'User';
+    }
+  };
+
   const initializeWindow = async (data = null) => {
     try {
       const configData = await window.api.getConfig();
@@ -1932,17 +1950,7 @@ onMounted(async () => {
       showDismissibleMessage.error('加载用户配置失败，使用默认配置。');
     }
 
-    try {
-      const userInfo = await window.api.getUser();
-      const nextAvatar = typeof userInfo?.avatar === 'string' ? userInfo.avatar.trim() : '';
-      if (!nextAvatar || nextAvatar.includes('/resources/user.png') || nextAvatar.startsWith('file:///')) {
-        UserAvart.value = defaultUserAvatarUrl;
-      } else {
-        UserAvart.value = nextAvatar;
-      }
-    } catch (err) {
-      UserAvart.value = defaultUserAvatarUrl;
-    }
+    await refreshUserProfile();
 
     if (data?.os) {
       currentOS.value = data.os;
@@ -2242,6 +2250,7 @@ onMounted(async () => {
       if (!newConfig || isClosingWindow.value) return;
 
       currentConfig.value = newConfig;
+      await refreshUserProfile();
       await applyPromptRuntimeConfig(newConfig, {
         skipIfSavingWindowSettings: true,
         preserveCurrentZoom: true
@@ -5203,7 +5212,7 @@ const scrollToMessageByIndex = (index) => {
             @update-auto-approve="handleToggleAutoApprove" @confirm-tool="handleToolApproval"
             @reject-tool="handleToolApproval" :ref="el => setMessageRef(el, message.id)" :message="message"
             :index="index" :is-last-message="index === chat_show.length - 1" :is-loading="loading"
-            :user-avatar="UserAvart" :ai-avatar="AIAvart" :is-collapsed="isCollapsed(index)"
+            :user-avatar="UserAvart" :user-nickname="userNickname" :ai-avatar="AIAvart" :is-collapsed="isCollapsed(index)"
             :is-dark-mode="currentConfig.isDarkMode" @delete-message="handleDeleteMessage" @copy-text="handleCopyText"
             @re-ask="handleReAsk" @toggle-collapse="handleToggleCollapse" @show-system-prompt="handleShowSystemPrompt"
             @avatar-click="onAvatarClick" @edit-message-requested="handleEditStart" @edit-finished="handleEditEnd"

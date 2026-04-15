@@ -226,8 +226,8 @@ const loadReadStatus = () => {
 };
 
 // 定义源地址常量
-const GITHUB_BASE = 'https://raw.githubusercontent.com/Komorebi-yaodong/Anywhere/main/';
-const GITEE_BASE = 'https://gitee.com/Komorebi-yaodong/Anywhere/raw/main/';
+const GITHUB_BASE = 'https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/';
+const GITEE_BASE = 'https://gitee.com/Komorebi-yaodong/anywhere_/raw/main/';
 
 /**
  * 尝试从 GitHub 获取，失败则回退到 Gitee

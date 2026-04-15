@@ -1368,7 +1368,6 @@ async function refreshPromptsConfig() {
   align-items: center;
   height: 45px;
   padding: 0 12px;
-  background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);
   position: sticky;
   top: 0;
@@ -1520,19 +1519,41 @@ async function refreshPromptsConfig() {
 }
 
 .search-input-container {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  padding: 8px 0px 8px 0px;
-  margin: 0px 0px 5px 0px;
+    position: sticky;
+    top: 0;
+    z-index: 12;
+    padding: 4px 0 16px;
+    margin: 0 0 12px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.88) 72%, rgba(255, 255, 255, 0) 100%);
+}
+
+html.dark .search-input-container {
+    background: transparent;
 }
 
 .search-input-container :deep(.el-input__wrapper) {
-  box-shadow: 0 0 0 1px var(--border-primary) inset !important;
+    min-height: 54px;
+    padding: 0 18px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.92) !important;
+    box-shadow: 0 0 0 1px rgba(228, 228, 231, 0.95) inset, 0 10px 20px -18px rgba(24, 24, 27, 0.16) !important;
+}
+
+html.dark .search-input-container :deep(.el-input__wrapper) {
+    background: rgba(39, 39, 42, 0.92) !important;
+    box-shadow: 0 0 0 1px rgba(82, 82, 91, 0.66) inset, 0 12px 22px -18px rgba(0, 0, 0, 0.46) !important;
 }
 
 .search-input-container :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 1px var(--text-accent) inset !important;
+    box-shadow: 0 0 0 1px var(--bg-accent) inset, 0 12px 22px -18px rgba(24, 24, 27, 0.22) !important;
+}
+
+.search-input-container :deep(.el-input__inner) {
+    font-size: 16px;
+}
+
+.search-input-container :deep(.el-input__prefix-inner) {
+    color: var(--text-tertiary);
 }
 
 .prompts-grid-container {

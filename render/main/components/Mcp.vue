@@ -685,22 +685,24 @@ async function triggerConnectionTest(server) {
                                 </el-select>
                             </el-form-item>
                         </el-col>
-                        <el-col :span="6" class="switches-container">
-                            <el-form-item :label="t('mcp.activeLabel')" class="compact-form-item">
-                                <el-switch v-model="editingServer.isActive" />
-                            </el-form-item>
-                            <el-form-item class="compact-form-item">
-                                <template #label>
-                                    <span>{{ t('mcp.persistent.label') }}</span>
-                                    <el-tooltip :content="t('mcp.persistent.tooltip')" placement="top">
-                                        <el-icon style="margin-left: 4px; cursor: help; vertical-align: middle;">
-                                            <QuestionFilled />
-                                        </el-icon>
-                                    </el-tooltip>
-                                </template>
-                                <el-switch v-model="editingServer.isPersistent"
-                                    style="--el-switch-on-color: #67C23A;" />
-                            </el-form-item>
+                        <el-col :span="6">
+                            <div class="switches-container">
+                                <el-form-item :label="t('mcp.activeLabel')" class="compact-form-item">
+                                    <el-switch v-model="editingServer.isActive" />
+                                </el-form-item>
+                                <el-form-item class="compact-form-item">
+                                    <template #label>
+                                        <span>{{ t('mcp.persistent.label') }}</span>
+                                        <el-tooltip :content="t('mcp.persistent.tooltip')" placement="top">
+                                            <el-icon style="margin-left: 4px; cursor: help; vertical-align: middle;">
+                                                <QuestionFilled />
+                                            </el-icon>
+                                        </el-tooltip>
+                                    </template>
+                                    <el-switch v-model="editingServer.isPersistent"
+                                        style="--el-switch-on-color: #67C23A;" />
+                                </el-form-item>
+                            </div>
                         </el-col>
                     </el-row>
                     <el-form-item :label="t('mcp.descriptionLabel')">
@@ -1424,9 +1426,11 @@ html.dark .advanced-collapse {
 }
 
 .switches-container {
-    display: flex;
-    justify-content: space-around;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 12px;
     align-items: flex-start;
+    width: 100%;
     padding-top: 8px;
 }
 
@@ -1434,6 +1438,8 @@ html.dark .advanced-collapse {
     display: flex;
     flex-direction: column;
     align-items: center;
+    width: 100%;
+    min-width: 0;
     margin-bottom: 0;
 }
 
@@ -1443,9 +1449,15 @@ html.dark .advanced-collapse {
     padding: 0 !important;
     display: flex;
     align-items: center;
+    justify-content: center;
+    width: 100%;
+    white-space: nowrap;
 }
 
 .compact-form-item :deep(.el-form-item__content) {
+    display: flex;
+    justify-content: center;
+    width: 100%;
     line-height: 1;
 }
 

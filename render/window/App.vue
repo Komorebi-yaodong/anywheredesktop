@@ -1211,8 +1211,9 @@ watch(focusedMessageIndex, (value) => {
   if (value === null || value === undefined) return;
   centerActiveNavNode(value);
 });
-watch(() => navMessages.value.length, () => {
-  if (!navMessages.value.length) {
+watch(() => chat_show.value.length, () => {
+  const hasNavigableMessage = chat_show.value.some(msg => msg?.role !== 'system');
+  if (!hasNavigableMessage) {
     focusedMessageIndex.value = null;
     return;
   }

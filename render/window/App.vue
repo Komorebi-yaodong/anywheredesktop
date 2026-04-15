@@ -858,21 +858,6 @@ const getToolCounts = (serverId) => {
 
 const isMcpActive = computed(() => sessionMcpServerIds.value.length > 0);
 
-const mcpConnectionCount = computed(() => {
-  if (!currentConfig.value || !currentConfig.value.mcpServers) return 0;
-  const persistentCount = tempSessionMcpServerIds.value.filter(id => {
-    const server = currentConfig.value.mcpServers[id];
-    return server && server.isPersistent && server.type?.toLowerCase() !== 'builtin';
-  }).length;
-
-  // 2. 计算是否占用了共享的临时连接 Worker (排除 builtin)
-  const hasOnDemand = tempSessionMcpServerIds.value.some(id => {
-    const server = currentConfig.value.mcpServers[id];
-    return server && !server.isPersistent && server.type?.toLowerCase() !== 'builtin';
-  });
-  return persistentCount + (hasOnDemand ? 1 : 0);
-});
-
 const availableMcpServers = computed(() => {
   if (!currentConfig.value || !currentConfig.value.mcpServers) return [];
   return Object.entries(currentConfig.value.mcpServers)
@@ -5568,21 +5553,8 @@ const scrollToMessageByIndex = (index) => {
     <template #footer>
       <div class="mcp-dialog-footer">
         <div class="footer-left-controls"> <!-- 使用新容器包裹左侧内容 -->
-          <span class="mcp-limit-hint" :class="{ 'warning': mcpConnectionCount > 5 }">
-            连接数：{{ 5 - mcpConnectionCount }}/5
-            <el-tooltip placement="top">
-              <template #content>
-                持久连接各占1个名额<br>
-                所有临时连接共占1个名额<br>
-                内置MCP不占用名额
-              </template>
-              <el-icon style="vertical-align: middle; margin-left: 4px; cursor: help;">
-                <QuestionFilled />
-              </el-icon>
-            </el-tooltip>
-          </span>
           <el-checkbox v-model="isAutoApproveTools" label="自动批准工具调用" class="bw-checkbox"
-            style="margin-left: 40px; margin-right: 0;" />
+            style="margin-left: 0; margin-right: 0;" />
         </div>
         <div>
           <el-button type="primary" class="bw-btn"

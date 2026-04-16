@@ -234,6 +234,7 @@ async function readRemoteSessionMetadata(client, remoteFilePath, basename) {
 export async function listBackups(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig)
   const remoteDir = config.path
+  const includeSessionMetadata = input?.includeSessionMetadata === true
 
   let contents
   try {
@@ -259,6 +260,10 @@ export async function listBackups(input = {}) {
           return null
         }
 
+        if (!includeSessionMetadata) {
+          return serialized
+        }
+
         const remotePath = `${remoteDir}/${serialized.basename}`
         const sessionMetadata = await readRemoteSessionMetadata(client, remotePath, serialized.basename)
         return {
@@ -276,9 +281,11 @@ export async function listBackups(input = {}) {
     files: files
       .filter(Boolean)
       .sort(
-        (a, b) =>
-          new Date(b.createdAt || b.updatedAt || b.lastmod).getTime() -
-          new Date(a.createdAt || a.updatedAt || a.lastmod).getTime()
+        includeSessionMetadata
+          ? (a, b) =>
+              new Date(b.createdAt || b.updatedAt || b.lastmod).getTime() -
+              new Date(a.createdAt || a.updatedAt || a.lastmod).getTime()
+          : (a, b) => new Date(b.lastmod).getTime() - new Date(a.lastmod).getTime()
       )
   }
 }

@@ -1118,7 +1118,9 @@ async function fetchBackupFiles() {
   isTableLoading.value = true;
 
   try {
-    const result = await window.api?.listWebdavBackups?.(buildWebdavInput())
+    const result = await window.api?.listWebdavBackups?.(
+      buildWebdavInput({ includeSessionMetadata: false })
+    )
 
     if (!result || result.ok === false) {
       throw new Error(getErrorMessage(result, 'webdav_list_failed'))

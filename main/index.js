@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray } from 'electron'
+import { app, BrowserWindow, Menu, Tray, nativeTheme } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
 import {
@@ -37,6 +37,18 @@ const debugMainLog = () => {}
 const debugMainError = () => {}
 
 let appTray = null
+
+function resolveNativeThemeSource(config = {}) {
+  const themeMode = typeof config?.themeMode === 'string' ? config.themeMode : 'system'
+  if (themeMode === 'dark') return 'dark'
+  if (themeMode === 'light') return 'light'
+  return 'system'
+}
+
+function syncNativeThemeFromConfig(config = {}) {
+  nativeTheme.themeSource = resolveNativeThemeSource(config)
+}
+
 
 process.on('uncaughtException', (error) => {
   debugMainError('process:uncaughtException', error)
@@ -370,6 +382,7 @@ async function syncDesktopRuntimeFromConfig() {
   const config = result?.config && typeof result.config === 'object' ? result.config : {}
   const desktop = config.desktop && typeof config.desktop === 'object' ? config.desktop : {}
 
+  syncNativeThemeFromConfig(config)
   setMainWindowCloseBehavior(desktop.closeToTray === false ? 'close' : 'tray')
 
   try {

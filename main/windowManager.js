@@ -11,6 +11,10 @@ import { WINDOW_EVENT_CHANNEL } from './eventBus.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+
+const MAIN_WINDOW_DARK_BACKGROUND = '#17171c'
+const MAIN_WINDOW_LIGHT_BACKGROUND = '#fffdf7'
+
 const WINDOWS = {
   main: {
     title: 'AI Anywhere Desktop - Main',
@@ -19,7 +23,9 @@ const WINDOWS = {
     devPath: '/main/index.html',
     width: 1200,
     height: 820,
-    options: {}
+    options: {
+      backgroundColor: '#fffdf7'
+    }
   },
   window: {
     title: 'AI Anywhere Desktop - Window',
@@ -840,11 +846,24 @@ export async function openWindow(type = 'main', payload = null) {
   const targetType = typeof type === 'string' ? type : 'main'
   const openPayload = normalizeWindowOpenPayload(payload)
   const baseConfig = WINDOWS[targetType]
-  const configResult = (targetType === 'window' || targetType === 'fast') ? await getConfig() : null
+  const configResult = (targetType === 'window' || targetType === 'fast' || targetType === 'main') ? await getConfig() : null
   const fullConfig =
     configResult?.config && typeof configResult.config === 'object'
       ? configResult.config
       : defaultConfig.config
+
+  const dynamicBaseConfig =
+    targetType === 'main'
+      ? {
+          ...baseConfig,
+          options: {
+            ...(baseConfig?.options || {}),
+            backgroundColor: Boolean(fullConfig?.isDarkMode)
+              ? MAIN_WINDOW_DARK_BACKGROUND
+              : MAIN_WINDOW_LIGHT_BACKGROUND
+          }
+        }
+      : baseConfig
 
   if (!baseConfig) {
     throw new Error(`[window] unknown window type: ${targetType}`)
@@ -853,7 +872,7 @@ export async function openWindow(type = 'main', payload = null) {
   if (SINGLETON_TYPES.has(targetType)) {
     const existing = getSingletonWindow(targetType)
     if (existing) {
-      const config = resolveWindowConfig(baseConfig, openPayload, fullConfig)
+      const config = resolveWindowConfig(dynamicBaseConfig, openPayload, fullConfig)
       if (targetType === 'quick') {
         applyQuickWindowBounds(existing, config)
       }
@@ -906,7 +925,7 @@ export async function openWindow(type = 'main', payload = null) {
       return { ok: true, type: targetType, id: targetType, reused: true, payload: openPayload }
     }
 
-    const config = resolveWindowConfig(baseConfig, openPayload, fullConfig)
+    const config = resolveWindowConfig(dynamicBaseConfig, openPayload, fullConfig)
     const initMessage = targetType === 'window'
       ? await buildWindowInitMessage(openPayload, targetType)
       : targetType === 'quick'

@@ -496,8 +496,22 @@ const api = {
   },
   onMcpCacheUpdated: (callback) => {
     if (typeof callback !== 'function') return
-    electronAPI.ipcRenderer.on('window:mcpCacheUpdated', (_event, serverId) => callback(serverId))
-    electronAPI.ipcRenderer.on('mcp-cache-updated', (_event, serverId) => callback(serverId))
+    const normalizePayload = (payload) => {
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        return {
+          serverId: typeof payload.serverId === 'string' ? payload.serverId : '',
+          reason: typeof payload.reason === 'string' ? payload.reason : '',
+          emitReloadSuggested: payload.emitReloadSuggested !== false
+        }
+      }
+      return {
+        serverId: typeof payload === 'string' ? payload : '',
+        reason: '',
+        emitReloadSuggested: true
+      }
+    }
+    electronAPI.ipcRenderer.on('window:mcpCacheUpdated', (_event, payload) => callback(normalizePayload(payload)))
+    electronAPI.ipcRenderer.on('mcp-cache-updated', (_event, payload) => callback(normalizePayload(payload)))
   },
   onSkillsUpdated: (callback) => {
     if (typeof callback !== 'function') return

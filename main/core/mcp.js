@@ -5,6 +5,7 @@ import { getBuiltinTools, invokeBuiltinTool } from './mcp_builtin.js'
 const persistentClients = new Map()
 const fullToolInfoMap = new Map()
 const currentlyConnectedServerIds = new Set()
+const inFlightToolFetchMap = new Map()
 
 function normalizeTransportType(transport = '') {
   const streamableHttpRegex = /^streamable[\s_-]?http$/i
@@ -78,16 +79,37 @@ function getToolEnabledState(cachedToolsMap, serverId, toolName) {
   return true
 }
 
-function saveToolCache(saveCacheCallback, id, tools, cachedToolsMap = {}) {
+function saveToolCache(saveCacheCallback, id, tools, cachedToolsMap = {}, options = {}) {
   if (typeof saveCacheCallback !== 'function') return
 
   const oldToolsCache = cachedToolsMap[id] || []
   const sanitizedTools = sanitizeToolsForCache(tools, oldToolsCache)
   const cleanTools = JSON.parse(JSON.stringify(sanitizedTools))
 
-  saveCacheCallback(id, cleanTools).catch((error) => {
+  saveCacheCallback(id, cleanTools, {
+    emitEvent: options.emitEvent !== false,
+    reason: options.reason || 'manual'
+  }).catch((error) => {
     console.error(`[MCP] Auto-cache failed for ${id}:`, error)
   })
+}
+
+
+function getToolFetchKey(id, config = {}) {
+  const normalizedConfig = {
+    id,
+    transport: config.transport || config.type || '',
+    command: config.command || '',
+    args: Array.isArray(config.args) ? [...config.args] : [],
+    url: config.url || config.baseUrl || '',
+    env: config.env && typeof config.env === 'object' ? Object.entries(config.env).sort(([a], [b]) => a.localeCompare(b)) : [],
+    headers: config.headers && typeof config.headers === 'object' ? Object.entries(config.headers).sort(([a], [b]) => a.localeCompare(b)) : [],
+    isPersistent: Boolean(config.isPersistent),
+    currentAgentName: config.currentAgentName || '',
+    prompts: config.prompts && typeof config.prompts === 'object' ? config.prompts : null
+  }
+
+  return JSON.stringify(normalizedConfig)
 }
 
 function registerToolsToMap({ id, config, tools, isPersistent, isBuiltin, cachedToolsMap = {}, includeInstance = false }) {
@@ -111,31 +133,49 @@ function registerToolsToMap({ id, config, tools, isPersistent, isBuiltin, cached
  * 用于测试连接，以及无缓存时的临时连接获取
  */
 export async function connectAndFetchTools(id, config = {}) {
-  if (config.transport === 'builtin' || config.type === 'builtin') {
-    return await getBuiltinTools(id, { configPrompts: config?.prompts, currentAgentName: config?.currentAgentName })
+  const fetchKey = getToolFetchKey(id, config)
+  const inFlightRequest = inFlightToolFetchMap.get(fetchKey)
+  if (inFlightRequest) {
+    return await inFlightRequest
   }
 
-  let tempClient = null
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 15_000)
+  const requestPromise = (async () => {
+    if (config.transport === 'builtin' || config.type === 'builtin') {
+      return await getBuiltinTools(id, { configPrompts: config?.prompts, currentAgentName: config?.currentAgentName })
+    }
+
+    let tempClient = null
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 15_000)
+
+    try {
+      const serverConfig = buildServerConfig(id, config)
+      tempClient = new MultiServerMCPClient({ [id]: serverConfig }, { signal: controller.signal })
+      return await tempClient.getTools()
+    } catch (error) {
+      console.error(`[MCP] Error fetching tools from ${id}:`, error)
+      throw error
+    } finally {
+      clearTimeout(timeoutId)
+      controller.abort()
+
+      if (tempClient) {
+        try {
+          await tempClient.close()
+        } catch (closeError) {
+          console.error(`[MCP] Error closing connection for ${id}:`, closeError)
+        }
+      }
+    }
+  })()
+
+  inFlightToolFetchMap.set(fetchKey, requestPromise)
 
   try {
-    const serverConfig = buildServerConfig(id, config)
-    tempClient = new MultiServerMCPClient({ [id]: serverConfig }, { signal: controller.signal })
-    return await tempClient.getTools()
-  } catch (error) {
-    console.error(`[MCP] Error fetching tools from ${id}:`, error)
-    throw error
+    return await requestPromise
   } finally {
-    clearTimeout(timeoutId)
-    controller.abort()
-
-    if (tempClient) {
-      try {
-        await tempClient.close()
-      } catch (closeError) {
-        console.error(`[MCP] Error closing connection for ${id}:`, closeError)
-      }
+    if (inFlightToolFetchMap.get(fetchKey) === requestPromise) {
+      inFlightToolFetchMap.delete(fetchKey)
     }
   }
 }
@@ -213,7 +253,7 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
         try {
           const tools = await connectAndFetchTools(id, config)
 
-          saveToolCache(saveCacheCallback, id, tools, cachedToolsMap)
+          saveToolCache(saveCacheCallback, id, tools, cachedToolsMap, { emitEvent: false, reason: 'auto-bootstrap' })
 
           const isBuiltin = config.transport === 'builtin' || config.type === 'builtin'
           registerToolsToMap({
@@ -243,7 +283,7 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
       if (config.transport === 'builtin' || config.type === 'builtin') {
         try {
           const tools = await getBuiltinTools(id, { configPrompts: config?.prompts, currentAgentName: config?.currentAgentName })
-          saveToolCache(saveCacheCallback, id, tools, cachedToolsMap)
+          saveToolCache(saveCacheCallback, id, tools, cachedToolsMap, { emitEvent: false, reason: 'auto-bootstrap' })
 
           registerToolsToMap({
             id,
@@ -267,7 +307,7 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
         const client = new MultiServerMCPClient({ [id]: serverConfig })
         const tools = await client.getTools()
 
-        saveToolCache(saveCacheCallback, id, tools, cachedToolsMap)
+        saveToolCache(saveCacheCallback, id, tools, cachedToolsMap, { emitEvent: false, reason: 'auto-bootstrap' })
 
         registerToolsToMap({
           id,

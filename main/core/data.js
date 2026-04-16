@@ -950,36 +950,96 @@ export async function getMcpToolCache() {
   return deepClone(cache)
 }
 
-export async function saveMcpToolCache(serverId, tools = []) {
+export async function saveMcpToolCache(serverId, tools = [], options = {}) {
   if (typeof serverId !== 'string' || !serverId.trim()) {
     throw new Error('[data] serverId is required')
   }
 
   const normalizedId = serverId.trim()
-  const currentCache = await getMcpToolCache()
-  currentCache[normalizedId] = Array.isArray(tools) ? deepClone(tools) : []
+  const normalizedTools = Array.isArray(tools) ? deepClone(tools) : []
+  const emitEvent = options?.emitEvent !== false
+  const reason = typeof options?.reason === 'string' && options.reason.trim()
+    ? options.reason.trim()
+    : 'manual'
+  const maxRetries = Number.isInteger(options?.maxRetries) && options.maxRetries > 0
+    ? options.maxRetries
+    : 3
 
-  const existing = await dbGet('mcp_tools_cache')
-  const doc = {
-    _id: 'mcp_tools_cache',
-    data: currentCache
-  }
+  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+    const existing = await dbGet('mcp_tools_cache')
+    const latestData = existing?.ok && existing.doc?.data && typeof existing.doc.data === 'object'
+      ? deepClone(existing.doc.data)
+      : {}
+    const previousTools = latestData[normalizedId]
 
-  if (existing?.ok && existing.doc?._rev) {
-    doc._rev = existing.doc._rev
-  }
+    let isSame = false
+    try {
+      isSame = JSON.stringify(previousTools ?? []) === JSON.stringify(normalizedTools)
+    } catch {
+      isSame = false
+    }
 
-  const putResult = await dbPut(doc)
+    if (isSame) {
+      return {
+        success: true,
+        id: normalizedId,
+        tools: normalizedTools,
+        skipped: true,
+        reason
+      }
+    }
 
-  if (putResult?.ok) {
-    emitWindowChannel('window:mcpCacheUpdated', normalizedId)
-    emitWindowChannel('mcp-cache-updated', normalizedId)
+    latestData[normalizedId] = normalizedTools
+    const doc = {
+      _id: 'mcp_tools_cache',
+      data: latestData
+    }
+
+    if (existing?.ok && existing.doc?._rev) {
+      doc._rev = existing.doc._rev
+    }
+
+    const putResult = await dbPut(doc)
+
+    if (putResult?.ok) {
+      if (emitEvent) {
+        const payload = {
+          serverId: normalizedId,
+          reason,
+          emitReloadSuggested: reason !== 'auto-bootstrap'
+        }
+        emitWindowChannel('window:mcpCacheUpdated', payload)
+        emitWindowChannel('mcp-cache-updated', payload)
+      }
+
+      return {
+        success: true,
+        id: normalizedId,
+        tools: normalizedTools,
+        reason
+      }
+    }
+
+    const message = String(putResult?.message || putResult?.error || '').toLowerCase()
+    const isConflict = message.includes('conflict') || message.includes('revision') || putResult?.name === 'conflict'
+
+    if (!isConflict || attempt === maxRetries - 1) {
+      return {
+        success: false,
+        id: normalizedId,
+        tools: normalizedTools,
+        reason,
+        message: putResult?.message || putResult?.error || 'save mcp tool cache failed'
+      }
+    }
   }
 
   return {
-    success: Boolean(putResult?.ok),
+    success: false,
     id: normalizedId,
-    tools: currentCache[normalizedId]
+    tools: normalizedTools,
+    reason,
+    message: 'save mcp tool cache retry exhausted'
   }
 }
 

@@ -1633,6 +1633,7 @@ const handleEditEnd = async ({ id, action, content }) => {
   if (currentIndex === -1) return;
 
   handleEditMessage(currentIndex, content);
+  scheduleAutoSave({ reason: 'message-edited', immediate: true });
   showDismissibleMessage.success('消息已更新');
 
   if (currentIndex === chat_show.value.length - 1 && chat_show.value[currentIndex].role === 'user') {
@@ -5023,6 +5024,7 @@ const deleteMessage = (index) => {
   collapsedMessages.value = newCollapsedMessages;
 
   focusedMessageIndex.value = null;
+  scheduleAutoSave({ reason: 'message-deleted', immediate: true });
 };
 
 const clearHistory = () => {

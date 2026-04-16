@@ -546,6 +546,56 @@ export async function readRemoteText(url = '', options = {}) {
   }
 }
 
+
+const localSessionMetadataCache = new Map()
+
+const buildLocalSessionCacheKey = (filePath) => {
+  const normalizedPath = String(filePath || '').trim()
+  return normalizedPath ? path.resolve(normalizedPath) : ''
+}
+
+const cloneSessionMetadataCacheEntry = (entry) => (entry ? { ...entry } : null)
+
+const invalidateLocalSessionMetadataCache = (...filePaths) => {
+  filePaths.forEach((filePath) => {
+    const cacheKey = buildLocalSessionCacheKey(filePath)
+    if (cacheKey) {
+      localSessionMetadataCache.delete(cacheKey)
+    }
+  })
+}
+
+const createSessionFileSummary = ({ filePath, basename, stats, sessionMetadata }) => {
+  const normalizedBasename = basename || path.basename(filePath)
+  const createdAt =
+    sessionMetadata?.createdAt ||
+    normalizeSessionTimestamp(stats.birthtime) ||
+    normalizeSessionTimestamp(stats.mtime)
+  const updatedAt = sessionMetadata?.updatedAt || normalizeSessionTimestamp(stats.mtime) || createdAt
+
+  return {
+    basename: normalizedBasename,
+    path: filePath,
+    lastmod: stats.mtime.toISOString(),
+    createdAt,
+    updatedAt,
+    title: sessionMetadata?.title || resolveFallbackTitle(normalizedBasename, { sessionMetadata }),
+    size: stats.size,
+    type: 'file'
+  }
+}
+
+const pruneLocalSessionMetadataCache = (validFilePaths) => {
+  const validPathSet = new Set(
+    validFilePaths.map((filePath) => buildLocalSessionCacheKey(filePath)).filter(Boolean)
+  )
+  for (const cacheKey of localSessionMetadataCache.keys()) {
+    if (!validPathSet.has(cacheKey)) {
+      localSessionMetadataCache.delete(cacheKey)
+    }
+  }
+}
+
 const normalizeSessionTimestamp = (value) => {
   if (value == null || value === '') return ''
 
@@ -606,11 +656,24 @@ const resolveFallbackTitle = (basename, sessionData) => {
   return normalizedBasename
 }
 
-const readSessionMetadata = async (filePath, basename) => {
+const readSessionMetadata = async (filePath, basename, cacheContext = null) => {
+  const cacheKey = buildLocalSessionCacheKey(filePath)
+
+  if (cacheContext?.stats && cacheKey) {
+    const cachedEntry = localSessionMetadataCache.get(cacheKey)
+    const { mtimeMs, size } = cacheContext.stats
+    if (cachedEntry && cachedEntry.mtimeMs === mtimeMs && cachedEntry.size === size) {
+      return cloneSessionMetadataCacheEntry(cachedEntry.sessionMetadata)
+    }
+  }
+
   try {
     const rawContent = await fs.readFile(filePath, 'utf-8')
     const sessionData = JSON.parse(rawContent)
     if (!sessionData || sessionData.anywhere_history !== true) {
+      if (cacheKey) {
+        localSessionMetadataCache.delete(cacheKey)
+      }
       return null
     }
 
@@ -619,13 +682,26 @@ const readSessionMetadata = async (filePath, basename) => {
       ? sessionData.sessionMetadata
       : {}
 
-    return {
+    const normalizedMetadata = {
       title: resolveFallbackTitle(basename, sessionData),
       createdAt: normalizeSessionTimestamp(metadata.createdAt) || timestamps[0] || '',
       updatedAt:
         normalizeSessionTimestamp(metadata.updatedAt) || timestamps[timestamps.length - 1] || ''
     }
+
+    if (cacheContext?.stats && cacheKey) {
+      localSessionMetadataCache.set(cacheKey, {
+        mtimeMs: cacheContext.stats.mtimeMs,
+        size: cacheContext.stats.size,
+        sessionMetadata: normalizedMetadata
+      })
+    }
+
+    return cloneSessionMetadataCacheEntry(normalizedMetadata)
   } catch {
+    if (cacheKey) {
+      localSessionMetadataCache.delete(cacheKey)
+    }
     return null
   }
 }
@@ -642,31 +718,24 @@ export async function listJsonFiles(dirPath) {
     (entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.json'
   )
 
+  const validFilePaths = jsonFiles.map((entry) => path.join(resolvedDirPath, entry.name))
+  pruneLocalSessionMetadataCache(validFilePaths)
+
   const fileDetails = await Promise.all(
     jsonFiles.map(async (entry) => {
       const fullPath = path.join(resolvedDirPath, entry.name)
       try {
         const stats = await fs.stat(fullPath)
-        const sessionMetadata = await readSessionMetadata(fullPath, entry.name)
-        const createdAt =
-          sessionMetadata?.createdAt ||
-          normalizeSessionTimestamp(stats.birthtime) ||
-          normalizeSessionTimestamp(stats.mtime)
-        const updatedAt =
-          sessionMetadata?.updatedAt || normalizeSessionTimestamp(stats.mtime) || createdAt
-
-        return {
+        const sessionMetadata = await readSessionMetadata(fullPath, entry.name, { stats })
+        return createSessionFileSummary({
+          filePath: fullPath,
           basename: entry.name,
-          path: fullPath,
-          lastmod: stats.mtime.toISOString(),
-          createdAt,
-          updatedAt,
-          title: sessionMetadata?.title || resolveFallbackTitle(entry.name),
-          size: stats.size,
-          type: 'file'
-        }
+          stats,
+          sessionMetadata
+        })
       } catch (error) {
         console.error(`[file] 无法获取文件信息: ${fullPath}`, error)
+        invalidateLocalSessionMetadataCache(fullPath)
         return null
       }
     })
@@ -734,11 +803,13 @@ export async function renameLocalFile(oldPath, newPath) {
   const targetPath = path.resolve(String(newPath || ''))
 
   await fs.rename(sourcePath, targetPath)
+  invalidateLocalSessionMetadataCache(sourcePath, targetPath)
 
   const metadataSynced = await syncLocalSessionMetadataTitleAfterRename(
     targetPath,
     resolveRenamedSessionTitleFromPath(targetPath)
   )
+  invalidateLocalSessionMetadataCache(targetPath)
 
   return {
     ok: true,
@@ -750,13 +821,15 @@ export async function renameLocalFile(oldPath, newPath) {
 
 export async function deleteLocalFile(filePath) {
   const resolvedPath = path.resolve(String(filePath || ''))
-  return fs.unlink(resolvedPath)
+  await fs.unlink(resolvedPath)
+  invalidateLocalSessionMetadataCache(resolvedPath)
 }
 
 export async function writeLocalFile(filePath, content, options = {}) {
   const resolvedPath = path.resolve(String(filePath || ''))
   const encoding = typeof options?.encoding === 'string' ? options.encoding : 'utf-8'
-  return fs.writeFile(resolvedPath, content, { encoding })
+  await fs.writeFile(resolvedPath, content, { encoding })
+  invalidateLocalSessionMetadataCache(resolvedPath)
 }
 
 export async function setFileMtime(filePath, mtime) {

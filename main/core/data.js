@@ -9,6 +9,7 @@ import { getBuiltinServers as getBuiltinMcpServers } from './mcp_builtin.js'
 import {
   get as dbGet,
   put as dbPut,
+  remove as dbRemove,
   allDocs as dbAllDocs,
   createDocIfMissing
 } from './db.js'
@@ -68,6 +69,148 @@ async function ensureBackgroundCacheDir() {
   const cacheDir = path.join(app.getPath('userData'), BACKGROUND_CACHE_DIR_NAME)
   await fs.mkdir(cacheDir, { recursive: true })
   return cacheDir
+}
+
+function isRemoteBackgroundUrl(url = '') {
+  const normalizedUrl = typeof url === 'string' ? url.trim() : ''
+  if (!normalizedUrl) return false
+  return !normalizedUrl.startsWith('data:') && !normalizedUrl.startsWith('file:')
+}
+
+function buildMcpCacheConfigSignature(server = {}) {
+  const normalizedServer = server && typeof server === 'object' ? server : {}
+  return JSON.stringify({
+    type: normalizedServer.type || '',
+    baseUrl: normalizedServer.baseUrl || '',
+    command: normalizedServer.command || '',
+    args: Array.isArray(normalizedServer.args) ? [...normalizedServer.args] : [],
+    env:
+      normalizedServer.env && typeof normalizedServer.env === 'object'
+        ? Object.entries(normalizedServer.env).sort(([a], [b]) => String(a).localeCompare(String(b)))
+        : [],
+    headers:
+      normalizedServer.headers && typeof normalizedServer.headers === 'object'
+        ? Object.entries(normalizedServer.headers).sort(([a], [b]) => String(a).localeCompare(String(b)))
+        : []
+  })
+}
+
+async function pruneMcpToolCache(nextConfig = {}, previousMcpServers = {}) {
+  const nextMcpServers = nextConfig?.mcpServers && typeof nextConfig.mcpServers === 'object'
+    ? nextConfig.mcpServers
+    : {}
+  const cacheResult = await dbGet('mcp_tools_cache')
+  const existingDoc = cacheResult?.ok && cacheResult.doc ? cacheResult.doc : null
+  const cacheData = existingDoc?.data && typeof existingDoc.data === 'object' ? deepClone(existingDoc.data) : {}
+  const nextCacheData = {}
+  const affectedServerIds = []
+
+  for (const [serverId, cachedTools] of Object.entries(cacheData)) {
+    const nextServer = nextMcpServers?.[serverId]
+    const previousServer = previousMcpServers?.[serverId]
+
+    if (!nextServer || nextServer.isActive === false) {
+      affectedServerIds.push(serverId)
+      continue
+    }
+
+    if (
+      previousServer &&
+      buildMcpCacheConfigSignature(previousServer) !== buildMcpCacheConfigSignature(nextServer)
+    ) {
+      affectedServerIds.push(serverId)
+      continue
+    }
+
+    nextCacheData[serverId] = deepClone(cachedTools)
+  }
+
+  const cacheChanged = JSON.stringify(cacheData) !== JSON.stringify(nextCacheData)
+
+  if (!cacheChanged) {
+    return { changed: false, affectedServerIds: [] }
+  }
+
+  if (Object.keys(nextCacheData).length === 0) {
+    if (existingDoc?._rev) {
+      await dbRemove('mcp_tools_cache', existingDoc._rev)
+    }
+  } else {
+    await writeDocData('mcp_tools_cache', nextCacheData)
+  }
+
+  return {
+    changed: true,
+    affectedServerIds: [...new Set(affectedServerIds)]
+  }
+}
+
+async function pruneBackgroundImageCache(nextConfig = {}) {
+  const prompts = nextConfig?.prompts && typeof nextConfig.prompts === 'object' ? nextConfig.prompts : {}
+  const referencedHashes = new Set()
+
+  Object.values(prompts).forEach((promptConfig) => {
+    const backgroundImage = typeof promptConfig?.backgroundImage === 'string' ? promptConfig.backgroundImage.trim() : ''
+    if (isRemoteBackgroundUrl(backgroundImage)) {
+      referencedHashes.add(getBackgroundCacheHash(backgroundImage))
+    }
+  })
+
+  const existingDocResult = await dbGet(BACKGROUND_CACHE_DOC_ID)
+  const existingDoc = existingDocResult?.ok && existingDocResult.doc ? existingDocResult.doc : null
+  const cacheData = existingDoc?.data && typeof existingDoc.data === 'object' ? deepClone(existingDoc.data) : {}
+  const cacheDir = await ensureBackgroundCacheDir()
+  const nextCacheData = {}
+  const filesToDelete = new Set()
+
+  for (const [hash, fileName] of Object.entries(cacheData)) {
+    if (referencedHashes.has(hash)) {
+      nextCacheData[hash] = fileName
+    } else if (typeof fileName === 'string' && fileName.trim()) {
+      filesToDelete.add(fileName)
+    }
+  }
+
+  try {
+    const existingFiles = await fs.readdir(cacheDir)
+    const retainedFileNames = new Set(Object.values(nextCacheData))
+    existingFiles.forEach((fileName) => {
+      if (!retainedFileNames.has(fileName)) {
+        filesToDelete.add(fileName)
+      }
+    })
+  } catch {
+    // ignore cache dir scan errors
+  }
+
+  await Promise.all(
+    [...filesToDelete].map(async (fileName) => {
+      try {
+        await fs.unlink(path.join(cacheDir, fileName))
+      } catch {
+        // ignore stale file cleanup errors
+      }
+    })
+  )
+
+  const cacheChanged = JSON.stringify(cacheData) !== JSON.stringify(nextCacheData)
+
+  if (!cacheChanged) {
+    return { changed: filesToDelete.size > 0, removedFileCount: filesToDelete.size }
+  }
+
+  if (Object.keys(nextCacheData).length === 0) {
+    if (existingDoc?._rev) {
+      await dbRemove(BACKGROUND_CACHE_DOC_ID, existingDoc._rev)
+    }
+  } else {
+    await writeDocData(BACKGROUND_CACHE_DOC_ID, nextCacheData)
+  }
+
+  return {
+    changed: true,
+    removedFileCount: filesToDelete.size
+  }
 }
 
 
@@ -822,7 +965,11 @@ export async function saveSetting(keyPath, value) {
 export async function updateConfigWithoutFeatures(newConfig) {
   const source = ensureObject(newConfig, {})
   const incomingConfig = ensureObject(source.config, {})
+  const currentResult = await getConfig()
+  const currentConfig = ensureObject(currentResult?.config, {})
   const plainConfig = deepClone(incomingConfig)
+  const previousMcpServers =
+    currentConfig?.mcpServers && typeof currentConfig.mcpServers === 'object' ? deepClone(currentConfig.mcpServers) : {}
 
   if (plainConfig.mcpServers && typeof plainConfig.mcpServers === 'object') {
     const serverToSave = {}
@@ -855,6 +1002,26 @@ export async function updateConfigWithoutFeatures(newConfig) {
     writeDocData(TASKS_DOC_ID, split.tasksPart),
     writeDocData(getLocalConfigId(), split.localConfigPart)
   ])
+
+  const [mcpPruneResult] = await Promise.all([
+    pruneMcpToolCache(plainConfig, previousMcpServers),
+    pruneBackgroundImageCache(plainConfig)
+  ])
+
+  if (mcpPruneResult?.changed) {
+    for (const serverId of mcpPruneResult.affectedServerIds || []) {
+      emitWindowChannel('window:mcpCacheUpdated', {
+        serverId,
+        reason: 'config-pruned',
+        emitReloadSuggested: false
+      })
+      emitWindowChannel('mcp-cache-updated', {
+        serverId,
+        reason: 'config-pruned',
+        emitReloadSuggested: false
+      })
+    }
+  }
 
   await notifyConfigUpdated()
 

@@ -1127,33 +1127,6 @@ async function openTaskChat(logFile) {
     opacity: 1;
 }
 
-/* 悬浮刷新按钮 */
-.refresh-fab-button {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: 21;
-    inline-size: 24px !important;
-    block-size: 24px !important;
-    width: 24px !important;
-    min-width: 24px !important;
-    max-width: 24px !important;
-    height: 24px !important;
-    min-height: 24px !important;
-    max-height: 24px !important;
-    padding: 0 !important;
-    aspect-ratio: 1 / 1;
-    flex: 0 0 24px;
-    display: inline-flex !important;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    font-size: 16px;
-    border-radius: 50% !important;
-    overflow: hidden;
-    box-sizing: border-box;
-    box-shadow: var(--el-box-shadow-light);
-}
 
 html.dark .task-form :deep(.el-input__wrapper),
 html.dark .task-form :deep(.el-select__wrapper),

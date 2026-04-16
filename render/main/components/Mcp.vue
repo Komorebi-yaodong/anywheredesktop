@@ -1387,16 +1387,25 @@ html.dark .advanced-collapse {
     bottom: 20px;
     right: 20px;
     z-index: 21;
-    width: 24px;
-    min-width: 24px;
-    height: 24px;
+    inline-size: 24px !important;
+    block-size: 24px !important;
+    width: 24px !important;
+    min-width: 24px !important;
+    max-width: 24px !important;
+    height: 24px !important;
+    min-height: 24px !important;
+    max-height: 24px !important;
     padding: 0 !important;
     aspect-ratio: 1 / 1;
-    display: inline-flex;
+    flex: 0 0 24px;
+    display: inline-flex !important;
     align-items: center;
     justify-content: center;
+    line-height: 1;
     font-size: 16px;
     border-radius: 50% !important;
+    overflow: hidden;
+    box-sizing: border-box;
     box-shadow: var(--el-box-shadow-light);
 }
 

@@ -56,7 +56,9 @@
     "configRequired": {
       "title": "Cloud Chats",
       "webdavDescription": "Please configure WebDAV URL and data path (data_path) in 'Settings' to use this feature.",
-      "localPathDescription": "Please configure your local chat storage path in the 'Settings' page first"
+      "localPathDescription": "Please choose a local folder for chat history first.",
+      "selectFolder": "Select Folder",
+      "localPathHint": "After selecting a folder, newly saved local chats and existing JSON sessions will be managed here together."
     },
     "table": {
       "filename": "Chat Name",
@@ -84,7 +86,8 @@
       "uploadChanges": "Upload {count} new or updated local files",
       "downloadChanges": "Download {count} new or updated cloud files",
       "forceUpload": "Force upload this file to the cloud (overwrite)",
-      "forceDownload": "Force download this file from the cloud (overwrite)"
+      "forceDownload": "Force download this file from the cloud (overwrite)",
+      "selectFolder": "Select local chat history folder"
     },
     "confirmDelete": "Are you sure you want to permanently delete chat '{filename}'?",
     "clean": {
@@ -134,6 +137,8 @@
       "confirmSyncDeleteMessage": "{count} of the selected files also exist on the {location}. Do you want to delete them from there as well?",
       "webdavRequired": "Please configure WebDAV first",
       "localPathRequired": "Please configure local chat path first",
+      "localPathConfigured": "Local chat history folder updated",
+      "localPathSaveFailed": "Failed to save local chat path",
       "continueConfirm": "Continue?",
       "restoreChat": "Restore Chat",
       "localListFailed": "Failed to read local chat files",

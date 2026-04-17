@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, watch, onUnmounted, nextTick, onActivated, onDeactivated, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { createClient } from "webdav/web";
-import { Refresh, Delete as DeleteIcon, ChatDotRound, Edit, Upload, Download, Switch, QuestionFilled, Brush, Operation } from '@element-plus/icons-vue'
+import { Refresh, Delete as DeleteIcon, ChatDotRound, Edit, Upload, Download, Switch, QuestionFilled, Brush, Operation, FolderOpened } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const { t } = useI18n();
@@ -300,6 +300,44 @@ const toUtcString = (value) => {
 const handleWindowFocus = () => {
     refreshData(true);
 };
+
+async function saveLocalChatPath(pathValue = '') {
+    const normalizedPath = typeof pathValue === 'string' ? pathValue.trim() : '';
+    localChatPath.value = normalizedPath;
+
+    if (currentConfig.value?.webdav && typeof currentConfig.value.webdav === 'object') {
+        currentConfig.value.webdav.localChatPath = normalizedPath;
+    }
+    if (webdavConfig.value && typeof webdavConfig.value === 'object') {
+        webdavConfig.value = {
+            ...webdavConfig.value,
+            localChatPath: normalizedPath
+        };
+    }
+
+    await window.api.saveSetting('webdav.localChatPath', normalizedPath);
+
+    if (!normalizedPath) {
+        localChatFiles.value = [];
+        selectedFiles.value = [];
+        currentPage.value = 1;
+        return;
+    }
+
+    await fetchLocalFiles();
+}
+
+async function selectLocalChatPath() {
+    try {
+        const path = await window.api.selectDirectory();
+        if (!path) return;
+        await saveLocalChatPath(path);
+        ElMessage.success(t('chats.alerts.localPathConfigured'));
+    } catch (error) {
+        ElMessage.error(`${t('chats.alerts.localPathSaveFailed')}: ${error.message}`);
+    }
+}
+
 
 onMounted(async () => {
     try {
@@ -1014,6 +1052,9 @@ const toggleSelectAll = () => {
                         <p v-html="t('chats.info.cloudDesc')"></p>
                     </div>
                 </el-popover>
+                <el-tooltip :content="t('chats.tooltips.selectFolder')" placement="bottom">
+                    <el-button :icon="FolderOpened" circle @click="selectLocalChatPath" />
+                </el-tooltip>
                 <el-tooltip :content="t('chats.clean.button')" placement="bottom">
                     <el-button :icon="Brush" circle @click="openCleanDialog" />
                 </el-tooltip>
@@ -1075,6 +1116,14 @@ const toggleSelectAll = () => {
                             <el-icon :size="50" color="#909399">
                                 <Edit />
                             </el-icon>
+                        </template>
+                        <template #default>
+                            <div class="config-prompt-actions">
+                                <el-button type="primary" :icon="FolderOpened" @click="selectLocalChatPath">
+                                    {{ t('chats.configRequired.selectFolder') }}
+                                </el-button>
+                                <div class="config-prompt-tip">{{ t('chats.configRequired.localPathHint') }}</div>
+                            </div>
                         </template>
                     </el-empty>
                 </div>
@@ -1551,6 +1600,23 @@ const toggleSelectAll = () => {
 :deep(.el-pagination.is-background .btn-next:hover) {
     color: var(--text-accent);
 }
+
+.config-prompt-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.config-prompt-tip {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-tertiary);
+    text-align: center;
+    max-width: 320px;
+}
+
 
 .config-prompt-small {
     display: flex;

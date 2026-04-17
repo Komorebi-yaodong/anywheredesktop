@@ -77,6 +77,27 @@ const ELECTRON_ACCELERATOR_KEY_MAP = new Map([
   ['Slash', '/']
 ])
 
+const ELECTRON_ACCELERATOR_CANDIDATES = new Map([
+  ['Space', ['Space', 'space']],
+  ['Escape', ['Escape', 'Esc']],
+  ['Plus', ['Plus']],
+  ['Minus', ['-', 'Minus']],
+  ['Backquote', ['`', 'Backquote']],
+  ['Equal', ['=', 'Equal']],
+  ['BracketLeft', ['[', 'BracketLeft']],
+  ['BracketRight', [']', 'BracketRight']],
+  ['Backslash', ['\\', 'Backslash']],
+  ['Semicolon', [';', 'Semicolon']],
+  ['Quote', ["'", 'Quote']],
+  ['Comma', [',', 'Comma']],
+  ['Period', ['.', 'Period']],
+  ['Slash', ['/', 'Slash']]
+])
+
+const WINDOWS_RESERVED_ACCELERATOR_HINTS = new Map([
+  ['Alt+Space', 'Windows 会优先将 Alt+Space 交给系统窗口菜单，通常无法作为稳定的全局快捷键。建议改用 Ctrl+Space、Alt+A 等组合。']
+])
+
 function uniq(items = []) {
   return [...new Set(items)]
 }
@@ -250,7 +271,7 @@ export function normalizeAccelerator(input = '') {
   }
 }
 
-function toElectronAccelerator(input = '') {
+function toElectronAcceleratorCandidates(input = '') {
   const normalized = normalizeAccelerator(input)
   if (!normalized.ok) {
     return normalized
@@ -258,10 +279,19 @@ function toElectronAccelerator(input = '') {
 
   const tokens = normalized.accelerator.split('+').map((item) => item.trim()).filter(Boolean)
   const keyToken = tokens[tokens.length - 1] || ''
-  const electronKey = ELECTRON_ACCELERATOR_KEY_MAP.get(keyToken) || keyToken
+  const fallbackKey = ELECTRON_ACCELERATOR_KEY_MAP.get(keyToken) || keyToken
+  const keyCandidates = ELECTRON_ACCELERATOR_CANDIDATES.get(keyToken) || [fallbackKey]
+  const modifiers = tokens.slice(0, -1)
+  const accelerators = uniq(
+    keyCandidates
+      .map((candidate) => [...modifiers, candidate].join('+'))
+      .filter(Boolean)
+  )
+
   return {
     ok: true,
-    accelerator: [...tokens.slice(0, -1), electronKey].join('+')
+    normalizedAccelerator: normalized.accelerator,
+    accelerators
   }
 }
 
@@ -271,6 +301,16 @@ function unregisterManagedShortcuts() {
   }
   MANAGED_ACCELERATORS.clear()
   MANAGED_CALLBACKS.clear()
+}
+
+function buildRegisterFailureMessage(bindingLabel = '', normalizedAccelerator = '', attemptedAccelerators = []) {
+  const attemptedList = uniq(attemptedAccelerators).filter(Boolean)
+  const attemptedText = attemptedList.length > 0 ? `（已尝试：${attemptedList.join(' / ')}）` : ''
+  const windowsReservedHint = process.platform === 'win32'
+    ? WINDOWS_RESERVED_ACCELERATOR_HINTS.get(normalizedAccelerator) || ''
+    : ''
+  const reasonText = windowsReservedHint || `快捷键注册失败，可能已被系统或其他程序占用：${normalizedAccelerator}`
+  return `${bindingLabel}：${reasonText}${attemptedText}`
 }
 
 function registerManagedShortcut(accelerator, callback) {
@@ -405,34 +445,57 @@ export function syncDesktopShortcuts(desktopConfig = {}, handlers = {}) {
   const registeredBindings = []
 
   validated.bindings.forEach((binding) => {
-    const electronAccelerator = toElectronAccelerator(binding.accelerator)
-    if (!electronAccelerator.ok) {
-      warnings.push(`${binding.label}：${electronAccelerator.error}`)
+    const electronAccelerators = toElectronAcceleratorCandidates(binding.accelerator)
+    if (!electronAccelerators.ok) {
+      warnings.push(`${binding.label}：${electronAccelerators.error}`)
       return
     }
 
+    let registeredElectronAccelerator = ''
+
     try {
-      if (binding.kind === 'mainToggle') {
-        registerManagedShortcut(electronAccelerator.accelerator, () => {
-          handlers?.onMainToggle?.()
-        })
-      } else if (binding.kind === 'quickSummon') {
-        registerManagedShortcut(electronAccelerator.accelerator, () => {
-          handlers?.onQuickSummon?.()
-        })
-      } else if (binding.kind === 'appendFollowUp') {
-        registerManagedShortcut(electronAccelerator.accelerator, () => {
-          handlers?.onAppendFollowUp?.()
-        })
-      } else if (binding.kind === 'promptBinding') {
-        registerManagedShortcut(electronAccelerator.accelerator, () => {
-          handlers?.onPromptTrigger?.(binding.promptKey)
-        })
+      const attemptedAccelerators = []
+      for (const candidate of electronAccelerators.accelerators) {
+        attemptedAccelerators.push(candidate)
+        try {
+          if (binding.kind === 'mainToggle') {
+            registerManagedShortcut(candidate, () => {
+              handlers?.onMainToggle?.()
+            })
+          } else if (binding.kind === 'quickSummon') {
+            registerManagedShortcut(candidate, () => {
+              handlers?.onQuickSummon?.()
+            })
+          } else if (binding.kind === 'appendFollowUp') {
+            registerManagedShortcut(candidate, () => {
+              handlers?.onAppendFollowUp?.()
+            })
+          } else if (binding.kind === 'promptBinding') {
+            registerManagedShortcut(candidate, () => {
+              handlers?.onPromptTrigger?.(binding.promptKey)
+            })
+          }
+
+          registeredElectronAccelerator = candidate
+          break
+        } catch {
+          // try next accelerator candidate
+        }
+      }
+
+      if (!registeredElectronAccelerator) {
+        throw new Error(
+          buildRegisterFailureMessage(
+            binding.label,
+            electronAccelerators.normalizedAccelerator,
+            attemptedAccelerators
+          )
+        )
       }
 
       registeredBindings.push({
         ...binding,
-        electronAccelerator: electronAccelerator.accelerator
+        electronAccelerator: registeredElectronAccelerator
       })
     } catch (error) {
       warnings.push(error?.message || `${binding.label}：快捷键注册失败`)

@@ -56,7 +56,9 @@
     "configRequired": {
       "title": "云端对话",
       "webdavDescription": "请先在“设置”中配置 WebDAV URL 和数据路径 (data_path) 以使用此功能",
-      "localPathDescription": "请先在“设置”页面配置您的本地对话存储路径"
+      "localPathDescription": "请先为历史对话选择本地存储文件夹",
+      "selectFolder": "选择文件夹",
+      "localPathHint": "选择后，新保存的本地历史对话和已存在的 JSON 会话都会在这里统一管理。"
     },
     "table": {
       "filename": "对话名称",
@@ -84,7 +86,8 @@
       "uploadChanges": "上传本地新增和较新的文件 ({count}个)",
       "downloadChanges": "下载云端新增和较新的文件 ({count}个)",
       "forceUpload": "强制上传此文件到云端 (覆盖)",
-      "forceDownload": "强制从云端下载此文件 (覆盖)"
+      "forceDownload": "强制从云端下载此文件 (覆盖)",
+      "selectFolder": "选择本地历史对话文件夹"
     },
     "confirmDelete": "您确定要永久删除对话 '{filename}' 吗？",
     "clean": {
@@ -134,6 +137,8 @@
       "confirmSyncDeleteMessage": "您选择的文件中，有 {count} 个在 {location} 也存在。是否要一并删除？",
       "webdavRequired": "请先配置WebDAV",
       "localPathRequired": "请先配置本地对话路径",
+      "localPathConfigured": "本地历史对话文件夹已更新",
+      "localPathSaveFailed": "保存本地对话路径失败",
       "continueConfirm": "是否继续？",
       "restoreChat": "恢复聊天",
       "localListFailed": "读取本地文件列表失败",

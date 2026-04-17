@@ -41,11 +41,13 @@ function emitWindowChannel(channel, payload = null) {
   }
 }
 
-async function notifyConfigUpdated() {
+async function notifyConfigUpdated(configOverride = null) {
   try {
-    const latestConfig = await getConfig()
-    emitWindowChannel('window:configUpdated', latestConfig.config)
-    emitWindowChannel('config-updated', latestConfig.config)
+    const nextConfig = configOverride && typeof configOverride === 'object'
+      ? deepClone(configOverride)
+      : (await getConfig()).config
+    emitWindowChannel('window:configUpdated', nextConfig)
+    emitWindowChannel('config-updated', nextConfig)
   } catch (error) {
     console.error('[data] failed to notify config update:', error)
   }
@@ -840,7 +842,8 @@ async function ensureConfigDocsIfMissing() {
   await createDocIfMissing(getLocalConfigId(), split.localConfigPart)
 }
 
-export async function getConfig() {
+
+async function readStoredConfigSnapshot() {
   await ensureConfigDocsIfMissing()
 
   const baseConfigPart = await readDocData(CONFIG_DOC_ID, { config: {} })
@@ -867,13 +870,96 @@ export async function getConfig() {
   mergedConfig.webdav.localChatPath =
     typeof localPart.localChatPath === 'string' ? localPart.localChatPath : ''
 
-  const { config: checkedConfig, changed } = checkConfig(mergedConfig)
+  return mergedConfig
+}
+
+function sanitizeConfigForStorage(incomingConfig = {}) {
+  const plainConfig = deepClone(ensureObject(incomingConfig, {}))
+
+  if (plainConfig.mcpServers && typeof plainConfig.mcpServers === 'object') {
+    const serverToSave = {}
+    const builtinIds = Object.keys(getBuiltinServers())
+
+    for (const [id, server] of Object.entries(plainConfig.mcpServers)) {
+      if (server?.type === 'builtin' || builtinIds.includes(id)) {
+        serverToSave[id] = {
+          id: server?.id || id,
+          type: 'builtin',
+          name: server?.name || id,
+          isActive: Boolean(server?.isActive),
+          isPersistent: Boolean(server?.isPersistent)
+        }
+      } else {
+        serverToSave[id] = deepClone(server)
+      }
+    }
+
+    plainConfig.mcpServers = serverToSave
+  }
+
+  return plainConfig
+}
+
+async function persistConfigSnapshot(config, options = {}) {
+  const plainConfig = sanitizeConfigForStorage(config)
+  const previousMcpServers = ensureObject(options.previousMcpServers, {})
+  const skipNotify = options.notify === false
+  const skipCachePrune = options.pruneCaches === false
+  const split = splitConfigForStorage(plainConfig)
+
+  await Promise.all([
+    writeDocData(CONFIG_DOC_ID, split.baseConfigPart),
+    writeDocData(PROMPTS_DOC_ID, split.promptsPart),
+    writeDocData(PROVIDERS_DOC_ID, split.providersPart),
+    writeDocData(MCP_SERVERS_DOC_ID, split.mcpServersPart),
+    writeDocData(TASKS_DOC_ID, split.tasksPart),
+    writeDocData(getLocalConfigId(), split.localConfigPart)
+  ])
+
+  let mcpPruneResult = null
+  if (!skipCachePrune) {
+    [mcpPruneResult] = await Promise.all([
+      pruneMcpToolCache(plainConfig, previousMcpServers),
+      pruneBackgroundImageCache(plainConfig)
+    ])
+  }
+
+  if (mcpPruneResult?.changed) {
+    for (const serverId of mcpPruneResult.affectedServerIds || []) {
+      emitWindowChannel('window:mcpCacheUpdated', {
+        serverId,
+        reason: 'config-pruned',
+        emitReloadSuggested: false
+      })
+      emitWindowChannel('mcp-cache-updated', {
+        serverId,
+        reason: 'config-pruned',
+        emitReloadSuggested: false
+      })
+    }
+  }
+
+  if (!skipNotify) {
+    await notifyConfigUpdated(plainConfig)
+  }
+
+  return {
+    success: true,
+    config: deepClone(plainConfig)
+  }
+}
+
+
+export async function getConfig() {
+  const storedConfig = await readStoredConfigSnapshot()
+  const previousMcpServers =
+    storedConfig?.mcpServers && typeof storedConfig.mcpServers === 'object' ? deepClone(storedConfig.mcpServers) : {}
+  const { config: checkedConfig, changed } = checkConfig(storedConfig)
 
   if (changed) {
-    await updateConfigWithoutFeatures({ config: checkedConfig })
-    return {
-      config: deepClone(checkedConfig)
-    }
+    await persistConfigSnapshot(checkedConfig, {
+      previousMcpServers
+    })
   }
 
   return {
@@ -965,69 +1051,13 @@ export async function saveSetting(keyPath, value) {
 export async function updateConfigWithoutFeatures(newConfig) {
   const source = ensureObject(newConfig, {})
   const incomingConfig = ensureObject(source.config, {})
-  const currentResult = await getConfig()
-  const currentConfig = ensureObject(currentResult?.config, {})
-  const plainConfig = deepClone(incomingConfig)
+  const storedConfig = await readStoredConfigSnapshot()
   const previousMcpServers =
-    currentConfig?.mcpServers && typeof currentConfig.mcpServers === 'object' ? deepClone(currentConfig.mcpServers) : {}
+    storedConfig?.mcpServers && typeof storedConfig.mcpServers === 'object' ? deepClone(storedConfig.mcpServers) : {}
 
-  if (plainConfig.mcpServers && typeof plainConfig.mcpServers === 'object') {
-    const serverToSave = {}
-    const builtinIds = Object.keys(getBuiltinServers())
-
-    for (const [id, server] of Object.entries(plainConfig.mcpServers)) {
-      if (server?.type === 'builtin' || builtinIds.includes(id)) {
-        serverToSave[id] = {
-          id: server?.id || id,
-          type: 'builtin',
-          name: server?.name || id,
-          isActive: Boolean(server?.isActive),
-          isPersistent: Boolean(server?.isPersistent)
-        }
-      } else {
-        serverToSave[id] = deepClone(server)
-      }
-    }
-
-    plainConfig.mcpServers = serverToSave
-  }
-
-  const split = splitConfigForStorage(plainConfig)
-
-  await Promise.all([
-    writeDocData(CONFIG_DOC_ID, split.baseConfigPart),
-    writeDocData(PROMPTS_DOC_ID, split.promptsPart),
-    writeDocData(PROVIDERS_DOC_ID, split.providersPart),
-    writeDocData(MCP_SERVERS_DOC_ID, split.mcpServersPart),
-    writeDocData(TASKS_DOC_ID, split.tasksPart),
-    writeDocData(getLocalConfigId(), split.localConfigPart)
-  ])
-
-  const [mcpPruneResult] = await Promise.all([
-    pruneMcpToolCache(plainConfig, previousMcpServers),
-    pruneBackgroundImageCache(plainConfig)
-  ])
-
-  if (mcpPruneResult?.changed) {
-    for (const serverId of mcpPruneResult.affectedServerIds || []) {
-      emitWindowChannel('window:mcpCacheUpdated', {
-        serverId,
-        reason: 'config-pruned',
-        emitReloadSuggested: false
-      })
-      emitWindowChannel('mcp-cache-updated', {
-        serverId,
-        reason: 'config-pruned',
-        emitReloadSuggested: false
-      })
-    }
-  }
-
-  await notifyConfigUpdated()
-
-  return {
-    success: true
-  }
+  return persistConfigSnapshot(incomingConfig, {
+    previousMcpServers
+  })
 }
 
 export async function updateConfig(newConfig) {

@@ -1,8 +1,10 @@
 name: Build Desktop Packages
 
+permissions:
+  contents: write
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ELECTRON_BUILDER_DISABLE_AUTO_PUBLISH: true
   ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
   npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
 
@@ -13,7 +15,58 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  prepare-release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release_meta.outputs.version }}
+      tag: ${{ steps.release_meta.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Resolve release version
+        id: release_meta
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Preparing release for $TAG"
+
+      - name: Ensure release tag is unique
+        shell: bash
+        run: |
+          TAG="${{ steps.release_meta.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists in the current checkout. Please update package.json.version before dispatching the workflow."
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists on origin. Please update package.json.version before dispatching the workflow."
+            exit 1
+          fi
+
+      - name: Create and push release tag
+        shell: bash
+        run: |
+          TAG="${{ steps.release_meta.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+  build-preview:
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -23,16 +76,22 @@ jobs:
             artifact_name: anywhere-windows
             artifact_glob: |
               dist/*-setup.exe
+              dist/*.yml
+              dist/*.blockmap
           - os: ubuntu-latest
             target: linux
             artifact_name: anywhere-linux
             artifact_glob: |
               dist/*.AppImage
+              dist/*.yml
+              dist/*.blockmap
           - os: macos-latest
             target: mac
             artifact_name: anywhere-macos
             artifact_glob: |
               dist/*-mac.zip
+              dist/*.yml
+              dist/*.blockmap
 
     runs-on: ${{ matrix.os }}
 
@@ -44,13 +103,8 @@ jobs:
         shell: bash
         run: |
           echo "BUILD_ARTIFACT_NAME=anywhere" >> "$GITHUB_ENV"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "BUILD_SUFFIX=-preview.${{ github.run_number }}" >> "$GITHUB_ENV"
-            echo "ARTIFACT_FLAVOR=preview" >> "$GITHUB_ENV"
-          else
-            echo "BUILD_SUFFIX=" >> "$GITHUB_ENV"
-            echo "ARTIFACT_FLAVOR=release" >> "$GITHUB_ENV"
-          fi
+          echo "BUILD_SUFFIX=-preview.${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "ARTIFACT_FLAVOR=preview" >> "$GITHUB_ENV"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v5
@@ -101,5 +155,105 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact_name }}-${{ env.ARTIFACT_FLAVOR }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+  build-release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            artifact_name: anywhere-windows
+            artifact_glob: |
+              dist/*-setup.exe
+              dist/*.yml
+              dist/*.blockmap
+          - os: ubuntu-latest
+            target: linux
+            artifact_name: anywhere-linux
+            artifact_glob: |
+              dist/*.AppImage
+              dist/*.yml
+              dist/*.blockmap
+          - os: macos-latest
+            target: mac
+            artifact_name: anywhere-macos
+            artifact_glob: |
+              dist/*-mac.zip
+              dist/*.yml
+              dist/*.blockmap
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare-release.outputs.tag }}
+
+      - name: Resolve build channel
+        shell: bash
+        run: |
+          echo "BUILD_ARTIFACT_NAME=anywhere" >> "$GITHUB_ENV"
+          echo "BUILD_SUFFIX=" >> "$GITHUB_ENV"
+          echo "ARTIFACT_FLAVOR=release" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${{ needs.prepare-release.outputs.version }}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${{ needs.prepare-release.outputs.tag }}" >> "$GITHUB_ENV"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify build icon assets
+        shell: bash
+        run: |
+          test -f build/icon.png
+          test -f build/icon.ico
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            test -f build/icon.icns
+          fi
+          echo "Using checked-in icon assets from build/:"
+          ls -R build
+
+      - name: Print builder envs
+        shell: bash
+        run: |
+          echo "BUILD_ARTIFACT_NAME=$BUILD_ARTIFACT_NAME"
+          echo "BUILD_SUFFIX=$BUILD_SUFFIX"
+          echo "ARTIFACT_FLAVOR=$ARTIFACT_FLAVOR"
+          echo "RELEASE_VERSION=$RELEASE_VERSION"
+          echo "RELEASE_TAG=$RELEASE_TAG"
+          echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR"
+          echo "npm_config_electron_builder_binaries_mirror=$npm_config_electron_builder_binaries_mirror"
+
+      - name: Build and publish package
+        run: pnpm release:${{ matrix.target }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+          npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+          BUILD_ARTIFACT_NAME: ${{ env.BUILD_ARTIFACT_NAME }}
+          BUILD_SUFFIX: ${{ env.BUILD_SUFFIX }}
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact_name }}-${{ env.ARTIFACT_FLAVOR }}-${{ env.RELEASE_VERSION }}
           path: ${{ matrix.artifact_glob }}
           if-no-files-found: error

@@ -20,7 +20,10 @@
     "build:unpack": "pnpm run build && electron-builder --dir --publish never",
     "build:win": "pnpm run build && electron-builder --win nsis --publish never",
     "build:mac": "pnpm run build && electron-builder --mac zip --publish never",
-    "build:linux": "pnpm run build && electron-builder --linux AppImage --publish never"
+    "build:linux": "pnpm run build && electron-builder --linux AppImage --publish never",
+    "release:win": "pnpm run build && electron-builder --win nsis --publish always",
+    "release:mac": "pnpm run build && electron-builder --mac zip --publish always",
+    "release:linux": "pnpm run build && electron-builder --linux AppImage --publish always"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

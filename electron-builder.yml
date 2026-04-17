@@ -55,5 +55,9 @@ linux:
 appImage:
   artifactName: ${env.BUILD_ARTIFACT_NAME}-${version}${env.BUILD_SUFFIX}.${ext}
 npmRebuild: false
+publish:
+  provider: github
+  releaseType: release
+
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

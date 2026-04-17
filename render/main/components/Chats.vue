@@ -545,7 +545,7 @@ async function fetchLocalFiles(silent = false) {
         const normalizedFiles = files.map((item) => normalizeChatFile(item, 'local'));
         localChatFiles.value = normalizedFiles;
     } catch (error) {
-        ElMessage.error(`读取本地文件列表失败: ${error.message}`);
+        ElMessage.error(`${t('chats.alerts.localListFailed')}: ${error.message}`);
         localChatFiles.value = [];
     } finally {
         isTableLoading.value = false;
@@ -866,7 +866,7 @@ async function forceSyncFile(basename, direction, signal) {
 
         if (direction === 'upload') {
             const localFile = localChatFiles.value.find(f => f.basename === normalizedBasename);
-            if (!localFile) throw new Error(`本地文件 "${normalizedBasename}" 未找到`);
+            if (!localFile) throw new Error(t('chats.alerts.localFileMissing', { filename: normalizedBasename }));
 
             const content = await window.api.readLocalFile(localPath, signal);
             ensureWebdavResult(
@@ -883,7 +883,7 @@ async function forceSyncFile(basename, direction, signal) {
             );
         } else { // download
             const cloudFile = cloudChatFiles.value.find(f => f.basename === normalizedBasename);
-            if (!cloudFile) throw new Error(`云端文件 "${normalizedBasename}" 未找到`);
+            if (!cloudFile) throw new Error(t('chats.alerts.cloudFileMissing', { filename: normalizedBasename }));
 
             const result = ensureWebdavResult(
                 await window.api.readWebdavBackup(buildWebdavInput({ filename: normalizedBasename })),
@@ -894,7 +894,7 @@ async function forceSyncFile(basename, direction, signal) {
         }
     } catch (error) {
         if (error.name === 'AbortError') throw new Error("Cancelled");
-        ElMessage.error(`同步文件 "${basename}" 失败: ${error.message}`);
+        ElMessage.error(t('chats.alerts.syncFileFailed', { filename: basename, message: error.message }));
         throw error;
     } finally {
         singleFileSyncing.value[basename] = false;
@@ -957,7 +957,7 @@ async function executeAutoClean() {
         selectedFiles.value = [];
 
     } catch (error) {
-        ElMessage.error(`清理失败: ${error.message}`);
+        ElMessage.error(t('chats.clean.failed', { message: error.message }));
     } finally {
         isCleaning.value = false;
     }
@@ -1092,7 +1092,7 @@ const toggleSelectAll = () => {
 
                 <!-- 空状态：无文件 -->
                 <div v-else-if="paginatedFiles.length === 0 && !isTableLoading" class="config-prompt-small">
-                    <el-empty :description="t('common.noFileSelected').replace('选中', '')" :image-size="80" />
+                    <el-empty :description="t('chats.selection.empty')" :image-size="80" />
                 </div>
 
                 <!-- 列表视图 -->
@@ -1158,9 +1158,9 @@ const toggleSelectAll = () => {
 
             <div class="footer-bar">
                 <div class="footer-left">
-                    <el-checkbox :model-value="isAllSelected" @change="toggleSelectAll" label="全选" size="large"
+                    <el-checkbox :model-value="isAllSelected" @change="toggleSelectAll" :label="t('chats.selection.selectAll')" size="large"
                         :disabled="paginatedFiles.length === 0" />
-                    <span v-if="selectedFiles.length > 0" class="selection-count">已选 {{ selectedFiles.length }} 项</span>
+                    <span v-if="selectedFiles.length > 0" class="selection-count">{{ t('chats.selection.selectedCount', { count: selectedFiles.length }) }}</span>
                 </div>
                 <div class="footer-center">
                     <el-pagination v-if="currentFiles.length > 0" v-model:current-page="currentPage"

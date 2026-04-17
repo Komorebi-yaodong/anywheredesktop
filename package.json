@@ -9,6 +9,7 @@
   },
   "companyName": "Komorebi",
   "homepage": "https://electron-vite.org",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",

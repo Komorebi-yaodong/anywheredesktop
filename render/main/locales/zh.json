@@ -25,6 +25,7 @@
     "loading": "文档加载中...",
     "loadFailed": "文档加载失败，请检查网络连接。",
     "checkNetwork": "请确保您能访问 GitHub 或其镜像站点。",
+    "sourcesUnavailable": "（GitHub 与 Gitee 文档源均不可用）",
     "titles": {
       "ai": "快捷助手",
       "chat": "历史对话",
@@ -95,6 +96,7 @@
       "noFilesFound": "未发现符合条件的旧对话",
       "confirmBtn": "确认清理",
       "success": "成功清理 {count} 个文件",
+      "failed": "清理失败: {message}",
       "ranges": {
         "3": "3天前",
         "7": "7天前",
@@ -133,7 +135,16 @@
       "webdavRequired": "请先配置WebDAV",
       "localPathRequired": "请先配置本地对话路径",
       "continueConfirm": "是否继续？",
-      "restoreChat": "恢复聊天"
+      "restoreChat": "恢复聊天",
+      "localListFailed": "读取本地文件列表失败",
+      "localFileMissing": "本地文件 \"{filename}\" 未找到",
+      "cloudFileMissing": "云端文件 \"{filename}\" 未找到",
+      "syncFileFailed": "同步文件 \"{filename}\" 失败: {message}"
+    },
+    "selection": {
+      "selectAll": "全选",
+      "selectedCount": "已选 {count} 项",
+      "empty": "暂无对话"
     }
   },
   "tasks": {
@@ -527,7 +538,13 @@
       "forkOn": "已开启子智能体模式",
       "forkOff": "已关闭子智能体模式",
       "extracting": "正在解压 Skill 包...",
-      "invalidPackage": "无效的压缩包：未找到 SKILL.md 文件"
+      "invalidPackage": "无效的压缩包：未找到 SKILL.md 文件",
+      "dragPathMissing": "无法获取拖拽文件的本地路径，请尝试通过系统文件管理器直接拖入，或改用文件夹/压缩包导入。",
+      "parseReadyReplaceSuffix": "（已准备替换当前 Skill）",
+      "parseReadyPackageSuffix": "（检测到完整 Skill 包）",
+      "applyAfterSave": "，请点击保存以应用",
+      "saveFirstHint": "请先保存 Skill 后再上传文件",
+      "exportFailed": "导出失败: {message}"
     },
     "export": {
       "button": "导出技能",
@@ -745,6 +762,11 @@
         "description": "按下后打开桌面端 quick 召唤面板。",
         "placeholder": "点击开始录制快捷键"
       },
+      "appendFollowUp": {
+        "label": "自动追问快捷键",
+        "description": "按下后自动追问；仅一个窗口时直接追问，多个窗口时打开追问选择界面。",
+        "placeholder": "点击开始录制快捷键"
+      },
       "profile": {
         "nickname": {
           "label": "用户名",
@@ -760,7 +782,8 @@
           "dialogTitle": "编辑用户头像",
           "editorHint": "拖拽移动，滚轮缩放",
           "scale": "缩放",
-          "radius": "圆角"
+          "radius": "圆角",
+          "invalidFile": "头像仅支持 JPG、PNG、WEBP 等图片格式"
         }
       },
       "promptShortcuts": {
@@ -779,6 +802,8 @@
     "alerts": {
       "importSuccess": "配置导入成功",
       "importFailed": "配置导入失败",
+      "exportSuccess": "配置导出成功",
+      "exportFailed": "配置导出失败",
       "saveSuccess": "保存成功！",
       "saveFailedPrefix": "保存设置失败: "
     }

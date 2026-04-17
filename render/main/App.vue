@@ -311,7 +311,7 @@ const fetchAndParseDoc = async (filename) => {
 
   } catch (error) {
     console.error('Failed to load doc:', error);
-    currentDocContent.value = `<h3>${t('doc.loadFailed')}</h3><p>${t('doc.checkNetwork')}</p><p style="font-size:12px; color:#888;">(Github & Gitee sources both unreachable)</p>`;
+    currentDocContent.value = `<h3>${t('doc.loadFailed')}</h3><p>${t('doc.checkNetwork')}</p><p style="font-size:12px; color:#888;">${t('doc.sourcesUnavailable')}</p>`;
   } finally {
     docLoading.value = false;
   }

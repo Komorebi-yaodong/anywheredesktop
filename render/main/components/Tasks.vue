@@ -4,7 +4,7 @@ import { Plus, Delete, Document, Edit, Search, InfoFilled, Refresh, Clock, Setti
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const currentConfig = inject('config');
 const activeTaskId = ref(null);
 const searchQuery = ref('');
@@ -352,7 +352,7 @@ const handleGlobalKeyDown = (e) => {
 
 const formatTime = (ts) => {
     if (!ts) return t('tasks.neverExecuted');
-    return new Date(ts).toLocaleString('zh-CN'); // 日期时间格式建议保留本地化
+    return new Date(ts).toLocaleString(locale.value === 'en' ? 'en-US' : 'zh-CN'); // 日期时间格式建议保留本地化
 }
 
 async function openTaskChat(logFile) {
@@ -360,7 +360,7 @@ async function openTaskChat(logFile) {
 
     const localPath = currentConfig.value.webdav?.localChatPath;
     if (!localPath) {
-        ElMessage.warning(t('chats.alerts.localPathRequired') || '请先配置本地对话路径');
+        ElMessage.warning(t('chats.alerts.localPathRequired'));
         return;
     }
 
@@ -372,7 +372,7 @@ async function openTaskChat(logFile) {
     }
 
     try {
-        ElMessage.info(t('chats.alerts.loadingChat') || '正在加载对话...');
+        ElMessage.info(t('chats.alerts.loadingChat'));
         const jsonString = await window.api.readLocalFile(filePath);
         const parsedSession = JSON.parse(jsonString);
         await window.api.openWindow('window', {
@@ -381,9 +381,9 @@ async function openTaskChat(logFile) {
             payload: jsonString,
             filename: logFile
         });
-        ElMessage.success(t('chats.alerts.restoreInitiated') || '对话已开始');
+        ElMessage.success(t('chats.alerts.restoreInitiated'));
     } catch (error) {
-        ElMessage.error((t('chats.alerts.restoreFailed') || '无法打开对话') + `: ${error.message}`);
+        ElMessage.error(`${t('chats.alerts.restoreFailed')}: ${error.message}`);
     }
 }
 </script>

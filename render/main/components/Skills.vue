@@ -478,7 +478,7 @@ async function onDialogDrop(e) {
 
   if (!resolvedItemPath) {
 
-    ElMessage.warning('无法获取拖拽文件的本地路径，请尝试通过系统文件管理器直接拖入，或改用文件夹/压缩包导入。');
+    ElMessage.warning(t('skills.alerts.dragPathMissing'));
     return;
   }
 
@@ -546,8 +546,8 @@ async function onDialogDrop(e) {
       }
 
 
-      const actionText = activeEditTab.value === 'files' ? ' (已准备替换当前 Skill)' : ' (检测到完整 Skill 包)';
-      ElMessage.success(t('skills.alerts.parseSuccess') + actionText + '，请点击保存以应用');
+      const actionText = activeEditTab.value === 'files' ? t('skills.alerts.parseReadyReplaceSuffix') : t('skills.alerts.parseReadyPackageSuffix');
+      ElMessage.success(t('skills.alerts.parseSuccess') + actionText + t('skills.alerts.applyAfterSave'));
       return;
     }
 
@@ -556,7 +556,7 @@ async function onDialogDrop(e) {
       if (!isNewSkill.value) {
         handleBatchUpload(files);
       } else {
-        ElMessage.warning(t('skills.alerts.saveFirstHint') || '请先保存 Skill 后再上传文件');
+        ElMessage.warning(t('skills.alerts.saveFirstHint'));
       }
       return;
     }
@@ -650,7 +650,7 @@ async function handleExportSkills() {
     }
   } catch (e) {
     console.error(e);
-    ElMessage.error("导出失败: " + e.message);
+    ElMessage.error(t('skills.alerts.exportFailed', { message: e.message }));
   } finally {
     isExporting.value = false;
   }
@@ -717,9 +717,9 @@ async function handleExportSkills() {
             <div class="skill-card-footer">
               <div class="skill-tags">
                 <el-tag v-if="skill.context === 'fork'" size="small" type="warning" effect="plain"
-                  round>Sub-Agent</el-tag>
+                  round>{{ t('skills.tags.subAgent') }}</el-tag>
                 <el-tag v-if="skill.allowedTools && skill.allowedTools.length > 0" size="small" type="info"
-                  effect="plain" round>Tools</el-tag>
+                  effect="plain" round>{{ t('skills.tags.tools') }}</el-tag>
               </div>
               <div class="skill-actions">
                 <el-button :icon="Edit" text circle @click="prepareEditSkill(skill.id)" class="action-btn-compact" />

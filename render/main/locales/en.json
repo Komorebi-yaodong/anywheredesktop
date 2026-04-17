@@ -25,6 +25,7 @@
     "loading": "Loading documentation...",
     "loadFailed": "Failed to load documentation. Please check your network connection.",
     "checkNetwork": "Please ensure you can access GitHub or its mirrors.",
+    "sourcesUnavailable": "(GitHub and Gitee documentation sources are both unreachable)",
     "titles": {
       "ai": "Agent Prompts",
       "chat": "Chat History",
@@ -95,6 +96,7 @@
       "noFilesFound": "No old chats found matching criteria",
       "confirmBtn": "Confirm Clean",
       "success": "Successfully cleaned {count} files",
+      "failed": "Clean failed: {message}",
       "ranges": {
         "3": "Older than 3 days",
         "7": "Older than 7 days",
@@ -133,7 +135,16 @@
       "webdavRequired": "Please configure WebDAV first",
       "localPathRequired": "Please configure local chat path first",
       "continueConfirm": "Continue?",
-      "restoreChat": "Restore Chat"
+      "restoreChat": "Restore Chat",
+      "localListFailed": "Failed to read local chat files",
+      "localFileMissing": "Local file \"{filename}\" was not found",
+      "cloudFileMissing": "Cloud file \"{filename}\" was not found",
+      "syncFileFailed": "Failed to sync file \"{filename}\": {message}"
+    },
+    "selection": {
+      "selectAll": "Select All",
+      "selectedCount": "{count} selected",
+      "empty": "No chats yet"
     }
   },
   "tasks": {
@@ -527,7 +538,13 @@
       "forkOn": "Sub-Agent mode enabled",
       "forkOff": "Sub-Agent mode disabled",
       "extracting": "Extracting Skill package...",
-      "invalidPackage": "Invalid package: SKILL.md not found"
+      "invalidPackage": "Invalid package: SKILL.md not found",
+      "dragPathMissing": "Unable to resolve the local path of the dragged file. Please drag it directly from the system file manager, or use folder/archive import instead.",
+      "parseReadyReplaceSuffix": " (ready to replace the current Skill)",
+      "parseReadyPackageSuffix": " (complete Skill package detected)",
+      "applyAfterSave": ", click Save to apply",
+      "saveFirstHint": "Please save the Skill before uploading files",
+      "exportFailed": "Export failed: {message}"
     },
     "export": {
       "button": "Export Skills",
@@ -745,6 +762,11 @@
         "description": "Opens the desktop quick summon panel.",
         "placeholder": "Click to record shortcut"
       },
+      "appendFollowUp": {
+        "label": "Follow-up shortcut",
+        "description": "Triggers automatic follow-up; if only one window is open it appends directly, otherwise it opens the target selection panel.",
+        "placeholder": "Click to record shortcut"
+      },
       "profile": {
         "nickname": {
           "label": "User name",
@@ -760,7 +782,8 @@
           "dialogTitle": "Edit user avatar",
           "editorHint": "Drag to move, wheel to zoom",
           "scale": "Scale",
-          "radius": "Radius"
+          "radius": "Radius",
+          "invalidFile": "Avatar only supports image formats such as JPG, PNG, and WEBP"
         }
       },
       "promptShortcuts": {
@@ -779,6 +802,8 @@
     "alerts": {
       "importSuccess": "Configuration imported successfully.",
       "importFailed": "Configuration import failed.",
+      "exportSuccess": "Configuration exported successfully.",
+      "exportFailed": "Configuration export failed.",
       "saveSuccess": "Saved successfully!",
       "saveFailedPrefix": "Failed to save setting: "
     }

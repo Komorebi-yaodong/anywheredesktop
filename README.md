@@ -192,3 +192,20 @@ Anywhere Desktop 是一个持续进化的开源项目，欢迎交流、反馈与
 * `Anywhere_doc`：负责官方用户指南、帮助文档与截图资源维护。
 
 欢迎一起把 Anywhere Desktop 打磨成更稳定、更强大、更适合真实桌面工作流的本地 AI Agent 平台。
+
+---
+
+## 📄 开源协议
+
+本项目采用 **GNU Affero General Public License v3.0（AGPL-3.0-or-later）**。
+
+这意味着：
+
+- 你可以在遵守 AGPL 的前提下使用、修改与分发本项目；
+- 你可以商用，但**如果你分发了修改版，或基于修改版对外提供网络服务**，则必须按 AGPL 要求公开对应源码；
+- 任何衍生版本不得绕过 AGPL 的开源义务进行闭源再发布。
+
+完整协议文本见仓库根目录下的 [LICENSE](./LICENSE) 文件。
+
+版权所有 © 2026 Komorebi
+

@@ -405,7 +405,7 @@ async function handleDesktopNicknameBlur() {
 function processProfileAvatarFile(file) {
   const isImage = file?.type?.startsWith('image/')
   if (!isImage) {
-    ElMessage.error('头像仅支持 JPG、PNG、WEBP 等图片格式')
+    ElMessage.error(t('setting.desktop.profile.avatar.invalidFile'))
     return
   }
 
@@ -684,7 +684,7 @@ function validateDesktopShortcutDraft() {
       accelerator: currentConfig.value.desktop.shortcuts.quickSummon
     },
     {
-      label: '自动追问快捷键',
+      label: t('setting.desktop.appendFollowUp.label'),
       accelerator: currentConfig.value.desktop.shortcuts.appendFollowUp
     }
   ]
@@ -1457,7 +1457,7 @@ async function selectLocalChatPath() {
                         <span class="setting-option-description">{{ t('setting.desktop.mainToggle.description') }}</span>
                       </div>
                       <el-button class="shortcut-record-btn" @click="startShortcutRecording('mainToggle')">
-                        {{ shortcutRecorder.active && shortcutRecorder.target === 'mainToggle' ? '请按下快捷键…' : toDisplayShortcut(currentConfig.desktop.shortcuts.mainToggle) || t('setting.desktop.mainToggle.placeholder') }}
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'mainToggle' ? t('setting.desktop.mainToggle.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.mainToggle) || t('setting.desktop.mainToggle.placeholder') }}
                       </el-button>
                     </div>
 
@@ -1467,17 +1467,17 @@ async function selectLocalChatPath() {
                         <span class="setting-option-description">{{ t('setting.desktop.quickSummon.description') }}</span>
                       </div>
                       <el-button class="shortcut-record-btn" @click="startShortcutRecording('quickSummon')">
-                        {{ shortcutRecorder.active && shortcutRecorder.target === 'quickSummon' ? '请按下快捷键…' : toDisplayShortcut(currentConfig.desktop.shortcuts.quickSummon) || t('setting.desktop.quickSummon.placeholder') }}
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'quickSummon' ? t('setting.desktop.quickSummon.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.quickSummon) || t('setting.desktop.quickSummon.placeholder') }}
                       </el-button>
                     </div>
 
                     <div class="setting-option-item">
                       <div class="setting-text-content">
-                        <span class="setting-option-label">自动追问快捷键</span>
-                        <span class="setting-option-description">按下后自动追问；仅一个窗口时直接追问，多个窗口时打开追问选择界面。</span>
+                        <span class="setting-option-label">{{ t('setting.desktop.appendFollowUp.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.desktop.appendFollowUp.description') }}</span>
                       </div>
                       <el-button class="shortcut-record-btn" @click="startShortcutRecording('appendFollowUp')">
-                        {{ shortcutRecorder.active && shortcutRecorder.target === 'appendFollowUp' ? '请按下快捷键…' : toDisplayShortcut(currentConfig.desktop.shortcuts.appendFollowUp) || 'Alt+S' }}
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'appendFollowUp' ? t('setting.desktop.appendFollowUp.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.appendFollowUp) || t('setting.desktop.appendFollowUp.placeholder') }}
                       </el-button>
                     </div>
 
@@ -1499,7 +1499,7 @@ async function selectLocalChatPath() {
                           <el-option v-for="prompt in availableWindowPrompts" :key="prompt.key" :label="prompt.key" :value="prompt.key" />
                         </el-select>
                         <el-button class="shortcut-record-btn small" @click="startShortcutRecording('promptBinding', index)">
-                          {{ shortcutRecorder.active && shortcutRecorder.target === 'promptBinding' && shortcutRecorder.index === index ? '请按下快捷键…' : (toDisplayShortcut(binding.accelerator) || t('setting.desktop.promptShortcuts.shortcutPlaceholder')) }}
+                          {{ shortcutRecorder.active && shortcutRecorder.target === 'promptBinding' && shortcutRecorder.index === index ? t('setting.desktop.promptShortcuts.shortcutPlaceholder') : (toDisplayShortcut(binding.accelerator) || t('setting.desktop.promptShortcuts.shortcutPlaceholder')) }}
                         </el-button>
                         <el-switch v-model="binding.enabled" @change="handleDesktopShortcutChange" />
                         <el-button text type="danger" :icon="Remove" @click="removePromptShortcutBinding(index)" />

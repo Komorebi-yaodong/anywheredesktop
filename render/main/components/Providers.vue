@@ -570,7 +570,7 @@ const apiKeyCount = computed(() => {
           </el-scrollbar>
           <div class="aside-actions">
             <el-button-group class="action-group">
-              <el-tooltip content="新建目录" placement="top">
+              <el-tooltip :content="t('providers.folders.newFolderTitle')" placement="top">
                 <el-button :icon="FolderAdd" @click="addFolder_page = true" />
               </el-tooltip>
               <el-button type="primary" :icon="Plus" @click="addProvider_page = true" class="add-provider-btn">
@@ -607,7 +607,7 @@ const apiKeyCount = computed(() => {
                   <el-tooltip :content="t('providers.apiTypeTooltip')" placement="top" :show-after="500">
                     <el-select v-model="selectedProvider.apiType"
                       @change="(val) => saveSingleProviderSetting('apiType', val)" size="default" class="api-type-select"
-                      placeholder="Chat Completions">
+                      :placeholder="t('providers.apiTypes.chatCompletions')">
                       <el-option :label="t('providers.apiTypes.chatCompletions')" value="chat_completions" />
                       <el-option :label="t('providers.apiTypes.responses')" value="responses" />
                     </el-select>

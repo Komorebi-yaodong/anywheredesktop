@@ -97,8 +97,16 @@ const fallbackDefaultConfig = {
     closeToTray: true,
     shortcuts: {
       mainToggle: 'Ctrl+Space',
-      quickSummon: 'Alt+X',
+      quickSummon: 'Alt+A',
+      appendFollowUp: 'Alt+S',
       promptBindings: []
+    },
+    profile: {
+      nickname: 'User',
+      avatar: ''
+    },
+    guide: {
+      quickStartOpened: false
     }
   },
 
@@ -199,9 +207,93 @@ const docLoading = ref(false);
 const currentDocContent = ref('');
 const activeDocIndex = ref('0');
 const docScrollbarRef = ref(null);
+const QUICK_START_DOC_FILE = '__quick_start__';
+
+const escapeHtml = (value = '') => String(value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const getQuickStartDocHtml = () => {
+  const mainToggle = config.value?.desktop?.shortcuts?.mainToggle || 'Ctrl+Space';
+  const quickSummon = config.value?.desktop?.shortcuts?.quickSummon || 'Alt+A';
+  const appendFollowUp = config.value?.desktop?.shortcuts?.appendFollowUp || 'Alt+S';
+
+  const renderShortcut = (shortcut) => {
+    return escapeHtml(shortcut)
+      .split('+')
+      .filter(Boolean)
+      .map((part) => `<span class="shortcut-key">${part}</span>`)
+      .join('<span class="shortcut-plus">+</span>');
+  };
+
+  return `
+    <section class="quick-start-doc">
+      <div class="quick-start-hero">
+        <div class="quick-start-hero__title-row">
+          <h1>${escapeHtml(t('doc.quickStart.title'))}</h1>
+          <div class="quick-start-hero__badge">${escapeHtml(t('doc.quickStart.badge'))}</div>
+        </div>
+        <p>${escapeHtml(t('doc.quickStart.description'))}</p>
+      </div>
+
+      <div class="quick-start-panel">
+        <div class="quick-start-panel__header">
+          <h2>${escapeHtml(t('doc.quickStart.basicsTitle'))}</h2>
+          <p>${escapeHtml(t('doc.quickStart.basicsDescription'))}</p>
+        </div>
+
+        <div class="quick-start-shortcuts">
+          <article class="quick-start-shortcut-card">
+            <div class="quick-start-shortcut-card__keys">${renderShortcut(mainToggle)}</div>
+            <div class="quick-start-shortcut-card__body">
+              <h3>${escapeHtml(t('doc.quickStart.mainWindow.title'))}</h3>
+              <p>${escapeHtml(t('doc.quickStart.mainWindow.description'))}</p>
+            </div>
+          </article>
+
+          <article class="quick-start-shortcut-card">
+            <div class="quick-start-shortcut-card__keys">${renderShortcut(quickSummon)}</div>
+            <div class="quick-start-shortcut-card__body">
+              <h3>${escapeHtml(t('doc.quickStart.agent.title'))}</h3>
+              <p>${escapeHtml(t('doc.quickStart.agent.description'))}</p>
+            </div>
+          </article>
+
+          <article class="quick-start-shortcut-card">
+            <div class="quick-start-shortcut-card__keys">${renderShortcut(appendFollowUp)}</div>
+            <div class="quick-start-shortcut-card__body">
+              <h3>${escapeHtml(t('doc.quickStart.followUp.title'))}</h3>
+              <p>${escapeHtml(t('doc.quickStart.followUp.description'))}</p>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div class="quick-start-tips">
+        <h2>${escapeHtml(t('doc.quickStart.customShortcut.title'))}</h2>
+        <p class="quick-start-tip-lead">${escapeHtml(t('doc.quickStart.customShortcut.description'))}</p>
+        <div class="quick-start-custom-card">
+          <div class="quick-start-custom-card__keys">
+            <span class="shortcut-key">Agent</span>
+            <span class="shortcut-plus">→</span>
+            <span class="shortcut-key">${escapeHtml(t('doc.quickStart.customShortcut.entry'))}</span>
+          </div>
+          <div class="quick-start-custom-card__body">
+            <h3>${escapeHtml(t('doc.quickStart.customShortcut.cardTitle'))}</h3>
+            <p>${escapeHtml(t('doc.quickStart.customShortcut.cardDescription'))}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+};
 
 // 文档列表配置，增加 i18nKey 用于动态标题，lastUpdated 动态获取
 const docList = ref([
+  { i18nKey: 'doc.titles.quickStart', file: QUICK_START_DOC_FILE, lastUpdated: null, isBuiltin: true },
   { i18nKey: 'doc.titles.chat', file: 'chat_doc.md', lastUpdated: null },
   { i18nKey: 'doc.titles.task', file: 'task_doc.md', lastUpdated: null },
   { i18nKey: 'doc.titles.ai', file: 'ai_doc.md', lastUpdated: null },
@@ -261,6 +353,11 @@ const fetchAllDocsMetadata = async () => {
   const dateRegex = /\*\*文档更新时间：(\d{4})年(\d{1,2})月(\d{1,2})日\*\*/;
 
   const promises = docList.value.map(async (doc) => {
+    if (doc.isBuiltin) {
+      doc.lastUpdated = null;
+      return;
+    }
+
     try {
       const { text } = await fetchWithFallback(`docs/${doc.file}`);
       
@@ -283,6 +380,17 @@ const fetchAllDocsMetadata = async () => {
 const fetchAndParseDoc = async (filename) => {
   // 标记当前文档为已读
   markDocAsRead(filename);
+
+  if (filename === QUICK_START_DOC_FILE) {
+    docLoading.value = false;
+    currentDocContent.value = getQuickStartDocHtml();
+    nextTick(() => {
+      if (docScrollbarRef.value) {
+        docScrollbarRef.value.setScrollTop(0);
+      }
+    });
+    return;
+  }
 
   docLoading.value = true;
   try {
@@ -320,7 +428,7 @@ const fetchAndParseDoc = async (filename) => {
 // 检查是否有更新
 const checkDocHasUpdate = (index) => {
   const doc = docList.value[index];
-  if (!doc || !doc.lastUpdated) return false;
+  if (!doc || doc.isBuiltin || !doc.lastUpdated) return false;
 
   // 从配置中读取状态
   const readMap = config.value?.docReadStatus || {};
@@ -370,6 +478,24 @@ watch(activeDocIndex, (newIndex) => {
 });
 
 // 打开弹窗时加载第一个文档，并更新阅读状态
+const openQuickStartGuideIfNeeded = async () => {
+  if (!config.value || config.value?.desktop?.guide?.quickStartOpened) return;
+
+  activeDocIndex.value = '0';
+  openHelpDialog();
+
+  config.value.desktop = config.value.desktop || {};
+  config.value.desktop.guide = config.value.desktop.guide || {};
+  config.value.desktop.guide.quickStartOpened = true;
+
+  try {
+    await window.api.saveSetting('desktop.guide.quickStartOpened', true);
+  } catch (error) {
+    console.error('Failed to persist quick start guide state:', error);
+  }
+};
+
+
 const openHelpDialog = () => {
   showDocDialog.value = true;
 
@@ -438,6 +564,8 @@ onMounted(async () => {
         window.api.saveSetting('isDarkMode', systemDark);
       }
     }
+
+    await openQuickStartGuideIfNeeded();
   } catch (error) {
     console.error("Error fetching config in App.vue:", error);
     config.value = normalizeConfigPayload(null);
@@ -616,10 +744,11 @@ watch(locale, () => {
     <el-dialog v-model="showDocDialog" :title="t('doc.title')" width="80%" :lock-scroll="false" class="doc-dialog">
       <div class="doc-container">
         <div class="doc-sidebar">
-          <el-menu :default-active="activeDocIndex" @select="(index) => activeDocIndex = index" class="doc-menu">
-            <el-menu-item v-for="(doc, index) in docList" :key="index" :index="String(index)">
+          <el-menu :default-active="activeDocIndex" :default-openeds="[]" @select="(index) => activeDocIndex = index" class="doc-menu">
+            <el-menu-item v-for="(doc, index) in docList" :key="index" :index="String(index)" :class="{ 'is-quick-start-item': doc.isBuiltin }">
               <el-icon>
-                <Document />
+                <Collection v-if="doc.isBuiltin" />
+                <Document v-else />
               </el-icon>
               <span class="menu-item-text">
                 {{ t(doc.i18nKey) }}
@@ -631,7 +760,7 @@ watch(locale, () => {
         </div>
         <div class="doc-content" v-loading="docLoading" :element-loading-text="t('doc.loading')">
           <el-scrollbar ref="docScrollbarRef" height="60vh">
-            <div class="markdown-body" v-html="currentDocContent" @click="handleDocLinks"></div>
+            <div class="markdown-body" :class="{ 'is-quick-start': docList[Number(activeDocIndex)]?.isBuiltin }" v-html="currentDocContent" @click="handleDocLinks"></div>
           </el-scrollbar>
         </div>
       </div>
@@ -852,13 +981,13 @@ html.dark .doc-container {
 }
 
 .bell-badge :deep(.el-badge__content.is-fixed.is-dot) {
-  right: 3px;
-  top: 3px;
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.92);
+  right: 1px;
+  top: 1px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9);
 }
 
 html.dark .bell-badge :deep(.el-badge__content.is-fixed.is-dot) {
-  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.92);
+  box-shadow: 0 0 0 1px rgba(24, 24, 27, 0.92);
 }
 
 .doc-sidebar {
@@ -1037,6 +1166,228 @@ html.dark .doc-menu :deep(.el-menu-item:hover) {
 
 .markdown-body :deep(a:hover) {
   border-bottom-color: var(--el-color-primary);
+}
+
+.markdown-body.is-quick-start {
+  padding: 24px 26px 30px;
+}
+
+.markdown-body :deep(.quick-start-doc) {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.markdown-body :deep(.quick-start-hero),
+.markdown-body :deep(.quick-start-panel),
+.markdown-body :deep(.quick-start-tips) {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-primary);
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(250, 250, 250, 0.82) 100%);
+  box-shadow: 0 14px 30px -26px rgba(15, 23, 42, 0.28);
+}
+
+html.dark .markdown-body :deep(.quick-start-hero),
+html.dark .markdown-body :deep(.quick-start-panel),
+html.dark .markdown-body :deep(.quick-start-tips) {
+  background: linear-gradient(180deg, rgba(39, 39, 42, 0.9) 0%, rgba(24, 24, 27, 0.86) 100%);
+  box-shadow: 0 18px 34px -28px rgba(0, 0, 0, 0.5);
+}
+
+.markdown-body :deep(.quick-start-hero) {
+  padding: 24px 24px 22px;
+}
+
+.markdown-body :deep(.quick-start-hero__title-row) {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.markdown-body :deep(.quick-start-hero__badge) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(24, 24, 27, 0.08);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  order: 2;
+}
+
+html.dark .markdown-body :deep(.quick-start-hero__badge) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.markdown-body :deep(.quick-start-hero h1) {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.2;
+}
+
+.markdown-body :deep(.quick-start-hero p),
+.markdown-body :deep(.quick-start-panel__header p) {
+  margin: 0;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.markdown-body :deep(.quick-start-panel) {
+  padding: 22px;
+}
+
+.markdown-body :deep(.quick-start-panel__header) {
+  margin-bottom: 18px;
+}
+
+.markdown-body :deep(.quick-start-panel__header h2),
+.markdown-body :deep(.quick-start-tips h2) {
+  margin: 0 0 8px;
+  font-size: 20px;
+  line-height: 1.3;
+  color: var(--text-primary);
+}
+
+.markdown-body :deep(.quick-start-shortcuts) {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.markdown-body :deep(.quick-start-shortcut-card) {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 18px 18px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(24, 24, 27, 0.08);
+  background: linear-gradient(180deg, rgba(250, 250, 250, 0.96) 0%, rgba(244, 244, 245, 0.9) 100%);
+}
+
+html.dark .markdown-body :deep(.quick-start-shortcut-card) {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(63, 63, 70, 0.58) 0%, rgba(39, 39, 42, 0.62) 100%);
+}
+
+.markdown-body :deep(.quick-start-shortcut-card__keys) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.markdown-body :deep(.shortcut-key) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: inset 0 -2px 0 rgba(24, 24, 27, 0.06);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+html.dark .markdown-body :deep(.shortcut-key) {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(24, 24, 27, 0.9);
+  box-shadow: inset 0 -2px 0 rgba(255, 255, 255, 0.04);
+}
+
+.markdown-body :deep(.shortcut-plus) {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.markdown-body :deep(.quick-start-shortcut-card__body) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.markdown-body :deep(.quick-start-shortcut-card__body h3) {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.markdown-body :deep(.quick-start-shortcut-card__body p) {
+  margin: 0;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.markdown-body :deep(.quick-start-tips) {
+  padding: 22px 22px 20px;
+}
+
+.markdown-body :deep(.quick-start-tip-lead) {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.markdown-body :deep(.quick-start-custom-card) {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(24, 24, 27, 0.08);
+  background: linear-gradient(180deg, rgba(250, 250, 250, 0.96) 0%, rgba(244, 244, 245, 0.9) 100%);
+}
+
+html.dark .markdown-body :deep(.quick-start-custom-card) {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(63, 63, 70, 0.58) 0%, rgba(39, 39, 42, 0.62) 100%);
+}
+
+.markdown-body :deep(.quick-start-custom-card__keys) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.markdown-body :deep(.quick-start-custom-card__body) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.markdown-body :deep(.quick-start-custom-card__body h3) {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.markdown-body :deep(.quick-start-custom-card__body p) {
+  margin: 0;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.markdown-body :deep(.quick-start-tips ul) {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.markdown-body :deep(.quick-start-tips li) {
+  color: var(--text-secondary);
+  margin-bottom: 10px;
 }
 
 :deep(.doc-dialog .el-dialog) {

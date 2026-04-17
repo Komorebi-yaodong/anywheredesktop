@@ -27,6 +27,7 @@
     "checkNetwork": "请确保您能访问 GitHub 或其镜像站点。",
     "sourcesUnavailable": "（GitHub 与 Gitee 文档源均不可用）",
     "titles": {
+      "quickStart": "快速开始",
       "ai": "快捷助手",
       "chat": "历史对话",
       "task": "定时任务",
@@ -34,6 +35,32 @@
       "skill": "Skill 技能",
       "provider": "服务商",
       "setting": "设置"
+    },
+    "quickStart": {
+      "badge": "新手入门",
+      "title": "快速开始",
+      "description": "第一次打开 Anywhere Desktop，可以先记住这 3 个最常用的全局快捷键，它们能帮你快速打开主界面、选择 Agent，以及把内容继续追问到对话窗口。",
+      "basicsTitle": "基础操作",
+      "basicsDescription": "下面这几个快捷键就是日常使用桌面端最核心的入口。",
+      "mainWindow": {
+        "title": "打开 / 隐藏主界面",
+        "description": "用来呼出或隐藏主控台，在设置、查看历史对话、管理 MCP / Skill / 服务商时最常用。"
+      },
+      "agent": {
+        "title": "打开 Agent 选择界面",
+        "description": "快速打开 Agent 选择界面，适合直接召唤不同助手开始新任务。"
+      },
+      "followUp": {
+        "title": "自动追问 / 打开追问选择界面",
+        "description": "当只有一个对话窗口时会直接追问；如果当前有多个对话窗口，则会打开窗口选择界面。"
+      },
+      "customShortcut": {
+        "title": "Agent 自定义快捷键",
+        "description": "除了默认全局快捷键，你还可以为单个 Agent 绑定专属快捷键，之后按下快捷键就能直接快捷召唤对应 Agent。",
+        "entry": "设置 → 快捷助手快捷键",
+        "cardTitle": "给常用 Agent 绑定专属快捷键",
+        "cardDescription": "在“设置”的“桌面端设置”中找到“快捷助手快捷键”，选择对应 Agent 并录制快捷键后，就可以用自定义快捷键直接召唤它。"
+      }
     }
   },
   "chats": {

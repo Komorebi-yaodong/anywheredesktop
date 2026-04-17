@@ -27,6 +27,7 @@
     "checkNetwork": "Please ensure you can access GitHub or its mirrors.",
     "sourcesUnavailable": "(GitHub and Gitee documentation sources are both unreachable)",
     "titles": {
+      "quickStart": "Quick Start",
       "ai": "Agent Prompts",
       "chat": "Chat History",
       "task": "Scheduled Task",
@@ -34,6 +35,32 @@
       "skill": "Skill Library",
       "provider": "Providers",
       "setting": "Settings"
+    },
+    "quickStart": {
+      "badge": "Getting Started",
+      "title": "Quick Start",
+      "description": "When you open Anywhere Desktop for the first time, start by remembering these 3 global shortcuts. They help you quickly open the main console, choose an Agent, and continue follow-up in an existing chat window.",
+      "basicsTitle": "Basic Operations",
+      "basicsDescription": "These shortcuts are the core entry points you will use most often in the desktop workflow.",
+      "mainWindow": {
+        "title": "Show / Hide Main Window",
+        "description": "Use it to open or hide the main console. It is the primary entry for settings, chat history, MCP, Skills, and providers."
+      },
+      "agent": {
+        "title": "Open Agent Selection",
+        "description": "Quickly open the Agent selection panel to summon different assistants and start a new task."
+      },
+      "followUp": {
+        "title": "Auto Follow-up / Open Target Picker",
+        "description": "If only one chat window is open, it follows up directly. If multiple chat windows are open, it opens the target selection panel first."
+      },
+      "customShortcut": {
+        "title": "Custom Agent Shortcuts",
+        "description": "Besides the default global shortcuts, you can bind a dedicated shortcut to a specific Agent and summon it directly with that shortcut later.",
+        "entry": "Settings → Prompt Shortcuts",
+        "cardTitle": "Bind dedicated shortcuts for frequently used Agents",
+        "cardDescription": "Open “Desktop Settings” in Settings, find “Prompt shortcut list”, choose the target Agent, record a shortcut, and then you can summon it directly with your custom shortcut."
+      }
     }
   },
   "chats": {

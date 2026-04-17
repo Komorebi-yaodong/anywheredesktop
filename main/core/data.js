@@ -301,6 +301,9 @@ export const defaultConfig = {
       profile: {
         nickname: 'User',
         avatar: ''
+      },
+      guide: {
+        quickStartOpened: false
       }
     },
 
@@ -585,6 +588,9 @@ function checkConfig(inputConfig) {
       profile: {
         nickname: 'User',
         avatar: ''
+      },
+      guide: {
+        quickStartOpened: false
       }
     },
     settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],
@@ -731,6 +737,16 @@ function checkConfig(inputConfig) {
         config.desktop.profile.avatar = rootDefaults.desktop.profile.avatar
         changed = true
       }
+    }
+
+    if (!config.desktop.guide || typeof config.desktop.guide !== 'object') {
+      config.desktop.guide = {
+        quickStartOpened: true
+      }
+      changed = true
+    } else if (typeof config.desktop.guide.quickStartOpened !== 'boolean') {
+      config.desktop.guide.quickStartOpened = rootDefaults.desktop.guide.quickStartOpened
+      changed = true
     }
   }
 

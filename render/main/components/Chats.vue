@@ -1041,63 +1041,65 @@ const toggleSelectAll = () => {
 <template>
     <div class="chats-page-container">
         <div class="chats-content-wrapper">
-            <div class="info-button-container">
-                <el-popover placement="bottom-start" :title="t('chats.info.title')" :width="450" trigger="click">
-                    <template #reference>
-                        <el-button :icon="QuestionFilled" circle />
-                    </template>
-                    <div class="info-popover-content">
-                        <p v-html="t('chats.info.localDesc', { path: localChatPath || t('chats.info.pathNotSet') })">
-                        </p>
-                        <p v-html="t('chats.info.cloudDesc')"></p>
+            <div class="top-toolbar">
+                <div class="info-button-container">
+                    <el-popover placement="bottom-start" :title="t('chats.info.title')" :width="450" trigger="click">
+                        <template #reference>
+                            <el-button :icon="QuestionFilled" circle />
+                        </template>
+                        <div class="info-popover-content">
+                            <p v-html="t('chats.info.localDesc', { path: localChatPath || t('chats.info.pathNotSet') })">
+                            </p>
+                            <p v-html="t('chats.info.cloudDesc')"></p>
+                        </div>
+                    </el-popover>
+                    <el-tooltip :content="t('chats.tooltips.selectFolder')" placement="bottom">
+                        <el-button :icon="FolderOpened" circle @click="selectLocalChatPath" />
+                    </el-tooltip>
+                    <el-tooltip :content="t('chats.clean.button')" placement="bottom">
+                        <el-button :icon="Brush" circle @click="openCleanDialog" />
+                    </el-tooltip>
+                    <div class="sort-button-container">
+                        <el-dropdown trigger="click" @command="(command) => sortMode = command">
+                            <el-button :icon="Operation" circle :title="`${t('chats.sort.button')}: ${getSortModeLabel()}`" />
+                            <template #dropdown>
+                                <el-dropdown-menu>
+                                    <el-dropdown-item command="createdAt" :class="{ 'is-active-sort': sortMode === 'createdAt' }">
+                                        {{ t('chats.sort.createdAt') }}
+                                    </el-dropdown-item>
+                                    <el-dropdown-item command="updatedAt" :class="{ 'is-active-sort': sortMode === 'updatedAt' }">
+                                        {{ t('chats.sort.updatedAt') }}
+                                    </el-dropdown-item>
+                                    <el-dropdown-item command="name" :class="{ 'is-active-sort': sortMode === 'name' }">
+                                        {{ t('chats.sort.name') }}
+                                    </el-dropdown-item>
+                                </el-dropdown-menu>
+                            </template>
+                        </el-dropdown>
                     </div>
-                </el-popover>
-                <el-tooltip :content="t('chats.tooltips.selectFolder')" placement="bottom">
-                    <el-button :icon="FolderOpened" circle @click="selectLocalChatPath" />
-                </el-tooltip>
-                <el-tooltip :content="t('chats.clean.button')" placement="bottom">
-                    <el-button :icon="Brush" circle @click="openCleanDialog" />
-                </el-tooltip>
-            </div>
-            <div class="sync-buttons-container">
-                <el-tooltip :content="t('chats.tooltips.uploadChanges', { count: uploadableCount })" placement="bottom">
-                    <el-badge :value="uploadableCount" :hidden="uploadableCount === 0" type="primary">
-                        <el-button :icon="Upload" @click="intelligentUpload" circle
-                            :disabled="!isWebdavConfigValid || !localChatPath" />
-                    </el-badge>
-                </el-tooltip>
-                <el-tooltip :content="t('chats.tooltips.downloadChanges', { count: downloadableCount })"
-                    placement="bottom">
-                    <el-badge :value="downloadableCount" :hidden="downloadableCount === 0" type="success">
-                        <el-button :icon="Download" @click="intelligentDownload" circle
-                            :disabled="!isWebdavConfigValid || !localChatPath" />
-                    </el-badge>
-                </el-tooltip>
-            </div>
-            <div class="view-selector">
-                <el-radio-group v-model="activeView" @change="currentPage = 1">
-                    <el-radio-button value="local">{{ t('chats.view.local') }}</el-radio-button>
-                    <el-radio-button value="cloud" :disabled="!isWebdavConfigValid">{{ t('chats.view.cloud')
-                        }}</el-radio-button>
-                </el-radio-group>
-            </div>
-            <div class="sort-button-container">
-                <el-dropdown trigger="click" @command="(command) => sortMode = command">
-                    <el-button :icon="Operation" circle :title="`${t('chats.sort.button')}: ${getSortModeLabel()}`" />
-                    <template #dropdown>
-                        <el-dropdown-menu>
-                            <el-dropdown-item command="createdAt" :class="{ 'is-active-sort': sortMode === 'createdAt' }">
-                                {{ t('chats.sort.createdAt') }}
-                            </el-dropdown-item>
-                            <el-dropdown-item command="updatedAt" :class="{ 'is-active-sort': sortMode === 'updatedAt' }">
-                                {{ t('chats.sort.updatedAt') }}
-                            </el-dropdown-item>
-                            <el-dropdown-item command="name" :class="{ 'is-active-sort': sortMode === 'name' }">
-                                {{ t('chats.sort.name') }}
-                            </el-dropdown-item>
-                        </el-dropdown-menu>
-                    </template>
-                </el-dropdown>
+                </div>
+                <div class="view-selector">
+                    <el-radio-group v-model="activeView" @change="currentPage = 1">
+                        <el-radio-button value="local">{{ t('chats.view.local') }}</el-radio-button>
+                        <el-radio-button value="cloud" :disabled="!isWebdavConfigValid">{{ t('chats.view.cloud')
+                            }}</el-radio-button>
+                    </el-radio-group>
+                </div>
+                <div class="sync-buttons-container">
+                    <el-tooltip :content="t('chats.tooltips.uploadChanges', { count: uploadableCount })" placement="bottom">
+                        <el-badge :value="uploadableCount" :hidden="uploadableCount === 0" type="primary">
+                            <el-button :icon="Upload" @click="intelligentUpload" circle
+                                :disabled="!isWebdavConfigValid || !localChatPath" />
+                        </el-badge>
+                    </el-tooltip>
+                    <el-tooltip :content="t('chats.tooltips.downloadChanges', { count: downloadableCount })"
+                        placement="bottom">
+                        <el-badge :value="downloadableCount" :hidden="downloadableCount === 0" type="success">
+                            <el-button :icon="Download" @click="intelligentDownload" circle
+                                :disabled="!isWebdavConfigValid || !localChatPath" />
+                        </el-badge>
+                    </el-tooltip>
+                </div>
             </div>
 
             <div class="table-container">
@@ -1299,8 +1301,17 @@ const toggleSelectAll = () => {
     border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
+.top-toolbar {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 20px 0;
+    flex-shrink: 0;
+}
+
 .view-selector {
-    padding: 5px 100px 0px 100px;
+    min-width: 0;
     text-align: center;
     display: flex;
     justify-content: center;
@@ -1310,10 +1321,8 @@ const toggleSelectAll = () => {
 }
 
 .sort-button-container {
-    position: absolute;
-    top: 8px;
-    left: 104px;
-    z-index: 10;
+    display: flex;
+    align-items: center;
 }
 
 .sort-button-container .el-button {
@@ -1636,12 +1645,11 @@ const toggleSelectAll = () => {
 }
 
 .sync-buttons-container {
-    position: absolute;
-    top: 8px;
-    right: 20px;
-    z-index: 10;
     display: flex;
+    align-items: center;
+    justify-content: flex-end;
     gap: 8px;
+    flex-shrink: 0;
 }
 
 .sync-buttons-container .el-button {
@@ -1665,10 +1673,10 @@ html.dark .sync-buttons-container :deep(.el-badge__content--primary) {
 }
 
 .info-button-container {
-    position: absolute;
-    top: 8px;
-    left: 20px;
-    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
 }
 
 .info-button-container .el-button {

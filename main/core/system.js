@@ -13,6 +13,37 @@ function normalizeText(input) {
   return String(input)
 }
 
+function resolveBinaryInputBuffer(input) {
+  if (!input) return null
+  if (Buffer.isBuffer(input)) return input
+  if (input instanceof ArrayBuffer) return Buffer.from(input)
+  if (ArrayBuffer.isView(input)) {
+    return Buffer.from(input.buffer, input.byteOffset, input.byteLength)
+  }
+
+  if (typeof input !== 'object') return null
+
+  if (Buffer.isBuffer(input.buffer)) return input.buffer
+  if (input.buffer instanceof ArrayBuffer) return Buffer.from(input.buffer)
+  if (ArrayBuffer.isView(input.buffer)) {
+    return Buffer.from(input.buffer.buffer, input.buffer.byteOffset, input.buffer.byteLength)
+  }
+  if (Array.isArray(input.buffer?.data)) {
+    return Buffer.from(input.buffer.data)
+  }
+  if (
+    input.buffer &&
+    typeof input.buffer === 'object' &&
+    typeof input.buffer.__type === 'string' &&
+    typeof input.buffer.data === 'string' &&
+    input.buffer.encoding === 'base64'
+  ) {
+    return Buffer.from(input.buffer.data, 'base64')
+  }
+
+  return null
+}
+
 function parseImageInput(input = {}) {
   if (!input || typeof input !== 'object') return nativeImage.createEmpty()
 
@@ -23,6 +54,15 @@ function parseImageInput(input = {}) {
   if (typeof input.base64 === 'string' && input.base64.trim()) {
     try {
       return nativeImage.createFromBuffer(Buffer.from(input.base64, 'base64'))
+    } catch {
+      return nativeImage.createEmpty()
+    }
+  }
+
+  const binaryBuffer = resolveBinaryInputBuffer(input)
+  if (binaryBuffer && binaryBuffer.length > 0) {
+    try {
+      return nativeImage.createFromBuffer(binaryBuffer)
     } catch {
       return nativeImage.createEmpty()
     }
@@ -251,20 +291,43 @@ function readClipboardFilePaths() {
   return []
 }
 
-function readClipboardImageDataUrl() {
+function readClipboardImageSnapshot(options = {}) {
   try {
     const image = clipboard.readImage()
-    if (!image || image.isEmpty()) return ''
-    return image.toDataURL()
+    if (!image || image.isEmpty()) {
+      return {
+        imageDataUrl: '',
+        imageSignature: '',
+        imageSize: { width: 0, height: 0 }
+      }
+    }
+
+    const size = image.getSize()
+    const width = Number(size?.width) || 0
+    const height = Number(size?.height) || 0
+    const imageSignature = width > 0 && height > 0 ? `${width}x${height}` : 'present'
+
+    return {
+      imageDataUrl: options.includeDataUrl ? image.toDataURL() : '',
+      imageSignature,
+      imageSize: { width, height }
+    }
   } catch {
-    return ''
+    return {
+      imageDataUrl: '',
+      imageSignature: '',
+      imageSize: { width: 0, height: 0 }
+    }
   }
 }
 
-function readClipboardPayloadRaw() {
+function readClipboardPayloadRaw(options = {}) {
+  const imageSnapshot = readClipboardImageSnapshot(options)
   return {
     text: clipboard.readText(),
-    imageDataUrl: readClipboardImageDataUrl(),
+    imageDataUrl: imageSnapshot.imageDataUrl,
+    imageSignature: imageSnapshot.imageSignature,
+    imageSize: imageSnapshot.imageSize,
     filePaths: readClipboardFilePaths(),
     formats: clipboard.availableFormats()
   }
@@ -273,15 +336,25 @@ function readClipboardPayloadRaw() {
 function buildFieldSignatures(raw = {}) {
   const text = typeof raw.text === 'string' ? raw.text : ''
   const imageDataUrl = typeof raw.imageDataUrl === 'string' ? raw.imageDataUrl : ''
+  const imageSignature = typeof raw.imageSignature === 'string' ? raw.imageSignature : ''
+  const imageSize =
+    raw.imageSize && typeof raw.imageSize === 'object'
+      ? {
+          width: Number(raw.imageSize.width) || 0,
+          height: Number(raw.imageSize.height) || 0
+        }
+      : { width: 0, height: 0 }
   const filePaths = Array.isArray(raw.filePaths) ? raw.filePaths.map((item) => path.normalize(String(item))) : []
 
   return {
     text,
     imageDataUrl,
+    imageSignature,
+    imageSize,
     filePaths,
     signatures: {
       text,
-      image: imageDataUrl ? `${imageDataUrl.length}:${imageDataUrl.slice(0, 128)}` : '',
+      image: imageSignature,
       files: JSON.stringify(filePaths)
     }
   }
@@ -338,7 +411,7 @@ function updateClipboardTimeline(raw = {}) {
   if (updateTimelineEntry(clipboardTimeline.text, normalized.signatures.text, normalized.text)) {
     changedKinds.push('text')
   }
-  if (updateTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageDataUrl)) {
+  if (updateTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageSignature)) {
     changedKinds.push('image')
   }
   if (updateTimelineEntry(clipboardTimeline.files, normalized.signatures.files, normalized.filePaths)) {
@@ -356,7 +429,7 @@ function primeClipboardTimeline(raw = {}) {
   const normalized = buildFieldSignatures(raw)
 
   primeTimelineEntry(clipboardTimeline.text, normalized.signatures.text, normalized.text)
-  primeTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageDataUrl)
+  primeTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageSignature)
   primeTimelineEntry(clipboardTimeline.files, normalized.signatures.files, normalized.filePaths)
 
   return normalized
@@ -402,6 +475,37 @@ function getFreshClipboardPayload(source = 'clipboard', preferredKinds = ['files
   const latestKind = resolveLatestKind(preferredKinds)
   const payload = buildClipboardPayloadFromKind(latestKind, source, formats)
   return payload.isFresh ? payload : buildClipboardPayloadFromKind('empty', 'empty', formats)
+}
+
+function resolveClipboardImageDataUrlForPayload(payload = null) {
+  if (!payload || payload.kind !== 'img' || !payload.hasImage) {
+    return payload
+  }
+
+  const imageSnapshot = readClipboardImageSnapshot({ includeDataUrl: true })
+  if (!imageSnapshot.imageSignature) {
+    return {
+      ...payload,
+      kind: 'empty',
+      imageDataUrl: '',
+      hasImage: false,
+      timestamp: 0,
+      ageMs: Number.POSITIVE_INFINITY,
+      isFresh: false,
+      source: 'empty'
+    }
+  }
+
+  if (clipboardTimeline.image.signature && imageSnapshot.imageSignature !== clipboardTimeline.image.signature) {
+    return buildClipboardPayloadFromKind('empty', 'empty', payload.formats || [])
+  }
+
+  return {
+    ...payload,
+    imageDataUrl: imageSnapshot.imageDataUrl,
+    imageSize: imageSnapshot.imageSize,
+    hasImage: Boolean(imageSnapshot.imageDataUrl)
+  }
 }
 
 
@@ -469,7 +573,7 @@ async function refreshClipboardTimelineFromSequence(raw = {}) {
 
   return [
     touchTimelineEntry(clipboardTimeline.text, normalized.signatures.text, normalized.text, now),
-    touchTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageDataUrl, now),
+    touchTimelineEntry(clipboardTimeline.image, normalized.signatures.image, normalized.imageSignature, now),
     touchTimelineEntry(clipboardTimeline.files, normalized.signatures.files, normalized.filePaths, now)
   ].some(Boolean)
 }
@@ -733,7 +837,7 @@ async function tryCaptureSelectionToClipboard() {
     return null
   }
 
-  return getFreshClipboardPayload('selection', ['files', 'image', 'text'], afterRaw.formats)
+  return resolveClipboardImageDataUrlForPayload(getFreshClipboardPayload('selection', ['files', 'image', 'text'], afterRaw.formats))
 }
 
 
@@ -743,19 +847,19 @@ export async function captureQuickPayload() {
 
   let clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (clipboardPayload.kind !== 'empty') {
-    return {
-      ...clipboardPayload,
-      source: 'recent-clipboard'
-    }
+    return resolveClipboardImageDataUrlForPayload({
+        ...clipboardPayload,
+        source: 'recent-clipboard'
+      })
   }
 
   await refreshClipboardTimelineFromSequence(raw)
   clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (clipboardPayload.kind !== 'empty') {
-    return {
-      ...clipboardPayload,
-      source: 'recent-clipboard'
-    }
+    return resolveClipboardImageDataUrlForPayload({
+        ...clipboardPayload,
+        source: 'recent-clipboard'
+      })
   }
 
   const explorerSelection = await tryReadForegroundExplorerSelection()
@@ -804,7 +908,7 @@ export async function captureQuickPayload() {
     }
   }
 
-  return clipboardPayload
+  return resolveClipboardImageDataUrlForPayload(clipboardPayload)
 }
 
 export async function captureSelectionPayload() {
@@ -819,19 +923,19 @@ export async function captureSelectionPayload() {
 
   if (clipboardPayload.kind !== 'empty') {
     if (clipboardPayload.isFresh) {
-      return {
+      return resolveClipboardImageDataUrlForPayload({
         ...clipboardPayload,
         source: 'recent-clipboard'
-      }
+      })
     }
 
-    return {
+    return resolveClipboardImageDataUrlForPayload({
       ...clipboardPayload,
       source: 'clipboard'
-    }
+    })
   }
 
-  return clipboardPayload
+  return resolveClipboardImageDataUrlForPayload(clipboardPayload)
 }
 
 export async function readClipboardPayload() {
@@ -840,12 +944,12 @@ export async function readClipboardPayload() {
 
   let payload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (payload.kind !== 'empty') {
-    return payload
+    return resolveClipboardImageDataUrlForPayload(payload)
   }
 
   await refreshClipboardTimelineFromSequence(raw)
   payload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
-  return payload
+  return resolveClipboardImageDataUrlForPayload(payload)
 }
 
 export async function readClipboardText() {

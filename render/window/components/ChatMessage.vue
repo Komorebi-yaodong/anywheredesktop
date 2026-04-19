@@ -323,6 +323,25 @@ const cleanupMessageScreenshot = (wrapper, canvas) => {
   }
 };
 
+const canvasToPngBytes = async (canvas) => {
+  if (!canvas) {
+    throw new Error('canvas_required');
+  }
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) {
+        resolve(result);
+      } else {
+        reject(new Error('canvas_to_blob_failed'));
+      }
+    }, 'image/png');
+  });
+
+  const arrayBuffer = await blob.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
+};
+
 const onCopyImage = async () => {
   if (!messageWrapperRef.value) return;
 
@@ -331,7 +350,7 @@ const onCopyImage = async () => {
   setTimeout(async () => {
     let wrapper = null;
     let canvas = null;
-    let dataUrl = '';
+    let imageBytes = null;
 
     try {
       const isDark = document.documentElement.classList.contains('dark');
@@ -374,8 +393,8 @@ const onCopyImage = async () => {
         ignoreElements: () => false
       });
 
-      dataUrl = canvas.toDataURL('image/png');
-      await window.api.copyImage(dataUrl);
+      imageBytes = await canvasToPngBytes(canvas);
+      await window.api.copyImage({ buffer: imageBytes });
       loadingMsg.close();
       ElMessage.success('消息图片已复制');
     } catch (error) {
@@ -386,7 +405,7 @@ const onCopyImage = async () => {
       cleanupMessageScreenshot(wrapper, canvas);
       wrapper = null;
       canvas = null;
-      dataUrl = '';
+      imageBytes = null;
     }
   }, 50);
 };

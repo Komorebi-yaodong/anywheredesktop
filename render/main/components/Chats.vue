@@ -1201,6 +1201,7 @@ const toggleSelectAll = () => {
                 <!-- 列表视图 -->
                 <div v-else class="chat-table-shell" v-loading="isTableLoading">
                     <div class="chat-table-header">
+                        <div class="chat-column chat-column-checkbox"></div>
                         <button type="button" class="chat-column chat-column-title sortable" :class="{ active: sortMode === 'name' }"
                             @click="toggleSort('name')">
                             <span>{{ t('chats.table.filename') }}</span>
@@ -1464,7 +1465,7 @@ const toggleSelectAll = () => {
 
 .chat-table-header {
     display: grid;
-    grid-template-columns: minmax(220px, 1.8fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(110px, 0.7fr) 168px;
+    grid-template-columns: 24px minmax(0, 1.8fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(110px, 0.7fr) 168px;
     align-items: center;
     gap: 12px;
     padding: 0 18px 10px 16px;
@@ -1578,6 +1579,10 @@ const toggleSelectAll = () => {
     pointer-events: auto;
 }
 
+.chat-list-item.is-selected .list-title {
+    transform: translateX(10px);
+}
+
 .list-content {
     flex: 1;
     display: grid;
@@ -1586,6 +1591,7 @@ const toggleSelectAll = () => {
     gap: 12px;
     min-width: 0;
     margin-right: 8px;
+    overflow: hidden;
 }
 
 .list-title {
@@ -1596,6 +1602,8 @@ const toggleSelectAll = () => {
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+    padding-right: 8px;
+    transition: transform 0.2s ease;
 }
 
 .list-meta-grid,

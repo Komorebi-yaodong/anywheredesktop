@@ -1570,15 +1570,74 @@ const handleWindowFocus = () => {
   }, 50);
 };
 
+
+const inferImageExtension = (contentType = '', fallback = 'png') => {
+  const normalized = String(contentType || '').toLowerCase();
+  if (normalized.includes('jpeg') || normalized.includes('jpg')) return 'jpg';
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('gif')) return 'gif';
+  if (normalized.includes('bmp')) return 'bmp';
+  if (normalized.includes('svg')) return 'svg';
+  if (normalized.includes('png')) return 'png';
+  return fallback;
+};
+
+const parseDataImageUrl = (url = '') => {
+  const match = String(url || '').match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) return null;
+  return {
+    contentType: match[1],
+    uint8: Uint8Array.from(atob(match[2]), char => char.charCodeAt(0))
+  };
+};
+
+const readImageBinaryFromSource = async (url) => {
+  const normalizedUrl = String(url || '').trim();
+  if (!normalizedUrl) {
+    throw new Error('图片地址为空');
+  }
+
+  const dataImage = parseDataImageUrl(normalizedUrl);
+  if (dataImage) {
+    return dataImage;
+  }
+
+  if (/^https?:\/\//i.test(normalizedUrl)) {
+    const response = await window.api.readRemoteBinary(normalizedUrl);
+    if (!response?.ok) throw new Error(response?.message || '远程读取失败');
+    return {
+      contentType: typeof response.contentType === 'string' && response.contentType ? response.contentType : 'image/png',
+      uint8: response.data instanceof Uint8Array ? response.data : new Uint8Array(response.data || [])
+    };
+  }
+
+  let localPath = normalizedUrl;
+  if (/^file:\/\//i.test(localPath)) {
+    localPath = decodeURIComponent(localPath.replace(/^file:\/\//i, ''));
+    if (/^\/[A-Za-z]:/.test(localPath)) {
+      localPath = localPath.slice(1);
+    }
+  }
+
+  const localFile = await window.api.readFile(localPath);
+  if (!localFile) {
+    throw new Error('本地图片读取失败');
+  }
+
+  const localFileUrl = typeof localFile.url === 'string' ? localFile.url : '';
+  const parsedLocalData = parseDataImageUrl(localFileUrl);
+  if (!parsedLocalData) {
+    throw new Error('本地图片数据格式无效');
+  }
+
+  return parsedLocalData;
+};
+
 const handleCopyImageFromViewer = (url) => {
   if (!url) return;
   (async () => {
     try {
-      const response = await window.api.readRemoteBinary(url);
-      if (!response?.ok) throw new Error(response?.message || '远程读取失败');
-
-      const contentType = typeof response.contentType === 'string' && response.contentType ? response.contentType : 'image/png';
-      const uint8 = response.data instanceof Uint8Array ? response.data : new Uint8Array(response.data || []);
+      const { contentType, uint8 } = await readImageBinaryFromSource(url);
       const blob = new Blob([uint8], { type: contentType });
 
       try {
@@ -1612,11 +1671,8 @@ const handleCopyImageFromViewer = (url) => {
 const handleDownloadImageFromViewer = async (url) => {
   if (!url) return;
   try {
-    const response = await window.api.readRemoteBinary(url);
-    if (!response?.ok) throw new Error(response?.message || '远程读取失败');
-    const contentType = typeof response.contentType === 'string' && response.contentType ? response.contentType : 'image/png';
-    const uint8 = response.data instanceof Uint8Array ? response.data : new Uint8Array(response.data || []);
-    const defaultFilename = `image_${Date.now()}.${contentType.split('/')[1] || 'png'}`;
+    const { contentType, uint8 } = await readImageBinaryFromSource(url);
+    const defaultFilename = `image_${Date.now()}.${inferImageExtension(contentType)}`;
     await window.api.saveFile({ title: '保存图片', defaultPath: defaultFilename, buttonLabel: '保存', fileContent: uint8 });
     showDismissibleMessage.success('图片保存成功！');
   } catch (error) {

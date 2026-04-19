@@ -58,6 +58,9 @@ watch(() => currentConfig.value?.webdav, (newWebdav) => {
         localChatPath.value = newWebdav.localChatPath || '';
         webdavConfig.value = newWebdav;
         isWebdavConfigValid.value = !!(webdavConfig.value.url && webdavConfig.value.data_path);
+
+        isCloudDataLoaded.value = false;
+
         
         // 如果本地路径发生变化，且当前在"本地对话"视图，则重新获取列表
         if (oldLocalPath !== localChatPath.value) {
@@ -565,8 +568,8 @@ watch(sortMode, () => {
 
 watch(activeView, async (newView) => {
     if (newView === 'cloud' && !isCloudDataLoaded.value && isWebdavConfigValid.value) {
-        await fetchCloudFiles();
-        isCloudDataLoaded.value = true;
+        const loaded = await fetchCloudFiles();
+        isCloudDataLoaded.value = loaded;
     } else if (newView === 'local' && localChatPath.value) {
         await fetchLocalFiles();
     }
@@ -591,7 +594,7 @@ async function fetchLocalFiles(silent = false) {
 }
 
 async function fetchCloudFiles(silent = false) {
-    if (!isWebdavConfigValid.value) return;
+    if (!isWebdavConfigValid.value) return false;
     if (!silent) isTableLoading.value = true;
     try {
         const result = ensureWebdavResult(
@@ -601,7 +604,7 @@ async function fetchCloudFiles(silent = false) {
 
         if (!result.exists) {
             cloudChatFiles.value = [];
-            return;
+            return true;
         }
 
         const files = Array.isArray(result.files) ? result.files : [];
@@ -609,9 +612,11 @@ async function fetchCloudFiles(silent = false) {
             .map((item) => normalizeChatFile(item, 'cloud'))
             .filter((item) => item.type === 'file' && item.basename && item.basename.endsWith('.json'));
         cloudChatFiles.value = normalizedFiles;
+        return true;
     } catch (error) {
         ElMessage.error(`${t('chats.alerts.fetchFailed')}: ${error.message}`);
         cloudChatFiles.value = [];
+        return false;
     } finally {
         isTableLoading.value = false;
     }
@@ -626,8 +631,7 @@ async function refreshData(silent = false) {
         }
     } else if (activeView.value === 'cloud') {
         if (isWebdavConfigValid.value) {
-            await fetchCloudFiles(silent);
-            isCloudDataLoaded.value = true;
+            isCloudDataLoaded.value = await fetchCloudFiles(silent);
         }
     }
 }

@@ -14,6 +14,59 @@ function buildHeadersCompat(inputHeaders = {}) {
   }
 }
 
+
+const DEFAULT_FETCH_TIMEOUT_MS = 15000
+
+function normalizeTimeoutMs(value, fallback = DEFAULT_FETCH_TIMEOUT_MS) {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : fallback
+}
+
+function createTimeoutContext(init = {}) {
+  const upstreamSignal = init?.signal
+  const timeoutMs = normalizeTimeoutMs(init?.timeout ?? init?.timeoutMs)
+
+  let timedOut = false
+  const controller = new AbortController()
+
+  const forwardAbort = () => {
+    try {
+      controller.abort(upstreamSignal?.reason)
+    } catch {
+      controller.abort()
+    }
+  }
+
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) {
+      forwardAbort()
+    } else {
+      upstreamSignal.addEventListener('abort', forwardAbort, { once: true })
+    }
+  }
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    try {
+      controller.abort(new Error(`fetch_timeout_${timeoutMs}ms`))
+    } catch {
+      controller.abort()
+    }
+  }, timeoutMs)
+
+  return {
+    signal: controller.signal,
+    timeoutMs,
+    isTimedOut: () => timedOut,
+    cleanup: () => {
+      clearTimeout(timeoutId)
+      if (upstreamSignal) {
+        upstreamSignal.removeEventListener('abort', forwardAbort)
+      }
+    }
+  }
+}
+
 function normalizeFetchInit(init = {}) {
   const nextInit = { ...init }
   if (nextInit.body instanceof URLSearchParams) {
@@ -33,14 +86,28 @@ function normalizeFetchInit(init = {}) {
  */
 export async function fetchWithProxy(input, init = {}) {
   const normalizedInit = normalizeFetchInit(init)
-
-  if (net && typeof net.fetch === 'function') {
-    return await net.fetch(input, normalizedInit)
+  const timeoutContext = createTimeoutContext(normalizedInit)
+  const requestInit = {
+    ...normalizedInit,
+    signal: timeoutContext.signal
   }
 
-  if (typeof fetch === 'function') {
-    return await fetch(input, normalizedInit)
-  }
+  try {
+    if (net && typeof net.fetch === 'function') {
+      return await net.fetch(input, requestInit)
+    }
 
-  throw new Error('fetch_unavailable_in_current_context')
+    if (typeof fetch === 'function') {
+      return await fetch(input, requestInit)
+    }
+
+    throw new Error('fetch_unavailable_in_current_context')
+  } catch (error) {
+    if (timeoutContext.isTimedOut()) {
+      throw new Error(`web_request_timeout_${timeoutContext.timeoutMs}ms`)
+    }
+    throw error
+  } finally {
+    timeoutContext.cleanup()
+  }
 }

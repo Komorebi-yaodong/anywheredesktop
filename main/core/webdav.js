@@ -149,6 +149,50 @@ function toSerializableFileInfo(item = {}) {
   }
 }
 
+
+const WEBDAV_METADATA_TIMEOUT_MS = 5000
+const WEBDAV_METADATA_CONCURRENCY = 4
+
+function createTimeoutError(label = 'operation_timeout') {
+  const error = new Error(label)
+  error.name = 'TimeoutError'
+  return error
+}
+
+async function withTimeout(task, timeoutMs, timeoutMessage = 'operation_timeout') {
+  const normalizedTimeout = Number(timeoutMs)
+  if (!Number.isFinite(normalizedTimeout) || normalizedTimeout <= 0) {
+    return await task()
+  }
+
+  return await Promise.race([
+    task(),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(createTimeoutError(timeoutMessage)), normalizedTimeout)
+    })
+  ])
+}
+
+async function mapWithConcurrency(items, mapper, concurrency = WEBDAV_METADATA_CONCURRENCY) {
+  const normalizedConcurrency = Math.max(1, Number(concurrency) || 1)
+  const results = new Array(items.length)
+  let currentIndex = 0
+
+  const worker = async () => {
+    while (currentIndex < items.length) {
+      const targetIndex = currentIndex
+      currentIndex += 1
+      results[targetIndex] = await mapper(items[targetIndex], targetIndex)
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(normalizedConcurrency, items.length || 1) }, () => worker())
+  )
+
+  return results
+}
+
 function normalizeSessionTimestamp(value) {
   if (value == null || value === '') return ''
 
@@ -209,7 +253,11 @@ function resolveSessionFallbackTitle(basename = '', sessionData = null) {
 
 async function readRemoteSessionMetadata(client, remoteFilePath, basename) {
   try {
-    const content = await client.getFileContents(remoteFilePath, { format: 'text' })
+    const content = await withTimeout(
+      () => client.getFileContents(remoteFilePath, { format: 'text' }),
+      WEBDAV_METADATA_TIMEOUT_MS,
+      'webdav_metadata_timeout'
+    )
     const rawText = typeof content === 'string' ? content : normalizeText(content)
     const sessionData = JSON.parse(rawText)
     if (!sessionData || sessionData.anywhere_history !== true) {
@@ -251,28 +299,29 @@ export async function listBackups(input = {}) {
   }
 
   const normalizedContents = normalizeDirectoryContents(contents)
-  const files = await Promise.all(
-    normalizedContents
-      .filter((item) => item?.type === 'file')
-      .map(async (item) => {
-        const serialized = toSerializableFileInfo(item)
-        if (!serialized.basename.toLowerCase().endsWith('.json')) {
-          return null
-        }
+  const remoteFiles = normalizedContents.filter((item) => item?.type === 'file')
+  const files = await mapWithConcurrency(
+    remoteFiles,
+    async (item) => {
+      const serialized = toSerializableFileInfo(item)
+      if (!serialized.basename.toLowerCase().endsWith('.json')) {
+        return null
+      }
 
-        if (!includeSessionMetadata) {
-          return serialized
-        }
+      if (!includeSessionMetadata) {
+        return serialized
+      }
 
-        const remotePath = `${remoteDir}/${serialized.basename}`
-        const sessionMetadata = await readRemoteSessionMetadata(client, remotePath, serialized.basename)
-        return {
-          ...serialized,
-          title: sessionMetadata?.title || resolveSessionFallbackTitle(serialized.basename),
-          createdAt: sessionMetadata?.createdAt || '',
-          updatedAt: sessionMetadata?.updatedAt || serialized.lastmod || ''
-        }
-      })
+      const remotePath = `${remoteDir}/${serialized.basename}`
+      const sessionMetadata = await readRemoteSessionMetadata(client, remotePath, serialized.basename)
+      return {
+        ...serialized,
+        title: sessionMetadata?.title || resolveSessionFallbackTitle(serialized.basename),
+        createdAt: sessionMetadata?.createdAt || '',
+        updatedAt: sessionMetadata?.updatedAt || serialized.lastmod || ''
+      }
+    },
+    WEBDAV_METADATA_CONCURRENCY
   )
 
   return {

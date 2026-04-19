@@ -135,7 +135,11 @@ const applyPromptRuntimeConfig = async (config, options = {}) => {
   isAlwaysOnTop.value = promptConfig.isAlwaysOnTop ?? config.isAlwaysOnTop_global ?? true;
   tempReasoningEffort.value = promptConfig.reasoning_effort || 'default';
   selectedVoice.value = promptConfig.voice || null;
-  model.value = promptConfig.model || modelList.value[0]?.value || '';
+  if (!options.preserveCurrentModel) {
+    model.value = promptConfig.model || modelList.value[0]?.value || '';
+  } else if (!model.value) {
+    model.value = promptConfig.model || modelList.value[0]?.value || '';
+  }
   autoCloseOnBlur.value = promptConfig.autoCloseOnBlur ?? false;
 
   if (currentTaskConfig.value) {
@@ -252,6 +256,60 @@ const getMessageComponentByIndex = (index) => {
   return messageRefs.get(msg.id);
 };
 
+
+const normalizeModelDialogProviderCollapseStates = (input, providerNames = []) => {
+  const nextStates = {};
+  const source = input && typeof input === 'object' ? input : {};
+  const providerSet = new Set(providerNames.filter(Boolean));
+
+  providerSet.forEach((providerName) => {
+    nextStates[providerName] = typeof source[providerName] === 'boolean' ? source[providerName] : true;
+  });
+
+  return nextStates;
+};
+
+const syncModelDialogProviderCollapseStates = (config) => {
+  const providerNames = (modelList.value || [])
+    .map(item => String(item?.label || '').split('|')[0])
+    .filter(Boolean)
+    .filter((value, index, array) => array.indexOf(value) === index);
+
+  const savedStates = config?.ui?.windowModelDialogProviderCollapseStates;
+  const normalizedStates = normalizeModelDialogProviderCollapseStates(savedStates, providerNames);
+  const prevSerialized = JSON.stringify(modelDialogProviderCollapseStates.value || {});
+  const nextSerialized = JSON.stringify(normalizedStates);
+
+  if (prevSerialized !== nextSerialized) {
+    modelDialogProviderCollapseStates.value = normalizedStates;
+  }
+
+  return normalizedStates;
+};
+
+const handleProviderCollapseStatesChange = async (nextStates) => {
+  const normalizedStates = normalizeModelDialogProviderCollapseStates(
+    nextStates,
+    (modelList.value || []).map(item => String(item?.label || '').split('|')[0])
+  );
+  const prevSerialized = JSON.stringify(modelDialogProviderCollapseStates.value || {});
+  const nextSerialized = JSON.stringify(normalizedStates);
+
+  if (prevSerialized === nextSerialized) {
+    return;
+  }
+
+  modelDialogProviderCollapseStates.value = normalizedStates;
+  currentConfig.value.ui = currentConfig.value.ui || {};
+  currentConfig.value.ui.windowModelDialogProviderCollapseStates = normalizedStates;
+
+  try {
+    await window.api.saveSetting('ui.windowModelDialogProviderCollapseStates', normalizedStates);
+  } catch (error) {
+    console.warn('保存模型弹窗折叠状态失败', error);
+  }
+};
+
 const updateModelListAndMap = (config) => {
   const newModelList = [];
   const newModelMap = {};
@@ -292,6 +350,7 @@ const updateModelListAndMap = (config) => {
 
   modelList.value = newModelList;
   modelMap.value = newModelMap;
+  syncModelDialogProviderCollapseStates(config);
 };
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -320,6 +379,7 @@ const autoCloseOnBlur = ref(false);
 const modelList = ref([]);
 const modelMap = ref({});
 const model = ref("");
+const modelDialogProviderCollapseStates = ref({});
 const isAlwaysOnTop = ref(true);
 const currentOS = ref('win');
 const currentTaskConfig = ref(null);
@@ -2266,7 +2326,8 @@ onMounted(async () => {
       await refreshUserProfile();
       await applyPromptRuntimeConfig(newConfig, {
         skipIfSavingWindowSettings: true,
-        preserveCurrentZoom: true
+        preserveCurrentZoom: true,
+        preserveCurrentModel: true
       });
 
       if (newConfig.mcpServers) {
@@ -5531,6 +5592,8 @@ const scrollToMessageByIndex = (index) => {
   </main>
 
   <ModelSelectionDialog v-model="changeModel_page" :modelList="modelList" :currentModel="model"
+    :provider-collapse-states="modelDialogProviderCollapseStates"
+    @update:provider-collapse-states="handleProviderCollapseStatesChange"
     @select="handleChangeModel" @save-model="handleSaveModel" />
 
   <el-dialog v-model="systemPromptDialogVisible" title="" custom-class="system-prompt-dialog" width="60%"

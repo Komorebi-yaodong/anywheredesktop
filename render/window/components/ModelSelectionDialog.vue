@@ -1,15 +1,19 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { ElDialog, ElButton, ElInput, ElScrollbar, ElIcon } from 'element-plus';
-import { Search, Check } from '@element-plus/icons-vue';
+import { Search, Check, ArrowRight, ArrowDown } from '@element-plus/icons-vue';
 
 const props = defineProps({
     modelValue: Boolean, // for v-model
     modelList: Array,
     currentModel: String,
+    providerCollapseStates: {
+        type: Object,
+        default: () => ({})
+    }
 });
 
-const emit = defineEmits(['update:modelValue', 'select', 'save-model']);
+const emit = defineEmits(['update:modelValue', 'select', 'save-model', 'update:providerCollapseStates']);
 
 const searchQuery = ref('');
 const searchInputRef = ref(null);
@@ -54,6 +58,48 @@ const groupedModels = computed(() => {
     }));
 });
 
+
+const localProviderCollapseStates = ref({});
+
+const syncProviderCollapseStates = () => {
+    const nextStates = { ...(props.providerCollapseStates || {}) };
+    const visibleProviderNames = new Set(groupedModels.value.map(group => group.name));
+
+    groupedModels.value.forEach((group) => {
+        if (typeof nextStates[group.name] !== 'boolean') {
+            nextStates[group.name] = true;
+        }
+    });
+
+    Object.keys(nextStates).forEach((providerName) => {
+        if (!visibleProviderNames.has(providerName)) {
+            delete nextStates[providerName];
+        }
+    });
+
+    const currentSerialized = JSON.stringify(localProviderCollapseStates.value);
+    const nextSerialized = JSON.stringify(nextStates);
+    if (currentSerialized !== nextSerialized) {
+        localProviderCollapseStates.value = nextStates;
+    }
+
+    const propSerialized = JSON.stringify(props.providerCollapseStates || {});
+    if (propSerialized !== nextSerialized) {
+        emit('update:providerCollapseStates', nextStates);
+    }
+};
+
+const isProviderExpanded = (providerName) => localProviderCollapseStates.value[providerName] !== false;
+
+const toggleProviderExpanded = (providerName) => {
+    const nextStates = {
+        ...localProviderCollapseStates.value,
+        [providerName]: !isProviderExpanded(providerName)
+    };
+    localProviderCollapseStates.value = nextStates;
+    emit('update:providerCollapseStates', nextStates);
+};
+
 const onModelClick = (model, event) => {
     // 如果按住 Alt 键点击，或者是当前模型再次点击，则触发保存为默认
     if (model.value === props.currentModel || event.altKey) {
@@ -67,6 +113,15 @@ const handleClose = () => {
     searchQuery.value = ''; // 关闭时清空搜索词
     emit('update:modelValue', false);
 };
+
+
+watch(groupedModels, () => {
+    syncProviderCollapseStates();
+}, { immediate: true });
+
+watch(() => props.providerCollapseStates, () => {
+    syncProviderCollapseStates();
+}, { deep: true });
 
 const getProviderStyle = (providerName) => {
     let hash = 0;
@@ -112,9 +167,17 @@ const getProviderStyle = (providerName) => {
 
                 <div v-else class="model-groups">
                     <div v-for="group in groupedModels" :key="group.name" class="provider-group" :style="getProviderStyle(group.name)">
-                        <div class="provider-title">{{ group.name }}</div>
+                        <button type="button" class="provider-title" @click="toggleProviderExpanded(group.name)">
+                            <span class="provider-title-left">
+                                <el-icon class="provider-collapse-icon">
+                                    <component :is="isProviderExpanded(group.name) ? ArrowDown : ArrowRight" />
+                                </el-icon>
+                                <span>{{ group.name }}</span>
+                            </span>
+                            <span class="provider-title-count">{{ group.models.length }}</span>
+                        </button>
                         
-                        <div class="model-grid">
+                        <div v-show="isProviderExpanded(group.name)" class="model-grid">
                             <div 
                                 v-for="model in group.models" 
                                 :key="model.value" 
@@ -197,11 +260,33 @@ html.dark .provider-group {
 }
 
 .provider-title {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     font-size: 13px;
     color: hsla(var(--provider-hue), 60%, 40%, 0.8);
     margin-bottom: 8px;
-    padding-left: 4px; /* 调整内边距适应新外壳 */
+    padding: 4px 6px;
     font-weight: 600;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+}
+
+.provider-title-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.provider-title-count {
+    font-size: 12px;
+    opacity: 0.72;
+}
+
+.provider-collapse-icon {
+    font-size: 13px;
 }
 
 html.dark .provider-title {

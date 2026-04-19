@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed, inject, h, watch } from 'vue'
+import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount, computed, inject, h, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Upload, UploadFilled, FolderOpened, Refresh, Delete as DeleteIcon, Download, Plus, ArrowRight, Check, Warning, Remove, Edit } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElInput } from 'element-plus'
@@ -305,7 +305,6 @@ function buildWebdavInput(extra = {}) {
 
 
 onMounted(() => {
-  window.addEventListener('keydown', handleShortcutRecorderKeydown, true)
   if (['ja', 'ru'].includes(locale.value)) {
     handleLanguageChange('zh');
   } else {
@@ -319,6 +318,15 @@ onMounted(() => {
   }
 });
 
+onActivated(() => {
+  window.addEventListener('keydown', handleShortcutRecorderKeydown, true)
+})
+
+onDeactivated(() => {
+  stopShortcutRecording()
+  window.removeEventListener('keydown', handleShortcutRecorderKeydown, true)
+})
+
 watch(() => currentConfig.value, (newVal) => {
   if (newVal) {
     ensureDesktopConfig();
@@ -329,6 +337,7 @@ watch(() => currentConfig.value, (newVal) => {
 
 
 onBeforeUnmount(() => {
+  stopShortcutRecording()
   window.removeEventListener('keydown', handleShortcutRecorderKeydown, true)
 })
 

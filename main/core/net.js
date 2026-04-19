@@ -15,7 +15,7 @@ function buildHeadersCompat(inputHeaders = {}) {
 }
 
 
-const DEFAULT_FETCH_TIMEOUT_MS = 15000
+const DEFAULT_FETCH_TIMEOUT_MS = 30000
 
 function normalizeTimeoutMs(value, fallback = DEFAULT_FETCH_TIMEOUT_MS) {
   const numericValue = Number(value)

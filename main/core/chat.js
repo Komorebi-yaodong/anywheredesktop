@@ -1,6 +1,8 @@
 import OpenAI from 'openai'
 import { fetchWithProxy } from './net.js'
 
+const CHAT_REQUEST_TIMEOUT_MS = 120_000
+
 /**
  * 随机获取列表中的一项（用于 API Key 负载均衡）
  * @param {string | string[] | unknown} list
@@ -232,7 +234,11 @@ export async function createChatCompletion(params = {}) {
     apiKey: getRandomItem(apiKey),
     maxRetries: 3,
     dangerouslyAllowBrowser: true,
-    fetch: fetchWithProxy,
+    fetch: (input, init = {}) =>
+      fetchWithProxy(input, {
+        ...init,
+        timeoutMs: init?.timeoutMs ?? CHAT_REQUEST_TIMEOUT_MS
+      }),
     defaultHeaders: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'

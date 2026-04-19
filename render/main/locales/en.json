@@ -78,7 +78,8 @@
       "button": "Sort",
       "createdAt": "Sort by Created Time",
       "updatedAt": "Sort by Edited Time",
-      "name": "Sort by Name"
+      "name": "Sort by Name",
+      "size": "Sort by Size"
     },
     "configRequired": {
       "title": "Cloud Chats",
@@ -89,6 +90,7 @@
     },
     "table": {
       "filename": "Chat Name",
+      "createdTime": "Created Time",
       "modifiedTime": "Modified Time",
       "size": "Size",
       "actions": "Actions"

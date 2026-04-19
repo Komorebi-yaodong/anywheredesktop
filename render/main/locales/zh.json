@@ -78,7 +78,8 @@
       "button": "排序方式",
       "createdAt": "按创建时间",
       "updatedAt": "按编辑时间",
-      "name": "按名称"
+      "name": "按名称",
+      "size": "按大小"
     },
     "configRequired": {
       "title": "云端对话",
@@ -89,6 +90,7 @@
     },
     "table": {
       "filename": "对话名称",
+      "createdTime": "创建时间",
       "modifiedTime": "修改时间",
       "size": "大小",
       "actions": "操作"

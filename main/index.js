@@ -56,6 +56,30 @@ const debugMainError = () => {}
 
 let appTray = null
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+
+function focusPrimaryInstanceMainWindow() {
+  if (!app.isReady()) return
+  ensureMainWindowVisible()
+  showMainWindow()
+}
+
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (app.isReady()) {
+      focusPrimaryInstanceMainWindow()
+      return
+    }
+
+    app.once('ready', () => {
+      focusPrimaryInstanceMainWindow()
+    })
+  })
+}
+
+
 function resolveNativeThemeSource(config = {}) {
   const themeMode = typeof config?.themeMode === 'string' ? config.themeMode : 'system'
   if (themeMode === 'dark') return 'dark'

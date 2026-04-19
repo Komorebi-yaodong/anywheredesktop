@@ -478,10 +478,23 @@ export async function saveFile(options = {}) {
     throw new Error('用户取消了保存操作')
   }
 
-  const content =
-    typeof fileContent === 'string' || Buffer.isBuffer(fileContent)
-      ? fileContent
-      : JSON.stringify(fileContent, null, 2)
+  let content = fileContent
+
+  if (
+    fileContent &&
+    typeof fileContent === 'object' &&
+    typeof fileContent.__type === 'string' &&
+    typeof fileContent.data === 'string' &&
+    fileContent.encoding === 'base64'
+  ) {
+    content = Buffer.from(fileContent.data, 'base64')
+  } else if (ArrayBuffer.isView(fileContent)) {
+    content = Buffer.from(fileContent.buffer, fileContent.byteOffset, fileContent.byteLength)
+  } else if (fileContent instanceof ArrayBuffer) {
+    content = Buffer.from(fileContent)
+  } else if (!(typeof fileContent === 'string' || Buffer.isBuffer(fileContent))) {
+    content = JSON.stringify(fileContent, null, 2)
+  }
 
   await fs.writeFile(result.filePath, content)
 

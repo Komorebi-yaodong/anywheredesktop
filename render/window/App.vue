@@ -3530,6 +3530,21 @@ const saveSessionAsImage = async () => {
               filters: [{ name: 'PNG 图片', extensions: ['png'] }],
               fileContent: ia
             });
+
+            finalContainer.querySelectorAll('img').forEach((img) => {
+              img.src = '';
+            });
+            chunkDataUrls.length = 0;
+            finalCanvas.width = 0;
+            finalCanvas.height = 0;
+
+            try {
+              if (chatMain.contains(renderWrapper)) {
+                chatMain.removeChild(renderWrapper);
+              }
+            } catch {
+              renderWrapper.remove();
+            }
             loadingMsg.close();
             showDismissibleMessage.success('图片已成功导出！');
             done();

@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, watch, onUnmounted, nextTick, onActivated, onDeactivated, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { createClient } from "webdav/web";
-import { Refresh, Delete as DeleteIcon, ChatDotRound, Edit, Upload, Download, Switch, QuestionFilled, Brush, Operation, FolderOpened } from '@element-plus/icons-vue'
+import { Refresh, Delete as DeleteIcon, ChatDotRound, Edit, Upload, Download, Switch, QuestionFilled, Brush, FolderOpened } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const { t } = useI18n();
@@ -233,24 +233,13 @@ const normalizeTitleValue = (file) => {
     return basename.endsWith('.json') ? basename.slice(0, -5) : basename;
 };
 
-const getSortModeLabel = (mode = sortMode.value) => t(`chats.sort.${mode}`);
-
 const isCloudView = computed(() => activeView.value === 'cloud');
 const showCreatedAtColumn = computed(() => !isCloudView.value);
-
-const availableSortModes = computed(() => {
-    const baseModes = [
-        { key: 'name', label: t('chats.sort.name') },
-        { key: 'updatedAt', label: t('chats.sort.updatedAt') },
-        { key: 'size', label: t('chats.sort.size') }
-    ];
-
-    if (!isCloudView.value) {
-        baseModes.splice(1, 0, { key: 'createdAt', label: t('chats.sort.createdAt') });
-    }
-
-    return baseModes;
-});
+const chatTableColumns = computed(() => (
+    showCreatedAtColumn.value
+        ? '24px minmax(0, 1.8fr) minmax(168px, 1fr) minmax(168px, 1fr) minmax(120px, 0.7fr) 168px'
+        : '24px minmax(0, 2.2fr) minmax(180px, 1fr) minmax(120px, 0.7fr) 168px'
+));
 
 const getSortDirectionLabel = () => sortDirection.value === 'asc' ? '↑' : '↓';
 
@@ -1116,19 +1105,6 @@ const toggleSelectAll = () => {
                     <el-tooltip :content="t('chats.clean.button')" placement="bottom">
                         <el-button :icon="Brush" circle @click="openCleanDialog" />
                     </el-tooltip>
-                    <div class="sort-button-container">
-                        <el-dropdown trigger="click" @command="toggleSort">
-                            <el-button :icon="Operation" circle :title="`${t('chats.sort.button')}: ${getSortModeLabel()}`" />
-                            <template #dropdown>
-                                <el-dropdown-menu>
-                                    <el-dropdown-item v-for="sortItem in availableSortModes" :key="sortItem.key" :command="sortItem.key"
-                                        :class="{ 'is-active-sort': sortMode === sortItem.key }">
-                                        {{ sortItem.label }}
-                                    </el-dropdown-item>
-                                </el-dropdown-menu>
-                            </template>
-                        </el-dropdown>
-                    </div>
                 </div>
                 <div class="view-selector">
                     <el-radio-group v-model="activeView" @change="currentPage = 1">
@@ -1199,26 +1175,26 @@ const toggleSelectAll = () => {
                 </div>
 
                 <!-- 列表视图 -->
-                <div v-else class="chat-table-shell" v-loading="isTableLoading">
+                <div v-else class="chat-table-shell" v-loading="isTableLoading" :style="{ '--chat-table-columns': chatTableColumns }">
                     <div class="chat-table-header">
                         <div class="chat-column chat-column-checkbox"></div>
                         <button type="button" class="chat-column chat-column-title sortable" :class="{ active: sortMode === 'name' }"
-                            @click="toggleSort('name')">
+                            :title="getColumnSortLabel('name')" @click="toggleSort('name')">
                             <span>{{ t('chats.table.filename') }}</span>
                             <span v-if="sortMode === 'name'" class="sort-indicator">{{ getSortDirectionLabel() }}</span>
                         </button>
                         <button v-if="showCreatedAtColumn" type="button" class="chat-column chat-column-created sortable"
-                            :class="{ active: sortMode === 'createdAt' }" @click="toggleSort('createdAt')">
+                            :class="{ active: sortMode === 'createdAt' }" :title="getColumnSortLabel('createdAt')" @click="toggleSort('createdAt')">
                             <span>{{ t('chats.table.createdTime') }}</span>
                             <span v-if="sortMode === 'createdAt'" class="sort-indicator">{{ getSortDirectionLabel() }}</span>
                         </button>
                         <button type="button" class="chat-column chat-column-updated sortable" :class="{ active: sortMode === 'updatedAt' }"
-                            @click="toggleSort('updatedAt')">
+                            :title="getColumnSortLabel('updatedAt')" @click="toggleSort('updatedAt')">
                             <span>{{ t('chats.table.modifiedTime') }}</span>
                             <span v-if="sortMode === 'updatedAt'" class="sort-indicator">{{ getSortDirectionLabel() }}</span>
                         </button>
                         <button type="button" class="chat-column chat-column-size sortable" :class="{ active: sortMode === 'size' }"
-                            @click="toggleSort('size')">
+                            :title="getColumnSortLabel('size')" @click="toggleSort('size')">
                             <span>{{ t('chats.table.size') }}</span>
                             <span v-if="sortMode === 'size'" class="sort-indicator">{{ getSortDirectionLabel() }}</span>
                         </button>
@@ -1237,20 +1213,13 @@ const toggleSelectAll = () => {
                                     @change="(val) => toggleFileSelection(file, val)" @click.stop />
                             </div>
 
-                            <!-- 中间：名称 -->
-                            <div class="list-content">
-                                <div class="list-title" :title="normalizeTitleValue(file)">
-                                    {{ normalizeTitleValue(file) }}
-                                </div>
-                                <!-- 元数据现在紧跟标题 -->
-                                <div class="list-meta-grid">
-                                    <span v-if="showCreatedAtColumn" class="meta-created">{{ formatDate(file.createdAt || file.lastmod) }}</span>
-                                    <span class="meta-updated">{{ formatDate(file.updatedAt || file.lastmod || file.createdAt) }}</span>
-                                    <span class="meta-size">{{ formatBytes(file.size) }}</span>
-                                </div>
+                            <div class="list-title" :title="normalizeTitleValue(file)">
+                                {{ normalizeTitleValue(file) }}
                             </div>
+                            <div v-if="showCreatedAtColumn" class="meta-created">{{ formatDate(file.createdAt || file.lastmod) }}</div>
+                            <div class="meta-updated">{{ formatDate(file.updatedAt || file.lastmod || file.createdAt) }}</div>
+                            <div class="meta-size">{{ formatBytes(file.size) }}</div>
 
-                            <!-- 右侧：仅操作按钮 (移除 list-right-group 容器) -->
                             <div class="list-actions">
                                 <!-- 1. 聊天按钮 -->
                                 <el-tooltip :content="t('chats.actions.chat')" placement="top" :show-after="500">
@@ -1398,16 +1367,6 @@ const toggleSelectAll = () => {
     flex-wrap: wrap;
 }
 
-.sort-button-container {
-    display: flex;
-    align-items: center;
-}
-
-.sort-button-container .el-button {
-    width: 32px;
-    height: 32px;
-}
-
 .chats-page-container {
     height: 100%;
     width: 100%;
@@ -1465,15 +1424,20 @@ const toggleSelectAll = () => {
 
 .chat-table-header {
     display: grid;
-    grid-template-columns: 24px minmax(0, 1.8fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(110px, 0.7fr) 168px;
+    grid-template-columns: var(--chat-table-columns);
     align-items: center;
     gap: 12px;
-    padding: 0 18px 10px 16px;
+    padding: 0 16px 10px 16px;
     margin: 4px 10px 6px 0;
     border-bottom: 1px solid var(--border-primary);
 }
 
 .chat-column {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    min-width: 0;
+    text-align: left;
     font-size: 12px;
     font-weight: 600;
     color: var(--text-tertiary);
@@ -1481,9 +1445,9 @@ const toggleSelectAll = () => {
 }
 
 .chat-column.sortable {
-    display: inline-flex;
-    align-items: center;
+    justify-content: flex-start;
     gap: 6px;
+    width: 100%;
     border: none;
     background: transparent;
     padding: 0;
@@ -1502,8 +1466,8 @@ const toggleSelectAll = () => {
 }
 
 .chat-column-actions {
-    text-align: right;
-    padding-right: 4px;
+    justify-content: flex-start;
+    padding-right: 0;
 }
 
 .table-container {
@@ -1530,8 +1494,10 @@ const toggleSelectAll = () => {
 }
 
 .chat-list-item {
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--chat-table-columns);
     align-items: center;
+    gap: 12px;
     padding: 8px 16px;
     background-color: transparent;
     border-radius: 16px 8px 8px 16px;
@@ -1579,21 +1545,6 @@ const toggleSelectAll = () => {
     pointer-events: auto;
 }
 
-.chat-list-item.is-selected .list-title {
-    transform: translateX(10px);
-}
-
-.list-content {
-    flex: 1;
-    display: grid;
-    grid-template-columns: minmax(0, 1.8fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(110px, 0.7fr);
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-    margin-right: 8px;
-    overflow: hidden;
-}
-
 .list-title {
     font-size: 14px;
     font-weight: 500;
@@ -1606,26 +1557,23 @@ const toggleSelectAll = () => {
     transition: transform 0.2s ease;
 }
 
-.list-meta-grid,
 .meta-created,
 .meta-updated,
 .meta-size {
+    min-width: 0;
     font-size: 12px;
     color: var(--text-tertiary);
+    text-align: left;
     white-space: nowrap;
-}
-
-.list-meta-grid {
-    display: contents;
 }
 
 .list-actions {
     display: flex;
     align-items: center;
+    justify-content: flex-start;
     gap: 4px;
-    margin-left: auto;
+    min-width: 0;
     flex-shrink: 0;
-    
     opacity: 0;
     transition: opacity 0.2s;
 }
@@ -1644,20 +1592,6 @@ const toggleSelectAll = () => {
     white-space: nowrap;
 }
 
-:deep(.is-active-sort) {
-    color: var(--el-color-primary);
-    font-weight: 600;
-}
-
-
-.list-actions {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: auto;
-    opacity: 0;
-    transition: opacity 0.2s;
-}
 
 .chat-list-item:hover .list-actions,
 .chat-list-item.is-selected .list-actions {

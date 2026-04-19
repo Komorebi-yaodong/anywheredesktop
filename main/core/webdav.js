@@ -137,15 +137,70 @@ function normalizeWebdavLastmod(item = {}) {
 }
 
 
+
+function normalizeWebdavCreatedAt(item = {}) {
+  const candidates = [
+    item.createdAt,
+    item.creationdate,
+    item.created,
+    item.birthtime,
+    item.ctime,
+    item.getcreationdate,
+    item.props?.creationdate,
+    item.props?.getcreationdate,
+    item.data?.createdAt,
+    item.data?.creationdate,
+    item.data?.created,
+    item.data?.birthtime,
+    item.data?.ctime
+  ]
+
+  for (const candidate of candidates) {
+    if (candidate == null || candidate === '') continue
+
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0) {
+      const numericDate = new Date(candidate < 1e12 ? candidate * 1000 : candidate)
+      if (!Number.isNaN(numericDate.getTime()) && numericDate.getTime() > 0) {
+        return numericDate.toISOString()
+      }
+    }
+
+    const value = normalizeText(candidate).trim()
+    if (!value) continue
+
+    if (/^\d+$/.test(value)) {
+      const numericValue = Number(value)
+      if (Number.isFinite(numericValue) && numericValue > 0) {
+        const numericDate = new Date(value.length <= 10 ? numericValue * 1000 : numericValue)
+        if (!Number.isNaN(numericDate.getTime()) && numericDate.getTime() > 0) {
+          return numericDate.toISOString()
+        }
+      }
+    }
+
+    const date = new Date(value)
+    if (!Number.isNaN(date.getTime()) && date.getTime() > 0) {
+      return date.toISOString()
+    }
+  }
+
+  return ''
+}
+
 function toSerializableFileInfo(item = {}) {
   const basename = normalizeText(item.basename || item.filename || item.name).trim()
+  const createdAt = normalizeWebdavCreatedAt(item)
+  const updatedAt = normalizeWebdavLastmod(item) || createdAt
   return {
     basename,
     filename: basename,
     path: normalizeText(item.filename || item.path || ''),
     type: normalizeText(item.type || 'file'),
     size: Number(item.size || 0),
-    lastmod: normalizeWebdavLastmod(item)
+    lastmod: updatedAt,
+    createdAt: createdAt || updatedAt,
+    updatedAt,
+    title: basename.toLowerCase().endsWith('.json') ? basename.slice(0, -5) : basename
   }
 }
 
@@ -299,43 +354,20 @@ export async function listBackups(input = {}) {
   }
 
   const normalizedContents = normalizeDirectoryContents(contents)
-  const remoteFiles = normalizedContents.filter((item) => item?.type === 'file')
-  const files = await mapWithConcurrency(
-    remoteFiles,
-    async (item) => {
-      const serialized = toSerializableFileInfo(item)
-      if (!serialized.basename.toLowerCase().endsWith('.json')) {
-        return null
-      }
-
-      if (!includeSessionMetadata) {
-        return serialized
-      }
-
-      const remotePath = `${remoteDir}/${serialized.basename}`
-      const sessionMetadata = await readRemoteSessionMetadata(client, remotePath, serialized.basename)
-      return {
-        ...serialized,
-        title: sessionMetadata?.title || resolveSessionFallbackTitle(serialized.basename),
-        createdAt: sessionMetadata?.createdAt || '',
-        updatedAt: sessionMetadata?.updatedAt || serialized.lastmod || ''
-      }
-    },
-    WEBDAV_METADATA_CONCURRENCY
-  )
+  const files = normalizedContents
+    .filter((item) => item?.type === 'file')
+    .map((item) => toSerializableFileInfo(item))
+    .filter((item) => item.basename.toLowerCase().endsWith('.json'))
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt || b.updatedAt || b.lastmod).getTime() -
+        new Date(a.createdAt || a.updatedAt || a.lastmod).getTime()
+    )
 
   return {
     ok: true,
     exists: true,
-    files: files
-      .filter(Boolean)
-      .sort(
-        includeSessionMetadata
-          ? (a, b) =>
-              new Date(b.createdAt || b.updatedAt || b.lastmod).getTime() -
-              new Date(a.createdAt || a.updatedAt || a.lastmod).getTime()
-          : (a, b) => new Date(b.lastmod).getTime() - new Date(a.lastmod).getTime()
-      )
+    files
   }
 }
 

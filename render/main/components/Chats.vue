@@ -598,7 +598,7 @@ async function fetchCloudFiles(silent = false) {
     if (!silent) isTableLoading.value = true;
     try {
         const result = ensureWebdavResult(
-            await window.api.listWebdavBackups(buildWebdavInput({ includeSessionMetadata: true })),
+            await window.api.listWebdavBackups(buildWebdavInput()),
             'webdav_list_failed'
         );
 

@@ -578,13 +578,13 @@ const invalidateLocalSessionMetadataCache = (...filePaths) => {
   })
 }
 
-const createSessionFileSummary = ({ filePath, basename, stats, sessionMetadata }) => {
+const createSessionFileSummary = ({ filePath, basename, stats }) => {
   const normalizedBasename = basename || path.basename(filePath)
   const createdAt =
-    sessionMetadata?.createdAt ||
     normalizeSessionTimestamp(stats.birthtime) ||
+    normalizeSessionTimestamp(stats.ctime) ||
     normalizeSessionTimestamp(stats.mtime)
-  const updatedAt = sessionMetadata?.updatedAt || normalizeSessionTimestamp(stats.mtime) || createdAt
+  const updatedAt = normalizeSessionTimestamp(stats.mtime) || createdAt
 
   return {
     basename: normalizedBasename,
@@ -592,7 +592,7 @@ const createSessionFileSummary = ({ filePath, basename, stats, sessionMetadata }
     lastmod: stats.mtime.toISOString(),
     createdAt,
     updatedAt,
-    title: sessionMetadata?.title || resolveFallbackTitle(normalizedBasename, { sessionMetadata }),
+    title: resolveFallbackTitle(normalizedBasename),
     size: stats.size,
     type: 'file'
   }
@@ -731,24 +731,18 @@ export async function listJsonFiles(dirPath) {
     (entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.json'
   )
 
-  const validFilePaths = jsonFiles.map((entry) => path.join(resolvedDirPath, entry.name))
-  pruneLocalSessionMetadataCache(validFilePaths)
-
   const fileDetails = await Promise.all(
     jsonFiles.map(async (entry) => {
       const fullPath = path.join(resolvedDirPath, entry.name)
       try {
         const stats = await fs.stat(fullPath)
-        const sessionMetadata = await readSessionMetadata(fullPath, entry.name, { stats })
         return createSessionFileSummary({
           filePath: fullPath,
           basename: entry.name,
-          stats,
-          sessionMetadata
+          stats
         })
       } catch (error) {
         console.error(`[file] 无法获取文件信息: ${fullPath}`, error)
-        invalidateLocalSessionMetadataCache(fullPath)
         return null
       }
     })

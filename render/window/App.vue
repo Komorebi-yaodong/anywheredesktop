@@ -3380,11 +3380,19 @@ const saveSessionAsImage = async () => {
             const messageNodes = Array.from(chatMain.querySelectorAll('.chat-message'));
 
             const computedStyle = getComputedStyle(document.documentElement);
+            const isDarkScreenshot = document.documentElement.classList.contains('dark');
             let themeBgColor = computedStyle.getPropertyValue('--el-bg-color').trim();
             if (!themeBgColor || themeBgColor === 'transparent' || themeBgColor === 'rgba(0, 0, 0, 0)') {
-              const isDark = document.documentElement.classList.contains('dark');
-              themeBgColor = isDark ? '#212121' : '#FFFFFD';
+              themeBgColor = isDarkScreenshot ? '#212121' : '#FFFFFD';
             }
+
+            const exportBubbleBg = isDarkScreenshot ? '#23262D' : '#FFFFFF';
+            const exportBubbleBorder = isDarkScreenshot ? 'rgba(255, 255, 255, 0.10)' : 'rgba(220, 210, 194, 0.92)';
+            const exportTextColor = isDarkScreenshot ? '#F5F7FA' : '#2B2620';
+            const exportSubTextColor = isDarkScreenshot ? '#AAB2BF' : '#7A6B5B';
+            const exportCodeBg = isDarkScreenshot ? '#1B1D23' : '#F6F1E8';
+            const exportCodeBorder = isDarkScreenshot ? 'rgba(255, 255, 255, 0.08)' : 'rgba(214, 203, 186, 0.92)';
+            const exportThinkingBg = isDarkScreenshot ? '#1F232B' : '#F4EEE4';
 
             const targetWidth = Math.max(chatMain.clientWidth, 800);
 
@@ -3410,10 +3418,25 @@ const saveSessionAsImage = async () => {
               chunkContainer.style.display = 'flex';
               chunkContainer.style.flexDirection = 'column';
 
+              chunkContainer.style.background = exportBubbleBg;
+              chunkContainer.style.borderRadius = '18px';
+              chunkContainer.style.padding = '4px';
+              chunkContainer.style.boxSizing = 'border-box';
+              chunkContainer.style.gap = '10px';
+
+
               const chunkImages = [];
 
               for (const node of chunkNodes) {
                 const clone = node.cloneNode(true);
+                clone.classList.add('screenshot-export');
+                clone.style.setProperty('--screenshot-export-bubble-bg', exportBubbleBg);
+                clone.style.setProperty('--screenshot-export-bubble-border', exportBubbleBorder);
+                clone.style.setProperty('--screenshot-export-text', exportTextColor);
+                clone.style.setProperty('--screenshot-export-sub-text', exportSubTextColor);
+                clone.style.setProperty('--screenshot-export-code-bg', exportCodeBg);
+                clone.style.setProperty('--screenshot-export-code-border', exportCodeBorder);
+                clone.style.setProperty('--screenshot-export-thinking-bg', exportThinkingBg);
                 const footer = clone.querySelector('.message-footer');
                 if (footer) footer.remove();
 

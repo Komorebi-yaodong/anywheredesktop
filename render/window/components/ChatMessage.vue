@@ -880,6 +880,78 @@ const truncateFilename = (filename, maxLength = 30) => {
   }
 }
 
+
+.chat-message.screenshot-export,
+.chat-message.screenshot-export * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+.chat-message.screenshot-export {
+  .timestamp-row,
+  .voice-name {
+    color: var(--screenshot-export-sub-text, #7A6B5B) !important;
+  }
+
+  .user-name,
+  .ai-name,
+  .markdown-wrapper :deep(.elx-xmarkdown-container) {
+    color: var(--screenshot-export-text, #2B2620) !important;
+  }
+
+  .chat-avatar-top {
+    box-shadow: none !important;
+  }
+
+  .user-bubble,
+  .ai-bubble {
+    :deep(.el-bubble-content-wrapper .el-bubble-content) {
+      background: var(--screenshot-export-bubble-bg, #FFFFFF) !important;
+      background-image: none !important;
+      border: 1px solid var(--screenshot-export-bubble-border, rgba(220, 210, 194, 0.92)) !important;
+      box-shadow: none !important;
+      color: var(--screenshot-export-text, #2B2620) !important;
+    }
+
+    :deep(.el-bubble-content-wrapper .el-bubble-footer) {
+      background: transparent !important;
+      box-shadow: none !important;
+    }
+  }
+
+  .ai-bubble :deep(.el-thinking .trigger),
+  .ai-bubble :deep(.el-thinking-popper),
+  .ai-bubble :deep(.el-thinking-popper .el-popper__arrow::before) {
+    background: var(--screenshot-export-thinking-bg, #F4EEE4) !important;
+    background-image: none !important;
+    border-color: var(--screenshot-export-code-border, rgba(214, 203, 186, 0.92)) !important;
+    box-shadow: none !important;
+    color: var(--screenshot-export-text, #2B2620) !important;
+  }
+
+  .markdown-wrapper {
+    :deep(pre),
+    :deep(.table-scroll-wrapper),
+    :deep(blockquote),
+    :deep(.markdown-mermaid .mermaid-content),
+    :deep(.markdown-mermaid .mermaid-source-code) {
+      background: var(--screenshot-export-code-bg, #F6F1E8) !important;
+      background-image: none !important;
+      border-color: var(--screenshot-export-code-border, rgba(214, 203, 186, 0.92)) !important;
+      box-shadow: none !important;
+      color: var(--screenshot-export-text, #2B2620) !important;
+    }
+
+    :deep(code),
+    :deep(.inline-code-tag) {
+      color: var(--screenshot-export-text, #2B2620) !important;
+      text-shadow: none !important;
+    }
+  }
+}
+
 .chat-message .ai-bubble.no-content {
   :deep(.el-bubble-content) {
     display: none !important;

@@ -54,197 +54,233 @@ const timeDisplay = computed(() => {
 });
 
 
+const SCREENSHOT_THEME = {
+  light: {
+    background: '#FFFDF7',
+    bubble: '#FFFFFF',
+    bubbleBorder: 'rgba(220, 210, 194, 0.92)',
+    text: '#2B2620',
+    subText: '#7A6B5B',
+    codeBg: '#F6F1E8',
+    codeBorder: 'rgba(214, 203, 186, 0.92)',
+    thinkingBg: '#F4EEE4'
+  },
+  dark: {
+    background: '#17181C',
+    bubble: '#23262D',
+    bubbleBorder: 'rgba(255, 255, 255, 0.10)',
+    text: '#F5F7FA',
+    subText: '#AAB2BF',
+    codeBg: '#1B1D23',
+    codeBorder: 'rgba(255, 255, 255, 0.08)',
+    thinkingBg: '#1F232B'
+  }
+};
+
+const waitForScreenshotImages = async (container) => {
+  if (!container) return;
+  const images = Array.from(container.querySelectorAll('img'));
+  if (images.length === 0) return;
+
+  await Promise.all(images.map((img) => {
+    try {
+      img.removeAttribute('loading');
+      img.setAttribute('loading', 'eager');
+      img.decoding = 'sync';
+    } catch {
+      // ignore image eager-load fallback failure
+    }
+
+    if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      const done = () => {
+        img.onload = null;
+        img.onerror = null;
+        resolve();
+      };
+      img.onload = done;
+      img.onerror = done;
+    });
+  }));
+};
+
+const applyMessageScreenshotStyles = (clone, theme, role = 'assistant') => {
+  if (!clone) return;
+
+  clone.style.position = 'relative';
+  clone.style.zIndex = '1';
+  clone.style.margin = '0';
+  clone.style.maxWidth = '100%';
+  clone.style.width = '100%';
+  clone.style.alignSelf = role === 'user' ? 'flex-end' : 'flex-start';
+
+  clone.querySelectorAll('*').forEach((element) => {
+    element.style.animation = 'none';
+    element.style.transition = 'none';
+    element.style.backdropFilter = 'none';
+    element.style.webkitBackdropFilter = 'none';
+    if (element.tagName !== 'IMG') {
+      element.style.filter = 'none';
+    }
+  });
+
+  clone.querySelectorAll('.message-footer').forEach((footer) => footer.remove());
+  clone.querySelectorAll('.markdown-wrapper').forEach((markdownWrapper) => {
+    markdownWrapper.style.height = 'auto';
+    markdownWrapper.style.maxHeight = 'none';
+    markdownWrapper.style.overflow = 'visible';
+    markdownWrapper.classList.remove('collapsed');
+  });
+
+  clone.querySelectorAll('.elx-xmarkdown-container').forEach((container) => {
+    container.style.background = 'transparent';
+    container.style.backgroundImage = 'none';
+    container.style.color = theme.text;
+  });
+
+  clone.querySelectorAll('.chat-avatar-top').forEach((avatar) => {
+    avatar.style.boxShadow = 'none';
+  });
+
+  clone.querySelectorAll('.timestamp-row, .voice-name').forEach((metaText) => {
+    metaText.style.color = theme.subText;
+  });
+
+  clone.querySelectorAll('.user-name, .ai-name').forEach((nameText) => {
+    nameText.style.color = theme.text;
+  });
+
+  clone.querySelectorAll('.el-bubble-content').forEach((bubble) => {
+    bubble.style.background = theme.bubble;
+    bubble.style.backgroundImage = 'none';
+    bubble.style.color = theme.text;
+    bubble.style.border = `1px solid ${theme.bubbleBorder}`;
+    bubble.style.borderRadius = '22px';
+    bubble.style.boxShadow = 'none';
+    bubble.style.overflow = 'hidden';
+  });
+
+  clone.querySelectorAll('.el-thinking .trigger').forEach((trigger) => {
+    trigger.style.background = theme.thinkingBg;
+    trigger.style.backgroundImage = 'none';
+    trigger.style.border = `1px solid ${theme.codeBorder}`;
+    trigger.style.borderRadius = '16px';
+    trigger.style.boxShadow = 'none';
+    trigger.style.color = theme.text;
+  });
+
+  clone.querySelectorAll('.el-thinking .content pre, pre').forEach((preElement) => {
+    preElement.style.background = theme.codeBg;
+    preElement.style.backgroundImage = 'none';
+    preElement.style.border = `1px solid ${theme.codeBorder}`;
+    preElement.style.borderRadius = '16px';
+    preElement.style.boxShadow = 'none';
+    preElement.style.color = theme.text;
+    preElement.style.whiteSpace = 'pre-wrap';
+    preElement.style.overflow = 'visible';
+    preElement.style.height = 'auto';
+    preElement.style.maxHeight = 'none';
+  });
+
+  clone.querySelectorAll('code').forEach((codeElement) => {
+    codeElement.style.color = theme.text;
+    codeElement.style.textShadow = 'none';
+  });
+};
+
+const cleanupMessageScreenshot = (wrapper, canvas) => {
+  try {
+    wrapper?.querySelectorAll?.('img').forEach((img) => {
+      img.src = '';
+    });
+  } catch {
+    // ignore screenshot image cleanup failure
+  }
+
+  try {
+    if (wrapper?.parentNode) {
+      wrapper.parentNode.removeChild(wrapper);
+    }
+  } catch {
+    wrapper?.remove?.();
+  }
+
+  try {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  } catch {
+    // ignore canvas cleanup failure
+  }
+};
+
 const onCopyImage = async () => {
   if (!messageWrapperRef.value) return;
-  
+
   const loadingMsg = ElMessage.info({ message: '正在生成图片...', duration: 0 });
-  
-  // 延时让 UI 有机会渲染 Loading
+
   setTimeout(async () => {
     let wrapper = null;
-    try {
-      // 1. 获取 App 全局背景节点
-      const originalBgBase = document.querySelector('.window-bg-base');
-      const originalBgLayer = document.querySelector('.window-bg-layer');
-      
-      // 2. 获取兜底主题色
-      const rootStyle = getComputedStyle(document.documentElement);
-      let themeBgColor = rootStyle.getPropertyValue('--el-bg-color').trim();
-      const isDark = document.documentElement.classList.contains('dark');
-      if (!themeBgColor || themeBgColor === 'transparent' || themeBgColor === 'rgba(0, 0, 0, 0)') {
-          themeBgColor = isDark ? '#212121' : '#FFFFFD'; 
-      }
+    let canvas = null;
+    let dataUrl = '';
 
-      // 3. 构建截图容器 (Wrapper)
-      // 设置最小宽度
-      const MIN_IMAGE_WIDTH = 800; 
-      const targetWidth = Math.max(messageWrapperRef.value.clientWidth, MIN_IMAGE_WIDTH);
+    try {
+      const isDark = document.documentElement.classList.contains('dark');
+      const theme = isDark ? SCREENSHOT_THEME.dark : SCREENSHOT_THEME.light;
+      const role = props.message.role === 'user' ? 'user' : 'assistant';
+      const sourceWidth = Math.ceil(messageWrapperRef.value.clientWidth || 0);
+      const targetWidth = Math.min(Math.max(sourceWidth + 24, 560), 960);
 
       wrapper = document.createElement('div');
       wrapper.style.cssText = `
-        position: fixed; top: -10000px; left: 0; z-index: -9999;
+        position: fixed;
+        left: -20000px;
+        top: 0;
+        z-index: -9999;
         width: ${targetWidth}px;
-        box-sizing: content-box; padding: 20px;
-        display: flex; flex-direction: column; overflow: hidden;
+        padding: 20px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border-radius: 24px;
+        background: ${theme.background};
       `;
-      wrapper.style.backgroundColor = themeBgColor;
 
-      // 3.1 重建背景层 (Base)
-      const bgBaseClone = document.createElement('div');
-      bgBaseClone.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; z-index: 0;';
-      if (originalBgBase) {
-          bgBaseClone.style.backgroundColor = getComputedStyle(originalBgBase).backgroundColor;
-      } else {
-          bgBaseClone.style.backgroundColor = themeBgColor;
-      }
-      wrapper.appendChild(bgBaseClone);
-
-      // 3.2 重建背景层 (Layer)
-      if (originalBgLayer) {
-          const layerComputed = getComputedStyle(originalBgLayer);
-          if (layerComputed.backgroundImage !== 'none' && layerComputed.opacity !== '0') {
-              const bgLayerClone = document.createElement('div');
-              bgLayerClone.style.cssText = `
-                  position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1;
-                  background-image: ${layerComputed.backgroundImage};
-                  background-size: ${layerComputed.backgroundSize};
-                  background-position: ${layerComputed.backgroundPosition};
-                  background-repeat: ${layerComputed.backgroundRepeat};
-                  opacity: ${layerComputed.opacity};
-                  filter: ${layerComputed.filter};
-              `;
-              wrapper.appendChild(bgLayerClone);
-          }
-      }
-
-      // 4. 克隆消息内容
       const clone = messageWrapperRef.value.cloneNode(true);
-      clone.style.position = 'relative';
-      clone.style.zIndex = '2'; 
-      clone.style.margin = '0';
-      clone.style.maxWidth = '100%';
-      
-      const footer = clone.querySelector('.message-footer');
-      if (footer) footer.remove();
-
-      if (props.message.role === 'user') {
-          clone.style.alignSelf = 'flex-end';
-      } else {
-          clone.style.alignSelf = 'flex-start';
-      }
-
-      // A. 气泡本体
-      const originalBubble = messageWrapperRef.value.querySelector('.el-bubble-content');
-      const clonedBubble = clone.querySelector('.el-bubble-content');
-      
-      if (originalBubble && clonedBubble) {
-          const comp = getComputedStyle(originalBubble);
-          clonedBubble.style.backgroundColor = comp.backgroundColor;
-          clonedBubble.style.color = comp.color;
-          clonedBubble.style.border = comp.border;
-          clonedBubble.style.borderRadius = comp.borderRadius;
-          clonedBubble.style.boxShadow = comp.boxShadow;
-          clonedBubble.style.backdropFilter = 'none';
-          clonedBubble.style.overflow = 'hidden'; 
-      }
-
-      // B. 思考按钮
-      const originalThinkingTriggers = messageWrapperRef.value.querySelectorAll('.el-thinking .trigger');
-      const clonedThinkingTriggers = clone.querySelectorAll('.el-thinking .trigger');
-      originalThinkingTriggers.forEach((orig, i) => {
-          if (clonedThinkingTriggers[i]) {
-              const comp = getComputedStyle(orig);
-              clonedThinkingTriggers[i].style.backgroundColor = comp.backgroundColor;
-              clonedThinkingTriggers[i].style.border = comp.border;
-              clonedThinkingTriggers[i].style.borderRadius = comp.borderRadius;
-              clonedThinkingTriggers[i].style.color = comp.color;
-          }
-      });
-
-      // E. 思考内容块
-      const originalThinkingContent = messageWrapperRef.value.querySelectorAll('.el-thinking .content pre');
-      const clonedThinkingContent = clone.querySelectorAll('.el-thinking .content pre');
-      originalThinkingContent.forEach((orig, i) => {
-          if (clonedThinkingContent[i]) {
-              const comp = getComputedStyle(orig);
-              clonedThinkingContent[i].style.borderRadius = comp.borderRadius;
-              clonedThinkingContent[i].style.backgroundColor = comp.backgroundColor;
-              clonedThinkingContent[i].style.border = comp.border;
-              clonedThinkingContent[i].style.color = comp.color;
-              clonedThinkingContent[i].style.whiteSpace = 'pre-wrap';
-              clonedThinkingContent[i].style.overflow = 'visible';
-              clonedThinkingContent[i].style.height = 'auto';
-              clonedThinkingContent[i].style.maxHeight = 'none';
-          }
-      });
-
-      // C. 普通代码块
-      const originalPres = messageWrapperRef.value.querySelectorAll('pre:not(.el-thinking *)');
-      const clonedPres = clone.querySelectorAll('pre:not(.el-thinking *)');
-      originalPres.forEach((orig, i) => {
-          if (clonedPres[i]) {
-              const comp = getComputedStyle(orig);
-              clonedPres[i].style.backgroundColor = comp.backgroundColor;
-              clonedPres[i].style.color = comp.color;
-              clonedPres[i].style.border = comp.border;
-              clonedPres[i].style.borderRadius = comp.borderRadius;
-              clonedPres[i].style.whiteSpace = 'pre-wrap';
-              clonedPres[i].style.overflow = 'visible';
-              clonedPres[i].style.height = 'auto';
-              clonedPres[i].style.maxHeight = 'none';
-          }
-      });
-
-      // D. Markdown 容器
-      clone.querySelectorAll('.markdown-wrapper').forEach(md => {
-          md.style.height = 'auto';
-          md.style.overflow = 'visible';
-          md.classList.remove('collapsed');
-      });
-
+      applyMessageScreenshotStyles(clone, theme, role);
       wrapper.appendChild(clone);
       document.body.appendChild(wrapper);
 
-      await new Promise(r => requestAnimationFrame(() => setTimeout(r, 200)));
+      await waitForScreenshotImages(wrapper);
+      await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 80)));
 
-      // 5. 截图
-      const canvas = await html2canvas(wrapper, {
-        useCORS: true, 
+      canvas = await html2canvas(wrapper, {
+        useCORS: true,
         allowTaint: true,
-        backgroundColor: null,
-        scale: 2, 
+        backgroundColor: theme.background,
+        scale: 2,
         logging: false,
-        ignoreElements: (el) => false
+        ignoreElements: () => false
       });
 
-      // 6. 清理
-      document.body.removeChild(wrapper);
-      wrapper = null;
-
-      // 7. 导出
-      const dataUrl = canvas.toDataURL('image/png');
-      
-      requestAnimationFrame(async () => {
-          try {
-              await window.api.copyImage(dataUrl);
-              loadingMsg.close();
-              ElMessage.success('消息图片已复制');
-          } catch (clipErr) {
-              console.error(clipErr);
-              loadingMsg.close();
-              ElMessage.error('写入剪贴板失败');
-          }
-      });
-
+      dataUrl = canvas.toDataURL('image/png');
+      await window.api.copyImage(dataUrl);
+      loadingMsg.close();
+      ElMessage.success('消息图片已复制');
     } catch (error) {
       console.error('截图失败:', error);
       loadingMsg.close();
       ElMessage.error('生成图片失败');
-      if (wrapper && wrapper.parentNode) {
-          wrapper.parentNode.removeChild(wrapper);
-      }
-      const orphans = document.querySelectorAll('[style*="-10000px"]');
-      orphans.forEach(el => el.remove());
+    } finally {
+      cleanupMessageScreenshot(wrapper, canvas);
+      wrapper = null;
+      canvas = null;
+      dataUrl = '';
     }
   }, 50);
 };

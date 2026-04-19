@@ -3478,24 +3478,24 @@ const saveSessionAsImage = async () => {
             finalContainer.style.display = 'flex';
             finalContainer.style.flexDirection = 'column';
 
-            // 完全还原最开始的背景渲染方案
-            if (windowBackgroundImage.value) {
-              finalContainer.style.backgroundImage = `url('${windowBackgroundImage.value}')`;
-              finalContainer.style.backgroundSize = 'cover';
-              finalContainer.style.backgroundPosition = 'center';
-              finalContainer.style.backgroundRepeat = 'no-repeat';
-              finalContainer.style.backgroundColor = themeBgColor;
-            } else {
-              finalContainer.style.background = themeBgColor;
-            }
+            // 截图导出使用简约纯底，避免毛玻璃/背景图带来的黑边与额外渲染负担
+            finalContainer.style.background = themeBgColor;
+            finalContainer.style.borderRadius = '24px';
+            finalContainer.style.overflow = 'hidden';
+            finalContainer.style.padding = '12px';
+            finalContainer.style.gap = '12px';
+            finalContainer.style.boxSizing = 'border-box';
 
-            // 将刚才分批截好的块无缝贴入大容器中
+            // 将刚才分批截好的块贴入大容器中，并为每块提供稳定纯底
+            const chunkSurfaceColor = document.documentElement.classList.contains('dark') ? '#23262D' : '#FFFFFF';
             for (const dataUrl of chunkDataUrls) {
               const img = document.createElement('img');
               img.src = dataUrl;
               img.style.width = '100%';
               img.style.height = 'auto';
               img.style.display = 'block';
+              img.style.background = chunkSurfaceColor;
+              img.style.borderRadius = '18px';
               finalContainer.appendChild(img);
             }
 

@@ -3437,8 +3437,46 @@ const saveSessionAsImage = async () => {
                 clone.style.setProperty('--screenshot-export-code-bg', exportCodeBg);
                 clone.style.setProperty('--screenshot-export-code-border', exportCodeBorder);
                 clone.style.setProperty('--screenshot-export-thinking-bg', exportThinkingBg);
-                const footer = clone.querySelector('.message-footer');
-                if (footer) footer.remove();
+                clone.querySelectorAll('*').forEach((element) => {
+                  element.style.animation = 'none';
+                  element.style.transition = 'none';
+                  element.style.backdropFilter = 'none';
+                  element.style.webkitBackdropFilter = 'none';
+                  element.style.filter = 'none';
+                  element.style.backgroundImage = 'none';
+                  element.style.boxShadow = 'none';
+                  element.style.mixBlendMode = 'normal';
+                  element.style.maskImage = 'none';
+                  element.style.webkitMaskImage = 'none';
+                });
+                clone.querySelectorAll('.message-wrapper, .el-bubble-content-wrapper').forEach((element) => {
+                  element.style.background = 'transparent';
+                  element.style.border = 'none';
+                  element.style.boxShadow = 'none';
+                });
+                clone.querySelectorAll('.el-bubble-content-wrapper .el-bubble-content').forEach((bubble) => {
+                  bubble.style.background = exportBubbleBg;
+                  bubble.style.backgroundImage = 'none';
+                  bubble.style.border = `1px solid ${exportBubbleBorder}`;
+                  bubble.style.boxShadow = 'none';
+                  bubble.style.outline = 'none';
+                  bubble.style.color = exportTextColor;
+                });
+                clone.querySelectorAll('.el-thinking .trigger, .el-thinking-popper').forEach((element) => {
+                  element.style.background = exportThinkingBg;
+                  element.style.backgroundImage = 'none';
+                  element.style.border = `1px solid ${exportCodeBorder}`;
+                  element.style.boxShadow = 'none';
+                  element.style.color = exportTextColor;
+                });
+                clone.querySelectorAll('pre, .table-scroll-wrapper, blockquote, .markdown-mermaid .mermaid-content, .markdown-mermaid .mermaid-source-code').forEach((element) => {
+                  element.style.background = exportCodeBg;
+                  element.style.backgroundImage = 'none';
+                  element.style.border = `1px solid ${exportCodeBorder}`;
+                  element.style.boxShadow = 'none';
+                  element.style.color = exportTextColor;
+                });
+                clone.querySelectorAll('.message-footer').forEach((footer) => footer.remove());
 
                 // 解除 Markdown 容器高度限制，防止排版截断
                 const restrictSelectors = ['.markdown-wrapper', '.elx-xmarkdown-container', 'pre', '.table-scroll-wrapper'];
@@ -3484,7 +3522,7 @@ const saveSessionAsImage = async () => {
               const msgCanvas = await html2canvas(renderWrapper, {
                 useCORS: true,
                 allowTaint: true,
-                backgroundColor: null,
+                backgroundColor: exportBubbleBg,
                 scale: 2,
                 logging: false
               });

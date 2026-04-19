@@ -191,13 +191,116 @@ const applyMessageScreenshotStyles = (clone, theme, role = 'assistant') => {
   });
 };
 
+
+const forceScreenshotExportStyles = (clone, theme) => {
+  if (!clone) return;
+
+  const selectors = [
+    '.el-bubble-content-wrapper',
+    '.el-bubble-content-wrapper .el-bubble-content',
+    '.el-bubble-content-wrapper .el-bubble-footer',
+    '.el-thinking .trigger',
+    '.el-thinking-popper',
+    '.el-thinking-popper .el-popper__arrow::before',
+    '.markdown-wrapper',
+    '.elx-xmarkdown-container',
+    'pre',
+    '.table-scroll-wrapper',
+    'blockquote',
+    '.markdown-mermaid .mermaid-content',
+    '.markdown-mermaid .mermaid-source-code'
+  ];
+
+  clone.querySelectorAll('*').forEach((element) => {
+    element.style.backgroundImage = 'none';
+    element.style.boxShadow = 'none';
+    element.style.filter = 'none';
+    element.style.backdropFilter = 'none';
+    element.style.webkitBackdropFilter = 'none';
+    element.style.mixBlendMode = 'normal';
+    element.style.maskImage = 'none';
+    element.style.webkitMaskImage = 'none';
+  });
+
+  clone.querySelectorAll('.message-wrapper').forEach((wrapper) => {
+    wrapper.style.background = 'transparent';
+    wrapper.style.border = 'none';
+    wrapper.style.boxShadow = 'none';
+  });
+
+  clone.querySelectorAll('.el-bubble-content-wrapper').forEach((wrapper) => {
+    wrapper.style.background = 'transparent';
+    wrapper.style.backgroundImage = 'none';
+    wrapper.style.border = 'none';
+    wrapper.style.boxShadow = 'none';
+    wrapper.style.padding = '0';
+  });
+
+  clone.querySelectorAll('.el-bubble-content-wrapper .el-bubble-content').forEach((bubble) => {
+    bubble.style.background = theme.bubble;
+    bubble.style.backgroundImage = 'none';
+    bubble.style.border = `1px solid ${theme.bubbleBorder}`;
+    bubble.style.boxShadow = 'none';
+    bubble.style.outline = 'none';
+    bubble.style.color = theme.text;
+  });
+
+  clone.querySelectorAll('.el-bubble-content-wrapper .el-bubble-footer').forEach((footer) => {
+    footer.style.background = 'transparent';
+    footer.style.backgroundImage = 'none';
+    footer.style.border = 'none';
+    footer.style.boxShadow = 'none';
+  });
+
+  clone.querySelectorAll('.el-thinking .trigger, .el-thinking-popper').forEach((node) => {
+    node.style.background = theme.thinkingBg;
+    node.style.backgroundImage = 'none';
+    node.style.border = `1px solid ${theme.codeBorder}`;
+    node.style.boxShadow = 'none';
+    node.style.color = theme.text;
+  });
+
+  clone.querySelectorAll('pre, .table-scroll-wrapper, blockquote, .markdown-mermaid .mermaid-content, .markdown-mermaid .mermaid-source-code').forEach((node) => {
+    node.style.background = theme.codeBg;
+    node.style.backgroundImage = 'none';
+    node.style.border = `1px solid ${theme.codeBorder}`;
+    node.style.boxShadow = 'none';
+    node.style.color = theme.text;
+  });
+
+  clone.querySelectorAll('.markdown-wrapper, .elx-xmarkdown-container, code, .inline-code-tag').forEach((node) => {
+    node.style.color = theme.text;
+    node.style.textShadow = 'none';
+  });
+};
+
 const cleanupMessageScreenshot = (wrapper, canvas) => {
   try {
     wrapper?.querySelectorAll?.('img').forEach((img) => {
+      img.onload = null;
+      img.onerror = null;
+      img.removeAttribute('src');
       img.src = '';
     });
   } catch {
     // ignore screenshot image cleanup failure
+  }
+
+  try {
+    wrapper?.querySelectorAll?.('*').forEach((node) => {
+      node.ontransitionend = null;
+      node.onanimationend = null;
+    });
+  } catch {
+    // ignore temporary node cleanup failure
+  }
+
+  try {
+    if (wrapper) {
+      wrapper.innerHTML = '';
+    }
+  } catch {
+    // ignore wrapper html cleanup failure
   }
 
   try {
@@ -210,6 +313,8 @@ const cleanupMessageScreenshot = (wrapper, canvas) => {
 
   try {
     if (canvas) {
+      const context = canvas.getContext?.('2d');
+      context?.clearRect?.(0, 0, canvas.width, canvas.height);
       canvas.width = 0;
       canvas.height = 0;
     }
@@ -253,6 +358,7 @@ const onCopyImage = async () => {
 
       const clone = messageWrapperRef.value.cloneNode(true);
       applyMessageScreenshotStyles(clone, theme, role);
+      forceScreenshotExportStyles(clone, theme);
       wrapper.appendChild(clone);
       document.body.appendChild(wrapper);
 

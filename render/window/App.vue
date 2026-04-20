@@ -762,6 +762,12 @@ const tempSessionMcpServerIds = ref([]);
 const isAutoApproveTools = ref(true);
 const pendingToolApprovals = ref(new Map());
 
+const isAbortError = (error) => {
+  if (!error) return false;
+  return error.name === 'AbortError' || String(error?.message || '').includes('aborted');
+};
+
+
 
 const formatToolResult = (result) => {
   if (result == null) return '';
@@ -4517,6 +4523,8 @@ const askAI = async (forceSend = false) => {
   loading.value = true;
   syncAutoCloseOnBlurListener();
   signalController.value = new AbortController();
+  const requestAbortController = signalController.value;
+  const requestSignal = requestAbortController.signal;
   await nextTick();
 
   if (isAtBottom.value) {
@@ -4537,7 +4545,7 @@ const askAI = async (forceSend = false) => {
 
   try {
     // --- 3. 开始工具调用循环 ---
-    while (!signalController.value.signal.aborted) {
+    while (!requestSignal.aborted) {
       // chatInputRef.value?.focus({ cursor: 'end' });
 
       // --- 为本次请求创建临时消息列表 ---
@@ -4615,7 +4623,7 @@ const askAI = async (forceSend = false) => {
         apiType: apiType,
         messages: messagesForThisRequest,
         stream: useStream,
-        signal: signalController.value.signal
+        signal: requestSignal
       };
 
       if (currentPromptConfig?.isTemperature) requestParams.temperature = currentPromptConfig.temperature;
@@ -4627,20 +4635,8 @@ const askAI = async (forceSend = false) => {
       if (sessionSkillIds.value.length > 0) {
         try {
           const runtimeSkillPath = await getRuntimeSkillPath();
-          console.log('[Skill Debug][window:before-getToolDefinition]', {
-            code: CODE.value,
-            runtimeSkillPath,
-            sessionSkillIds: [...sessionSkillIds.value],
-            builtinToolNames: activeTools.map((tool) => tool?.function?.name || tool?.name || '')
-          });
           if (runtimeSkillPath) {
             const skillToolDef = await window.api.getSkillToolDefinition(runtimeSkillPath, sessionSkillIds.value);
-            console.log('[Skill Debug][window:getToolDefinition:result]', {
-              runtimeSkillPath,
-              requestedSkills: [...sessionSkillIds.value],
-              skillToolName: skillToolDef?.function?.name || skillToolDef?.name || '',
-              skillEnum: skillToolDef?.function?.parameters?.properties?.skill?.enum || []
-            });
             if (skillToolDef) {
               activeTools.push(skillToolDef);
             }
@@ -4649,12 +4645,6 @@ const askAI = async (forceSend = false) => {
           console.error("Failed to generate skill tool definition:", e);
         }
       }
-
-      console.log('[Skill Debug][window:request-tools]', {
-        code: CODE.value,
-        finalSkillNames: [...sessionSkillIds.value],
-        toolNames: activeTools.map((tool) => tool?.function?.name || tool?.name || '')
-      });
 
       if (activeTools.length > 0) {
         requestParams.tools = activeTools;
@@ -4696,6 +4686,10 @@ const askAI = async (forceSend = false) => {
         const responsesItemIdToIndexMap = new Map();
 
         const flushStreamingDisplay = () => {
+          if (requestSignal.aborted || currentAssistantChatShowIndex < 0 || !chat_show.value[currentAssistantChatShowIndex]) {
+            return;
+          }
+
           const currentDisplayContent = [];
           if (aggregatedContent) currentDisplayContent.push({ type: 'text', text: aggregatedContent });
           if (aggregatedMedia.length > 0) currentDisplayContent.push(...aggregatedMedia);
@@ -4710,6 +4704,9 @@ const askAI = async (forceSend = false) => {
         };
 
         for await (const part of stream) {
+          if (requestSignal.aborted) {
+            break;
+          }
           // console.log(part);
           if (apiType === 'responses') {
             if (part.type === 'response.output_text.delta') {
@@ -4810,9 +4807,16 @@ const askAI = async (forceSend = false) => {
           if (currentTotalLength > 4000) throttleDelay = 250;
           if (currentTotalLength > 8000) throttleDelay = 400;
 
+          if (requestSignal.aborted) {
+            break;
+          }
+
           if (Date.now() - lastUpdateTime > throttleDelay) {
             flushStreamingDisplay();
           }
+        }
+        if (requestSignal.aborted) {
+          throw new DOMException('The operation was aborted.', 'AbortError');
         }
         flushStreamingDisplay();
 
@@ -4839,6 +4843,9 @@ const askAI = async (forceSend = false) => {
       } else {
         // --- 非流式处理 ---
         const response = await window.api.createChatCompletion(requestParams);
+        if (requestSignal.aborted) {
+          throw new DOMException('The operation was aborted.', 'AbortError');
+        }
 
         if (apiType === 'responses') {
           let contentText = "";
@@ -4896,6 +4903,10 @@ const askAI = async (forceSend = false) => {
             tc.function.arguments = sanitizeToolArgs(tc.function.arguments);
           }
         });
+      }
+
+      if (requestSignal.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError');
       }
 
       history.value.push(responseMessage);
@@ -4967,6 +4978,10 @@ const askAI = async (forceSend = false) => {
             toolCallControllers.value.set(toolCall.id, controller);
 
             try {
+              if (requestSignal.aborted) {
+                throw new DOMException('The operation was aborted.', 'AbortError');
+              }
+
               const toolArgs = JSON.parse(toolCall.function.arguments);
 
               if (toolCall.function.name === 'Skill') {
@@ -4994,17 +5009,12 @@ const askAI = async (forceSend = false) => {
                 };
 
                 const runtimeSkillPath = await getRuntimeSkillPath();
-                console.log('[Skill Debug][window:resolveSkillInvocation:before]', {
-                  runtimeSkillPath,
-                  requestedSkill: toolArgs.skill,
-                  sessionSkillIds: [...sessionSkillIds.value]
-                });
                 toolContent = await window.api.resolveSkillInvocation(
                   runtimeSkillPath,
                   toolArgs.skill,
                   toolArgs,
                   executionContext,
-                  toolCallControllers.value.get(toolCall.id)?.signal || signalController.value.signal
+                  toolCallControllers.value.get(toolCall.id)?.signal || requestSignal
                 );
 
                 if (uiToolCall) {
@@ -5050,7 +5060,7 @@ const askAI = async (forceSend = false) => {
                 const result = await window.api.invokeMcpTool(
                   toolCall.function.name,
                   toolArgs,
-                  toolCallControllers.value.get(toolCall.id)?.signal || signalController.value.signal,
+                  toolCallControllers.value.get(toolCall.id)?.signal || requestSignal,
                   executionContext
                 );
 
@@ -5117,7 +5127,7 @@ const askAI = async (forceSend = false) => {
     }
   } catch (error) {
     let errorDisplay = `发生错误: ${error.message || '未知错误'}`;
-    if (error.name === 'AbortError') errorDisplay = "请求已取消";
+    if (isAbortError(error)) errorDisplay = "请求已取消";
 
     const errorBubbleIndex = currentAssistantChatShowIndex > -1 ? currentAssistantChatShowIndex : chat_show.value.length;
     if (currentAssistantChatShowIndex === -1) {
@@ -5219,6 +5229,13 @@ const askAI = async (forceSend = false) => {
 const cancelAskAI = () => {
   if (loading.value && signalController.value) {
     signalController.value.abort();
+    toolCallControllers.value.forEach((controller) => {
+      try {
+        controller.abort();
+      } catch {
+        // ignore abort race
+      }
+    });
     scheduleAutoSave({ reason: 'assistant-cancelled', immediate: true });
     chatInputRef.value?.focus();
   }

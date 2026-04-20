@@ -5126,8 +5126,9 @@ const askAI = async (forceSend = false) => {
       }
     }
   } catch (error) {
+    const aborted = isAbortError(error);
     let errorDisplay = `发生错误: ${error.message || '未知错误'}`;
-    if (isAbortError(error)) errorDisplay = "请求已取消";
+    if (aborted) errorDisplay = "请求已取消";
 
     const errorBubbleIndex = currentAssistantChatShowIndex > -1 ? currentAssistantChatShowIndex : chat_show.value.length;
     if (currentAssistantChatShowIndex === -1) {
@@ -5137,8 +5138,9 @@ const askAI = async (forceSend = false) => {
       });
     }
     const currentBubble = chat_show.value[errorBubbleIndex];
-    if (chat_show.value[errorBubbleIndex].reasoning_content && currentBubble.status === 'thinking') {
-      chat_show.value[errorBubbleIndex].status = "error";
+    const hadThinkingContent = Boolean(currentBubble.reasoning_content && String(currentBubble.reasoning_content).trim());
+    if (hadThinkingContent && currentBubble.status === 'thinking') {
+      currentBubble.status = aborted ? 'cancelled' : 'error';
     }
 
     let existingText = "";
@@ -5151,7 +5153,23 @@ const askAI = async (forceSend = false) => {
       existingText = currentBubble.content;
     }
 
-    if (existingText && existingText.trim().length > 0) {
+    const shouldSuppressPartialThinking = aborted && hadThinkingContent && (!existingText || !existingText.trim());
+    if (shouldSuppressPartialThinking) {
+      currentBubble.reasoning_content = null;
+      currentBubble.content = [{ type: "text", text: errorDisplay }];
+      history.value.push({
+        role: 'assistant',
+        content: errorDisplay,
+        reasoning_content: null
+      });
+    } else if (aborted) {
+      currentBubble.content = [{ type: "text", text: errorDisplay }];
+      history.value.push({
+        role: 'assistant',
+        content: errorDisplay,
+        reasoning_content: null
+      });
+    } else if (existingText && existingText.trim().length > 0) {
       const combinedText = `${existingText}\n\n> **Error**: ${errorDisplay}`;
       currentBubble.content = [{ type: "text", text: combinedText }];
       history.value.push({
@@ -5167,7 +5185,7 @@ const askAI = async (forceSend = false) => {
         reasoning_content: currentBubble.reasoning_content || null
       });
     }
-    scheduleAutoSave({ reason: 'assistant-error', immediate: true });
+    scheduleAutoSave({ reason: aborted ? 'assistant-cancelled-error' : 'assistant-error', immediate: true });
 
   } finally {
     loading.value = false;
@@ -6847,8 +6865,8 @@ html.dark .app-container {
   overflow: hidden;
   min-height: 0;
   --window-nav-raise: 52px;
-  --window-nav-safe-bottom: 156px;
-  --window-nav-height: 46vh;
+  --window-nav-safe-bottom: 138px;
+  --window-nav-height: 62vh;
 }
 
 .chat-main {
@@ -6870,23 +6888,23 @@ html.dark .app-container {
   transform: translateY(-50%);
   height: min(var(--window-nav-height), calc(100% - var(--window-nav-safe-bottom)));
   max-height: calc(100% - var(--window-nav-safe-bottom));
-  min-height: 180px;
+  min-height: 240px;
   width: 30px;
   z-index: 90;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   pointer-events: none;
 }
 
 .nav-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   pointer-events: auto;
   flex-shrink: 0;
-  padding: 4px 0;
+  padding: 2px 0;
 }
 
 .nav-mini-btn {
@@ -6952,8 +6970,8 @@ html.dark .app-container {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 7px;
-  padding: 6px 0;
+  gap: 6px;
+  padding: 4px 0;
   scroll-behavior: smooth;
 
   &::-webkit-scrollbar {
@@ -6972,7 +6990,7 @@ html.dark .app-container {
   cursor: pointer;
   flex-shrink: 0;
   position: relative;
-  padding: 3px 0;
+  padding: 2px 0;
 
   &:hover .timeline-node {
     transform: scaleX(1.18);

@@ -734,7 +734,7 @@ const truncateFilename = (filename, maxLength = 30) => {
         :class="{ 'no-content': !hasContentToShow }"
         :loading="showBubbleLoading">
         <template #header>
-          <Thinking v-if="message.reasoning_content && message.reasoning_content.trim().length > 0" maxWidth="90%"
+          <Thinking v-if="message.reasoning_content && message.reasoning_content.trim().length > 0 && message.status !== 'cancelled'" maxWidth="90%"
             :content="(message.reasoning_content || '').trim()" :modelValue="false" :status="message.status">
           </Thinking>
         </template>

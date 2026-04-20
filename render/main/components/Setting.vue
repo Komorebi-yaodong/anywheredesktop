@@ -2187,6 +2187,9 @@ html.dark .icon-action-button {
   height: 30px;
   transition: all 0.2s ease;
 }
+:deep(.el-input__count-inner){
+  background-color: transparent !important;
+}
 
 :deep(.el-input__inner) {
   color: var(--panda-text-main);

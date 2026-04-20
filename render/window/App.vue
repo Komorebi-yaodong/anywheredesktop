@@ -6864,9 +6864,9 @@ html.dark .app-container {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
-  --window-nav-raise: 52px;
-  --window-nav-safe-bottom: 138px;
-  --window-nav-height: 62vh;
+  --window-nav-raise: 52px !important;
+  --window-nav-safe-bottom: 138px !important;
+  --window-nav-height: 62vh !important;
 }
 
 .chat-main {

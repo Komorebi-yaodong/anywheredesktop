@@ -767,7 +767,43 @@ const isAbortError = (error) => {
   return error.name === 'AbortError' || String(error?.message || '').includes('aborted');
 };
 
+const normalizeAssistantMessageContent = (content) => {
+  if (Array.isArray(content)) return content.filter(part => part && typeof part === 'object');
+  if (typeof content === 'string') {
+    return content.trim() ? [{ type: 'text', text: content }] : [];
+  }
+  return [];
+};
 
+const appendTerminalNoticeToAssistantContent = (content, terminalNotice) => {
+  const normalizedContent = normalizeAssistantMessageContent(content);
+  if (!terminalNotice || !terminalNotice.trim()) {
+    return normalizedContent;
+  }
+
+  if (normalizedContent.length === 0) {
+    return [{ type: 'text', text: terminalNotice }];
+  }
+
+  const nextContent = normalizedContent.map(part => ({ ...part }));
+  for (let index = nextContent.length - 1; index >= 0; index -= 1) {
+    const part = nextContent[index];
+    if (part?.type === 'text' && typeof part.text === 'string') {
+      part.text = `${part.text}${terminalNotice}`;
+      return nextContent;
+    }
+  }
+
+  nextContent.push({ type: 'text', text: terminalNotice });
+  return nextContent;
+};
+
+const getAssistantTerminalNoticeMarkdown = (aborted, errorDisplay) => {
+  if (aborted) {
+    return "\n\n> **请求已取消**";
+  }
+  return `\n\n> **错误信息**：${errorDisplay}`;
+};
 
 const formatToolResult = (result) => {
   if (result == null) return '';
@@ -4685,8 +4721,8 @@ const askAI = async (forceSend = false) => {
 
         const responsesItemIdToIndexMap = new Map();
 
-        const flushStreamingDisplay = () => {
-          if (requestSignal.aborted || currentAssistantChatShowIndex < 0 || !chat_show.value[currentAssistantChatShowIndex]) {
+        const flushStreamingDisplay = (force = false) => {
+          if ((!force && requestSignal.aborted) || currentAssistantChatShowIndex < 0 || !chat_show.value[currentAssistantChatShowIndex]) {
             return;
           }
 
@@ -4816,9 +4852,10 @@ const askAI = async (forceSend = false) => {
           }
         }
         if (requestSignal.aborted) {
+          flushStreamingDisplay(true);
           throw new DOMException('The operation was aborted.', 'AbortError');
         }
-        flushStreamingDisplay();
+        flushStreamingDisplay(true);
 
 
         let finalContentForHistory = null;
@@ -5133,58 +5170,27 @@ const askAI = async (forceSend = false) => {
     const errorBubbleIndex = currentAssistantChatShowIndex > -1 ? currentAssistantChatShowIndex : chat_show.value.length;
     if (currentAssistantChatShowIndex === -1) {
       chat_show.value.push({
-        id: messageIdCounter.value++, role: "assistant", content: [],
+        id: messageIdCounter.value++, role: "assistant", content: [], reasoning_content: "", status: "",
         aiName: modelMap.value[model.value] || model.value.split('|')[1], voiceName: selectedVoice.value
       });
     }
+
     const currentBubble = chat_show.value[errorBubbleIndex];
-    const hadThinkingContent = Boolean(currentBubble.reasoning_content && String(currentBubble.reasoning_content).trim());
-    if (hadThinkingContent && currentBubble.status === 'thinking') {
-      currentBubble.status = aborted ? 'cancelled' : 'error';
-    }
+    const terminalNotice = getAssistantTerminalNoticeMarkdown(aborted, errorDisplay);
+    const finalContent = appendTerminalNoticeToAssistantContent(currentBubble.content, terminalNotice);
+    const finalReasoningContent = typeof currentBubble.reasoning_content === 'string'
+      ? currentBubble.reasoning_content
+      : (currentBubble.reasoning_content ? String(currentBubble.reasoning_content) : '');
 
-    let existingText = "";
-    if (currentBubble.content && Array.isArray(currentBubble.content)) {
-      existingText = currentBubble.content
-        .filter(part => part.type === 'text')
-        .map(part => part.text)
-        .join('');
-    } else if (typeof currentBubble.content === 'string') {
-      existingText = currentBubble.content;
-    }
+    currentBubble.content = finalContent;
+    currentBubble.reasoning_content = finalReasoningContent;
+    currentBubble.status = aborted ? 'cancelled' : 'error';
 
-    const shouldSuppressPartialThinking = aborted && hadThinkingContent && (!existingText || !existingText.trim());
-    if (shouldSuppressPartialThinking) {
-      currentBubble.reasoning_content = null;
-      currentBubble.content = [{ type: "text", text: errorDisplay }];
-      history.value.push({
-        role: 'assistant',
-        content: errorDisplay,
-        reasoning_content: null
-      });
-    } else if (aborted) {
-      currentBubble.content = [{ type: "text", text: errorDisplay }];
-      history.value.push({
-        role: 'assistant',
-        content: errorDisplay,
-        reasoning_content: null
-      });
-    } else if (existingText && existingText.trim().length > 0) {
-      const combinedText = `${existingText}\n\n> **Error**: ${errorDisplay}`;
-      currentBubble.content = [{ type: "text", text: combinedText }];
-      history.value.push({
-        role: 'assistant',
-        content: combinedText,
-        reasoning_content: currentBubble.reasoning_content || null
-      });
-    } else {
-      currentBubble.content = [{ type: "text", text: `${errorDisplay}` }];
-      history.value.push({
-        role: 'assistant',
-        content: `${errorDisplay}`,
-        reasoning_content: currentBubble.reasoning_content || null
-      });
-    }
+    history.value.push({
+      role: 'assistant',
+      content: finalContent,
+      reasoning_content: finalReasoningContent || null
+    });
     scheduleAutoSave({ reason: aborted ? 'assistant-cancelled-error' : 'assistant-error', immediate: true });
 
   } finally {

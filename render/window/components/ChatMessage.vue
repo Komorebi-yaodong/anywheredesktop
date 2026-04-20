@@ -1824,7 +1824,7 @@ html.dark .ai-bubble :deep(.el-thinking .content pre) {
     line-height: 1;
     box-shadow: none;
     background-clip: padding-box;
-    transition: border-radius 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+    transition: border-color 0.2s ease, background-color 0.2s ease;
   }
 
   :deep(.el-collapse-item__arrow) {
@@ -1832,6 +1832,7 @@ html.dark .ai-bubble :deep(.el-thinking .content pre) {
   }
 
   :deep(.el-collapse-item__wrap) {
+    display: none;
     background-color: transparent;
     border: none;
     border-radius: 0;
@@ -1845,19 +1846,22 @@ html.dark .ai-bubble :deep(.el-thinking .content pre) {
 
   :deep(.el-collapse-item:not(.is-active) > .el-collapse-item__header),
   :deep(.el-collapse-item__header:not(.is-active)) {
-    border-bottom-left-radius: var(--bubble-radius);
-    border-bottom-right-radius: var(--bubble-radius);
-    border-bottom-color: var(--el-border-color-lighter);
+    background-color: transparent !important;
+    border-bottom-left-radius: var(--bubble-radius) !important;
+    border-bottom-right-radius: var(--bubble-radius) !important;
+    border-bottom-color: var(--el-border-color-lighter) !important;
   }
 
   :deep(.el-collapse-item.is-active > .el-collapse-item__header),
   :deep(.el-collapse-item__header.is-active) {
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-    border-bottom-color: transparent;
+    background-color: transparent !important;
+    border-bottom-left-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+    border-bottom-color: transparent !important;
   }
 
   :deep(.el-collapse-item.is-active > .el-collapse-item__wrap) {
+    display: block;
     background-color: color-mix(in srgb, var(--el-fill-color-lighter) 78%, transparent);
     border: 1px solid var(--el-border-color-lighter);
     border-top: none;

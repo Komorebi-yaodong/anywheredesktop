@@ -994,6 +994,25 @@ const clearSkills = () => {
   tempSessionSkillIds.value = [];
 };
 
+const getRuntimeSkillPath = async () => {
+  const currentPath = typeof currentConfig.value?.skillPath === 'string' ? currentConfig.value.skillPath.trim() : '';
+  if (currentPath) return currentPath;
+  if (!window.api?.getConfig) return '';
+
+  try {
+    const configResult = await window.api.getConfig();
+    const runtimePath = typeof configResult?.config?.skillPath === 'string' ? configResult.config.skillPath.trim() : '';
+    if (runtimePath && currentConfig.value) {
+      currentConfig.value.skillPath = runtimePath;
+    }
+    return runtimePath;
+  } catch (error) {
+    console.error('获取运行时 Skill 路径失败:', error);
+    return '';
+  }
+};
+
+
 const toggleSkillDialog = async () => {
   if (!isSkillDialogVisible.value) {
     tempSessionSkillIds.value = [...sessionSkillIds.value];
@@ -1001,20 +1020,15 @@ const toggleSkillDialog = async () => {
     skillSearchQuery.value = '';
     expandedSkillDescriptions.value = new Set();
 
-    if (currentConfig.value?.skillPath || (window.api?.getConfig && (await window.api.getConfig())?.config?.skillPath)) {
-      // 重新获取 config 以防路径变更
-      const cfg = (await window.api.getConfig()).config;
-      const path = cfg.skillPath;
-
-      if (path) {
-        try {
-          const skills = await window.api.listSkills(path);
-          // 过滤并排序
-          allSkillsList.value = skills.filter(s => !s.disabled).sort((a, b) => a.name.localeCompare(b.name));
-        } catch (e) {
-          console.error("Fetch skills failed:", e);
-          ElMessage.error("刷新技能列表失败");
-        }
+    const path = await getRuntimeSkillPath();
+    if (path) {
+      try {
+        const skills = await window.api.listSkills(path);
+        // 过滤并排序
+        allSkillsList.value = skills.filter(s => !s.disabled).sort((a, b) => a.name.localeCompare(b.name));
+      } catch (e) {
+        console.error("Fetch skills failed:", e);
+        ElMessage.error("刷新技能列表失败");
       }
     }
   }
@@ -1022,26 +1036,26 @@ const toggleSkillDialog = async () => {
 };
 
 const fetchSkillsList = async () => {
-  if (currentConfig.value?.skillPath || (window.api?.getConfig && (await window.api.getConfig())?.config?.skillPath)) {
-    const path = currentConfig.value?.skillPath || (await window.api.getConfig()).config.skillPath;
-    try {
-      const skills = await window.api.listSkills(path);
-      allSkillsList.value = skills.filter(s => !s.disabled).sort((a, b) => a.name.localeCompare(b.name));
+  const path = await getRuntimeSkillPath();
+  if (!path) return;
 
-      const validSkillNames = allSkillsList.value.map(s => s.name);
+  try {
+    const skills = await window.api.listSkills(path);
+    allSkillsList.value = skills.filter(s => !s.disabled).sort((a, b) => a.name.localeCompare(b.name));
 
-      const validSessionSkills = sessionSkillIds.value.filter(name => validSkillNames.includes(name));
-      if (validSessionSkills.length !== sessionSkillIds.value.length) {
-        sessionSkillIds.value = validSessionSkills;
-      }
+    const validSkillNames = allSkillsList.value.map(s => s.name);
 
-      const validTempSkills = tempSessionSkillIds.value.filter(name => validSkillNames.includes(name));
-      if (validTempSkills.length !== tempSessionSkillIds.value.length) {
-        tempSessionSkillIds.value = validTempSkills;
-      }
-    } catch (e) {
-      console.error("Fetch skills failed:", e);
+    const validSessionSkills = sessionSkillIds.value.filter(name => validSkillNames.includes(name));
+    if (validSessionSkills.length !== sessionSkillIds.value.length) {
+      sessionSkillIds.value = validSessionSkills;
     }
+
+    const validTempSkills = tempSessionSkillIds.value.filter(name => validSkillNames.includes(name));
+    if (validTempSkills.length !== tempSessionSkillIds.value.length) {
+      tempSessionSkillIds.value = validTempSkills;
+    }
+  } catch (e) {
+    console.error("Fetch skills failed:", e);
   }
 };
 
@@ -1096,8 +1110,10 @@ const handleQuickSkillToggle = async (skillName) => {
 const handleSkillForkToggle = async (skill) => {
   const newForkState = skill.context !== 'fork';
   try {
-    const configData = await window.api.getConfig();
-    const path = configData.config.skillPath;
+    const path = await getRuntimeSkillPath();
+    if (!path) {
+      throw new Error('Skill 路径未配置');
+    }
 
     await window.api.toggleSkillForkMode(path, skill.id, newForkState);
 
@@ -4581,11 +4597,14 @@ const askAI = async (forceSend = false) => {
       // --- 构建工具列表 (MCP + Skill) ---
       let activeTools = [...openaiFormattedTools.value];
 
-      if (sessionSkillIds.value.length > 0 && currentConfig.value.skillPath) {
+      if (sessionSkillIds.value.length > 0) {
         try {
-          const skillToolDef = await window.api.getSkillToolDefinition(currentConfig.value.skillPath, sessionSkillIds.value);
-          if (skillToolDef) {
-            activeTools.push(skillToolDef);
+          const runtimeSkillPath = await getRuntimeSkillPath();
+          if (runtimeSkillPath) {
+            const skillToolDef = await window.api.getSkillToolDefinition(runtimeSkillPath, sessionSkillIds.value);
+            if (skillToolDef) {
+              activeTools.push(skillToolDef);
+            }
           }
         } catch (e) {
           console.error("Failed to generate skill tool definition:", e);
@@ -4929,8 +4948,9 @@ const askAI = async (forceSend = false) => {
                   apiType: apiType
                 };
 
+                const runtimeSkillPath = await getRuntimeSkillPath();
                 toolContent = await window.api.resolveSkillInvocation(
-                  currentConfig.value.skillPath,
+                  runtimeSkillPath,
                   toolArgs.skill,
                   toolArgs,
                   executionContext,

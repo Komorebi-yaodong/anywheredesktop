@@ -615,7 +615,14 @@ handleInvoke('mcp:closeClient', async () => {
 
   handleInvoke('skill:getToolDefinition', async (_event, skillRootPath = '', enabledSkillNames = []) => {
     const allSkills = skillApi.listSkills(skillRootPath)
-    const activeSkills = allSkills.filter((skill) => enabledSkillNames.includes(skill.name))
+    const normalizedEnabledSkillNames = Array.isArray(enabledSkillNames)
+      ? enabledSkillNames.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+    const activeSkills = allSkills.filter(
+      (skill) =>
+        normalizedEnabledSkillNames.includes(String(skill?.name || '').trim()) ||
+        normalizedEnabledSkillNames.includes(String(skill?.id || '').trim())
+    )
 
     if (activeSkills.length === 0) {
       return null

@@ -1809,41 +1809,22 @@ html.dark .ai-bubble :deep(.el-thinking .content pre) {
   width: 100%;
   border: none;
   background: transparent;
-  box-shadow: none;
-  overflow: visible;
-  --el-collapse-border-color: transparent;
   --el-collapse-header-height: 38px;
 
   :deep(.el-collapse-item) {
-    border: none !important;
-    background: transparent;
-    box-shadow: none !important;
-    overflow: visible;
+    border: none;
   }
 
   :deep(.el-collapse-item__header) {
-    position: relative;
-    z-index: 1;
-    background-color: var(--el-fill-color-light) !important;
-    border: 1px solid var(--el-border-color-lighter) !important;
-    border-radius: var(--bubble-radius) !important;
+    background-color: var(--el-fill-color-light);
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: var(--bubble-radius);
     padding: 0 12px;
     font-size: 13px;
     line-height: 1;
-    box-shadow: none !important;
+    box-shadow: none;
     background-clip: padding-box;
-    overflow: hidden;
     transition: border-radius 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
-  }
-
-  :deep(.el-collapse-item__header::before),
-  :deep(.el-collapse-item__header::after),
-  :deep(.el-collapse-item::before),
-  :deep(.el-collapse-item::after),
-  :deep(.el-collapse-item__wrap::before),
-  :deep(.el-collapse-item__wrap::after) {
-    display: none !important;
-    box-shadow: none !important;
   }
 
   :deep(.el-collapse-item__arrow) {
@@ -1851,33 +1832,29 @@ html.dark .ai-bubble :deep(.el-thinking .content pre) {
   }
 
   :deep(.el-collapse-item__wrap) {
-    position: relative;
-    z-index: 0;
-    background-color: transparent !important;
-    border: 1px solid var(--el-border-color-lighter) !important;
-    border-top: none !important;
-    border-bottom-left-radius: var(--bubble-radius) !important;
-    border-bottom-right-radius: var(--bubble-radius) !important;
-    box-shadow: none !important;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
     overflow: hidden;
   }
 
   :deep(.el-collapse-item__content) {
     padding: 12px;
-    background: transparent;
-    box-shadow: none;
   }
 
   :deep(.el-collapse-item.is-active > .el-collapse-item__header) {
-    border-bottom-left-radius: 0 !important;
-    border-bottom-right-radius: 0 !important;
-    border-bottom-color: transparent !important;
-    box-shadow: none !important;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-color: transparent;
   }
 
   :deep(.el-collapse-item.is-active > .el-collapse-item__wrap) {
-    background-color: color-mix(in srgb, var(--el-fill-color-lighter) 78%, transparent) !important;
-    box-shadow: none !important;
+    background-color: color-mix(in srgb, var(--el-fill-color-lighter) 78%, transparent);
+    border: 1px solid var(--el-border-color-lighter);
+    border-top: none;
+    border-bottom-left-radius: var(--bubble-radius);
+    border-bottom-right-radius: var(--bubble-radius);
   }
 }
 

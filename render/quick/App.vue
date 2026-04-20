@@ -944,7 +944,9 @@ onBeforeUnmount(() => {
           type="button"
           @click="restoreSession(candidate)"
         >
-          ↺ {{ candidate.fileName }}
+          <span class="restore-chip-badge">恢复会话</span>
+          <span class="restore-chip-icon">↺</span>
+          <span class="restore-chip-name">{{ candidate.fileName }}</span>
         </button>
       </div>
 
@@ -1187,22 +1189,76 @@ html.dark .recommend-title {
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   overflow: hidden;
 }
 
 .restore-chip {
   border: none;
+  min-height: 34px;
+  max-width: 320px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border-radius: 999px;
-  padding: 5px 9px;
-  background: rgba(242, 245, 249, 0.96);
-  color: #4e4e59;
+  padding: 5px 12px 5px 8px;
+  background: rgba(242, 245, 249, 0.98);
+  color: #2f3441;
   cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.restore-chip:hover {
+  background: rgba(234, 239, 245, 1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.restore-chip-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.restore-chip-icon {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: #475467;
+}
+
+.restore-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 html.dark .restore-chip {
-  background: rgba(44, 47, 55, 0.94);
+  background: rgba(44, 47, 55, 0.96);
   color: #ececf0;
+}
+
+html.dark .restore-chip:hover {
+  background: rgba(52, 56, 65, 0.98);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
+}
+
+html.dark .restore-chip-badge {
+  background: rgba(96, 165, 250, 0.18);
+  color: #93c5fd;
+}
+
+html.dark .restore-chip-icon {
+  color: #c7ced9;
 }
 
 .grid-wrap {

@@ -1012,6 +1012,47 @@ const getRuntimeSkillPath = async () => {
   }
 };
 
+const normalizeSkillSelectionToNames = (skillSelection = [], availableSkills = []) => {
+  const normalizedSelection = Array.isArray(skillSelection)
+    ? skillSelection.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+
+  if (normalizedSelection.length === 0) return [];
+
+  const skillNameSet = new Set();
+  const skillMap = new Map();
+
+  (Array.isArray(availableSkills) ? availableSkills : []).forEach((skill) => {
+    const normalizedName = String(skill?.name || '').trim();
+    const normalizedId = String(skill?.id || '').trim();
+    if (normalizedName) {
+      skillMap.set(normalizedName, normalizedName);
+      skillNameSet.add(normalizedName);
+    }
+    if (normalizedId && normalizedName) {
+      skillMap.set(normalizedId, normalizedName);
+    }
+  });
+
+  const resolved = [];
+  normalizedSelection.forEach((item) => {
+    const mappedName = skillMap.get(item) || item;
+    if (mappedName && !resolved.includes(mappedName)) {
+      resolved.push(mappedName);
+    }
+  });
+
+  return resolved.filter((name) => !skillNameSet.size || skillNameSet.has(name));
+};
+
+const applyNormalizedSkillSelection = (skillSelection = [], availableSkills = allSkillsList.value) => {
+  const normalizedSkillNames = normalizeSkillSelectionToNames(skillSelection, availableSkills);
+  sessionSkillIds.value = [...normalizedSkillNames];
+  tempSessionSkillIds.value = [...normalizedSkillNames];
+  return normalizedSkillNames;
+};
+
+
 
 const toggleSkillDialog = async () => {
   if (!isSkillDialogVisible.value) {
@@ -1042,18 +1083,7 @@ const fetchSkillsList = async () => {
   try {
     const skills = await window.api.listSkills(path);
     allSkillsList.value = skills.filter(s => !s.disabled).sort((a, b) => a.name.localeCompare(b.name));
-
-    const validSkillNames = allSkillsList.value.map(s => s.name);
-
-    const validSessionSkills = sessionSkillIds.value.filter(name => validSkillNames.includes(name));
-    if (validSessionSkills.length !== sessionSkillIds.value.length) {
-      sessionSkillIds.value = validSessionSkills;
-    }
-
-    const validTempSkills = tempSessionSkillIds.value.filter(name => validSkillNames.includes(name));
-    if (validTempSkills.length !== tempSessionSkillIds.value.length) {
-      tempSessionSkillIds.value = validTempSkills;
-    }
+    applyNormalizedSkillSelection(sessionSkillIds.value, allSkillsList.value);
   } catch (e) {
     console.error("Fetch skills failed:", e);
   }
@@ -2134,8 +2164,7 @@ onMounted(async () => {
     }
 
     if (currentPromptConfig.defaultSkills && Array.isArray(currentPromptConfig.defaultSkills)) {
-      sessionSkillIds.value = [...currentPromptConfig.defaultSkills];
-      tempSessionSkillIds.value = [...currentPromptConfig.defaultSkills];
+      applyNormalizedSkillSelection(currentPromptConfig.defaultSkills);
     } else {
       sessionSkillIds.value = [];
       tempSessionSkillIds.value = [];
@@ -2159,8 +2188,7 @@ onMounted(async () => {
           tempSessionMcpServerIds.value = [...data.taskConfig.extraMcp];
         }
         if (data.taskConfig.extraSkills) {
-          sessionSkillIds.value = [...data.taskConfig.extraSkills];
-          tempSessionSkillIds.value = [...data.taskConfig.extraSkills];
+          applyNormalizedSkillSelection(data.taskConfig.extraSkills);
         }
 
         // 将任务内容直接作为用户的输入，压入历史记录，而不是放到输入框
@@ -3911,8 +3939,7 @@ const loadSession = async (jsonData) => {
     model.value = restoredModel;
 
     if (jsonData.activeSkillIds && Array.isArray(jsonData.activeSkillIds)) {
-      sessionSkillIds.value = [...jsonData.activeSkillIds];
-      tempSessionSkillIds.value = [...jsonData.activeSkillIds];
+      applyNormalizedSkillSelection(jsonData.activeSkillIds);
     } else {
       sessionSkillIds.value = [];
       tempSessionSkillIds.value = [];
@@ -4600,8 +4627,20 @@ const askAI = async (forceSend = false) => {
       if (sessionSkillIds.value.length > 0) {
         try {
           const runtimeSkillPath = await getRuntimeSkillPath();
+          console.log('[Skill Debug][window:before-getToolDefinition]', {
+            code: CODE.value,
+            runtimeSkillPath,
+            sessionSkillIds: [...sessionSkillIds.value],
+            builtinToolNames: activeTools.map((tool) => tool?.function?.name || tool?.name || '')
+          });
           if (runtimeSkillPath) {
             const skillToolDef = await window.api.getSkillToolDefinition(runtimeSkillPath, sessionSkillIds.value);
+            console.log('[Skill Debug][window:getToolDefinition:result]', {
+              runtimeSkillPath,
+              requestedSkills: [...sessionSkillIds.value],
+              skillToolName: skillToolDef?.function?.name || skillToolDef?.name || '',
+              skillEnum: skillToolDef?.function?.parameters?.properties?.skill?.enum || []
+            });
             if (skillToolDef) {
               activeTools.push(skillToolDef);
             }
@@ -4610,6 +4649,12 @@ const askAI = async (forceSend = false) => {
           console.error("Failed to generate skill tool definition:", e);
         }
       }
+
+      console.log('[Skill Debug][window:request-tools]', {
+        code: CODE.value,
+        finalSkillNames: [...sessionSkillIds.value],
+        toolNames: activeTools.map((tool) => tool?.function?.name || tool?.name || '')
+      });
 
       if (activeTools.length > 0) {
         requestParams.tools = activeTools;
@@ -4949,6 +4994,11 @@ const askAI = async (forceSend = false) => {
                 };
 
                 const runtimeSkillPath = await getRuntimeSkillPath();
+                console.log('[Skill Debug][window:resolveSkillInvocation:before]', {
+                  runtimeSkillPath,
+                  requestedSkill: toolArgs.skill,
+                  sessionSkillIds: [...sessionSkillIds.value]
+                });
                 toolContent = await window.api.resolveSkillInvocation(
                   runtimeSkillPath,
                   toolArgs.skill,

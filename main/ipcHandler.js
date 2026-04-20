@@ -624,6 +624,13 @@ handleInvoke('mcp:closeClient', async () => {
         normalizedEnabledSkillNames.includes(String(skill?.id || '').trim())
     )
 
+    console.log('[Skill Debug][main:getToolDefinition]', {
+      skillRootPath,
+      enabledSkillNames: normalizedEnabledSkillNames,
+      allSkills: allSkills.map((skill) => ({ id: skill?.id || '', name: skill?.name || '' })),
+      activeSkills: activeSkills.map((skill) => ({ id: skill?.id || '', name: skill?.name || '' }))
+    })
+
     if (activeSkills.length === 0) {
       return null
     }

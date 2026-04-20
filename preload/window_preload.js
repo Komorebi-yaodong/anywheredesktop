@@ -386,7 +386,7 @@ const api = {
   deleteSkill: (skillRootPath = '', skillId = '') => invokeOrThrow('skill:delete', skillRootPath, skillId),
   exportSkillToPackage: (skillRootPath = '', skillId = '', outputDir = '') => invokeOrThrow('skill:exportPackage', skillRootPath, skillId, outputDir),
   extractSkillPackage: (filePath = '') => invokeOrThrow('skill:extractPackage', filePath),
-  getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) => invokeOrThrow('skill:getToolDefinition', skillRootPath, enabledSkillNames),
+  getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) => invokeOrThrow('skill:getToolDefinition', skillRootPath, toPlainPayload(enabledSkillNames) || []),
   resolveSkillInvocation: async (skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null, signal = null) => {
     const signalToken = registerSignal(signal)
     const callbackToken = registerCallback(globalContext?.onUpdate)

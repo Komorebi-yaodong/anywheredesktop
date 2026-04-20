@@ -146,7 +146,7 @@ const api = {
   extractSkillPackage: (filePath = '') =>
     invokeOrThrow('skill:extractPackage', filePath),
   getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) =>
-    invokeOrThrow('skill:getToolDefinition', skillRootPath, enabledSkillNames),
+    invokeOrThrow('skill:getToolDefinition', skillRootPath, toPlainPayload(enabledSkillNames) || []),
   resolveSkillInvocation: (skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null) =>
     invokeOrThrow(
       'skill:resolveInvocation',

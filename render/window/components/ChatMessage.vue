@@ -1843,7 +1843,15 @@ html.dark .ai-bubble :deep(.el-thinking .content pre) {
     padding: 12px;
   }
 
-  :deep(.el-collapse-item.is-active > .el-collapse-item__header) {
+  :deep(.el-collapse-item:not(.is-active) > .el-collapse-item__header),
+  :deep(.el-collapse-item__header:not(.is-active)) {
+    border-bottom-left-radius: var(--bubble-radius);
+    border-bottom-right-radius: var(--bubble-radius);
+    border-bottom-color: var(--el-border-color-lighter);
+  }
+
+  :deep(.el-collapse-item.is-active > .el-collapse-item__header),
+  :deep(.el-collapse-item__header.is-active) {
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
     border-bottom-color: transparent;

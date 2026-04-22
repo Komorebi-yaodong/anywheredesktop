@@ -882,9 +882,6 @@ foreach ($win in $shell.Windows()) {
   } catch {}
 }
 $target = $windows | Where-Object { $_.hwnd -eq $foregroundHwnd } | Select-Object -First 1;
-if ($null -eq $target -or @($target.filePaths).Count -eq 0) {
-  $target = $windows | Where-Object { @($_.filePaths).Count -gt 0 } | Sort-Object selectedCount -Descending | Select-Object -First 1;
-}
 @{
   foregroundHwnd = $foregroundHwnd
   windows = @($windows)

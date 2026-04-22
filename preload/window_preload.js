@@ -339,7 +339,7 @@ const api = {
     return result?.cache || result || {}
   },
   saveMcpToolCache: (serverId, tools = []) => electronAPI.ipcRenderer.invoke('mcp:saveToolCache', serverId, toPlainPayload(tools) || []),
-  initializeMcpClient: (activeServerConfigs = {}) => electronAPI.ipcRenderer.invoke('mcp:initializeClient', toPlainPayload(activeServerConfigs) || {}),
+  initializeMcpClient: (activeServerConfigs = {}, meta = {}) => electronAPI.ipcRenderer.invoke('mcp:initializeClient', toPlainPayload(activeServerConfigs) || {}, toPlainPayload(meta) || {}),
   testMcpConnection: (serverConfig = {}) => electronAPI.ipcRenderer.invoke('mcp:testConnection', toPlainPayload(serverConfig) || {}),
   testInvokeMcpTool: (serverConfig = {}, toolName = '', args = {}) => electronAPI.ipcRenderer.invoke('mcp:testInvokeTool', toPlainPayload(serverConfig) || {}, toolName, toPlainPayload(args) || {}),
   invokeMcpTool: async (toolName = '', toolArgs = {}, signal = null, context = null) => {
@@ -378,7 +378,7 @@ const api = {
       unregisterCallback(callbackToken)
     }
   },
-  closeMcpClient: () => electronAPI.ipcRenderer.invoke('mcp:closeClient'),
+  closeMcpClient: (meta = {}) => electronAPI.ipcRenderer.invoke('mcp:closeClient', toPlainPayload(meta) || {}),
 
   listSkills: (skillRootPath = '') => invokeOrThrow('skill:list', skillRootPath),
   getSkillDetails: (skillRootPath = '', skillId = '') => invokeOrThrow('skill:getDetails', skillRootPath, skillId),

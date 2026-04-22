@@ -868,7 +868,55 @@ const isMcpLoading = ref(false);
 const mcpFilter = ref('all');
 const isRefreshingMcp = ref(false);
 const mcpToolCache = ref({});
+const sessionMcpToolOverrides = ref({});
 const expandedMcpServers = ref(new Set());
+
+const cloneMcpTools = (tools = []) => Array.isArray(tools)
+  ? tools.map(tool => ({ ...tool }))
+  : [];
+
+const getSessionToolList = (serverId) => {
+  const cachedTools = Array.isArray(mcpToolCache.value?.[serverId])
+    ? cloneMcpTools(mcpToolCache.value[serverId])
+    : [];
+  const overrideTools = Array.isArray(sessionMcpToolOverrides.value?.[serverId])
+    ? sessionMcpToolOverrides.value[serverId]
+    : [];
+
+  if (cachedTools.length === 0) {
+    return cloneMcpTools(overrideTools);
+  }
+
+  if (overrideTools.length === 0) {
+    return cachedTools;
+  }
+
+  const overrideStateMap = new Map(
+    overrideTools.map(tool => [tool.name, tool.enabled !== false])
+  );
+
+  return cachedTools.map(tool => overrideStateMap.has(tool.name)
+    ? { ...tool, enabled: overrideStateMap.get(tool.name) }
+    : tool);
+};
+
+const getEffectiveMcpToolCache = () => {
+  const mergedCache = {};
+  const allServerIds = new Set([
+    ...Object.keys(mcpToolCache.value || {}),
+    ...Object.keys(sessionMcpToolOverrides.value || {})
+  ]);
+
+  allServerIds.forEach((serverId) => {
+    const tools = getSessionToolList(serverId);
+    if (Array.isArray(tools) && tools.length > 0) {
+      mergedCache[serverId] = cloneMcpTools(tools);
+    }
+  });
+
+  return mergedCache;
+};
+
 
 const toggleMcpServerExpansion = (serverId) => {
   if (expandedMcpServers.value.has(serverId)) {
@@ -909,7 +957,7 @@ const refreshSelectedMcpServers = async () => {
     }
   }
 
-  // 刷新完毕后，重新拉取最新的缓存以渲染 UI
+  // 刷新完毕后，重新拉取最新的全局缓存；当前窗口 override 继续保留，不做广播
   mcpToolCache.value = await window.api.getMcpToolCache() || {};
   isRefreshingMcp.value = false;
 
@@ -922,37 +970,26 @@ const refreshSelectedMcpServers = async () => {
   }
 };
 
-// 切换具体工具的启用状态
+// 切换具体工具的启用状态（仅当前会话生效，不写入全局缓存，避免广播风暴）
 const handleMcpToolStatusChange = async (serverId, toolName, enabled) => {
-  if (!mcpToolCache.value[serverId]) return;
+  const currentTools = cloneMcpTools(getSessionToolList(serverId));
+  if (!currentTools.length) return;
 
-  // 更新本地视图状态
-  const tools = mcpToolCache.value[serverId];
-  const toolIndex = tools.findIndex(t => t.name === toolName);
-  if (toolIndex !== -1) {
-    tools[toolIndex].enabled = enabled;
+  const toolIndex = currentTools.findIndex(t => t.name === toolName);
+  if (toolIndex === -1) return;
 
-    // 深拷贝以去除 Vue 响应式代理，准备保存
-    const toolsToSave = JSON.parse(JSON.stringify(tools));
-    try {
-      // 调用 preload API 保存到数据库
-      await window.api.saveMcpToolCache(serverId, toolsToSave);
-      // 静默保存成功
-    } catch (e) {
-      console.error("Failed to save tool status:", e);
-      showDismissibleMessage.error("保存工具状态失败");
-      // 回滚状态
-      tools[toolIndex].enabled = !enabled;
-    }
-  }
+  currentTools[toolIndex].enabled = enabled;
+  sessionMcpToolOverrides.value = {
+    ...sessionMcpToolOverrides.value,
+    [serverId]: currentTools
+  };
 };
 
 const getToolCounts = (serverId) => {
-  const tools = mcpToolCache.value[serverId];
-  if (!tools || !Array.isArray(tools)) return null;
+  const tools = getSessionToolList(serverId);
+  if (!tools || !Array.isArray(tools) || tools.length === 0) return null;
 
   const total = tools.length;
-  // 默认 enabled 为 undefined 时也视为启用
   const enabled = tools.filter(t => t.enabled !== false).length;
 
   return { enabled, total };
@@ -2661,6 +2698,13 @@ const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false
 
   if (immediate || force || delay <= 0) {
     clearScheduledAutoSave();
+  try {
+    const windowSessionKey = String(window.api?.getWindowContext?.()?.senderId || 'global');
+    window.api.closeMcpClient({ sessionKey: windowSessionKey }).catch(() => {});
+  } catch {
+    // ignore MCP session cleanup errors on window destroy
+  }
+
     executeAutoSaveRequest(request);
     return;
   }
@@ -4345,7 +4389,9 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
 
   const activeServerConfigs = {};
   const serverIdsToLoad = [...sessionMcpServerIds.value];
-  console.log('[Window MCP] applying tools', { reason, show_none, serverIdsToLoad });
+  const effectiveToolCache = getEffectiveMcpToolCache();
+  const windowSessionKey = String(window.api?.getWindowContext?.()?.senderId || 'global');
+  console.log('[Window MCP] applying tools', { reason, show_none, serverIdsToLoad, windowSessionKey });
 
   for (const id of serverIdsToLoad) {
     if (currentConfig.value.mcpServers[id]) {
@@ -4359,6 +4405,7 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
         headers: serverConf.headers,
         isPersistent: serverConf.isPersistent,
         currentAgentName: CODE.value || '',
+        toolCacheOverride: effectiveToolCache[id] || undefined,
       };
     }
   }
@@ -4368,7 +4415,7 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
       openaiFormattedTools: newFormattedTools,
       successfulServerIds,
       failedServerIds
-    } = await window.api.initializeMcpClient(activeServerConfigs);
+    } = await window.api.initializeMcpClient(activeServerConfigs, { sessionKey: windowSessionKey });
 
     openaiFormattedTools.value = newFormattedTools;
     sessionMcpServerIds.value = successfulServerIds;
@@ -5877,8 +5924,8 @@ const scrollToMessageByIndex = (index) => {
 
           <!-- 折叠的工具列表区域 (保持不变) -->
           <div v-if="expandedMcpServers.has(server.id)" class="mcp-tools-panel" @click.stop>
-            <template v-if="mcpToolCache[server.id] && mcpToolCache[server.id].length > 0">
-              <div v-for="tool in mcpToolCache[server.id]" :key="tool.name" class="mcp-tool-row">
+            <template v-if="getSessionToolList(server.id) && getSessionToolList(server.id).length > 0">
+              <div v-for="tool in getSessionToolList(server.id)" :key="tool.name" class="mcp-tool-row">
                 <el-switch :model-value="tool.enabled !== false" size="small"
                   @change="(val) => handleMcpToolStatusChange(server.id, tool.name, val)" />
                 <div class="mcp-tool-info">

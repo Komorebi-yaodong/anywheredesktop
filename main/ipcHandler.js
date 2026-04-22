@@ -472,7 +472,7 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
     return dataApi.saveMcpToolCache(serverId, tools)
   })
 
-  handleInvoke('mcp:initializeClient', async (_event, activeServerConfigs = {}) => {
+  handleInvoke('mcp:initializeClient', async (event, activeServerConfigs = {}, meta = {}) => {
     let cache = {}
 
     try {
@@ -481,7 +481,12 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
       console.error('[IPC] Failed to read MCP cache, fallback to empty cache:', error)
     }
 
-    return mcpApi.initializeMcpClient(activeServerConfigs, cache, dataApi.saveMcpToolCache)
+    const senderId = BrowserWindow.fromWebContents(event.sender)?.id || event.sender?.id || null
+    const sessionKey = typeof meta?.sessionKey === 'string' && meta.sessionKey.trim()
+      ? meta.sessionKey.trim()
+      : (senderId ? String(senderId) : 'global')
+
+    return mcpApi.initializeMcpClient(activeServerConfigs, cache, dataApi.saveMcpToolCache, { sessionKey })
   })
 
   handleInvoke('mcp:testConnection', async (_event, serverConfig = {}) => {
@@ -580,8 +585,12 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
   })
 
 
-handleInvoke('mcp:closeClient', async () => {
-    return mcpApi.closeMcpClient()
+handleInvoke('mcp:closeClient', async (event, meta = {}) => {
+    const senderId = BrowserWindow.fromWebContents(event.sender)?.id || event.sender?.id || null
+    const sessionKey = typeof meta?.sessionKey === 'string' && meta.sessionKey.trim()
+      ? meta.sessionKey.trim()
+      : (senderId ? String(senderId) : 'global')
+    return mcpApi.closeMcpClient({ sessionKey })
   })
 
 

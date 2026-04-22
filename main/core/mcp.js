@@ -1,10 +1,7 @@
 import { MultiServerMCPClient } from '@langchain/mcp-adapters'
 import { getBuiltinTools, invokeBuiltinTool } from './mcp_builtin.js'
 
-
-const persistentClients = new Map()
-const fullToolInfoMap = new Map()
-const currentlyConnectedServerIds = new Set()
+const sessionRuntimes = new Map()
 const inFlightToolFetchMap = new Map()
 
 function normalizeTransportType(transport = '') {
@@ -13,6 +10,50 @@ function normalizeTransportType(transport = '') {
     return 'http'
   }
   return transport
+}
+
+function getSessionKey(sessionKey = 'global') {
+  if (typeof sessionKey === 'string' && sessionKey.trim()) {
+    return sessionKey.trim()
+  }
+  return 'global'
+}
+
+function createSessionRuntime() {
+  return {
+    persistentClients: new Map(),
+    fullToolInfoMap: new Map(),
+    currentlyConnectedServerIds: new Set()
+  }
+}
+
+function getSessionRuntime(sessionKey = 'global', createIfMissing = true) {
+  const normalizedKey = getSessionKey(sessionKey)
+  if (!sessionRuntimes.has(normalizedKey) && createIfMissing) {
+    sessionRuntimes.set(normalizedKey, createSessionRuntime())
+  }
+  return sessionRuntimes.get(normalizedKey)
+}
+
+async function teardownSessionRuntime(sessionKey = 'global') {
+  const normalizedKey = getSessionKey(sessionKey)
+  const runtime = getSessionRuntime(normalizedKey, false)
+  if (!runtime) return
+
+  if (runtime.persistentClients.size > 0) {
+    for (const client of runtime.persistentClients.values()) {
+      try {
+        await client.close()
+      } catch {
+        // ignore close errors
+      }
+    }
+  }
+
+  runtime.persistentClients.clear()
+  runtime.fullToolInfoMap.clear()
+  runtime.currentlyConnectedServerIds.clear()
+  sessionRuntimes.delete(normalizedKey)
 }
 
 /**
@@ -49,7 +90,8 @@ function preprocessStdioConfig(config = {}) {
 }
 
 function buildServerConfig(id, config = {}) {
-  const preprocessed = preprocessStdioConfig(config)
+  const { toolCacheOverride, ...rawConfig } = config || {}
+  const preprocessed = preprocessStdioConfig(rawConfig)
   const resolvedTransport = preprocessed.transport || preprocessed.type || ''
   return {
     id,
@@ -57,7 +99,6 @@ function buildServerConfig(id, config = {}) {
     transport: normalizeTransportType(resolvedTransport)
   }
 }
-
 
 function sanitizeToolsForCache(tools = [], oldToolsCache = []) {
   return tools.map((tool) => {
@@ -79,6 +120,18 @@ function getToolEnabledState(cachedToolsMap, serverId, toolName) {
   return true
 }
 
+function getEffectiveToolsMap(activeServerConfigs = {}, cachedToolsMap = {}) {
+  const effectiveToolsMap = { ...(cachedToolsMap || {}) }
+
+  for (const [id, config] of Object.entries(activeServerConfigs || {})) {
+    if (Array.isArray(config?.toolCacheOverride)) {
+      effectiveToolsMap[id] = JSON.parse(JSON.stringify(config.toolCacheOverride))
+    }
+  }
+
+  return effectiveToolsMap
+}
+
 function saveToolCache(saveCacheCallback, id, tools, cachedToolsMap = {}, options = {}) {
   if (typeof saveCacheCallback !== 'function') return
 
@@ -93,7 +146,6 @@ function saveToolCache(saveCacheCallback, id, tools, cachedToolsMap = {}, option
     console.error(`[MCP] Auto-cache failed for ${id}:`, error)
   })
 }
-
 
 function getToolFetchKey(id, config = {}) {
   const normalizedConfig = {
@@ -112,20 +164,20 @@ function getToolFetchKey(id, config = {}) {
   return JSON.stringify(normalizedConfig)
 }
 
-function registerToolsToMap({ id, config, tools, isPersistent, isBuiltin, cachedToolsMap = {}, includeInstance = false }) {
+function registerToolsToMap(runtime, { id, config, tools, isPersistent, isBuiltin, enabledToolsMap = {}, includeInstance = false }) {
   for (const tool of tools) {
-    fullToolInfoMap.set(tool.name, {
+    runtime.fullToolInfoMap.set(tool.name, {
       instance: includeInstance ? tool : undefined,
       schema: tool.schema || tool.inputSchema,
       description: tool.description,
       isPersistent,
       serverConfig: { id, ...config },
       isBuiltin,
-      enabled: getToolEnabledState(cachedToolsMap, id, tool.name)
+      enabled: getToolEnabledState(enabledToolsMap, id, tool.name)
     })
   }
 
-  currentlyConnectedServerIds.add(id)
+  runtime.currentlyConnectedServerIds.add(id)
 }
 
 /**
@@ -181,65 +233,39 @@ export async function connectAndFetchTools(id, config = {}) {
 }
 
 /**
- * 增量式初始化/同步 MCP 客户端
+ * 会话级初始化/同步 MCP 客户端
+ * 每次按当前窗口配置全量重建，避免旧工具启用状态残留。
  */
-export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsMap = {}, saveCacheCallback = null) {
-  const newIds = new Set(Object.keys(activeServerConfigs))
-  const oldIds = new Set(currentlyConnectedServerIds)
-
-  const idsToAdd = [...newIds].filter((id) => !oldIds.has(id))
-  const idsToRemove = [...oldIds].filter((id) => !newIds.has(id))
+export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsMap = {}, saveCacheCallback = null, options = {}) {
+  const sessionKey = getSessionKey(options?.sessionKey)
+  await teardownSessionRuntime(sessionKey)
+  const runtime = getSessionRuntime(sessionKey, true)
+  const enabledToolsMap = getEffectiveToolsMap(activeServerConfigs, cachedToolsMap)
   const failedServerIds = []
+  const serverEntries = Object.entries(activeServerConfigs || {})
 
-  // 1) 先移除
-  for (const id of idsToRemove) {
-    if (persistentClients.has(id)) {
-      const client = persistentClients.get(id)
-      try {
-        await client.close()
-      } catch {
-        // ignore close errors
-      }
-      persistentClients.delete(id)
-    }
-
-    for (const [toolName, toolInfo] of fullToolInfoMap.entries()) {
-      if (toolInfo.serverConfig.id === id) {
-        fullToolInfoMap.delete(toolName)
-      }
-    }
-
-    currentlyConnectedServerIds.delete(id)
-  }
-
-  const onDemandConfigsToAdd = idsToAdd
-    .map((id) => ({ id, config: activeServerConfigs[id] }))
+  const onDemandConfigsToAdd = serverEntries
+    .map(([id, config]) => ({ id, config }))
     .filter(({ config }) => config && !config.isPersistent)
 
-  const persistentConfigsToAdd = idsToAdd
-    .map((id) => ({ id, config: activeServerConfigs[id] }))
+  const persistentConfigsToAdd = serverEntries
+    .map(([id, config]) => ({ id, config }))
     .filter(({ config }) => config && config.isPersistent)
 
-  // 2) 非持久：优先缓存
   const onDemandToConnect = []
 
   for (const { id, config } of onDemandConfigsToAdd) {
     const isBuiltin = config.transport === 'builtin' || config.type === 'builtin'
+    const effectiveCachedTools = Array.isArray(enabledToolsMap[id]) ? enabledToolsMap[id] : []
 
-    if (
-      !isBuiltin &&
-      cachedToolsMap &&
-      Array.isArray(cachedToolsMap[id]) &&
-      cachedToolsMap[id].length > 0
-    ) {
-      const cachedTools = cachedToolsMap[id]
-      registerToolsToMap({
+    if (!isBuiltin && effectiveCachedTools.length > 0) {
+      registerToolsToMap(runtime, {
         id,
         config,
-        tools: cachedTools,
+        tools: effectiveCachedTools,
         isPersistent: false,
         isBuiltin: false,
-        cachedToolsMap,
+        enabledToolsMap,
         includeInstance: false
       })
     } else {
@@ -256,13 +282,13 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
           saveToolCache(saveCacheCallback, id, tools, cachedToolsMap, { emitEvent: false, reason: 'auto-bootstrap' })
 
           const isBuiltin = config.transport === 'builtin' || config.type === 'builtin'
-          registerToolsToMap({
+          registerToolsToMap(runtime, {
             id,
             config,
             tools,
             isPersistent: false,
             isBuiltin,
-            cachedToolsMap,
+            enabledToolsMap,
             includeInstance: false
           })
         } catch (error) {
@@ -277,7 +303,6 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
     await Promise.all(allTasks)
   }
 
-  // 3) 持久连接
   if (persistentConfigsToAdd.length > 0) {
     for (const { id, config } of persistentConfigsToAdd) {
       if (config.transport === 'builtin' || config.type === 'builtin') {
@@ -285,13 +310,13 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
           const tools = await getBuiltinTools(id, { configPrompts: config?.prompts, currentAgentName: config?.currentAgentName })
           saveToolCache(saveCacheCallback, id, tools, cachedToolsMap, { emitEvent: false, reason: 'auto-bootstrap' })
 
-          registerToolsToMap({
+          registerToolsToMap(runtime, {
             id,
             config,
             tools,
             isPersistent: true,
             isBuiltin: true,
-            cachedToolsMap,
+            enabledToolsMap,
             includeInstance: false
           })
         } catch (error) {
@@ -309,22 +334,22 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
 
         saveToolCache(saveCacheCallback, id, tools, cachedToolsMap, { emitEvent: false, reason: 'auto-bootstrap' })
 
-        registerToolsToMap({
+        registerToolsToMap(runtime, {
           id,
           config,
           tools,
           isPersistent: true,
           isBuiltin: false,
-          cachedToolsMap,
+          enabledToolsMap,
           includeInstance: true
         })
 
-        persistentClients.set(id, client)
+        runtime.persistentClients.set(id, client)
       } catch (error) {
         console.error(`[MCP Debug] Failed to connect to persistent server ${id}:`, error)
         failedServerIds.push(id)
 
-        const client = persistentClients.get(id)
+        const client = runtime.persistentClients.get(id)
         if (client) {
           try {
             await client.close()
@@ -332,22 +357,25 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
             // ignore close errors
           }
         }
-        persistentClients.delete(id)
+        runtime.persistentClients.delete(id)
       }
     }
   }
 
   return {
-    openaiFormattedTools: buildOpenaiFormattedTools(),
-    successfulServerIds: [...currentlyConnectedServerIds],
+    openaiFormattedTools: buildOpenaiFormattedTools(sessionKey),
+    successfulServerIds: [...runtime.currentlyConnectedServerIds],
     failedServerIds
   }
 }
 
-function buildOpenaiFormattedTools() {
+function buildOpenaiFormattedTools(sessionKey = 'global') {
+  const runtime = getSessionRuntime(sessionKey, false)
+  if (!runtime) return []
+
   const formattedTools = []
 
-  for (const [toolName, toolInfo] of fullToolInfoMap.entries()) {
+  for (const [toolName, toolInfo] of runtime.fullToolInfoMap.entries()) {
     if (toolInfo.schema && toolInfo.enabled !== false) {
       formattedTools.push({
         type: 'function',
@@ -367,7 +395,9 @@ function buildOpenaiFormattedTools() {
  * 统一工具调用入口
  */
 export async function invokeMcpTool(toolName, toolArgs, signal, context = null) {
-  const toolInfo = fullToolInfoMap.get(toolName)
+  const sessionKey = getSessionKey(context?.senderId)
+  const runtime = getSessionRuntime(sessionKey, false)
+  const toolInfo = runtime?.fullToolInfoMap.get(toolName)
 
   if (!toolInfo) {
     try {
@@ -488,16 +518,8 @@ export async function connectAndInvokeTool(id, config, toolName, toolArgs, conte
   }
 }
 
-export async function closeMcpClient() {
-  if (persistentClients.size > 0) {
-    for (const client of persistentClients.values()) {
-      await client.close()
-    }
-    persistentClients.clear()
-  }
-
-  fullToolInfoMap.clear()
-  currentlyConnectedServerIds.clear()
-
-  return { ok: true }
+export async function closeMcpClient(options = {}) {
+  const sessionKey = getSessionKey(typeof options === 'string' ? options : options?.sessionKey)
+  await teardownSessionRuntime(sessionKey)
+  return { ok: true, sessionKey }
 }

@@ -362,6 +362,28 @@ export async function probeFilePathSupport(filePath = '') {
 
   const resolvedPath = path.resolve(filePath.trim())
   const fileName = path.basename(resolvedPath)
+
+  try {
+    const stat = await fs.stat(resolvedPath)
+    if (!stat.isFile()) {
+      return {
+        supported: false,
+        reason: 'is_directory',
+        fileName,
+        extension: '',
+        isDirectory: true
+      }
+    }
+  } catch (error) {
+    return {
+      supported: false,
+      reason: 'probe_failed',
+      fileName,
+      extension: getExtension(fileName),
+      error: error?.message || String(error)
+    }
+  }
+
   const extension = getExtension(fileName)
 
   if (!extension || UNSUPPORTED_BINARY_EXTENSIONS.includes(extension)) {

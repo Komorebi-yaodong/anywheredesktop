@@ -442,13 +442,29 @@ function resolveLatestKind(preferredKinds = ['files', 'image', 'text']) {
     .sort((a, b) => b.timestamp - a.timestamp)[0]?.kind || 'empty'
 }
 
+function filterRegularFilePaths(paths = []) {
+  return (Array.isArray(paths) ? paths : [])
+    .map((item) => path.normalize(String(item || '')).trim())
+    .filter(Boolean)
+    .filter((item) => {
+      try {
+        return fs.statSync(item).isFile()
+      } catch {
+        return false
+      }
+    })
+}
+
+
 function buildClipboardPayloadFromKind(kind = 'empty', source = 'clipboard', formats = []) {
-  const finalKind = kind === 'files' ? 'files' : kind === 'image' ? 'img' : kind === 'text' ? 'over' : 'empty'
-  const timestamp = kind === 'files'
+  const filteredFilePaths = kind === 'files' ? filterRegularFilePaths(clipboardTimeline.files.value) : []
+  const effectiveKind = kind === 'files' && filteredFilePaths.length === 0 ? 'empty' : kind
+  const finalKind = effectiveKind === 'files' ? 'files' : effectiveKind === 'image' ? 'img' : effectiveKind === 'text' ? 'over' : 'empty'
+  const timestamp = effectiveKind === 'files'
     ? clipboardTimeline.files.timestamp
-    : kind === 'image'
+    : effectiveKind === 'image'
       ? clipboardTimeline.image.timestamp
-      : kind === 'text'
+      : effectiveKind === 'text'
         ? clipboardTimeline.text.timestamp
         : 0
   const ageMs = timestamp > 0 ? Math.max(0, Date.now() - timestamp) : Number.POSITIVE_INFINITY
@@ -456,12 +472,12 @@ function buildClipboardPayloadFromKind(kind = 'empty', source = 'clipboard', for
   return {
     ok: true,
     kind: finalKind,
-    text: kind === 'text' ? clipboardTimeline.text.value : '',
-    imageDataUrl: kind === 'image' ? clipboardTimeline.image.value : '',
-    filePaths: kind === 'files' ? [...clipboardTimeline.files.value] : [],
-    hasText: kind === 'text' && Boolean(clipboardTimeline.text.value?.trim()),
-    hasImage: kind === 'image' && Boolean(clipboardTimeline.image.value),
-    hasFiles: kind === 'files' && clipboardTimeline.files.value.length > 0,
+    text: effectiveKind === 'text' ? clipboardTimeline.text.value : '',
+    imageDataUrl: effectiveKind === 'image' ? clipboardTimeline.image.value : '',
+    filePaths: effectiveKind === 'files' ? filteredFilePaths : [],
+    hasText: effectiveKind === 'text' && Boolean(clipboardTimeline.text.value?.trim()),
+    hasImage: effectiveKind === 'image' && Boolean(clipboardTimeline.image.value),
+    hasFiles: effectiveKind === 'files' && filteredFilePaths.length > 0,
     formats,
     timestamp,
     ageMs,
@@ -866,13 +882,14 @@ export async function captureQuickPayload() {
   const explorerSelectionStateResult = updateExplorerSelectionState(explorerSelection, {
     primeOnly: !explorerSelectionState.signature
   })
-  if (explorerSelectionStateResult.isFresh && explorerSelectionStateResult.filePaths.length > 0) {
+  const explorerSelectionFiles = filterRegularFilePaths(explorerSelectionStateResult.filePaths)
+  if (explorerSelectionStateResult.isFresh && explorerSelectionFiles.length > 0) {
     return {
       ok: true,
       kind: 'files',
       text: '',
       imageDataUrl: '',
-      filePaths: explorerSelectionStateResult.filePaths,
+      filePaths: explorerSelectionFiles,
       hasText: false,
       hasImage: false,
       hasFiles: true,
@@ -889,13 +906,14 @@ export async function captureQuickPayload() {
   const clipboardFileDropStateResult = updateClipboardFileDropState(clipboardPowerShellFiles, {
     primeOnly: !clipboardFileDropState.signature
   })
-  if (clipboardFileDropStateResult.isFresh && clipboardFileDropStateResult.filePaths.length > 0) {
+  const clipboardDropFiles = filterRegularFilePaths(clipboardFileDropStateResult.filePaths)
+  if (clipboardFileDropStateResult.isFresh && clipboardDropFiles.length > 0) {
     return {
       ok: true,
       kind: 'files',
       text: '',
       imageDataUrl: '',
-      filePaths: clipboardFileDropStateResult.filePaths,
+      filePaths: clipboardDropFiles,
       hasText: false,
       hasImage: false,
       hasFiles: true,

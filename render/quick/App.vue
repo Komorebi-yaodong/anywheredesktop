@@ -262,7 +262,9 @@ async function filterSupportedFilePaths(paths = []) {
     try {
       const probe = await window.api.probeFilePathSupport?.(filePath)
       if (probe?.supported === false) {
-        ElMessage.warning(`不支持的文件类型: ${fileName}`)
+        if (probe?.reason !== 'is_directory') {
+          ElMessage.warning(`不支持的文件类型: ${fileName}`)
+        }
         continue
       }
       supportedPaths.push(filePath)
@@ -893,7 +895,6 @@ onMounted(async () => {
     ElMessage.error(getErrorMessage(error, '加载配置失败'))
   }
 
-  refreshFromClipboard(true).catch(() => {})
   refreshAppendTargets().catch(() => {})
 
   requestAnimationFrame(() => {

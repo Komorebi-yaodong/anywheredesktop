@@ -169,6 +169,12 @@ export async function copyImage(input = {}) {
 const CLIPBOARD_FRESHNESS_MS = 3000
 const CLIPBOARD_POLL_INTERVAL_MS = 400
 
+const AUXILIARY_SHORTCUT_POLL_INTERVAL_MS = 900
+let auxiliaryShortcutWatcherTimer = null
+let auxiliaryShortcutWatchPrimed = false
+let auxiliaryShortcutPollInFlight = false
+
+
 let clipboardWatcherTimer = null
 const clipboardTimeline = {
   text: { signature: '', timestamp: 0, value: '' },
@@ -493,6 +499,45 @@ function getFreshClipboardPayload(source = 'clipboard', preferredKinds = ['files
   return payload.isFresh ? payload : buildClipboardPayloadFromKind('empty', 'empty', formats)
 }
 
+function buildFreshFilePayloadFromState(filePaths = [], timestamp = 0, source = 'selection', formats = []) {
+  const normalizedFilePaths = filterRegularFilePaths(filePaths)
+  const ageMs = timestamp > 0 ? Math.max(0, Date.now() - timestamp) : Number.POSITIVE_INFINITY
+  if (normalizedFilePaths.length === 0 || ageMs > CLIPBOARD_FRESHNESS_MS) {
+    return null
+  }
+
+  return {
+    ok: true,
+    kind: 'files',
+    text: '',
+    imageDataUrl: '',
+    filePaths: normalizedFilePaths,
+    hasText: false,
+    hasImage: false,
+    hasFiles: true,
+    formats,
+    timestamp,
+    ageMs,
+    freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
+    isFresh: true,
+    source
+  }
+}
+
+function getFreshAuxiliaryFilePayload() {
+  const candidates = [
+    buildFreshFilePayloadFromState(explorerSelectionState.filePaths, explorerSelectionState.timestamp, 'selection', [
+      'foreground-explorer-selection-cache'
+    ]),
+    buildFreshFilePayloadFromState(clipboardFileDropState.filePaths, clipboardFileDropState.timestamp, 'clipboard', [
+      'clipboard-file-drop-cache'
+    ])
+  ].filter(Boolean)
+
+  return candidates.sort((a, b) => b.timestamp - a.timestamp)[0] || null
+}
+
+
 function resolveClipboardImageDataUrlForPayload(payload = null) {
   if (!payload || payload.kind !== 'img' || !payload.hasImage) {
     return payload
@@ -610,6 +655,28 @@ function pollClipboardSnapshot() {
   }
 }
 
+async function pollAuxiliaryShortcutStates(options = {}) {
+  if (auxiliaryShortcutPollInFlight) {
+    return
+  }
+
+  auxiliaryShortcutPollInFlight = true
+  try {
+    const shouldPrimeOnly = options?.primeOnly === true && !auxiliaryShortcutWatchPrimed
+    const [clipboardPowerShellFiles, explorerSelection] = await Promise.all([
+      tryReadClipboardFileDropListViaPowerShell(),
+      tryReadForegroundExplorerSelection()
+    ])
+
+    updateClipboardFileDropState(clipboardPowerShellFiles, { primeOnly: shouldPrimeOnly })
+    updateExplorerSelectionState(explorerSelection, { primeOnly: shouldPrimeOnly })
+    auxiliaryShortcutWatchPrimed = true
+  } finally {
+    auxiliaryShortcutPollInFlight = false
+  }
+}
+
+
 export function startClipboardWatcher() {
   if (clipboardWatcherTimer) {
     return {
@@ -620,8 +687,13 @@ export function startClipboardWatcher() {
   }
 
   primeClipboardWatcherState()
+  void pollAuxiliaryShortcutStates({ primeOnly: true })
   clipboardWatcherTimer = setInterval(pollClipboardSnapshot, CLIPBOARD_POLL_INTERVAL_MS)
   clipboardWatcherTimer.unref?.()
+  auxiliaryShortcutWatcherTimer = setInterval(() => {
+    void pollAuxiliaryShortcutStates()
+  }, AUXILIARY_SHORTCUT_POLL_INTERVAL_MS)
+  auxiliaryShortcutWatcherTimer.unref?.()
 
   return {
     ok: true,
@@ -641,6 +713,10 @@ export function stopClipboardWatcher() {
 
   clearInterval(clipboardWatcherTimer)
   clipboardWatcherTimer = null
+  if (auxiliaryShortcutWatcherTimer) {
+    clearInterval(auxiliaryShortcutWatcherTimer)
+    auxiliaryShortcutWatcherTimer = null
+  }
 
   return {
     ok: true,
@@ -861,7 +937,7 @@ export async function captureQuickPayload() {
   const raw = readClipboardPayloadRaw()
   updateClipboardTimeline(raw)
 
-  let clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
+  const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (clipboardPayload.kind !== 'empty') {
     return resolveClipboardImageDataUrlForPayload({
       ...clipboardPayload,
@@ -869,45 +945,18 @@ export async function captureQuickPayload() {
     })
   }
 
-  await refreshClipboardTimelineFromSequence(raw)
-  clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
-  if (clipboardPayload.kind !== 'empty') {
-    return resolveClipboardImageDataUrlForPayload({
-      ...clipboardPayload,
-      source: 'recent-clipboard'
-    })
+  const auxiliaryFilePayload = getFreshAuxiliaryFilePayload()
+  if (auxiliaryFilePayload) {
+    return auxiliaryFilePayload
   }
 
-  const clipboardDropFiles = filterRegularFilePaths(clipboardFileDropState.filePaths)
-  const clipboardDropAgeMs = clipboardFileDropState.timestamp > 0
-    ? Math.max(0, Date.now() - clipboardFileDropState.timestamp)
-    : Number.POSITIVE_INFINITY
-  if (clipboardDropFiles.length > 0 && clipboardDropAgeMs <= CLIPBOARD_FRESHNESS_MS) {
-    return {
-      ok: true,
-      kind: 'files',
-      text: '',
-      imageDataUrl: '',
-      filePaths: clipboardDropFiles,
-      hasText: false,
-      hasImage: false,
-      hasFiles: true,
-      formats: ['clipboard-file-drop-cached'],
-      timestamp: clipboardFileDropState.timestamp,
-      ageMs: clipboardDropAgeMs,
-      freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
-      isFresh: true,
-      source: 'clipboard'
-    }
-  }
-
-  return resolveClipboardImageDataUrlForPayload(clipboardPayload)
+  return resolveClipboardImageDataUrlForPayload(buildClipboardPayloadFromKind('empty', 'empty', raw.formats))
 }
 
 export async function captureSelectionPayload() {
   const directRaw = readClipboardPayloadRaw()
   updateClipboardTimeline(directRaw)
-  let clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
+  const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
 
   const captured = await tryCaptureSelectionToClipboard()
   if (captured && captured.kind !== 'empty') {
@@ -921,65 +970,31 @@ export async function captureSelectionPayload() {
     })
   }
 
-  await refreshClipboardTimelineFromSequence(directRaw)
-  clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
-  if (clipboardPayload.kind !== 'empty' && clipboardPayload.isFresh) {
-    return resolveClipboardImageDataUrlForPayload({
-      ...clipboardPayload,
-      source: 'recent-clipboard'
-    })
-  }
-
-  const explorerSelection = await tryReadForegroundExplorerSelection()
-  const explorerSelectionStateResult = updateExplorerSelectionState(explorerSelection, {
-    primeOnly: !explorerSelectionState.signature
-  })
-  const explorerSelectionFiles = filterRegularFilePaths(explorerSelectionStateResult.filePaths)
-  if (explorerSelectionStateResult.isFresh && explorerSelectionFiles.length > 0) {
-    return {
-      ok: true,
-      kind: 'files',
-      text: '',
-      imageDataUrl: '',
-      filePaths: explorerSelectionFiles,
-      hasText: false,
-      hasImage: false,
-      hasFiles: true,
-      formats: ['foreground-explorer-selection'],
-      timestamp: explorerSelectionState.timestamp,
-      ageMs: explorerSelectionStateResult.ageMs,
-      freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
-      isFresh: true,
-      source: 'selection'
-    }
-  }
-
-  const clipboardPowerShellFiles = await tryReadClipboardFileDropListViaPowerShell()
-  const clipboardFileDropStateResult = updateClipboardFileDropState(clipboardPowerShellFiles, {
-    primeOnly: !clipboardFileDropState.signature
-  })
-  const clipboardDropFiles = filterRegularFilePaths(clipboardFileDropStateResult.filePaths)
-  if (clipboardFileDropStateResult.isFresh && clipboardDropFiles.length > 0) {
-    return {
-      ok: true,
-      kind: 'files',
-      text: '',
-      imageDataUrl: '',
-      filePaths: clipboardDropFiles,
-      hasText: false,
-      hasImage: false,
-      hasFiles: true,
-      formats: ['clipboard-file-drop-powershell'],
-      timestamp: clipboardFileDropState.timestamp,
-      ageMs: clipboardFileDropStateResult.ageMs,
-      freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
-      isFresh: true,
-      source: 'selection'
-    }
+  const auxiliaryFilePayload = getFreshAuxiliaryFilePayload()
+  if (auxiliaryFilePayload) {
+    return auxiliaryFilePayload
   }
 
   return resolveClipboardImageDataUrlForPayload(buildClipboardPayloadFromKind('empty', 'empty', directRaw.formats))
 }
+
+export async function captureQuickFilePayloadFallback() {
+  const cachedPayload = getFreshAuxiliaryFilePayload()
+  if (cachedPayload) {
+    return cachedPayload
+  }
+
+  const [clipboardPowerShellFiles, explorerSelection] = await Promise.all([
+    tryReadClipboardFileDropListViaPowerShell(),
+    tryReadForegroundExplorerSelection()
+  ])
+
+  updateClipboardFileDropState(clipboardPowerShellFiles, { primeOnly: false })
+  updateExplorerSelectionState(explorerSelection, { primeOnly: false })
+
+  return getFreshAuxiliaryFilePayload() || buildClipboardPayloadFromKind('empty', 'empty', [])
+}
+
 
 export async function readClipboardPayload() {
   const raw = readClipboardPayloadRaw()

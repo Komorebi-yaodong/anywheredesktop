@@ -195,6 +195,19 @@ async function collectQuickPayloadFast() {
   }
 }
 
+async function collectQuickFilePayloadFallback() {
+  try {
+    const result = await systemApi.captureQuickFilePayloadFallback()
+    return buildQuickPayloadFromClipboardResult(result)
+  } catch {
+    return {
+      type: 'empty',
+      payload: '',
+      source: 'empty'
+    }
+  }
+}
+
 
 async function openQuickWindowPreservingMain(payload = null) {
   return openWindow('quick', payload)
@@ -232,8 +245,22 @@ async function triggerQuickSummon() {
   }
 
   const quickPayload = await collectQuickPayloadFast()
-  quickSummonToken += 1
-  return openQuickWindowPreservingMain(quickPayload)
+  const token = ++quickSummonToken
+  const openResult = await openQuickWindowPreservingMain(quickPayload)
+
+  if (quickPayload.type === 'empty') {
+    collectQuickFilePayloadFallback()
+      .then((fallbackPayload) => {
+        if (token !== quickSummonToken) return
+        if (!fallbackPayload || fallbackPayload.type === 'empty') return
+        pushQuickPayloadToVisibleWindow(fallbackPayload)
+      })
+      .catch((error) => {
+        debugMainError('quick:file-fallback-collect-failed', error)
+      })
+  }
+
+  return openResult
 }
 
 async function dispatchShortcutPayloadToWindow(targetWindowId, quickPayload, promptKey = '') {
@@ -292,11 +319,28 @@ async function triggerAppendFollowUpShortcut() {
     }
 
     const quickPayload = await collectQuickPayloadFast()
-    quickSummonToken += 1
-    return openQuickWindowPreservingMain({
+    const token = ++quickSummonToken
+    const openResult = await openQuickWindowPreservingMain({
       ...quickPayload,
       triggerMode: 'append-only'
     })
+
+    if (quickPayload.type === 'empty') {
+      collectQuickFilePayloadFallback()
+        .then((fallbackPayload) => {
+          if (token !== quickSummonToken) return
+          if (!fallbackPayload || fallbackPayload.type === 'empty') return
+          pushQuickPayloadToVisibleWindow({
+            ...fallbackPayload,
+            triggerMode: 'append-only'
+          })
+        })
+        .catch((error) => {
+          debugMainError('append-shortcut:file-fallback-collect-failed', error)
+        })
+    }
+
+    return openResult
   } catch (error) {
     debugMainError('shortcut:append-follow-up-failed', error)
     return { ok: false, reason: 'append_follow_up_failed', error: error?.message || String(error) }

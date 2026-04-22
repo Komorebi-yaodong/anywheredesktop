@@ -175,6 +175,89 @@ let auxiliaryShortcutWatchPrimed = false
 let auxiliaryShortcutPollInFlight = false
 
 
+
+let latestShortcutPayloadContext = {
+  contextId: '',
+  timestamp: 0,
+  status: 'expired',
+  kind: 'empty',
+  source: 'empty',
+  text: '',
+  imageDataUrl: '',
+  filePaths: [],
+  formats: []
+}
+
+function resetShortcutPayloadContext(status = 'expired') {
+  latestShortcutPayloadContext = {
+    contextId: '',
+    timestamp: 0,
+    status,
+    kind: 'empty',
+    source: 'empty',
+    text: '',
+    imageDataUrl: '',
+    filePaths: [],
+    formats: []
+  }
+}
+
+function storeShortcutPayloadContext(payload = null) {
+  if (!payload || payload.kind === 'empty' || payload.isFresh === false) {
+    resetShortcutPayloadContext('expired')
+    return buildClipboardPayloadFromKind('empty', 'empty', payload?.formats || [])
+  }
+
+  latestShortcutPayloadContext = {
+    contextId: `ctx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: Number(payload.timestamp) || Date.now(),
+    status: 'fresh',
+    kind: payload.kind,
+    source: payload.source || 'clipboard',
+    text: typeof payload.text === 'string' ? payload.text : '',
+    imageDataUrl: typeof payload.imageDataUrl === 'string' ? payload.imageDataUrl : '',
+    filePaths: Array.isArray(payload.filePaths) ? [...payload.filePaths] : [],
+    formats: Array.isArray(payload.formats) ? [...payload.formats] : []
+  }
+
+  return {
+    ...payload,
+    contextId: latestShortcutPayloadContext.contextId,
+    status: latestShortcutPayloadContext.status
+  }
+}
+
+function buildPayloadFromShortcutContext() {
+  if (latestShortcutPayloadContext.status !== 'fresh' || !latestShortcutPayloadContext.contextId) {
+    return buildClipboardPayloadFromKind('empty', 'empty', [])
+  }
+
+  const ageMs = Math.max(0, Date.now() - (latestShortcutPayloadContext.timestamp || 0))
+  if (ageMs > CLIPBOARD_FRESHNESS_MS) {
+    resetShortcutPayloadContext('expired')
+    return buildClipboardPayloadFromKind('empty', 'empty', latestShortcutPayloadContext.formats || [])
+  }
+
+  return {
+    ok: true,
+    kind: latestShortcutPayloadContext.kind,
+    text: latestShortcutPayloadContext.kind === 'over' ? latestShortcutPayloadContext.text : latestShortcutPayloadContext.text,
+    imageDataUrl: latestShortcutPayloadContext.imageDataUrl,
+    filePaths: [...latestShortcutPayloadContext.filePaths],
+    hasText: Boolean(latestShortcutPayloadContext.text?.trim()),
+    hasImage: Boolean(latestShortcutPayloadContext.imageDataUrl),
+    hasFiles: latestShortcutPayloadContext.filePaths.length > 0,
+    formats: [...latestShortcutPayloadContext.formats],
+    timestamp: latestShortcutPayloadContext.timestamp,
+    ageMs,
+    freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
+    isFresh: true,
+    source: latestShortcutPayloadContext.source,
+    contextId: latestShortcutPayloadContext.contextId,
+    status: latestShortcutPayloadContext.status
+  }
+}
+
 let clipboardWatcherTimer = null
 const clipboardTimeline = {
   text: { signature: '', timestamp: 0, value: '' },
@@ -934,54 +1017,69 @@ async function tryCaptureSelectionToClipboard() {
 
 
 export async function captureQuickPayload() {
+  const existingContextPayload = buildPayloadFromShortcutContext()
+  if (existingContextPayload.kind !== 'empty') {
+    return resolveClipboardImageDataUrlForPayload(existingContextPayload)
+  }
+
   const raw = readClipboardPayloadRaw()
   updateClipboardTimeline(raw)
 
   const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (clipboardPayload.kind !== 'empty') {
-    return resolveClipboardImageDataUrlForPayload({
+    return resolveClipboardImageDataUrlForPayload(storeShortcutPayloadContext({
       ...clipboardPayload,
       source: 'recent-clipboard'
-    })
+    }))
   }
 
   const auxiliaryFilePayload = getFreshAuxiliaryFilePayload()
   if (auxiliaryFilePayload) {
-    return auxiliaryFilePayload
+    return storeShortcutPayloadContext(auxiliaryFilePayload)
   }
 
   return resolveClipboardImageDataUrlForPayload(buildClipboardPayloadFromKind('empty', 'empty', raw.formats))
 }
 
 export async function captureSelectionPayload() {
+  const existingContextPayload = buildPayloadFromShortcutContext()
+  if (existingContextPayload.kind !== 'empty') {
+    return resolveClipboardImageDataUrlForPayload(existingContextPayload)
+  }
+
   const directRaw = readClipboardPayloadRaw()
   updateClipboardTimeline(directRaw)
   const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
 
   const captured = await tryCaptureSelectionToClipboard()
   if (captured && captured.kind !== 'empty') {
-    return captured
+    return storeShortcutPayloadContext(captured)
   }
 
   if (clipboardPayload.kind !== 'empty' && clipboardPayload.isFresh) {
-    return resolveClipboardImageDataUrlForPayload({
+    return resolveClipboardImageDataUrlForPayload(storeShortcutPayloadContext({
       ...clipboardPayload,
       source: 'recent-clipboard'
-    })
+    }))
   }
 
   const auxiliaryFilePayload = getFreshAuxiliaryFilePayload()
   if (auxiliaryFilePayload) {
-    return auxiliaryFilePayload
+    return storeShortcutPayloadContext(auxiliaryFilePayload)
   }
 
   return resolveClipboardImageDataUrlForPayload(buildClipboardPayloadFromKind('empty', 'empty', directRaw.formats))
 }
 
 export async function captureQuickFilePayloadFallback() {
+  const existingContextPayload = buildPayloadFromShortcutContext()
+  if (existingContextPayload.kind === 'files') {
+    return existingContextPayload
+  }
+
   const cachedPayload = getFreshAuxiliaryFilePayload()
   if (cachedPayload) {
-    return cachedPayload
+    return storeShortcutPayloadContext(cachedPayload)
   }
 
   const [clipboardPowerShellFiles, explorerSelection] = await Promise.all([
@@ -992,9 +1090,27 @@ export async function captureQuickFilePayloadFallback() {
   updateClipboardFileDropState(clipboardPowerShellFiles, { primeOnly: false })
   updateExplorerSelectionState(explorerSelection, { primeOnly: false })
 
-  return getFreshAuxiliaryFilePayload() || buildClipboardPayloadFromKind('empty', 'empty', [])
+  const fallbackPayload = getFreshAuxiliaryFilePayload()
+  return fallbackPayload ? storeShortcutPayloadContext(fallbackPayload) : buildClipboardPayloadFromKind('empty', 'empty', [])
 }
 
+
+
+export async function markShortcutPayloadConsumed(contextId = '') {
+  if (!contextId || latestShortcutPayloadContext.contextId !== contextId) {
+    return { ok: false, status: latestShortcutPayloadContext.status || 'expired', matched: false }
+  }
+  latestShortcutPayloadContext.status = 'consumed'
+  return { ok: true, status: 'consumed', matched: true }
+}
+
+export async function markShortcutPayloadDiscarded(contextId = '') {
+  if (!contextId || latestShortcutPayloadContext.contextId !== contextId) {
+    return { ok: false, status: latestShortcutPayloadContext.status || 'expired', matched: false }
+  }
+  latestShortcutPayloadContext.status = 'discarded'
+  return { ok: true, status: 'discarded', matched: true }
+}
 
 export async function readClipboardPayload() {
   const raw = readClipboardPayloadRaw()

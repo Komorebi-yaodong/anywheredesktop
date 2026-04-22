@@ -227,6 +227,14 @@ export function registerIpcHandlers({
     return systemApi.captureSelectionPayload()
   })
 
+  handleInvoke('system:clipboard:markConsumed', async (_event, contextId = '') => {
+    return systemApi.markShortcutPayloadConsumed(contextId)
+  })
+
+  handleInvoke('system:clipboard:markDiscarded', async (_event, contextId = '') => {
+    return systemApi.markShortcutPayloadDiscarded(contextId)
+  })
+
   handleInvoke('system:dialog:open', async (event, options = {}) => {
     return systemApi.showOpenDialog(options, getSenderWindow(event))
   })

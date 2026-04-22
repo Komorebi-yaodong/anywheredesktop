@@ -479,6 +479,13 @@ export async function startFastInputSession({ win, payload = {}, onCompleted } =
   }
 
   const initPayload = await buildFastInputInitPayload(payload)
+  if (typeof payload?.contextId === 'string' && payload.contextId) {
+    try {
+      await systemApi.markShortcutPayloadConsumed(payload.contextId)
+    } catch {
+      // ignore shortcut payload consume reporting failure
+    }
+  }
   const userMessageResult = await buildUserMessageFromPayload(payload, initPayload.promptConfig)
   const deferredAttachments = Array.isArray(userMessageResult?.deferredAttachments)
     ? userMessageResult.deferredAttachments

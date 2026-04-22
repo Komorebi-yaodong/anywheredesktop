@@ -5,6 +5,7 @@ import { pinyin } from 'pinyin-pro'
 
 const senderId = ref('quick')
 let hasInitPayloadApplied = false
+const autoUploadContextId = ref('')
 
 const currentConfig = ref(null)
 const queryText = ref('')
@@ -170,7 +171,27 @@ function clearAttachment() {
   restoreCandidates.value = []
 }
 
-function clearQuickContent() {
+async function discardAutoUploadedContentIfNeeded() {
+  if (!autoUploadContextId.value) return
+  const contextId = autoUploadContextId.value
+  autoUploadContextId.value = ''
+  try {
+    await window.api.markShortcutPayloadDiscarded?.(contextId)
+  } catch {
+    // ignore discard reporting failure
+  }
+}
+
+function resetAutoUploadContext() {
+  autoUploadContextId.value = ''
+}
+
+async function clearQuickContent(options = {}) {
+  if (options?.discardAutoUpload) {
+    await discardAutoUploadedContentIfNeeded()
+  } else {
+    resetAutoUploadContext()
+  }
   queryText.value = ''
   clearAttachment()
   shouldShowSelection.value = false
@@ -428,6 +449,9 @@ const selectedPrompt = computed(() => {
 function resolveQuickDispatchPayload(prompt = null) {
   const payload = {}
   const trimmedQueryText = queryText.value.trim()
+  if (autoUploadContextId.value) {
+    payload.contextId = autoUploadContextId.value
+  }
 
   if (attachment.value.type === 'img' && attachment.value.imageDataUrl) {
     payload.type = 'img'
@@ -571,7 +595,7 @@ function updateFromTextInput(text = '', forceOverride = false) {
 
   if (!trimmed) {
     if (forceOverride) {
-      clearQuickContent()
+      void clearQuickContent()
     }
     return
   }
@@ -599,16 +623,19 @@ async function handleClipboardPayload(result = {}, forceOverride = false) {
 
   if (nextFilePaths.length > 0) {
     await applyFileAttachment(nextFilePaths)
+    resetAutoUploadContext()
     return
   }
 
   if (nextImage) {
     applyImageAttachment(nextImage)
+    resetAutoUploadContext()
     return
   }
 
   if (nextText.trim()) {
     updateFromTextInput(nextText, true)
+    resetAutoUploadContext()
     return
   }
 
@@ -793,14 +820,14 @@ function handleKeydown(event) {
 
   if (event.key === 'Backspace' && !queryText.value && hasAttachment.value) {
     event.preventDefault()
-    clearAttachment()
+    void clearQuickContent({ discardAutoUpload: true })
     return
   }
 
   if (event.key === 'Escape') {
     event.preventDefault()
     if (queryText.value.trim() || hasAttachment.value) {
-      clearQuickContent()
+      void clearQuickContent({ discardAutoUpload: true })
       shouldShowSelection.value = false
       focusInputToEnd()
       return
@@ -817,7 +844,7 @@ function handleGlobalKeydown(event) {
   if (event.key === 'Backspace' && !queryText.value && hasAttachment.value) {
     event.preventDefault()
     event.stopPropagation()
-    clearAttachment()
+    void clearQuickContent({ discardAutoUpload: true })
     return
   }
 
@@ -825,7 +852,7 @@ function handleGlobalKeydown(event) {
     event.preventDefault()
     event.stopPropagation()
     if (queryText.value.trim() || hasAttachment.value) {
-      clearQuickContent()
+      void clearQuickContent({ discardAutoUpload: true })
       shouldShowSelection.value = false
       focusInputToEnd()
       return
@@ -858,6 +885,12 @@ onMounted(async () => {
       quickMode.value = 'default'
     }
 
+    if (typeof data?.contextId === 'string' && data.contextId) {
+      autoUploadContextId.value = data.contextId
+    } else {
+      resetAutoUploadContext()
+    }
+
     if (data?.type === 'files' && Array.isArray(data.payload)) {
       const paths = data.payload.map((item) => item?.path).filter(Boolean)
       applyFileAttachment(paths)
@@ -869,7 +902,7 @@ onMounted(async () => {
       updateFromTextInput(data.payload, true)
       hasInitPayloadApplied = Boolean(data.payload.trim())
     } else if (data?.type === 'empty') {
-      clearQuickContent()
+      void clearQuickContent()
       shouldShowSelection.value = false
       focusInputToEnd()
     }

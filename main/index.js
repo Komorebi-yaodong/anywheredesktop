@@ -112,6 +112,7 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
   const textType = /\r?\n/.test(rawText) ? 'multiline-text' : 'over'
   const imageDataUrl = typeof result.imageDataUrl === 'string' ? result.imageDataUrl : ''
   const hasRasterImage = Boolean(imageDataUrl && !imageDataUrl.startsWith('data:image/svg+xml'))
+  const contextId = typeof result.contextId === 'string' ? result.contextId : ''
 
   if ((filePaths.length > 0 || normalizedType === 'files') && hasRasterImage) {
     return {
@@ -121,7 +122,8 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
         ...filePaths.map((filePath) => ({ path: filePath }))
       ],
       userText: trimmedText,
-      source: result.source || 'clipboard'
+      source: result.source || 'clipboard',
+      contextId
     }
   }
 
@@ -130,7 +132,8 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
       type: 'files',
       payload: filePaths.map((filePath) => ({ path: filePath })),
       userText: trimmedText,
-      source: result.source || 'clipboard'
+      source: result.source || 'clipboard',
+      contextId
     }
   }
 
@@ -139,7 +142,8 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
       type: 'img',
       payload: imageDataUrl,
       userText: trimmedText,
-      source: result.source || 'clipboard'
+      source: result.source || 'clipboard',
+      contextId
     }
   }
 
@@ -147,7 +151,8 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
     return {
       type: trimmedText ? textType : 'empty',
       payload: trimmedText ? rawText : '',
-      source: result.source || 'clipboard'
+      source: result.source || 'clipboard',
+      contextId
     }
   }
 
@@ -155,14 +160,16 @@ function buildQuickPayloadFromClipboardResult(result = {}) {
     return {
       type: textType,
       payload: rawText,
-      source: result.source || 'clipboard'
+      source: result.source || 'clipboard',
+      contextId
     }
   }
 
   return {
     type: 'empty',
     payload: '',
-    source: result.source || 'empty'
+    source: result.source || 'empty',
+    contextId
   }
 }
 
@@ -314,10 +321,14 @@ async function triggerAppendFollowUpShortcut() {
         quickPayload = await collectQuickFilePayloadFallback()
       }
       if (quickPayload && quickPayload.type !== 'empty') {
-        return appendPayloadToWindow(windows[0].id, quickPayload, {
+        const appendResult = await appendPayloadToWindow(windows[0].id, quickPayload, {
           sourceId: 'append-shortcut',
           event: 'quick:append-payload'
         })
+        if (quickPayload.contextId) {
+          await systemApi.markShortcutPayloadConsumed(quickPayload.contextId)
+        }
+        return appendResult
       }
     }
 

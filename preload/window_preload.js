@@ -248,6 +248,8 @@ const api = {
     electronAPI.ipcRenderer.on('window:init', (_event, data) => callback(data))
   },
   getWindowContext: () => ({ appWindowType: windowType, senderId }),
+  markShortcutPayloadConsumed: (contextId = '') => electronAPI.ipcRenderer.invoke('system:clipboard:markConsumed', contextId),
+  markShortcutPayloadDiscarded: (contextId = '') => electronAPI.ipcRenderer.invoke('system:clipboard:markDiscarded', contextId),
   getDroppedFilePath: (file) => {
     try {
       return webUtils.getPathForFile(file) || ''

@@ -2254,6 +2254,13 @@ onMounted(async () => {
     let isSessionRestored = false;
     let pendingAgentToolSend = null;
     const normalizedUserText = typeof data?.userText === 'string' ? data.userText.trim() : '';
+    if (typeof data?.contextId === 'string' && data.contextId && window.api?.markShortcutPayloadConsumed) {
+      try {
+        await window.api.markShortcutPayloadConsumed(data.contextId);
+      } catch {
+        // ignore shortcut payload consume reporting failure
+      }
+    }
 
     if (data) {
       basic_msg.value = { code: data.code, type: data.type, payload: data.payload };

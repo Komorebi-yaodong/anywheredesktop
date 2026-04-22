@@ -100,6 +100,8 @@ const api = {
   readClipboardText: () => electronAPI.ipcRenderer.invoke('system:clipboard:readText'),
   readClipboardPayload: () => electronAPI.ipcRenderer.invoke('system:clipboard:readPayload'),
   captureSelectionPayload: () => electronAPI.ipcRenderer.invoke('system:clipboard:captureSelection'),
+  markShortcutPayloadConsumed: (contextId = '') => electronAPI.ipcRenderer.invoke('system:clipboard:markConsumed', contextId),
+  markShortcutPayloadDiscarded: (contextId = '') => electronAPI.ipcRenderer.invoke('system:clipboard:markDiscarded', contextId),
   getConfig: () => electronAPI.ipcRenderer.invoke('data:getConfig'),
   isFileTypeSupported: (fileName) => invokeOrThrow('file:isFileTypeSupported', fileName),
   probeFilePathSupport: (filePath) => invokeOrThrow('file:probePathSupport', filePath),

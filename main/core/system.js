@@ -864,18 +864,70 @@ export async function captureQuickPayload() {
   let clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (clipboardPayload.kind !== 'empty') {
     return resolveClipboardImageDataUrlForPayload({
-        ...clipboardPayload,
-        source: 'recent-clipboard'
-      })
+      ...clipboardPayload,
+      source: 'recent-clipboard'
+    })
   }
 
   await refreshClipboardTimelineFromSequence(raw)
   clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], raw.formats)
   if (clipboardPayload.kind !== 'empty') {
     return resolveClipboardImageDataUrlForPayload({
-        ...clipboardPayload,
-        source: 'recent-clipboard'
-      })
+      ...clipboardPayload,
+      source: 'recent-clipboard'
+    })
+  }
+
+  const clipboardDropFiles = filterRegularFilePaths(clipboardFileDropState.filePaths)
+  const clipboardDropAgeMs = clipboardFileDropState.timestamp > 0
+    ? Math.max(0, Date.now() - clipboardFileDropState.timestamp)
+    : Number.POSITIVE_INFINITY
+  if (clipboardDropFiles.length > 0 && clipboardDropAgeMs <= CLIPBOARD_FRESHNESS_MS) {
+    return {
+      ok: true,
+      kind: 'files',
+      text: '',
+      imageDataUrl: '',
+      filePaths: clipboardDropFiles,
+      hasText: false,
+      hasImage: false,
+      hasFiles: true,
+      formats: ['clipboard-file-drop-cached'],
+      timestamp: clipboardFileDropState.timestamp,
+      ageMs: clipboardDropAgeMs,
+      freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
+      isFresh: true,
+      source: 'clipboard'
+    }
+  }
+
+  return resolveClipboardImageDataUrlForPayload(clipboardPayload)
+}
+
+export async function captureSelectionPayload() {
+  const directRaw = readClipboardPayloadRaw()
+  updateClipboardTimeline(directRaw)
+  let clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
+
+  const captured = await tryCaptureSelectionToClipboard()
+  if (captured && captured.kind !== 'empty') {
+    return captured
+  }
+
+  if (clipboardPayload.kind !== 'empty' && clipboardPayload.isFresh) {
+    return resolveClipboardImageDataUrlForPayload({
+      ...clipboardPayload,
+      source: 'recent-clipboard'
+    })
+  }
+
+  await refreshClipboardTimelineFromSequence(directRaw)
+  clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
+  if (clipboardPayload.kind !== 'empty' && clipboardPayload.isFresh) {
+    return resolveClipboardImageDataUrlForPayload({
+      ...clipboardPayload,
+      source: 'recent-clipboard'
+    })
   }
 
   const explorerSelection = await tryReadForegroundExplorerSelection()
@@ -922,38 +974,11 @@ export async function captureQuickPayload() {
       ageMs: clipboardFileDropStateResult.ageMs,
       freshnessWindowMs: CLIPBOARD_FRESHNESS_MS,
       isFresh: true,
-      source: 'clipboard'
+      source: 'selection'
     }
   }
 
-  return resolveClipboardImageDataUrlForPayload(clipboardPayload)
-}
-
-export async function captureSelectionPayload() {
-  const directRaw = readClipboardPayloadRaw()
-  updateClipboardTimeline(directRaw)
-  const clipboardPayload = getFreshClipboardPayload('clipboard', ['files', 'image', 'text'], directRaw.formats)
-
-  const captured = await tryCaptureSelectionToClipboard()
-  if (captured && captured.kind !== 'empty') {
-    return captured
-  }
-
-  if (clipboardPayload.kind !== 'empty') {
-    if (clipboardPayload.isFresh) {
-      return resolveClipboardImageDataUrlForPayload({
-        ...clipboardPayload,
-        source: 'recent-clipboard'
-      })
-    }
-
-    return resolveClipboardImageDataUrlForPayload({
-      ...clipboardPayload,
-      source: 'clipboard'
-    })
-  }
-
-  return resolveClipboardImageDataUrlForPayload(clipboardPayload)
+  return resolveClipboardImageDataUrlForPayload(buildClipboardPayloadFromKind('empty', 'empty', directRaw.formats))
 }
 
 export async function readClipboardPayload() {

@@ -1,6 +1,6 @@
 {
   "name": "anywhere-desktop",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "AI Anywhere Desktop",
   "main": "./out/main/index.js",
   "author": {

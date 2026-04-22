@@ -648,6 +648,8 @@ function resolveDialogWindowConfig(baseConfig, fullConfig = {}, payload = null) 
     fullConfig,
     config: {
       ...baseConfig,
+      devPath: isDarkMode ? `${baseConfig.devPath}?dark=1` : baseConfig.devPath,
+      initialThemeSearch: isDarkMode ? '?dark=1' : '',
       title: 'AI Anywhere Desktop - Window',
       width: placement.width,
       height: placement.height,
@@ -809,7 +811,12 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${config.devPath}`)
   } else {
-    win.loadFile(path.join(__dirname, `../renderer/${config.html}`))
+    const rendererFilePath = path.join(__dirname, `../renderer/${config.html}`)
+    if (typeof config.initialThemeSearch === 'string' && config.initialThemeSearch) {
+      win.loadFile(rendererFilePath, { search: config.initialThemeSearch })
+    } else {
+      win.loadFile(rendererFilePath)
+    }
   }
 
     if (type === 'main') {

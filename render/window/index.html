@@ -9,13 +9,53 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' http: https:; img-src 'self' data: blob: http: https: file:; connect-src 'self' data: blob: http: https: ws: wss: file:; font-src 'self' data: http: https:; media-src 'self' data: blob: http: https: file:"
     />
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const isDarkMode = params.get('dark') === '1';
+        if (isDarkMode) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
+    <style>
+      html,
+      body {
+        height: 100vh;
+        width: 100vw;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body,
+      #app {
+        background-color: #fffdfd;
+      }
+
+      html.dark,
+      html.dark body,
+      html.dark #app {
+        background-color: #212121;
+      }
+
+      body,
+      .app {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .app {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+      }
+    </style>
   </head>
   <body>
     <div id="app" class="app"></div>
     <script type="module" src="/window/main.js"></script>
-    <style>
-      html, body { height: 100vh; width: 100vw; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; background-color: transparent;}
-      .app { height: 100%; width: 100%; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; }
-    </style>
   </body>
 </html>

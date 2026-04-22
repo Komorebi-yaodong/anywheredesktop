@@ -1,5 +1,12 @@
 @import './base.css';
 
+html,
+body,
+#app {
+  background-color: inherit;
+}
+
+
 #app {
   width: 100%;
   height: 100%;

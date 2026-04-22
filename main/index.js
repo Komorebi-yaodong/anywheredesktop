@@ -309,7 +309,10 @@ async function triggerAppendFollowUpShortcut() {
     }
 
     if (windows.length === 1) {
-      const quickPayload = await collectQuickPayloadFast()
+      let quickPayload = await collectQuickPayloadFast()
+      if (!quickPayload || quickPayload.type === 'empty') {
+        quickPayload = await collectQuickFilePayloadFallback()
+      }
       if (quickPayload && quickPayload.type !== 'empty') {
         return appendPayloadToWindow(windows[0].id, quickPayload, {
           sourceId: 'append-shortcut',
@@ -359,7 +362,10 @@ async function triggerPromptShortcut(promptKey = '') {
     if (!promptConfig || promptConfig.enable === false) return
 
     if (promptConfig.showMode === 'fastinput') {
-      const quickPayload = await collectQuickPayloadFast()
+      let quickPayload = await collectQuickPayloadFast()
+      if (!quickPayload || quickPayload.type === 'empty') {
+        quickPayload = await collectQuickFilePayloadFallback()
+      }
 
       await openWindow('fast', {
         code: normalizedPromptKey,
@@ -371,12 +377,32 @@ async function triggerPromptShortcut(promptKey = '') {
     }
 
     const quickPayload = await collectQuickPayloadFast()
-    await openWindow('window', {
+    const openResult = await openWindow('window', {
       code: normalizedPromptKey,
       ...quickPayload,
       promptKey: normalizedPromptKey,
       triggerMode: 'shortcut'
     })
+
+    if (!quickPayload || quickPayload.type === 'empty') {
+      collectQuickFilePayloadFallback()
+        .then(async (fallbackPayload) => {
+          if (!fallbackPayload || fallbackPayload.type === 'empty') return
+          const delivered = await dispatchShortcutPayloadToWindow(openResult?.id, fallbackPayload, normalizedPromptKey)
+          if (!delivered) {
+            debugMainError('shortcut:file-fallback-dispatch-timeout', {
+              promptKey: normalizedPromptKey,
+              targetWindowId: openResult?.id || null
+            })
+          }
+        })
+        .catch((error) => {
+          debugMainError('shortcut:file-fallback-collect-failed', {
+            promptKey: normalizedPromptKey,
+            error: error?.message || error
+          })
+        })
+    }
   } catch (error) {
     debugMainError('shortcut:prompt-trigger-failed', { promptKey, error: error?.message || error })
   }

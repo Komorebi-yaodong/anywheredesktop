@@ -426,6 +426,11 @@ const onMouseDown = (e) => {
         return;
     }
 
+    const container = chatListRef.value?.closest('.table-container');
+    if (!container) return;
+
+    const containerRect = container.getBoundingClientRect();
+
     isMouseDown = true;
     hasMoved = false;
     startX = e.clientX;
@@ -434,8 +439,13 @@ const onMouseDown = (e) => {
     // 快照：记录当前已选中的文件ID
     initialSelectionSnap = new Set(selectedFiles.value.map(f => f.basename));
 
-    selectionBox.value = { left: startX, top: startY, width: 0, height: 0 };
-    
+    selectionBox.value = {
+        left: startX - containerRect.left,
+        top: startY - containerRect.top,
+        width: 0,
+        height: 0
+    };
+
     // 不在此处 preventDefault，以便支持点击事件冒泡
 };
 
@@ -455,10 +465,15 @@ const onGlobalMouseMove = (e) => {
 
     if (hasMoved) {
         e.preventDefault(); // 阻止后续默认行为
-        
-        // 计算选框几何
-        const left = Math.min(startX, currentX);
-        const top = Math.min(startY, currentY);
+
+        const container = chatListRef.value?.closest('.table-container');
+        if (!container) return;
+
+        const containerRect = container.getBoundingClientRect();
+
+        // 计算选框几何（基于 table-container 局部坐标）
+        const left = Math.min(startX, currentX) - containerRect.left;
+        const top = Math.min(startY, currentY) - containerRect.top;
         const width = Math.abs(currentX - startX);
         const height = Math.abs(currentY - startY);
 
@@ -472,12 +487,16 @@ const onGlobalMouseMove = (e) => {
 const updateSelectionInvert = () => {
     if (!chatListRef.value) return;
 
+    const container = chatListRef.value.closest('.table-container');
+    if (!container) return;
+
+    const containerRect = container.getBoundingClientRect();
     const items = chatListRef.value.querySelectorAll('.chat-list-item');
     const boxRect = {
-        left: selectionBox.value.left,
-        top: selectionBox.value.top,
-        right: selectionBox.value.left + selectionBox.value.width,
-        bottom: selectionBox.value.top + selectionBox.value.height
+        left: containerRect.left + selectionBox.value.left,
+        top: containerRect.top + selectionBox.value.top,
+        right: containerRect.left + selectionBox.value.left + selectionBox.value.width,
+        bottom: containerRect.top + selectionBox.value.top + selectionBox.value.height
     };
 
     const currentInBox = new Set();
@@ -1335,7 +1354,7 @@ const toggleSelectAll = () => {
 <style scoped>
 /* 框选矩形样式 */
 .selection-box {
-    position: fixed; /* 使用 fixed 定位，直接基于视口 */
+    position: absolute; /* 基于 table-container 局部坐标，避免受外层玻璃态容器影响 */
     background-color: rgba(24, 24, 27, 0.1); /* Panda Black 10% */
     border: 1px solid rgba(24, 24, 27, 0.2); /* Panda Black 20% */
     z-index: 9999;

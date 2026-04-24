@@ -4,6 +4,63 @@ import { getBuiltinTools, invokeBuiltinTool } from './mcp_builtin.js'
 const sessionRuntimes = new Map()
 const inFlightToolFetchMap = new Map()
 
+const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/
+
+function sanitizeToolName(rawName, fallbackPrefix = 'tool') {
+  const source = typeof rawName === 'string' ? rawName.trim() : ''
+  const baseName = source || fallbackPrefix
+  const sanitized = baseName
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+
+  return sanitized || fallbackPrefix
+}
+
+function ensureUniqueToolAlias(alias, usedAliases, fallbackPrefix = 'tool') {
+  const safeBase = sanitizeToolName(alias, fallbackPrefix)
+  let candidate = safeBase
+  let index = 2
+
+  while (usedAliases.has(candidate)) {
+    candidate = `${safeBase}_${index}`
+    index += 1
+  }
+
+  usedAliases.add(candidate)
+  return candidate
+}
+
+function findCachedToolEntry(cachedTools = [], rawName = '', aliasName = '') {
+  if (!Array.isArray(cachedTools) || cachedTools.length === 0) return null
+
+  return cachedTools.find((tool) => {
+    if (!tool || typeof tool !== 'object') return false
+    return tool.name === rawName
+      || tool.alias === aliasName
+      || tool.rawName === rawName
+      || tool.originalName === rawName
+      || (aliasName && tool.name === aliasName)
+  }) || null
+}
+
+function buildCachedToolRecord(tool, oldTool = null, aliasName = '') {
+  const rawName = typeof tool?.name === 'string'
+    ? tool.name
+    : (typeof oldTool?.rawName === 'string' ? oldTool.rawName : '')
+
+  return {
+    name: rawName || aliasName,
+    alias: aliasName || (typeof oldTool?.alias === 'string' ? oldTool.alias : ''),
+    rawName: rawName || (typeof oldTool?.rawName === 'string' ? oldTool.rawName : ''),
+    originalName: rawName || (typeof oldTool?.originalName === 'string' ? oldTool.originalName : ''),
+    displayName: rawName || (typeof oldTool?.displayName === 'string' ? oldTool.displayName : aliasName),
+    description: tool?.description,
+    inputSchema: tool?.inputSchema || tool?.schema || {},
+    enabled: oldTool ? (oldTool.enabled ?? true) : true
+  }
+}
+
 function normalizeTransportType(transport = '') {
   const streamableHttpRegex = /^streamable[\s_-]?http$/i
   if (streamableHttpRegex.test(transport)) {
@@ -100,21 +157,17 @@ function buildServerConfig(id, config = {}) {
   }
 }
 
-function sanitizeToolsForCache(tools = [], oldToolsCache = []) {
+function sanitizeToolsForCache(tools = [], oldToolsCache = [], serverId = '') {
   return tools.map((tool) => {
-    const oldTool = oldToolsCache.find((item) => item.name === tool.name)
-    return {
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema || tool.schema || {},
-      enabled: oldTool ? (oldTool.enabled ?? true) : true
-    }
+    const aliasName = sanitizeToolName(tool?.name, serverId || 'tool')
+    const oldTool = findCachedToolEntry(oldToolsCache, tool?.name, aliasName)
+    return buildCachedToolRecord(tool, oldTool, aliasName)
   })
 }
 
-function getToolEnabledState(cachedToolsMap, serverId, toolName) {
+function getToolEnabledState(cachedToolsMap, serverId, toolName, aliasName = '') {
   if (cachedToolsMap && cachedToolsMap[serverId]) {
-    const cachedTool = cachedToolsMap[serverId].find((item) => item.name === toolName)
+    const cachedTool = findCachedToolEntry(cachedToolsMap[serverId], toolName, aliasName)
     return cachedTool ? (cachedTool.enabled ?? true) : true
   }
   return true
@@ -136,7 +189,7 @@ function saveToolCache(saveCacheCallback, id, tools, cachedToolsMap = {}, option
   if (typeof saveCacheCallback !== 'function') return
 
   const oldToolsCache = cachedToolsMap[id] || []
-  const sanitizedTools = sanitizeToolsForCache(tools, oldToolsCache)
+  const sanitizedTools = sanitizeToolsForCache(tools, oldToolsCache, id)
   const cleanTools = JSON.parse(JSON.stringify(sanitizedTools))
 
   saveCacheCallback(id, cleanTools, {
@@ -165,15 +218,31 @@ function getToolFetchKey(id, config = {}) {
 }
 
 function registerToolsToMap(runtime, { id, config, tools, isPersistent, isBuiltin, enabledToolsMap = {}, includeInstance = false }) {
-  for (const tool of tools) {
-    runtime.fullToolInfoMap.set(tool.name, {
+  const usedAliases = new Set(
+    [...runtime.fullToolInfoMap.values()]
+      .map((toolInfo) => toolInfo?.aliasName)
+      .filter(Boolean)
+  )
+
+  for (const [index, tool] of tools.entries()) {
+    const rawName = typeof tool?.rawName === 'string'
+      ? tool.rawName
+      : (typeof tool?.originalName === 'string' ? tool.originalName : tool?.name)
+    const preferredAlias = tool?.alias || tool?.aliasName || tool?.name || `${id}_tool_${index + 1}`
+    const aliasName = ensureUniqueToolAlias(preferredAlias, usedAliases, id || 'tool')
+
+    runtime.fullToolInfoMap.set(aliasName, {
       instance: includeInstance ? tool : undefined,
-      schema: tool.schema || tool.inputSchema,
-      description: tool.description,
+      schema: tool?.schema || tool?.inputSchema,
+      description: tool?.description,
       isPersistent,
       serverConfig: { id, ...config },
       isBuiltin,
-      enabled: getToolEnabledState(enabledToolsMap, id, tool.name)
+      enabled: getToolEnabledState(enabledToolsMap, id, rawName, aliasName),
+      aliasName,
+      rawName,
+      originalName: rawName,
+      displayName: tool?.displayName || rawName || aliasName
     })
   }
 
@@ -375,17 +444,24 @@ function buildOpenaiFormattedTools(sessionKey = 'global') {
 
   const formattedTools = []
 
-  for (const [toolName, toolInfo] of runtime.fullToolInfoMap.entries()) {
-    if (toolInfo.schema && toolInfo.enabled !== false) {
-      formattedTools.push({
-        type: 'function',
-        function: {
-          name: toolName,
-          description: toolInfo.description,
-          parameters: toolInfo.schema
-        }
-      })
+  for (const [, toolInfo] of runtime.fullToolInfoMap.entries()) {
+    if (!toolInfo.schema || toolInfo.enabled === false) {
+      continue
     }
+
+    const exportedName = toolInfo.aliasName || sanitizeToolName(toolInfo.rawName || toolInfo.displayName || 'tool')
+    if (!TOOL_NAME_PATTERN.test(exportedName)) {
+      continue
+    }
+
+    formattedTools.push({
+      type: 'function',
+      function: {
+        name: exportedName,
+        description: toolInfo.description,
+        parameters: toolInfo.schema
+      }
+    })
   }
 
   return formattedTools
@@ -398,6 +474,7 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
   const sessionKey = getSessionKey(context?.senderId)
   const runtime = getSessionRuntime(sessionKey, false)
   const toolInfo = runtime?.fullToolInfoMap.get(toolName)
+  const resolvedToolName = toolInfo?.rawName || toolInfo?.originalName || toolInfo?.displayName || toolName
 
   if (!toolInfo) {
     try {
@@ -408,11 +485,11 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
   }
 
   if (toolInfo.enabled === false) {
-    throw new Error(`Tool "${toolName}" has been disabled.`)
+    throw new Error(`Tool "${toolInfo.displayName || toolName}" has been disabled.`)
   }
 
   if (toolInfo.isBuiltin) {
-    return await invokeBuiltinTool(toolName, toolArgs, signal, context)
+    return await invokeBuiltinTool(resolvedToolName, toolArgs, signal, context)
   }
 
   if (toolInfo.isPersistent && toolInfo.instance) {
@@ -448,10 +525,10 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
       }
 
       const tools = await tempClient.getTools()
-      const toolToCall = tools.find((tool) => tool.name === toolName)
+      const toolToCall = tools.find((tool) => tool.name === resolvedToolName || sanitizeToolName(tool.name, serverConfig.id || 'tool') === toolName)
 
       if (!toolToCall) {
-        throw new Error(`Tool "${toolName}" not found.`)
+        throw new Error(`Tool "${resolvedToolName}" not found.`)
       }
 
       return await toolToCall.invoke(toolArgs, { signal: controller.signal })
@@ -469,7 +546,7 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
     }
   }
 
-  throw new Error(`Configuration error for tool "${toolName}".`)
+  throw new Error(`Configuration error for tool "${toolInfo.displayName || toolName}".`)
 }
 
 /**
@@ -490,7 +567,11 @@ export async function connectAndInvokeTool(id, config, toolName, toolArgs, conte
     tempClient = new MultiServerMCPClient({ [id]: serverConfig }, { signal: controller.signal })
 
     const tools = await tempClient.getTools()
-    const targetTool = tools.find((tool) => tool.name === toolName || tool.name === `${id}_${toolName}`)
+    const normalizedToolName = sanitizeToolName(toolName, id || 'tool')
+    const targetTool = tools.find((tool) => {
+      const alias = sanitizeToolName(tool.name, id || 'tool')
+      return tool.name === toolName || alias === toolName || alias === normalizedToolName || tool.name === `${id}_${toolName}`
+    })
 
     if (!targetTool) {
       throw new Error(

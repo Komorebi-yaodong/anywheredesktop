@@ -510,12 +510,41 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
     }
 
     const rawTools = await mcpApi.connectAndFetchTools(serverConfig.id, normalizedConfig)
-    const sanitizedTools = (Array.isArray(rawTools) ? rawTools : []).map((tool) => ({
-      name: tool?.name || '',
-      description: tool?.description || '',
-      inputSchema: tool?.inputSchema || tool?.schema || {},
-      enabled: tool?.enabled !== false
-    }))
+    const sanitizeToolAlias = (name, fallback = 'tool') => {
+      const source = typeof name === 'string' ? name.trim() : ''
+      const baseName = source || fallback
+      const sanitized = baseName
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '')
+      return sanitized || fallback
+    }
+
+    let oldTools = []
+    try {
+      const oldCacheMap = await dataApi.getMcpToolCache()
+      oldTools = oldCacheMap ? (oldCacheMap[serverConfig.id] || []) : []
+    } catch (error) {
+      console.error('[IPC] Failed to read MCP cache before testConnection:', error)
+    }
+
+    const sanitizedTools = (Array.isArray(rawTools) ? rawTools : []).map((tool) => {
+      const name = tool?.name || ''
+      const alias = sanitizeToolAlias(name, serverConfig.id || 'tool')
+      const oldTool = oldTools.find((item) => item?.name === name || item?.alias === alias || item?.rawName === name || item?.originalName === name)
+
+      return {
+        name,
+        alias,
+        rawName: name,
+        originalName: name,
+        displayName: name,
+        description: tool?.description || '',
+        inputSchema: tool?.inputSchema || tool?.schema || {},
+        enabled: oldTool ? (oldTool.enabled ?? true) : tool?.enabled !== false
+      }
+    })
+
     await dataApi.saveMcpToolCache(serverConfig.id, sanitizedTools)
 
     return {

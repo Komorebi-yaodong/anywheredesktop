@@ -116,10 +116,33 @@ function adaptToolsForResponses(tools) {
 /**
  * 将 Chat Completions 格式的消息历史转换为 Responses API 的 Input Items
  */
+
+function normalizeMessagesForChatCompletions(messages = []) {
+  if (!Array.isArray(messages)) return []
+
+  return messages.map((msg) => {
+    if (!msg || typeof msg !== 'object') return msg
+
+    const nextMsg = { ...msg }
+    if (nextMsg.role === 'assistant') {
+      const reasoningContent = typeof nextMsg.reasoning_content === 'string'
+        ? nextMsg.reasoning_content
+        : ''
+
+      if (reasoningContent) {
+        nextMsg.reasoning_content = reasoningContent
+      }
+    }
+
+    return nextMsg
+  })
+}
+
 function convertMessagesToResponsesInput(messages = []) {
   const inputItems = []
+  const normalizedMessages = normalizeMessagesForChatCompletions(messages)
 
-  for (const msg of messages) {
+  for (const msg of normalizedMessages) {
     // 1. Role 映射 (Responses API 使用 developer 代替 system)
     let role = msg?.role
     if (role === 'system') role = 'developer'
@@ -288,9 +311,12 @@ export async function createChatCompletion(params = {}) {
     }
 
     // 标准 Chat Completions API
+    const normalizedMessages = normalizeMessagesForChatCompletions(openAiParams.messages)
+
     return await client.chat.completions.create(
       {
         ...openAiParams,
+        messages: normalizedMessages,
         stream: params.stream ?? true
       },
       { signal }

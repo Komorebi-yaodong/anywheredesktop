@@ -228,18 +228,10 @@ const docVersionText = computed(() => {
 });
 
 const docVersionTooltip = computed(() => {
-  const source = versionInfo.value?.source ? t(`doc.version.sources.${versionInfo.value.source}`) : '';
   if (versionInfo.value?.hasUpdate && versionInfo.value?.latestVersion) {
     return t('doc.version.updateTooltip', {
       current: `v${versionInfo.value.currentVersion}`,
-      latest: `v${versionInfo.value.latestVersion}`,
-      source: source || '-'
-    });
-  }
-  if (versionInfo.value?.currentVersion && source) {
-    return t('doc.version.currentTooltip', {
-      current: `v${versionInfo.value.currentVersion}`,
-      source
+      latest: `v${versionInfo.value.latestVersion}`
     });
   }
   if (versionInfo.value?.currentVersion) {
@@ -249,6 +241,23 @@ const docVersionTooltip = computed(() => {
   }
   return '';
 });
+
+
+const getReleasePageUrl = () => {
+  if (versionInfo.value?.source === 'gitee') {
+    return 'https://gitee.com/Komorebi-yaodong/anywheredesktop/releases';
+  }
+  return 'https://github.com/Komorebi-yaodong/anywheredesktop/releases';
+};
+
+const openReleasePage = () => {
+  const targetUrl = getReleasePageUrl();
+  if (window.api && window.api.shellOpenExternal) {
+    window.api.shellOpenExternal(targetUrl);
+    return;
+  }
+  window.open(targetUrl, '_blank');
+};
 
 const fetchVersionInfo = async () => {
   try {
@@ -374,6 +383,7 @@ const getQuickStartDocHtml = () => {
           </div>
         </div>
       </div>
+      <p class="quick-start-feedback">${escapeHtml(t('doc.quickStart.customShortcut.feedbackGroup'))}</p>
     </section>
   `;
 };
@@ -834,7 +844,7 @@ watch(locale, () => {
         <div class="doc-dialog__header">
           <span class="doc-dialog__title">{{ t('doc.title') }}</span>
           <el-tooltip v-if="docVersionText" :content="docVersionTooltip" placement="top">
-            <span class="doc-dialog__version" :class="{ 'has-update': versionInfo.hasUpdate }">{{ docVersionText }}</span>
+            <button type="button" class="doc-dialog__version" :class="{ 'has-update': versionInfo.hasUpdate }" @click="openReleasePage">{{ docVersionText }}</button>
           </el-tooltip>
         </div>
       </template>
@@ -1088,6 +1098,29 @@ html.dark .el-main {
   background: rgba(15, 23, 42, 0.06);
   border: 1px solid rgba(15, 23, 42, 0.08);
   white-space: nowrap;
+}
+
+
+.doc-dialog__version {
+  appearance: none;
+  cursor: pointer;
+}
+
+.doc-dialog__version:hover {
+  color: var(--text-primary);
+  border-color: rgba(15, 23, 42, 0.18);
+}
+
+.doc-dialog__version:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.45);
+  outline-offset: 2px;
+}
+
+.quick-start-feedback {
+  margin: 18px 4px 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
 }
 
 .doc-dialog__version.has-update {

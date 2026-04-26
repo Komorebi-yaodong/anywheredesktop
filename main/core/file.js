@@ -526,6 +526,20 @@ export async function saveFile(options = {}) {
   }
 }
 
+
+export async function exportLocalChatFile(filePath, options = {}) {
+  const resolvedPath = path.resolve(String(filePath || '').trim())
+  if (!resolvedPath) {
+    throw new Error('invalid_local_chat_file_path')
+  }
+
+  const fileContent = await fs.readFile(resolvedPath)
+  return saveFile({
+    ...options,
+    fileContent
+  })
+}
+
 export async function selectDirectory() {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory']

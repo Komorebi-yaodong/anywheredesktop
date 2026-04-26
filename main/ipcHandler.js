@@ -798,6 +798,10 @@ handleInvoke('skill:pathJoin', async (_event, ...args) => {
     return fileApi.saveFile(options)
   })
 
+  handleInvoke('file:exportLocalChatFile', async (_event, filePath = '', options = {}) => {
+    return fileApi.exportLocalChatFile(filePath, options)
+  })
+
   handleInvoke('file:selectDirectory', async () => {
     return fileApi.selectDirectory()
   })

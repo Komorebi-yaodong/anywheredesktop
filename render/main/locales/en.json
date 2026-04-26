@@ -97,6 +97,7 @@
     },
     "actions": {
       "chat": "Chat",
+      "share": "Share / Export",
       "rename": "Rename",
       "delete": "Delete",
       "forceSync": "Sync"
@@ -108,6 +109,12 @@
       "syncTitle": "Sync Operation",
       "syncCloudConfirm": "A file with the same name exists in the cloud. Rename it synchronously?",
       "syncLocalConfirm": "A file with the same name exists locally. Rename it synchronously?"
+    },
+    "export": {
+      "dialogTitle": "Export Chat",
+      "success": "Chat exported successfully.",
+      "failed": "Failed to export chat",
+      "cancelled": "Export cancelled"
     },
     "tooltips": {
       "syncToCloud": "Upload to Cloud",

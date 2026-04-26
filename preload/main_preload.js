@@ -159,6 +159,9 @@ const api = {
   handleFilePath: (filePath) => invokeOrThrow('file:handleFilePath', filePath),
   sendfileDirect: (filePathList) => invokeOrThrow('file:sendfileDirect', filePathList),
   saveFile: (options) => invokeOrThrow('file:saveFile', options),
+  exportLocalChatFile: (filePath, options = {}) =>
+    invokeOrThrow('file:exportLocalChatFile', filePath, options),
+
   selectDirectory: () => invokeOrThrow('file:selectDirectory'),
   listJsonFiles: (dirPath) => invokeOrThrow('file:listJsonFiles', dirPath),
   readLocalFile: (filePath, options = {}) =>

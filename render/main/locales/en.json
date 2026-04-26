@@ -28,13 +28,8 @@
     "sourcesUnavailable": "(GitHub and Gitee documentation sources are both unreachable)",
     "version": {
       "latestAvailable": "New {version} available",
-      "currentTooltip": "Current version: {current} | Checked from: {source}",
       "currentOnlyTooltip": "Current version: {current}",
-      "updateTooltip": "Current version: {current} | Latest version: {latest} | Checked from: {source}",
-      "sources": {
-        "github": "GitHub",
-        "gitee": "Gitee"
-      }
+      "updateTooltip": "Current version: {current} | Latest version: {latest}"
     },
     "titles": {
       "quickStart": "Quick Start",
@@ -69,7 +64,8 @@
         "description": "Besides the default global shortcuts, you can bind a dedicated shortcut to a specific Agent and summon it directly with that shortcut later.",
         "entry": "Settings → Prompt Shortcuts",
         "cardTitle": "Bind dedicated shortcuts for frequently used Agents",
-        "cardDescription": "Open “Desktop Settings” in Settings, find “Prompt shortcut list”, choose the target Agent, record a shortcut, and then you can summon it directly with your custom shortcut."
+        "cardDescription": "Open “Desktop Settings” in Settings, find “Prompt shortcut list”, choose the target Agent, record a shortcut, and then you can summon it directly with your custom shortcut.",
+        "feedbackGroup": "【Issue feedback / feature requests】QQ Group: 1065512489"
       }
     }
   },

@@ -741,11 +741,17 @@ async function exportLocalChat(file) {
     }
 
     try {
-        await window.api.exportLocalChatFile(filePath, {
+        const result = await window.api.exportLocalChatFile(filePath, {
             title: t('chats.export.dialogTitle'),
             defaultPath: basename || 'chat.json',
             filters: [{ name: 'JSON Files', extensions: ['json'] }]
         });
+
+        const exportedPath = getSafeString(result?.path);
+        if (exportedPath) {
+            await window.api.shellShowItemInFolder(exportedPath);
+        }
+
         ElMessage.success(t('chats.export.success'));
     } catch (error) {
         const message = String(error?.message || '');

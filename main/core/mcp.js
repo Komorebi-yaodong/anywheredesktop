@@ -313,6 +313,12 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
   const failedServerIds = []
   const serverEntries = Object.entries(activeServerConfigs || {})
 
+  console.log('[MCP Runtime] initializeMcpClient:start', {
+    sessionKey,
+    activeServerIds: Object.keys(activeServerConfigs || {}),
+    cachedServerIds: Object.keys(cachedToolsMap || {})
+  })
+
   const onDemandConfigsToAdd = serverEntries
     .map(([id, config]) => ({ id, config }))
     .filter(({ config }) => config && !config.isPersistent)
@@ -431,7 +437,16 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
     }
   }
 
-  return {
+  
+  console.log('[MCP Runtime] initializeMcpClient:done', {
+    sessionKey,
+    successfulServerIds: [...runtime.currentlyConnectedServerIds],
+    failedServerIds,
+    registeredToolKeys: [...runtime.fullToolInfoMap.keys()],
+    exportedToolNames: buildOpenaiFormattedTools(sessionKey).map((item) => item?.function?.name).filter(Boolean)
+  })
+
+return {
     openaiFormattedTools: buildOpenaiFormattedTools(sessionKey),
     successfulServerIds: [...runtime.currentlyConnectedServerIds],
     failedServerIds
@@ -476,7 +491,24 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
   const toolInfo = runtime?.fullToolInfoMap.get(toolName)
   const resolvedToolName = toolInfo?.rawName || toolInfo?.originalName || toolInfo?.displayName || toolName
 
+  console.log('[MCP Runtime] invokeMcpTool:start', {
+    sessionKey,
+    requestedToolName: toolName,
+    resolvedToolName,
+    contextSenderId: context?.senderId || null,
+    runtimeExists: Boolean(runtime),
+    registeredToolKeys: runtime ? [...runtime.fullToolInfoMap.keys()] : []
+  })
+
   if (!toolInfo) {
+
+    console.warn('[MCP Runtime] invokeMcpTool:not-found', {
+      sessionKey,
+      requestedToolName: toolName,
+      resolvedToolName,
+      contextSenderId: context?.senderId || null,
+      registeredToolKeys: runtime ? [...runtime.fullToolInfoMap.keys()] : []
+    })
     try {
       return await invokeBuiltinTool(toolName, toolArgs, signal, context)
     } catch {

@@ -55,7 +55,11 @@ const api = {
     appWindowType: windowType,
     senderId: windowSenderId
   }),
-  getDroppedFilePath: (file) => {
+  
+  getAppVersion: () => invokeOrThrow('app:getVersion'),
+  checkLatestVersion: () => electronAPI.ipcRenderer.invoke('app:checkLatestVersion'),
+
+getDroppedFilePath: (file) => {
     try {
       const resolvedPath = webUtils.getPathForFile(file)
       return resolvedPath || ''

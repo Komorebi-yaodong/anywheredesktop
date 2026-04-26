@@ -1,6 +1,72 @@
 import path from 'node:path'
-import { BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
+
+const GITHUB_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/Komorebi-yaodong/anywheredesktop/main/package.json'
+const GITEE_PACKAGE_JSON_URL = 'https://gitee.com/Komorebi-yaodong/anywheredesktop/raw/main/package.json'
+
+function parseVersionParts(version = '') {
+  return String(version || '')
+    .trim()
+    .replace(/^v/i, '')
+    .split(/[.-]/)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part))
+}
+
+function compareVersions(a = '', b = '') {
+  const aParts = parseVersionParts(a)
+  const bParts = parseVersionParts(b)
+  const maxLength = Math.max(aParts.length, bParts.length)
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const left = aParts[index]
+    const right = bParts[index]
+
+    if (left === undefined && right === undefined) return 0
+    if (left === undefined) return typeof right === 'number' ? -1 : 1
+    if (right === undefined) return typeof left === 'number' ? 1 : -1
+
+    if (typeof left === 'number' && typeof right === 'number') {
+      if (left > right) return 1
+      if (left < right) return -1
+      continue
+    }
+
+    if (typeof left === 'number') return 1
+    if (typeof right === 'number') return -1
+
+    const compared = String(left).localeCompare(String(right))
+    if (compared !== 0) return compared > 0 ? 1 : -1
+  }
+
+  return 0
+}
+
+async function readLatestVersionFromPackage(fileApi, source, url) {
+  const result = await fileApi.readRemoteText(url)
+  if (!result?.ok || typeof result?.text !== 'string') {
+    throw new Error(result?.message || `${source}_package_fetch_failed`)
+  }
+
+  let parsed
+  try {
+    parsed = JSON.parse(result.text)
+  } catch {
+    throw new Error(`${source}_package_json_invalid`)
+  }
+
+  const version = typeof parsed?.version === 'string' ? parsed.version.trim() : ''
+  if (!version) {
+    throw new Error(`${source}_package_version_missing`)
+  }
+
+  return {
+    source,
+    url,
+    version
+  }
+}
+
 
 const liveSignalControllers = new Map()
 
@@ -314,7 +380,59 @@ export function registerIpcHandlers({
 
 
   
-  handleInvoke('data:getUser', async () => {
+  
+  handleInvoke('app:getVersion', async () => {
+    return {
+      ok: true,
+      version: app.getVersion()
+    }
+  })
+
+  handleInvoke('app:checkLatestVersion', async () => {
+    const currentVersion = app.getVersion()
+    const sources = [
+      { source: 'github', url: GITHUB_PACKAGE_JSON_URL },
+      { source: 'gitee', url: GITEE_PACKAGE_JSON_URL }
+    ]
+    const errors = []
+
+    for (const entry of sources) {
+      try {
+        const latest = await readLatestVersionFromPackage(fileApi, entry.source, entry.url)
+        return {
+          ok: true,
+          currentVersion,
+          latestVersion: latest.version,
+          hasUpdate: compareVersions(latest.version, currentVersion) > 0,
+          source: latest.source,
+          checkedUrl: latest.url,
+          errors
+        }
+      } catch (error) {
+        errors.push({
+          source: entry.source,
+          url: entry.url,
+          message: error?.message || String(error)
+        })
+      }
+    }
+
+    return {
+      ok: false,
+      currentVersion,
+      latestVersion: '',
+      hasUpdate: false,
+      source: '',
+      checkedUrl: '',
+      errors,
+      error: {
+        message: 'latest_version_check_failed'
+      }
+    }
+  })
+
+
+handleInvoke('data:getUser', async () => {
     return dataApi.getUser()
   })
 

@@ -26,6 +26,16 @@
     "loadFailed": "Failed to load documentation. Please check your network connection.",
     "checkNetwork": "Please ensure you can access GitHub or its mirrors.",
     "sourcesUnavailable": "(GitHub and Gitee documentation sources are both unreachable)",
+    "version": {
+      "latestAvailable": "New {version} available",
+      "currentTooltip": "Current version: {current} | Checked from: {source}",
+      "currentOnlyTooltip": "Current version: {current}",
+      "updateTooltip": "Current version: {current} | Latest version: {latest} | Checked from: {source}",
+      "sources": {
+        "github": "GitHub",
+        "gitee": "Gitee"
+      }
+    },
     "titles": {
       "quickStart": "Quick Start",
       "ai": "Agent Prompts",

@@ -209,6 +209,93 @@ const activeDocIndex = ref('0');
 const docScrollbarRef = ref(null);
 const QUICK_START_DOC_FILE = '__quick_start__';
 
+const versionInfo = ref({
+  currentVersion: '',
+  latestVersion: '',
+  hasUpdate: false,
+  source: '',
+  checkedUrl: '',
+  checkFailed: false
+});
+
+const docVersionText = computed(() => {
+  const current = versionInfo.value?.currentVersion ? `v${versionInfo.value.currentVersion}` : '';
+  if (!current) return '';
+  if (versionInfo.value?.hasUpdate && versionInfo.value?.latestVersion) {
+    return `${current} · ${t('doc.version.latestAvailable', { version: `v${versionInfo.value.latestVersion}` })}`;
+  }
+  return current;
+});
+
+const docVersionTooltip = computed(() => {
+  const source = versionInfo.value?.source ? t(`doc.version.sources.${versionInfo.value.source}`) : '';
+  if (versionInfo.value?.hasUpdate && versionInfo.value?.latestVersion) {
+    return t('doc.version.updateTooltip', {
+      current: `v${versionInfo.value.currentVersion}`,
+      latest: `v${versionInfo.value.latestVersion}`,
+      source: source || '-'
+    });
+  }
+  if (versionInfo.value?.currentVersion && source) {
+    return t('doc.version.currentTooltip', {
+      current: `v${versionInfo.value.currentVersion}`,
+      source
+    });
+  }
+  if (versionInfo.value?.currentVersion) {
+    return t('doc.version.currentOnlyTooltip', {
+      current: `v${versionInfo.value.currentVersion}`
+    });
+  }
+  return '';
+});
+
+const fetchVersionInfo = async () => {
+  try {
+    const currentResult = await window.api.getAppVersion();
+    const currentVersion = typeof currentResult?.version === 'string' ? currentResult.version.trim() : '';
+    versionInfo.value = {
+      ...versionInfo.value,
+      currentVersion,
+      checkFailed: false
+    };
+
+    const latestResult = await window.api.checkLatestVersion();
+    if (latestResult?.ok) {
+      versionInfo.value = {
+        currentVersion,
+        latestVersion: typeof latestResult?.latestVersion === 'string' ? latestResult.latestVersion.trim() : '',
+        hasUpdate: Boolean(latestResult?.hasUpdate),
+        source: typeof latestResult?.source === 'string' ? latestResult.source : '',
+        checkedUrl: typeof latestResult?.checkedUrl === 'string' ? latestResult.checkedUrl : '',
+        checkFailed: false
+      };
+      return;
+    }
+
+    versionInfo.value = {
+      ...versionInfo.value,
+      currentVersion,
+      latestVersion: '',
+      hasUpdate: false,
+      source: '',
+      checkedUrl: '',
+      checkFailed: true
+    };
+  } catch (error) {
+    console.warn('Failed to fetch version info:', error);
+    versionInfo.value = {
+      ...versionInfo.value,
+      latestVersion: '',
+      hasUpdate: false,
+      source: '',
+      checkedUrl: '',
+      checkFailed: true
+    };
+  }
+};
+
+
 const escapeHtml = (value = '') => String(value)
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -543,6 +630,7 @@ const handleDocLinks = (event) => {
 onMounted(async () => {
   // 异步获取文档更新时间，获取后会自动更新UI红点
   fetchAllDocsMetadata();
+  fetchVersionInfo();
 
   window.addEventListener('local-config-updated', (event) => {
     const newConfig = event.detail;
@@ -741,7 +829,15 @@ watch(locale, () => {
     </el-main>
 
     <!-- 帮助文档弹窗 -->
-    <el-dialog v-model="showDocDialog" :title="t('doc.title')" width="80%" :lock-scroll="false" class="doc-dialog">
+    <el-dialog v-model="showDocDialog" width="80%" :lock-scroll="false" class="doc-dialog">
+      <template #header>
+        <div class="doc-dialog__header">
+          <span class="doc-dialog__title">{{ t('doc.title') }}</span>
+          <el-tooltip v-if="docVersionText" :content="docVersionTooltip" placement="top">
+            <span class="doc-dialog__version" :class="{ 'has-update': versionInfo.hasUpdate }">{{ docVersionText }}</span>
+          </el-tooltip>
+        </div>
+      </template>
       <div class="doc-container">
         <div class="doc-sidebar">
           <el-menu :default-active="activeDocIndex" :default-openeds="[]" @select="(index) => activeDocIndex = index" class="doc-menu">
@@ -963,6 +1059,53 @@ html.dark .el-main {
 
 .blank-col {
   min-width: 32px;
+}
+
+
+.doc-dialog__header {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+}
+
+.doc-dialog__title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.doc-dialog__version {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  white-space: nowrap;
+}
+
+.doc-dialog__version.has-update {
+  color: #16a34a;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.28);
+}
+
+html.dark .doc-dialog__version {
+  color: rgba(228, 228, 231, 0.88);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .doc-dialog__version.has-update {
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(74, 222, 128, 0.28);
 }
 
 .doc-container {

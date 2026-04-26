@@ -457,24 +457,13 @@ const api = {
     const channel = actionMap[action]
     if (!channel) {
       const unsupported = { ok: false, error: 'unsupported_window_action', action }
-      debugPreloadError('windowControl:unsupported', unsupported)
       return Promise.resolve(unsupported)
     }
-    debugPreloadLog('windowControl:before', { action, channel, windowRef })
-    try {
-      if (channel === 'window:close') {
-        electronAPI.ipcRenderer.send(channel, { windowRef })
-        const result = { ok: true, action: 'close', windowRef: windowRef || null, dispatched: true }
-        debugPreloadLog('windowControl:after', { action, channel, windowRef, result })
-        return result
-      }
-      const result = await electronAPI.ipcRenderer.invoke(channel, { windowRef })
-      debugPreloadLog('windowControl:after', { action, channel, windowRef, result })
-      return result
-    } catch (error) {
-      debugPreloadError('windowControl:error', { action, channel, windowRef, error })
-      throw error
+    if (channel === 'window:close') {
+      electronAPI.ipcRenderer.send(channel, { windowRef })
+      return { ok: true, action: 'close', windowRef: windowRef || null, dispatched: true }
     }
+    return await electronAPI.ipcRenderer.invoke(channel, { windowRef })
   },
   onAlwaysOnTopChanged: (callback) => {
     if (typeof callback !== 'function') return

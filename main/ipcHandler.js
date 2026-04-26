@@ -612,14 +612,6 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
       ? meta.sessionKey.trim()
       : (senderId ? String(senderId) : 'global')
 
-    console.log('[IPC MCP] initializeClient', {
-      senderId,
-      senderRef: senderId,
-      sessionKey,
-      requestedSessionKey: typeof meta?.sessionKey === 'string' ? meta.sessionKey : null,
-      serverIds: Object.keys(activeServerConfigs || {})
-    })
-
     return mcpApi.initializeMcpClient(activeServerConfigs, cache, dataApi.saveMcpToolCache, { sessionKey })
   })
 
@@ -718,16 +710,6 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
 
     const nextContext = context ? { ...context } : null
 
-    console.log('[IPC MCP] invokeToolLive', {
-      senderRef: BrowserWindow.fromWebContents(event.sender)?.id || event.sender?.id || null,
-      signalToken,
-      callbackToken,
-      toolName,
-      contextSenderId: context?.senderId || null,
-      contextKeys: context ? Object.keys(context) : [],
-      argKeys: toolArgs && typeof toolArgs === 'object' ? Object.keys(toolArgs) : [],
-      aborted: Boolean(meta?.aborted)
-    })
     if (nextContext && callbackToken) {
       nextContext.onUpdate = (payload) => {
         try {

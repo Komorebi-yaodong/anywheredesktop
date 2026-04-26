@@ -171,11 +171,6 @@ function decodeSerializedBinary(value) {
   return value
 }
 
-const PRELOAD_DEBUG_PREFIX = '[Anywhere Preload Debug]'
-const debugPreloadLog = (...args) => console.log(PRELOAD_DEBUG_PREFIX, ...args)
-const debugPreloadError = (...args) => console.error(PRELOAD_DEBUG_PREFIX, ...args)
-
-
 electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
   latestInitMessage = data
   if (typeof data.windowType === 'string' && data.windowType) {
@@ -184,12 +179,6 @@ electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
   if (typeof data.senderId === 'string' && data.senderId) {
     senderId = data.senderId
   }
-  debugPreloadLog('window:init', {
-    windowType: data?.windowType || null,
-    incomingSenderId: data?.senderId || null,
-    previousSenderId: senderId || null
-  })
-
 })
 
 electronAPI.ipcRenderer.on('window:callback', (_event, data = {}) => {
@@ -316,15 +305,7 @@ const api = {
   coderedirect: (label = '', payload = null) => electronAPI.ipcRenderer.invoke('data:coderedirect', label, payload),
   runTaskNow: (taskId = '') => electronAPI.ipcRenderer.invoke('data:runTaskNow', taskId),
   savePromptWindowSettings: async (promptKey, settings) => {
-    debugPreloadLog('savePromptWindowSettings:before', { promptKey, settings })
-    try {
-      const result = await electronAPI.ipcRenderer.invoke('data:savePromptWindowSettings', promptKey, settings)
-      debugPreloadLog('savePromptWindowSettings:after', result)
-      return result
-    } catch (error) {
-      debugPreloadError('savePromptWindowSettings:error', error)
-      throw error
-    }
+    return await electronAPI.ipcRenderer.invoke('data:savePromptWindowSettings', promptKey, settings)
   },
   addTaskHistory: (taskId, logEntry) => electronAPI.ipcRenderer.invoke('data:addTaskHistory', taskId, logEntry),
   getCachedBackgroundImage: async (url) => decodeSerializedBinary(await electronAPI.ipcRenderer.invoke('data:getCachedBackgroundImage', url)),
@@ -348,16 +329,7 @@ const api = {
     return result?.cache || result || {}
   },
   saveMcpToolCache: (serverId, tools = []) => electronAPI.ipcRenderer.invoke('mcp:saveToolCache', serverId, toPlainPayload(tools) || []),
-  initializeMcpClient: (activeServerConfigs = {}, meta = {}) => {
-    const nextMeta = toPlainPayload(meta) || {}
-    debugPreloadLog('initializeMcpClient:before', {
-      senderId,
-      requestedSessionKey: nextMeta?.sessionKey || null,
-      resolvedWindowContext: { appWindowType: windowType, senderId },
-      serverIds: Object.keys(toPlainPayload(activeServerConfigs) || {})
-    })
-    return electronAPI.ipcRenderer.invoke('mcp:initializeClient', toPlainPayload(activeServerConfigs) || {}, nextMeta)
-  },
+  initializeMcpClient: (activeServerConfigs = {}, meta = {}) => electronAPI.ipcRenderer.invoke('mcp:initializeClient', toPlainPayload(activeServerConfigs) || {}, toPlainPayload(meta) || {}),
   testMcpConnection: (serverConfig = {}) => electronAPI.ipcRenderer.invoke('mcp:testConnection', toPlainPayload(serverConfig) || {}),
   testInvokeMcpTool: (serverConfig = {}, toolName = '', args = {}) => electronAPI.ipcRenderer.invoke('mcp:testInvokeTool', toPlainPayload(serverConfig) || {}, toolName, toPlainPayload(args) || {}),
   invokeMcpTool: async (toolName = '', toolArgs = {}, signal = null, context = null) => {
@@ -372,28 +344,11 @@ const api = {
     if (nextContext && callbackToken) delete nextContext.onUpdate
 
     try {
-      debugPreloadLog('invokeMcpTool:before', {
-        toolName,
-        senderId,
-        signalToken,
-        callbackToken,
-        contextSenderId: nextContext?.senderId || null,
-        contextKeys: nextContext ? Object.keys(nextContext) : [],
-        argKeys: toolArgs && typeof toolArgs === 'object' ? Object.keys(toolArgs) : [],
-        windowContext: { appWindowType: windowType, senderId }
-      })
       const result = await electronAPI.ipcRenderer.invoke('mcp:invokeToolLive', toolName, toPlainPayload(toolArgs) || {}, {
         signalToken,
         callbackToken,
         aborted: Boolean(signal?.aborted),
         context: nextContext
-      })
-      debugPreloadLog('invokeMcpTool:after', {
-        toolName,
-        senderId,
-        contextSenderId: nextContext?.senderId || null,
-        resultType: typeof result,
-        resultPreview: typeof result === 'string' ? result.slice(0, 200) : result
       })
 
       if (result && typeof result === 'object' && result.ok === false) {

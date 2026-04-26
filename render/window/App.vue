@@ -4414,16 +4414,6 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
   const serverIdsToLoad = [...sessionMcpServerIds.value];
   const effectiveToolCache = getEffectiveMcpToolCache();
   const windowSessionKey = String(window.api?.getWindowContext?.()?.senderId || 'global');
-  console.log('[Window MCP] applying tools', {
-    reason,
-    show_none,
-    code: CODE.value,
-    senderId: window.api?.getWindowContext?.()?.senderId || null,
-    windowContext: window.api?.getWindowContext?.() || null,
-    serverIdsToLoad,
-    windowSessionKey,
-    toolCacheServerIds: Object.keys(effectiveToolCache || {})
-  });
 
   for (const id of serverIdsToLoad) {
     if (currentConfig.value.mcpServers[id]) {
@@ -4451,15 +4441,6 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
 
     openaiFormattedTools.value = newFormattedTools;
 
-    console.log('[Window MCP] initialize result', {
-      code: CODE.value,
-      windowSessionKey,
-      successfulServerIds,
-      failedServerIds,
-      toolNames: Array.isArray(newFormattedTools)
-        ? newFormattedTools.map((item) => item?.function?.name).filter(Boolean)
-        : []
-    });
     sessionMcpServerIds.value = successfulServerIds;
 
     if (failedServerIds && failedServerIds.length > 0) {
@@ -5184,16 +5165,6 @@ const askAI = async (forceSend = false) => {
                 }
 
                 
-                console.log('[Window MCP] invoking tool', {
-                  code: CODE.value,
-                  toolName: toolCall.function.name,
-                  toolArgs,
-                  windowContext: window.api?.getWindowContext?.() || null,
-                  executionContextSenderId: executionContext?.senderId || null,
-                  activeToolNames: Array.isArray(activeTools)
-                    ? activeTools.map((item) => item?.function?.name).filter(Boolean)
-                    : []
-                });
 const result = await window.api.invokeMcpTool(
                   toolCall.function.name,
                   toolArgs,

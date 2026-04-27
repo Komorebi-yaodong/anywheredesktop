@@ -42,6 +42,103 @@ const normalizeToolsForRequest = (tools = []) => {
   });
 };
 
+const shouldBackfillAssistantReasoningContent = (reasoningEffort) => {
+  return typeof reasoningEffort === 'string' && !['', 'default', 'none'].includes(reasoningEffort);
+};
+
+const ensureAssistantReasoningContentForThinkingMode = (messages = [], reasoningEffort) => {
+  if (!Array.isArray(messages) || !shouldBackfillAssistantReasoningContent(reasoningEffort)) {
+    return messages;
+  }
+
+  messages.forEach(msg => {
+    if (msg?.role === 'assistant' && typeof msg.reasoning_content !== 'string') {
+      msg.reasoning_content = '';
+    }
+  });
+
+  return messages;
+};
+
+const isAsyncIterableResponse = (value) => {
+  return value && typeof value[Symbol.asyncIterator] === 'function';
+};
+
+const collectChatCompletionStreamToMessage = async (streamLike, reasoningEffort = 'default') => {
+  let aggregatedReasoningContent = '';
+  let aggregatedContent = '';
+  let aggregatedMedia = [];
+  let aggregatedToolCalls = [];
+  let aggregatedExtraContent = null;
+
+  for await (const part of streamLike) {
+    const delta = part?.choices?.[0]?.delta;
+    if (!delta) continue;
+
+    if (delta.extra_content) {
+      aggregatedExtraContent = { ...aggregatedExtraContent, ...delta.extra_content };
+    }
+    if (delta.thought_signature) {
+      aggregatedExtraContent = aggregatedExtraContent || {};
+      aggregatedExtraContent.google = aggregatedExtraContent.google || {};
+      aggregatedExtraContent.google.thought_signature = delta.thought_signature;
+    }
+    if (delta.reasoning_content || delta.reasoning) {
+      aggregatedReasoningContent += delta.reasoning_content || delta.reasoning;
+    }
+    if (delta.content) {
+      if (typeof delta.content === 'string') {
+        aggregatedContent += delta.content;
+      } else if (Array.isArray(delta.content)) {
+        delta.content.forEach(item => {
+          if (item?.type === 'text') {
+            aggregatedContent += (item.text || '');
+          } else if (item?.type === 'image_url') {
+            aggregatedMedia.push(item);
+          }
+        });
+      }
+    }
+    if (delta.tool_calls) {
+      for (const toolCallChunk of delta.tool_calls) {
+        const index = toolCallChunk.index ?? aggregatedToolCalls.length;
+        if (!aggregatedToolCalls[index]) {
+          aggregatedToolCalls[index] = { id: '', type: 'function', function: { name: '', arguments: '' } };
+        }
+        const currentTool = aggregatedToolCalls[index];
+        if (toolCallChunk.id) currentTool.id = toolCallChunk.id;
+        if (toolCallChunk.function?.name) currentTool.function.name = toolCallChunk.function.name;
+        if (toolCallChunk.function?.arguments) currentTool.function.arguments += toolCallChunk.function.arguments;
+        if (toolCallChunk.extra_content) {
+          currentTool.extra_content = { ...currentTool.extra_content, ...toolCallChunk.extra_content };
+        }
+      }
+    }
+  }
+
+  let normalizedContent = aggregatedContent || null;
+  if (aggregatedMedia.length > 0) {
+    normalizedContent = [];
+    if (aggregatedContent) normalizedContent.push({ type: 'text', text: aggregatedContent });
+    normalizedContent.push(...aggregatedMedia);
+  }
+
+  const message = {
+    role: 'assistant',
+    content: normalizedContent,
+    reasoning_content: aggregatedReasoningContent || (shouldBackfillAssistantReasoningContent(reasoningEffort) ? '' : null),
+    extra_content: aggregatedExtraContent
+  };
+
+  const validToolCalls = aggregatedToolCalls.filter(tc => tc?.id && tc?.function?.name);
+  if (validToolCalls.length > 0) {
+    message.tool_calls = validToolCalls;
+  }
+
+  return message;
+};
+
+
 const showDismissibleMessage = (options) => {
   const opts = typeof options === 'string' ? { message: options } : options;
   const duration = opts.duration !== undefined ? opts.duration : 1000;
@@ -4640,7 +4737,7 @@ const askAI = async (forceSend = false) => {
 
   const currentPromptConfig = currentConfig.value.prompts[CODE.value];
   const isVoiceReply = !!selectedVoice.value;
-  let useStream = currentPromptConfig?.stream && !isVoiceReply;
+  let useStream = (currentPromptConfig?.stream ?? true) && !isVoiceReply;
   let tool_calls_count = 0;
 
   // 获取当前服务商的 API 类型
@@ -4663,6 +4760,8 @@ const askAI = async (forceSend = false) => {
         }
         return true;
       });
+
+      ensureAssistantReasoningContentForThinkingMode(messagesForThisRequest, tempReasoningEffort.value);
 
       messagesForThisRequest.forEach(msg => {
         if (Array.isArray(msg.content)) {
@@ -4940,7 +5039,7 @@ const askAI = async (forceSend = false) => {
         responseMessage = {
           role: 'assistant',
           content: finalContentForHistory,
-          reasoning_content: aggregatedReasoningContent || null,
+          reasoning_content: aggregatedReasoningContent || (shouldBackfillAssistantReasoningContent(tempReasoningEffort.value) ? '' : null),
           extra_content: aggregatedExtraContent
         };
 
@@ -4995,12 +5094,16 @@ const askAI = async (forceSend = false) => {
           responseMessage = {
             role: 'assistant',
             content: contentText || null,
-            reasoning_content: reasoningText || null,
+            reasoning_content: reasoningText || (shouldBackfillAssistantReasoningContent(tempReasoningEffort.value) ? '' : null),
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined
           };
         } else {
           // Chat Completions
-          responseMessage = response.choices[0].message;
+          if (isAsyncIterableResponse(response)) {
+            responseMessage = await collectChatCompletionStreamToMessage(response, tempReasoningEffort.value);
+          } else {
+            responseMessage = response.choices[0].message;
+          }
         }
       }
 
@@ -5015,6 +5118,8 @@ const askAI = async (forceSend = false) => {
       if (requestSignal.aborted) {
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
+
+      ensureAssistantReasoningContentForThinkingMode([responseMessage], tempReasoningEffort.value);
 
       history.value.push(responseMessage);
 

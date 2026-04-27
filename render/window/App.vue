@@ -991,6 +991,36 @@ const mcpToolCache = ref({});
 const sessionMcpToolOverrides = ref({});
 const expandedMcpServers = ref(new Set());
 
+const lastAppliedMcpConfigFingerprint = ref('');
+
+const buildComparableMcpServerConfig = (server = {}) => ({
+  type: server?.type || '',
+  command: server?.command || '',
+  args: Array.isArray(server?.args) ? [...server.args] : [],
+  baseUrl: server?.baseUrl || '',
+  env: server?.env && typeof server.env === 'object'
+    ? Object.entries(server.env).sort(([a], [b]) => String(a).localeCompare(String(b)))
+    : [],
+  headers: server?.headers && typeof server.headers === 'object'
+    ? Object.entries(server.headers).sort(([a], [b]) => String(a).localeCompare(String(b)))
+    : [],
+  isPersistent: Boolean(server?.isPersistent),
+  timeoutSeconds: Number(server?.timeoutSeconds) || 120
+});
+
+const buildSelectedMcpConfigFingerprint = (serverIds = sessionMcpServerIds.value, mcpServers = currentConfig.value?.mcpServers || {}) => {
+  const payload = (Array.isArray(serverIds) ? [...serverIds] : [])
+    .filter(id => mcpServers && mcpServers[id])
+    .sort()
+    .map((id) => ({
+      id,
+      config: buildComparableMcpServerConfig(mcpServers[id])
+    }));
+
+  return JSON.stringify(payload);
+};
+
+
 const cloneMcpTools = (tools = []) => Array.isArray(tools)
   ? tools.map(tool => ({ ...tool }))
   : [];
@@ -2639,6 +2669,7 @@ onMounted(async () => {
 
       if (newConfig.mcpServers) {
         let mcpChanged = false;
+        const previousFingerprint = lastAppliedMcpConfigFingerprint.value;
         const validMcpIds = sessionMcpServerIds.value.filter(id => {
           const server = newConfig.mcpServers[id];
           return server && server.isActive;
@@ -2653,8 +2684,13 @@ onMounted(async () => {
           mcpChanged = true;
         }
 
-        if (mcpChanged && !loading.value) {
-          requestApplyMcpTools(false, 'config-or-session-sync');
+        const nextFingerprint = buildSelectedMcpConfigFingerprint(validMcpIds, newConfig.mcpServers);
+        if (nextFingerprint !== previousFingerprint) {
+          mcpChanged = true;
+        }
+
+        if (mcpChanged && !loading.value && !isMcpLoading.value) {
+          requestApplyMcpTools(false, 'config-runtime-changed');
         }
       }
     });
@@ -4541,6 +4577,7 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
     openaiFormattedTools.value = newFormattedTools;
 
     sessionMcpServerIds.value = successfulServerIds;
+    lastAppliedMcpConfigFingerprint.value = buildSelectedMcpConfigFingerprint(successfulServerIds, currentConfig.value?.mcpServers || {});
 
     if (failedServerIds && failedServerIds.length > 0) {
       const failedNames = failedServerIds.map(id => currentConfig.value.mcpServers[id]?.name || id).join('、');
@@ -4563,6 +4600,7 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
     showDismissibleMessage.error(`加载MCP工具失败: ${error.message}`);
     openaiFormattedTools.value = [];
     sessionMcpServerIds.value = [];
+    lastAppliedMcpConfigFingerprint.value = buildSelectedMcpConfigFingerprint([], currentConfig.value?.mcpServers || {});
   } finally {
     isMcpLoading.value = false;
   }

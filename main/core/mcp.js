@@ -517,7 +517,7 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
 
   if (toolInfo.isPersistent && toolInfo.instance) {
     const toolTimeoutMs = normalizeMcpTimeoutSeconds(toolInfo?.serverConfig?.timeoutSeconds) * 1000
-    return await toolInfo.instance.invoke(toolArgs, { signal, timeout: toolTimeoutMs })
+    return await toolInfo.instance.call(toolArgs, { signal, timeout: toolTimeoutMs })
   }
 
   const toolTimeoutMs = normalizeMcpTimeoutSeconds(toolInfo?.serverConfig?.timeoutSeconds) * 1000
@@ -556,7 +556,7 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
         throw new Error(`Tool "${resolvedToolName}" not found.`)
       }
 
-      return await toolToCall.invoke(toolArgs, { signal: controller.signal, timeout: toolTimeoutMs })
+      return await toolToCall.call(toolArgs, { signal: controller.signal, timeout: toolTimeoutMs })
     } finally {
       if (signal && abortHandler) {
         signal.removeEventListener('abort', abortHandler)
@@ -603,7 +603,7 @@ export async function connectAndInvokeTool(id, config, toolName, toolArgs, conte
     }
 
     const toolTimeoutMs = normalizeMcpTimeoutSeconds(config?.timeoutSeconds) * 1000
-    return await targetTool.invoke(toolArgs, { signal: controller.signal, timeout: toolTimeoutMs })
+    return await targetTool.call(toolArgs, { signal: controller.signal, timeout: toolTimeoutMs })
   } catch (error) {
     console.error(`[MCP] Error invoking tool ${toolName} on ${id}:`, error)
     throw error

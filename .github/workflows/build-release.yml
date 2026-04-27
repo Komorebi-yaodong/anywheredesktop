@@ -87,21 +87,21 @@ jobs:
             artifact_name: anywhere-windows
             artifact_glob: |
               dist/*-setup.exe
-              dist/*.yml
+              dist/latest*.yml
               dist/*.blockmap
           - os: ubuntu-latest
             target: linux
             artifact_name: anywhere-linux
             artifact_glob: |
               dist/*.AppImage
-              dist/*.yml
+              dist/latest*.yml
               dist/*.blockmap
           - os: macos-latest
             target: mac
             artifact_name: anywhere-macos
             artifact_glob: |
               dist/*-mac.zip
-              dist/*.yml
+              dist/latest*.yml
               dist/*.blockmap
 
     runs-on: ${{ matrix.os }}
@@ -181,21 +181,21 @@ jobs:
             artifact_name: anywhere-windows
             artifact_glob: |
               dist/*-setup.exe
-              dist/*.yml
+              dist/latest*.yml
               dist/*.blockmap
           - os: ubuntu-latest
             target: linux
             artifact_name: anywhere-linux
             artifact_glob: |
               dist/*.AppImage
-              dist/*.yml
+              dist/latest*.yml
               dist/*.blockmap
           - os: macos-latest
             target: mac
             artifact_name: anywhere-macos
             artifact_glob: |
               dist/*-mac.zip
-              dist/*.yml
+              dist/latest*.yml
               dist/*.blockmap
 
     runs-on: ${{ matrix.os }}
@@ -300,24 +300,26 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ needs.prepare-release.outputs.tag }}"
           TITLE="$TAG"
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
             echo "GitHub release $TAG already exists, reusing it."
           else
-            gh release create "$TAG" --title "$TITLE" --notes ""
+            gh release create "$TAG" --repo "$GH_REPO" --title "$TITLE" --notes ""
           fi
 
       - name: Upload release assets
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ needs.prepare-release.outputs.tag }}"
-          mapfile -t FILES < <(find release-assets -type f)
+          mapfile -t FILES < <(find release-assets -type f ! -name 'builder-debug.yml')
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "::error::No release assets were downloaded."
             exit 1
           fi
-          gh release upload "$TAG" "${FILES[@]}" --clobber
+          gh release upload "$TAG" --repo "$GH_REPO" "${FILES[@]}" --clobber

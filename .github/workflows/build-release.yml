@@ -42,24 +42,35 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Preparing release for $TAG"
 
-      - name: Ensure release tag is unique
+      - name: Ensure release tag points to current commit
         shell: bash
         run: |
           TAG="${{ steps.release_meta.outputs.tag }}"
+          CURRENT_SHA="$(git rev-parse HEAD)"
+
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists in the current checkout. Please update package.json.version before dispatching the workflow."
+            LOCAL_TAG_SHA="$(git rev-list -n 1 "$TAG")"
+            if [ "$LOCAL_TAG_SHA" != "$CURRENT_SHA" ]; then
+              echo "::error::Local tag $TAG already exists but points to $LOCAL_TAG_SHA instead of current commit $CURRENT_SHA."
+              exit 1
+            fi
+          fi
+
+          REMOTE_TAG_SHA="$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')"
+          if [ -n "$REMOTE_TAG_SHA" ] && [ "$REMOTE_TAG_SHA" != "$CURRENT_SHA" ]; then
+            echo "::error::Remote tag $TAG already exists on origin but points to $REMOTE_TAG_SHA instead of current commit $CURRENT_SHA."
             exit 1
           fi
 
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists on origin. Please update package.json.version before dispatching the workflow."
-            exit 1
-          fi
-
-      - name: Create and push release tag
+      - name: Create and push release tag if missing
         shell: bash
         run: |
           TAG="${{ steps.release_meta.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists on origin, reusing it for this release run."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "$TAG"
@@ -241,11 +252,11 @@ jobs:
           echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR"
           echo "npm_config_electron_builder_binaries_mirror=$npm_config_electron_builder_binaries_mirror"
 
-      - name: Build and publish package
-        run: pnpm release:${{ matrix.target }}
+      - name: Build package
+        run: pnpm build:${{ matrix.target }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_BUILDER_DISABLE_AUTO_PUBLISH: true
           ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
           npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
           BUILD_ARTIFACT_NAME: ${{ env.BUILD_ARTIFACT_NAME }}
@@ -257,3 +268,56 @@ jobs:
           name: ${{ matrix.artifact_name }}-${{ env.ARTIFACT_FLAVOR }}-${{ env.RELEASE_VERSION }}
           path: ${{ matrix.artifact_glob }}
           if-no-files-found: error
+
+
+  publish-release-assets:
+    if: github.event_name == 'workflow_dispatch'
+    needs:
+      - prepare-release
+      - build-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: anywhere-windows-release-${{ needs.prepare-release.outputs.version }}
+          path: release-assets/windows
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: anywhere-linux-release-${{ needs.prepare-release.outputs.version }}
+          path: release-assets/linux
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: anywhere-macos-release-${{ needs.prepare-release.outputs.version }}
+          path: release-assets/macos
+
+      - name: Create or reuse GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.prepare-release.outputs.tag }}"
+          TITLE="$TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "GitHub release $TAG already exists, reusing it."
+          else
+            gh release create "$TAG" --title "$TITLE" --notes ""
+          fi
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.prepare-release.outputs.tag }}"
+          mapfile -t FILES < <(find release-assets -type f)
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::No release assets were downloaded."
+            exit 1
+          fi
+          gh release upload "$TAG" "${FILES[@]}" --clobber

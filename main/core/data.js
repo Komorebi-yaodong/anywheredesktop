@@ -21,6 +21,7 @@ const MCP_SERVERS_DOC_ID = 'mcpServers'
 const TASKS_DOC_ID = 'tasks'
 const LOCAL_CONFIG_DOC_ID = 'config_local_desktop'
 const CURRENT_CONFIG_VERSION = '2.6.10'
+const DEFAULT_MCP_TIMEOUT_SECONDS = 120
 
 const BACKGROUND_CACHE_DOC_ID = 'background_cache'
 const BACKGROUND_CACHE_DIR_NAME = 'background_cache'
@@ -556,7 +557,19 @@ function checkConfig(inputConfig) {
     }
   }
 
-  const rootDefaults = {
+  
+  if (config.mcpServers && typeof config.mcpServers === 'object') {
+    for (const server of Object.values(config.mcpServers)) {
+      if (!server || typeof server !== 'object') continue
+      const normalizedTimeout = normalizeMcpTimeoutSeconds(server.timeoutSeconds)
+      if (server.timeoutSeconds !== normalizedTimeout) {
+        server.timeoutSeconds = normalizedTimeout
+        changed = true
+      }
+    }
+  }
+
+const rootDefaults = {
     defaultTaskModel: '',
     tasks: {},
     providers: { ...defaultConfig.config.providers },
@@ -859,6 +872,15 @@ async function ensureConfigDocsIfMissing() {
 }
 
 
+
+function normalizeMcpTimeoutSeconds(timeoutSeconds, fallbackSeconds = DEFAULT_MCP_TIMEOUT_SECONDS) {
+  const numericValue = Number(timeoutSeconds)
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return fallbackSeconds
+  }
+  return numericValue
+}
+
 async function readStoredConfigSnapshot() {
   await ensureConfigDocsIfMissing()
 
@@ -886,6 +908,13 @@ async function readStoredConfigSnapshot() {
   mergedConfig.webdav.localChatPath =
     typeof localPart.localChatPath === 'string' ? localPart.localChatPath : ''
 
+  if (mergedConfig.mcpServers && typeof mergedConfig.mcpServers === 'object') {
+    Object.values(mergedConfig.mcpServers).forEach((server) => {
+      if (!server || typeof server !== 'object') return
+      server.timeoutSeconds = normalizeMcpTimeoutSeconds(server.timeoutSeconds)
+    })
+  }
+
   return mergedConfig
 }
 
@@ -903,7 +932,13 @@ function sanitizeConfigForStorage(incomingConfig = {}) {
           type: 'builtin',
           name: server?.name || id,
           isActive: Boolean(server?.isActive),
-          isPersistent: Boolean(server?.isPersistent)
+          isPersistent: Boolean(server?.isPersistent),
+          timeoutSeconds: (() => {
+            const numericTimeout = Number(server?.timeoutSeconds)
+            return Number.isFinite(numericTimeout) && numericTimeout > 0
+              ? numericTimeout
+              : DEFAULT_MCP_TIMEOUT_SECONDS
+          })()
         }
       } else {
         serverToSave[id] = deepClone(server)

@@ -624,7 +624,8 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
       env: serverConfig.env,
       headers: serverConfig.headers,
       type: serverConfig.type,
-      isPersistent: Boolean(serverConfig.isPersistent)
+      isPersistent: Boolean(serverConfig.isPersistent),
+      timeoutSeconds: serverConfig.timeoutSeconds
     }
 
     const rawTools = await mcpApi.connectAndFetchTools(serverConfig.id, normalizedConfig)
@@ -679,7 +680,8 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
       url: serverConfig.baseUrl,
       env: serverConfig.env,
       headers: serverConfig.headers,
-      type: serverConfig.type
+      type: serverConfig.type,
+      timeoutSeconds: serverConfig.timeoutSeconds
     }
 
     const result = await mcpApi.connectAndInvokeTool(serverConfig.id, normalizedConfig, toolName, args)

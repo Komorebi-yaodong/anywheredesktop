@@ -88,6 +88,7 @@ const defaultServer = {
     type: 'sse',
     isActive: true,
     isPersistent: false,
+    timeoutSeconds: 120,
     baseUrl: '',
     command: '',
     args: [],
@@ -101,6 +102,7 @@ const defaultServer = {
 
 const createEditingServerState = () => ({
     ...defaultServer,
+    timeoutSeconds: 120,
     args: '',
     env: '',
     headers: '',
@@ -207,6 +209,15 @@ const convertObjectToText = (obj) => {
     return Object.entries(obj).map(([key, value]) => `${key}: ${value}`).join('\n');
 };
 
+const normalizeTimeoutSecondsInput = (value, fallback = 120) => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return fallback;
+    }
+    return numericValue;
+};
+
+
 function prepareAddServer() {
     isNewServer.value = true;
     Object.assign(editingServer, createEditingServerState());
@@ -219,6 +230,7 @@ function prepareEditServer(server) {
     Object.assign(editingServer, {
         ...createEditingServerState(),
         ...server,
+        timeoutSeconds: normalizeTimeoutSecondsInput(server.timeoutSeconds),
         args: convertLinesToText(server.args),
         env: convertObjectToText(server.env),
         headers: convertObjectToText(server.headers),
@@ -241,6 +253,7 @@ async function saveServer() {
     };
 
     addIfPresent(serverData, 'description', editingServer.description);
+    serverData.timeoutSeconds = normalizeTimeoutSecondsInput(editingServer.timeoutSeconds);
     addIfPresent(serverData, 'baseUrl', editingServer.baseUrl);
     addIfPresent(serverData, 'command', editingServer.command);
     addIfArrayPresent(serverData, 'args', convertTextToLines(editingServer.args));
@@ -418,7 +431,8 @@ async function runToolTest() {
             baseUrl: server.baseUrl,
             env: typeof server.env === 'string' ? convertTextToObject(server.env) : server.env,
             headers: typeof server.headers === 'string' ? convertTextToObject(server.headers) : server.headers,
-            args: Array.isArray(server.args) ? server.args : convertTextToLines(server.args)
+            args: Array.isArray(server.args) ? server.args : convertTextToLines(server.args),
+            timeoutSeconds: normalizeTimeoutSecondsInput(server.timeoutSeconds)
         }));
 
         const response = await window.api.testInvokeMcpTool(configToTest, currentTestToolName.value, args);
@@ -540,7 +554,8 @@ async function triggerConnectionTest(server) {
         baseUrl: server.baseUrl,
         env: typeof server.env === 'string' ? convertTextToObject(server.env) : server.env,
         headers: typeof server.headers === 'string' ? convertTextToObject(server.headers) : server.headers,
-        args: Array.isArray(server.args) ? server.args : convertTextToLines(server.args)
+        args: Array.isArray(server.args) ? server.args : convertTextToLines(server.args),
+        timeoutSeconds: normalizeTimeoutSecondsInput(server.timeoutSeconds)
     }));
 
     try {
@@ -705,7 +720,22 @@ async function triggerConnectionTest(server) {
                             </div>
                         </el-col>
                     </el-row>
-                    <el-form-item :label="t('mcp.descriptionLabel')">
+                                            <el-col :span="12">
+                            <el-form-item>
+                                <template #label>
+                                    <span>{{ t('mcp.timeoutLabel') }}</span>
+                                    <el-tooltip :content="t('mcp.timeoutTooltip')" placement="top">
+                                        <el-icon style="margin-left: 4px; cursor: help; vertical-align: middle;">
+                                            <QuestionFilled />
+                                        </el-icon>
+                                    </el-tooltip>
+                                </template>
+                                <el-input-number v-model="editingServer.timeoutSeconds" :min="1" :step="10" :precision="0"
+                                    style="width: 100%;" :placeholder="t('mcp.timeoutPlaceholder')" />
+                            </el-form-item>
+                        </el-col>
+
+<el-form-item :label="t('mcp.descriptionLabel')">
                         <el-scrollbar max-height="100px" class="item-scrollbar">
                             <el-input v-model="editingServer.description" type="textarea" :autosize="{ minRows: 2 }"
                                 resize="none" />

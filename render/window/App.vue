@@ -1066,7 +1066,8 @@ const refreshSelectedMcpServers = async () => {
       baseUrl: serverConf.baseUrl,
       env: serverConf.env,
       headers: serverConf.headers,
-      args: serverConf.args
+      args: serverConf.args,
+      timeoutSeconds: serverConf.timeoutSeconds
     };
 
     const res = await window.api.testMcpConnection(configToTest);
@@ -4525,6 +4526,7 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
         isPersistent: serverConf.isPersistent,
         currentAgentName: CODE.value || '',
         toolCacheOverride: effectiveToolCache[id] || undefined,
+        timeoutSeconds: serverConf.timeoutSeconds,
       };
     }
   }

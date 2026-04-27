@@ -318,6 +318,45 @@ const applyPromptRuntimeConfig = async (config, options = {}) => {
 
 
 
+
+const getPromptConfigForWindow = (config) => {
+  if (!CODE.value) return defaultConfig.config.prompts.AI || {};
+  return config?.prompts?.[CODE.value] || defaultConfig.config.prompts.AI || {};
+};
+
+const syncProviderContextFromModel = (config, nextModel = model.value) => {
+  if (!nextModel) {
+    currentProviderID.value = '';
+    base_url.value = '';
+    api_key.value = '';
+    return;
+  }
+
+  currentProviderID.value = String(nextModel).split('|')[0];
+  base_url.value = config?.providers?.[currentProviderID.value]?.url || '';
+  api_key.value = config?.providers?.[currentProviderID.value]?.api_key || '';
+};
+
+const buildConfigSnapshotPreservingWindowRuntime = (config) => {
+  if (!config || !CODE.value) return config;
+  const promptConfig = getPromptConfigForWindow(config);
+
+  return {
+    ...config,
+    prompts: {
+      ...(config.prompts || {}),
+      [CODE.value]: {
+        ...promptConfig,
+        prompt: currentSystemPrompt.value,
+        isAlwaysOnTop: isAlwaysOnTop.value,
+        autoCloseOnBlur: currentTaskConfig.value ? false : autoCloseOnBlur.value,
+        reasoning_effort: tempReasoningEffort.value || 'default',
+        voice: selectedVoice.value || null
+      }
+    }
+  };
+};
+
 const chatInputRef = ref(null);
 const lastSelectionStart = ref(null);
 const lastSelectionEnd = ref(null);
@@ -1700,6 +1739,9 @@ const syncAutoCloseOnBlurListener = () => {
 
 const handleTogglePin = () => {
   autoCloseOnBlur.value = !autoCloseOnBlur.value;
+  if (CODE.value && currentConfig.value?.prompts?.[CODE.value]) {
+    currentConfig.value.prompts[CODE.value].autoCloseOnBlur = autoCloseOnBlur.value;
+  }
   syncAutoCloseOnBlurListener();
 };
 const handleToggleAlwaysOnTop = () => {
@@ -2659,13 +2701,37 @@ onMounted(async () => {
     window.api.onConfigUpdated(async (newConfig) => {
       if (!newConfig || isClosingWindow.value) return;
 
-      currentConfig.value = newConfig;
+      const previousPromptConfig = currentConfig.value?.prompts?.[CODE.value] || null;
+      const mergedConfig = buildConfigSnapshotPreservingWindowRuntime(newConfig);
+      currentConfig.value = mergedConfig;
+
       await refreshUserProfile();
-      await applyPromptRuntimeConfig(newConfig, {
-        skipIfSavingWindowSettings: true,
-        preserveCurrentZoom: true,
-        preserveCurrentModel: true
-      });
+      syncThemeClass(mergedConfig.isDarkMode);
+      updateModelListAndMap(mergedConfig);
+
+      const nextPromptConfig = getPromptConfigForWindow(mergedConfig);
+      sourcePromptConfig.value = nextPromptConfig;
+      if (nextPromptConfig.icon) {
+        AIAvart.value = nextPromptConfig.icon;
+        favicon.value = nextPromptConfig.icon;
+      } else {
+        AIAvart.value = defaultAiAvatarUrl;
+        favicon.value = defaultAiAvatarUrl;
+      }
+
+      const previousSavedModel = typeof previousPromptConfig?.model === 'string' ? previousPromptConfig.model : '';
+      const nextSavedModel = typeof nextPromptConfig?.model === 'string' ? nextPromptConfig.model : '';
+      const shouldSyncModelSelection = nextSavedModel !== previousSavedModel;
+      const hasValidCurrentModel = Boolean(model.value && modelMap.value[model.value]);
+
+      if (shouldSyncModelSelection || !hasValidCurrentModel) {
+        if (nextSavedModel && modelMap.value[nextSavedModel]) {
+          model.value = nextSavedModel;
+        } else {
+          model.value = modelList.value[0]?.value || '';
+        }
+      }
+      syncProviderContextFromModel(mergedConfig);
 
       if (newConfig.mcpServers) {
         let mcpChanged = false;

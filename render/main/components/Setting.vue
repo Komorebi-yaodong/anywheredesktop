@@ -1281,6 +1281,15 @@ const handleSelectionChange = (val) => {
   selectedFiles.value = val;
 };
 
+
+async function selectSkillStoragePath() {
+  const path = await window.api.selectDirectory();
+  if (path) {
+    currentConfig.value.skillPath = path;
+    saveSingleSetting('skillPath', path);
+  }
+}
+
 async function selectLocalChatPath() {
   const path = await window.api.selectDirectory();
   if (path) {
@@ -1546,6 +1555,19 @@ async function selectLocalChatPath() {
                       <el-button @click="importConfig" :icon="Upload" size="default" plain>{{
                         t('setting.dataManagement.importButton')
                       }}</el-button>
+                    </div>
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.dataManagement.localSkillPath') }}</span>
+                        <span class="setting-option-description">{{ t('setting.dataManagement.localSkillPathPlaceholder') }}</span>
+                      </div>
+                      <el-input v-model="currentConfig.skillPath"
+                        @change="(value) => saveSingleSetting('skillPath', value)"
+                        :placeholder="t('setting.dataManagement.localSkillPathPlaceholder')" style="width: 320px;">
+                        <template #append>
+                          <el-button @click="selectSkillStoragePath">{{ t('setting.webdav.selectFolder') }}</el-button>
+                        </template>
+                      </el-input>
                     </div>
                     <div class="setting-option-item no-border">
                       <div class="setting-text-content">

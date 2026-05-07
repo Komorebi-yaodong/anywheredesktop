@@ -3785,18 +3785,31 @@ const handleRenameSession = async () => {
     if (url && data_path) {
       try {
         const remoteDir = data_path.endsWith('/') ? data_path.slice(0, -1) : data_path;
+        const webdavConfig = {
+          url,
+          username,
+          password,
+          path: remoteDir
+        };
+        const remoteSourceFile = await window.api.readWebdavBackup({
+          webdavConfig,
+          filename: oldFilename
+        });
+
+        if (remoteSourceFile?.ok === false) {
+          if (remoteSourceFile.reason === 'webdav_file_not_found') {
+            return;
+          }
+          throw new Error(remoteSourceFile.message || '检查云端会话文件失败');
+        }
+
         await ElMessageBox.confirm(
           '云端也存在同名文件，是否同步重命名？',
           '同步操作提示',
           { confirmButtonText: '是', cancelButtonText: '否', type: 'info' }
         );
         const moveResult = await window.api.moveWebdavFile({
-          webdavConfig: {
-            url,
-            username,
-            password,
-            path: remoteDir
-          },
+          webdavConfig,
           fromFilename: oldFilename,
           toFilename: newFilename
         });

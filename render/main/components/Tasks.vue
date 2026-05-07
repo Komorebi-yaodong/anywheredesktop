@@ -560,6 +560,7 @@ async function openTaskChat(logFile) {
                                                     <el-form-item :label="t('tasks.weeklySettingsLabel')"
                                                         class="compact-form-item">
                                                         <el-checkbox-group v-model="selectedTask.weeklyDays"
+                                                            class="weekly-days-group"
                                                             @change="(val) => saveTaskSetting('weeklyDays', val)"
                                                             style="margin-bottom: 10px;">
                                                             <el-checkbox-button :value="1">{{ t('tasks.weekdays.1')
@@ -1210,6 +1211,50 @@ html.dark .task-textarea-scrollbar :deep(.el-scrollbar__thumb:hover) {
 
 .trigger-type-group :deep(.el-radio-button) {
     flex: 1;
+}
+
+
+.weekly-days-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+}
+
+.weekly-days-group :deep(.el-checkbox-button) {
+    margin: 0;
+}
+
+.weekly-days-group :deep(.el-checkbox-button__inner) {
+    min-width: 56px;
+    text-align: center;
+}
+
+html.dark .weekly-days-group :deep(.el-checkbox-button__inner) {
+    background-color: var(--bg-secondary) !important;
+    border-color: var(--border-primary) !important;
+    color: var(--text-secondary) !important;
+    box-shadow: none !important;
+}
+
+html.dark .weekly-days-group :deep(.el-checkbox-button__inner:hover) {
+    color: var(--text-primary) !important;
+    border-color: var(--text-accent) !important;
+}
+
+html.dark .weekly-days-group :deep(.el-checkbox-button.is-checked .el-checkbox-button__inner) {
+    background-color: var(--text-accent) !important;
+    border-color: var(--text-accent) !important;
+    color: #ffffff !important;
+    box-shadow: -1px 0 0 0 var(--text-accent) !important;
+}
+
+html.dark .weekly-days-group :deep(.el-checkbox-button.is-checked:first-child .el-checkbox-button__inner) {
+    box-shadow: none !important;
+}
+
+html.dark .weekly-days-group :deep(.el-checkbox-button.is-checked .el-checkbox-button__inner:hover) {
+    color: #ffffff !important;
+    filter: brightness(1.05);
 }
 
 .trigger-type-group :deep(.el-radio-button__inner) {

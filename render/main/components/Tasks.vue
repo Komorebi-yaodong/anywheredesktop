@@ -1244,7 +1244,7 @@ html.dark .weekly-days-group :deep(.el-checkbox-button__inner:hover) {
 html.dark .weekly-days-group :deep(.el-checkbox-button.is-checked .el-checkbox-button__inner) {
     background-color: var(--text-accent) !important;
     border-color: var(--text-accent) !important;
-    color: #ffffff !important;
+    color: #000000 !important;
     box-shadow: -1px 0 0 0 var(--text-accent) !important;
 }
 
@@ -1253,7 +1253,7 @@ html.dark .weekly-days-group :deep(.el-checkbox-button.is-checked:first-child .e
 }
 
 html.dark .weekly-days-group :deep(.el-checkbox-button.is-checked .el-checkbox-button__inner:hover) {
-    color: #ffffff !important;
+    color: #000000 !important;
     filter: brightness(1.05);
 }
 

@@ -205,6 +205,18 @@ const getErrorMessage = (input, fallback = '未知错误') => {
   return String(input);
 };
 
+
+const formatErrorMessageForDisplay = (input, fallback = '未知错误') => {
+  const rawMessage = getErrorMessage(input, fallback);
+  const normalized = String(rawMessage)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const finalMessage = normalized || fallback;
+  return finalMessage.length > 200 ? `${finalMessage.slice(0, 200)}...` : finalMessage;
+};
+
 const normalizeZoomLevel = (value) => {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return null;
@@ -5446,7 +5458,7 @@ const result = await window.api.invokeMcpTool(
     }
   } catch (error) {
     const aborted = isAbortError(error);
-    let errorDisplay = `发生错误: ${error.message || '未知错误'}`;
+    let errorDisplay = `发生错误: ${formatErrorMessageForDisplay(error)}`;
     if (aborted) errorDisplay = "请求已取消";
 
     const errorBubbleIndex = currentAssistantChatShowIndex > -1 ? currentAssistantChatShowIndex : chat_show.value.length;

@@ -75,6 +75,24 @@ function extractMetadata(html) {
 }
 
 // HTML 转 Markdown 辅助函数
+
+function resolveProviderConfigByModel(fullConfig = {}, modelValue = '') {
+    const normalizedModelValue = typeof modelValue === 'string' ? modelValue.trim() : '';
+    const [providerId, ...modelParts] = normalizedModelValue.split('|');
+    const modelName = modelParts.join('|').trim();
+    const providers = fullConfig?.providers && typeof fullConfig.providers === 'object' ? fullConfig.providers : {};
+    const provider = providerId ? providers[providerId] : null;
+
+    return {
+        providerId: providerId || '',
+        modelName,
+        provider,
+        apiType: provider?.apiType || 'chat_completions',
+        baseUrl: provider?.url || '',
+        apiKey: provider?.api_key || ''
+    };
+}
+
 function convertHtmlToMarkdown(html, baseUrl = '') {
     let text = html;
 
@@ -1095,11 +1113,15 @@ const isPathSafe = (targetPath) => {
 
 async function runSubAgent(args, globalContext, signal) {
     const { task, context: userContext, tools: allowedToolNames, model_route = 'general', planning_level, custom_steps } = args;
-    const { apiKey, baseUrl, tools: allToolDefinitions, mcpSystemPrompt, onUpdate, apiType } = globalContext;
+    const { tools: allToolDefinitions, mcpSystemPrompt, onUpdate } = globalContext;
     const configData = await getConfig();
     const resolvedConfig = configData?.config || {};
     const normalizedModelRoute = ['superior', 'general', 'fast'].includes(model_route) ? model_route : 'general';
     const model = resolveDefaultAssistantModel(resolvedConfig, normalizedModelRoute);
+    const providerInfo = resolveProviderConfigByModel(resolvedConfig, model);
+    const baseUrl = providerInfo.baseUrl;
+    const apiKey = providerInfo.apiKey;
+    const apiType = providerInfo.apiType;
 
     // --- 1. 工具直接映射 (Direct Mapping) ---
     let availableTools = [];
@@ -1148,7 +1170,7 @@ ${userContext || 'No additional context provided.'}
         }
     };
 
-    log(`[Sub-Agent] Started. Route: ${normalizedModelRoute}. Model: ${model || 'N/A'}. Max steps: ${MAX_STEPS}. Tools: ${availableTools.map(t => t.function.name).join(', ') || 'None'}`);
+    log(`[Sub-Agent] Started. Route: ${normalizedModelRoute}. Model: ${model || 'N/A'}. Provider: ${providerInfo.providerId || 'N/A'}. Max steps: ${MAX_STEPS}. Tools: ${availableTools.map(t => t.function.name).join(', ') || 'None'}`);
 
     const { invokeMcpTool } = await import('./mcp.js');
 

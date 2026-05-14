@@ -20,7 +20,7 @@ const PROVIDERS_DOC_ID = 'providers'
 const MCP_SERVERS_DOC_ID = 'mcpServers'
 const TASKS_DOC_ID = 'tasks'
 const LOCAL_CONFIG_DOC_ID = 'config_local_desktop'
-const CURRENT_CONFIG_VERSION = '2.6.10'
+const CURRENT_CONFIG_VERSION = '2.6.11'
 const DEFAULT_MCP_TIMEOUT_SECONDS = 120
 
 const BACKGROUND_CACHE_DOC_ID = 'background_cache'
@@ -220,6 +220,8 @@ async function pruneBackgroundImageCache(nextConfig = {}) {
 export const defaultConfig = {
   config: {
     defaultTaskModel: '',
+    defaultSuperiorModel: '',
+    defaultFastModel: '',
     tasks: {},
     providers: {
       '0': {
@@ -428,10 +430,21 @@ export function getFirstAvailableProviderModel(config = {}) {
   return ''
 }
 
-export function resolveDefaultAssistantModel(config = {}) {
-  if (isValidProviderModelKey(config, config?.defaultTaskModel)) {
-    return config.defaultTaskModel
+export function resolveDefaultAssistantModel(config = {}, route = 'general') {
+  let candidateModel = ''
+
+  if (route === 'superior') {
+    candidateModel = config?.defaultSuperiorModel
+  } else if (route === 'fast') {
+    candidateModel = config?.defaultFastModel
+  } else {
+    candidateModel = config?.defaultTaskModel
   }
+
+  if (isValidProviderModelKey(config, candidateModel)) {
+    return candidateModel
+  }
+
   return getFirstAvailableProviderModel(config)
 }
 
@@ -571,6 +584,8 @@ function checkConfig(inputConfig) {
 
 const rootDefaults = {
     defaultTaskModel: '',
+    defaultSuperiorModel: '',
+    defaultFastModel: '',
     tasks: {},
     providers: { ...defaultConfig.config.providers },
     providerOrder: [...defaultConfig.config.providerOrder],
@@ -638,6 +653,37 @@ const rootDefaults = {
   config.tasks = ensureObject(config.tasks, {})
   config.providerFolders = ensureObject(config.providerFolders, {})
   config.tags = ensureObject(config.tags, {})
+
+  if (typeof config.defaultTaskModel !== 'string') {
+    config.defaultTaskModel = ''
+    changed = true
+  }
+
+  if (typeof config.defaultSuperiorModel !== 'string') {
+    config.defaultSuperiorModel = ''
+    changed = true
+  }
+
+  if (typeof config.defaultFastModel !== 'string') {
+    config.defaultFastModel = ''
+    changed = true
+  }
+
+  if (config.defaultTaskModel && !isValidProviderModelKey(config, config.defaultTaskModel)) {
+    config.defaultTaskModel = ''
+    changed = true
+  }
+
+  if (config.defaultSuperiorModel && !isValidProviderModelKey(config, config.defaultSuperiorModel)) {
+    config.defaultSuperiorModel = ''
+    changed = true
+  }
+
+  if (config.defaultFastModel && !isValidProviderModelKey(config, config.defaultFastModel)) {
+    config.defaultFastModel = ''
+    changed = true
+  }
+
 
 
   if (typeof config.autoSaveChat_global !== 'boolean') {

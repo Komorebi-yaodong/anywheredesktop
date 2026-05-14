@@ -198,7 +198,7 @@
     "defaultPromptLabel": "Default Agent (Recommended)",
     "refreshSuccess": "History refreshed successfully",
     "refreshFailed": "Refresh failed",
-    "defaultModelUpdated": "Default agent model updated",
+    "defaultModelUpdated": "Default assistant route models updated",
     "nameInvalidChar": "Task name cannot contain special characters",
     "nameInvalidFileSystem": "Task name cannot contain file system special characters",
     "testTaskTooltip": "Run task immediately",
@@ -274,9 +274,22 @@
     "addDialogTitle": "New Scheduled Task",
     "addDialogNameLabel": "Task Name",
     "addDialogNamePlaceholder": "Enter a valid filename format",
-    "globalSettingsDialogTitle": "Global Default Agent Settings",
-    "executionModelLabel": "Execution Model",
-    "executionModelTooltip": "When a scheduled task is assigned to the [Default Agent], this model will be used uniformly, without any preset system prompts."
+    "globalSettingsDialogTitle": "Default Assistant Route Settings",
+    "defaultAssistantRouteLabel": "Default Assistant Model Capability",
+    "defaultAssistantRoutes": {
+      "superior": {
+        "label": "Superior Model",
+        "tooltip": "Use for the strongest reasoning, complex analysis, and high-quality planning. Falls back to the first available model if not configured."
+      },
+      "general": {
+        "label": "General Model",
+        "tooltip": "Use for balanced everyday tasks; seamlessly compatible with the current `defaultTaskModel`. Falls back to the first available model if not configured."
+      },
+      "fast": {
+        "label": "Fast Model",
+        "tooltip": "Use for lightweight tasks where speed matters most. Falls back to the first available model if not configured."
+      }
+    }
   },
   "prompts": {
     "allPrompts": "ALL",
@@ -357,7 +370,11 @@
     "isAlwaysOnTopLabel": "Always on Top",
     "autoCloseOnBlurLabel": "Auto-close on Blur",
     "autoSaveChatLabel": "Auto-save Chat",
-    "replaceModels": "Replace Models",
+    
+    "defaultAssistantRoutesButton": "Default Assistant Route",
+    "defaultAssistantRoutesDialogTitle": "Default Assistant Route",
+
+"replaceModels": "Replace Models",
     "replaceModelsDialog": {
       "title": "Bulk Replace Models",
       "sourceModel": "Source Model",

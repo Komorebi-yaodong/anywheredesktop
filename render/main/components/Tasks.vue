@@ -155,9 +155,15 @@ const showAddDialog = ref(false);
 const showGlobalSettingDialog = ref(false);
 const addTaskForm = reactive({ name: "" });
 
-function saveGlobalTaskModel(val) {
+const defaultAssistantRouteOptions = computed(() => ([
+    { value: 'superior', label: t('tasks.defaultAssistantRoutes.superior.label') },
+    { value: 'general', label: t('tasks.defaultAssistantRoutes.general.label') },
+    { value: 'fast', label: t('tasks.defaultAssistantRoutes.fast.label') }
+]));
+
+function saveDefaultAssistantModel(settingKey, val) {
     atomicSave(config => {
-        config.defaultTaskModel = val;
+        config[settingKey] = val;
     });
     ElMessage.success(t('tasks.defaultModelUpdated'));
 }
@@ -191,6 +197,7 @@ function handleAddTask() {
             singleDate: new Date().toLocaleDateString('sv-SE'),
             singleTime: '12:00',
             promptKey: '__DEFAULT__',
+            modelRoute: 'general',
             description: '',
             extraMcp: builtinIds,
             extraSkills: [],
@@ -635,7 +642,18 @@ async function openTaskChat(logFile) {
                                                     :label="item.label" :value="item.value" />
                                             </el-select>
                                         </el-form-item>
-                                        <el-form-item :label="t('tasks.promptContentLabel')"
+                                        
+                                        <el-form-item v-if="selectedTask.promptKey === '__DEFAULT__'"
+                                            :label="t('tasks.defaultAssistantRouteLabel')">
+                                            <el-select v-model="selectedTask.modelRoute"
+                                                @change="(val) => saveTaskSetting('modelRoute', val)"
+                                                style="width: 100%;">
+                                                <el-option v-for="item in defaultAssistantRouteOptions" :key="item.value"
+                                                    :label="item.label" :value="item.value" />
+                                            </el-select>
+                                        </el-form-item>
+
+<el-form-item :label="t('tasks.promptContentLabel')"
                                             class="task-desc-form-item">
                                             <el-scrollbar max-height="220px" class="task-textarea-scrollbar">
                                                 <el-input v-model="selectedTask.description" type="textarea"
@@ -790,19 +808,45 @@ async function openTaskChat(logFile) {
             </template>
         </el-dialog>
 
-        <!-- 默认助手设置弹窗 -->
-        <el-dialog v-model="showGlobalSettingDialog" :title="t('tasks.globalSettingsDialogTitle')" width="400px"
+        <!-- 默认助手路由设置弹窗 -->
+        <el-dialog v-model="showGlobalSettingDialog" :title="t('tasks.globalSettingsDialogTitle')" width="520px"
             :close-on-click-modal="false">
             <el-form label-position="top">
                 <el-form-item>
                     <template #label>
-                        {{ t('tasks.executionModelLabel') }}
-                        <el-tooltip :content="t('tasks.executionModelTooltip')"><el-icon>
+                        {{ t('tasks.defaultAssistantRoutes.superior.label') }}
+                        <el-tooltip :content="t('tasks.defaultAssistantRoutes.superior.tooltip')"><el-icon>
+                                <InfoFilled />
+                            </el-icon></el-tooltip>
+                    </template>
+                    <el-select v-model="currentConfig.defaultSuperiorModel" filterable style="width: 100%;"
+                        @change="(val) => saveDefaultAssistantModel('defaultSuperiorModel', val)">
+                        <el-option v-for="item in availableModels" :key="item.value" :label="item.label"
+                            :value="item.value" />
+                    </el-select>
+                </el-form-item>
+                <el-form-item>
+                    <template #label>
+                        {{ t('tasks.defaultAssistantRoutes.general.label') }}
+                        <el-tooltip :content="t('tasks.defaultAssistantRoutes.general.tooltip')"><el-icon>
                                 <InfoFilled />
                             </el-icon></el-tooltip>
                     </template>
                     <el-select v-model="currentConfig.defaultTaskModel" filterable style="width: 100%;"
-                        @change="saveGlobalTaskModel">
+                        @change="(val) => saveDefaultAssistantModel('defaultTaskModel', val)">
+                        <el-option v-for="item in availableModels" :key="item.value" :label="item.label"
+                            :value="item.value" />
+                    </el-select>
+                </el-form-item>
+                <el-form-item>
+                    <template #label>
+                        {{ t('tasks.defaultAssistantRoutes.fast.label') }}
+                        <el-tooltip :content="t('tasks.defaultAssistantRoutes.fast.tooltip')"><el-icon>
+                                <InfoFilled />
+                            </el-icon></el-tooltip>
+                    </template>
+                    <el-select v-model="currentConfig.defaultFastModel" filterable style="width: 100%;"
+                        @change="(val) => saveDefaultAssistantModel('defaultFastModel', val)">
                         <el-option v-for="item in availableModels" :key="item.value" :label="item.label"
                             :value="item.value" />
                     </el-select>

@@ -532,13 +532,14 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
     }
 
     const promptKey = typeof task.promptKey === 'string' && task.promptKey ? task.promptKey : '__DEFAULT__'
+    const modelRoute = ['superior', 'general', 'fast'].includes(task?.modelRoute) ? task.modelRoute : 'general'
     const tempPromptConfig =
       promptKey === '__DEFAULT__'
         ? {
             type: 'general',
             prompt: '',
             showMode: 'window',
-            model: dataApi.resolveDefaultAssistantModel(fullConfig),
+            model: dataApi.resolveDefaultAssistantModel(fullConfig, modelRoute),
             stream: true,
             isAlwaysOnTop: fullConfig.isAlwaysOnTop_global ?? true,
             autoCloseOnBlur: fullConfig.autoCloseOnBlur_global ?? true,

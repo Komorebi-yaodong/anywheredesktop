@@ -540,6 +540,7 @@ IMPORTANT:
                     task: { type: "string", description: "The detailed task description for the worker." },
                     context: { type: "string", description: "Background info or required variables." },
                     tools: { type: "array", items: { type: "string" }, description: "Tool names granted to the worker." },
+                    model_route: { type: "string", enum: ["superior", "general", "fast"], description: "Which global default assistant route to use for this sub-agent. Defaults to 'general'." },
                     planning_level: { type: "string", enum: ["fast", "medium", "high", "custom"] },
                     custom_steps: { type: "integer" }
                 },
@@ -1093,8 +1094,12 @@ const isPathSafe = (targetPath) => {
 };
 
 async function runSubAgent(args, globalContext, signal) {
-    const { task, context: userContext, tools: allowedToolNames, planning_level, custom_steps } = args;
-    const { apiKey, baseUrl, model, tools: allToolDefinitions, mcpSystemPrompt, onUpdate, apiType } = globalContext;
+    const { task, context: userContext, tools: allowedToolNames, model_route = 'general', planning_level, custom_steps } = args;
+    const { apiKey, baseUrl, tools: allToolDefinitions, mcpSystemPrompt, onUpdate, apiType } = globalContext;
+    const configData = await getConfig();
+    const resolvedConfig = configData?.config || {};
+    const normalizedModelRoute = ['superior', 'general', 'fast'].includes(model_route) ? model_route : 'general';
+    const model = resolveDefaultAssistantModel(resolvedConfig, normalizedModelRoute);
 
     // --- 1. 工具直接映射 (Direct Mapping) ---
     let availableTools = [];
@@ -1143,7 +1148,7 @@ ${userContext || 'No additional context provided.'}
         }
     };
 
-    log(`[Sub-Agent] Started. Max steps: ${MAX_STEPS}. Tools: ${availableTools.map(t => t.function.name).join(', ') || 'None'}`);
+    log(`[Sub-Agent] Started. Route: ${normalizedModelRoute}. Model: ${model || 'N/A'}. Max steps: ${MAX_STEPS}. Tools: ${availableTools.map(t => t.function.name).join(', ') || 'None'}`);
 
     const { invokeMcpTool } = await import('./mcp.js');
 

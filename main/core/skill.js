@@ -400,7 +400,7 @@ ${availableSkillsText}
           model_route: {
             type: 'string',
             enum: ['superior', 'general', 'fast'],
-            description: "Optional. Choose which default assistant route the Sub-Agent should use. Defaults to 'general'."
+            description: "Optional. Choose which default assistant route the Sub-Agent should use based on the task difficulty. Defaults to 'general'."
           },
           custom_steps: {
             type: 'array',

@@ -559,7 +559,7 @@ IMPORTANT:
                     task: { type: "string", description: "The detailed task description for the worker." },
                     context: { type: "string", description: "Background info or required variables." },
                     tools: { type: "array", items: { type: "string" }, description: "Tool names granted to the worker." },
-                    model_route: { type: "string", enum: ["superior", "general", "fast"], description: "Which global default assistant route to use for this sub-agent. Defaults to 'general'." },
+                    model_route: { type: "string", enum: ["superior", "general", "fast"], description: "Choose which default assistant route the Sub-Agent should use based on the task difficulty. Defaults to 'general'." },
                     planning_level: { type: "string", enum: ["fast", "medium", "high", "custom"] },
                     custom_steps: { type: "integer" }
                 },

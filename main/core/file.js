@@ -234,6 +234,42 @@ async function parseTextFileFromDataUrl(dataUrl = '') {
   return Buffer.from(base64, 'base64').toString('utf-8')
 }
 
+async function parseWordFileFromDataUrl(dataUrl = '') {
+  const base64 = extractBase64FromDataUrl(dataUrl)
+  if (!base64) {
+    throw new Error('Invalid base64 data for Word file')
+  }
+
+  const buffer = Buffer.from(base64, 'base64')
+  const mammoth = await import('mammoth')
+  const result = await mammoth.convertToHtml({ buffer })
+  return String(result?.value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function parseExcelFileFromDataUrl(dataUrl = '') {
+  const base64 = extractBase64FromDataUrl(dataUrl)
+  if (!base64) {
+    throw new Error('Invalid base64 data for Excel file')
+  }
+
+  const buffer = Buffer.from(base64, 'base64')
+  const xlsx = await import('xlsx')
+  const workbook = xlsx.read(buffer, { type: 'buffer' })
+
+  let fullTextContent = ''
+  workbook.SheetNames.forEach((sheetName) => {
+    const worksheet = workbook.Sheets[sheetName]
+    const csvData = xlsx.utils.sheet_to_csv(worksheet)
+    fullTextContent += `--- Sheet: ${sheetName} ---\n${csvData}\n\n`
+  })
+
+  return fullTextContent.trim()
+}
+
+
 function looksLikeBinaryByBase64(base64 = '') {
   if (typeof base64 !== 'string' || !base64) {
     return false
@@ -312,7 +348,23 @@ export async function parseFileObject(fileObj) {
     }
   }
 
-  if (category === 'docx' || category === 'excel' || category === 'pdf') {
+  if (category === 'docx') {
+    const content = await parseWordFileFromDataUrl(normalized.url)
+    return {
+      type: 'text',
+      text: `file name:${normalized.name}\nfile content:\n${content}\nfile end`
+    }
+  }
+
+  if (category === 'excel') {
+    const content = await parseExcelFileFromDataUrl(normalized.url)
+    return {
+      type: 'text',
+      text: `file name:${normalized.name}\nfile content:\n${content}\nfile end`
+    }
+  }
+
+  if (category === 'pdf') {
     return {
       type: 'file',
       file: {

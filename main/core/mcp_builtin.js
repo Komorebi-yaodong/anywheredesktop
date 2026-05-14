@@ -1122,8 +1122,14 @@ async function runSubAgent(args, globalContext, signal) {
     const baseUrl = providerInfo.baseUrl;
     const apiKey = providerInfo.apiKey;
     const apiType = providerInfo.apiType;
+    const requestModelName = providerInfo.modelName || '';
 
-    // --- 1. 工具直接映射 (Direct Mapping) ---
+    
+    if (!baseUrl || !apiKey || !requestModelName) {
+        return `[Sub-Agent Error] Missing provider configuration for route '${normalizedModelRoute}'. Provider: ${providerInfo.providerId || 'N/A'}, model: ${model || 'N/A'}`;
+    }
+
+// --- 1. 工具直接映射 (Direct Mapping) ---
     let availableTools = [];
     if (allowedToolNames && Array.isArray(allowedToolNames) && allowedToolNames.length > 0) {
         const allowedSet = new Set(allowedToolNames);
@@ -1170,7 +1176,7 @@ ${userContext || 'No additional context provided.'}
         }
     };
 
-    log(`[Sub-Agent] Started. Route: ${normalizedModelRoute}. Model: ${model || 'N/A'}. Provider: ${providerInfo.providerId || 'N/A'}. Max steps: ${MAX_STEPS}. Tools: ${availableTools.map(t => t.function.name).join(', ') || 'None'}`);
+    log(`[Sub-Agent] Started. Route: ${normalizedModelRoute}. Model: ${model || 'N/A'}. Request Model: ${requestModelName || 'N/A'}. Provider: ${providerInfo.providerId || 'N/A'}. Max steps: ${MAX_STEPS}. Tools: ${availableTools.map(t => t.function.name).join(', ') || 'None'}`);
 
     const { invokeMcpTool } = await import('./mcp.js');
 
@@ -1187,7 +1193,7 @@ ${userContext || 'No additional context provided.'}
             const response = await createChatCompletion({
                 baseUrl: baseUrl,
                 apiKey: apiKey,
-                model: model,
+                model: requestModelName,
                 apiType: currentApiType,
                 messages: messages,
                 tools: availableTools.length > 0 ? availableTools : undefined,

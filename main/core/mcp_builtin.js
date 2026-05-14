@@ -85,6 +85,7 @@ function resolveProviderConfigByModel(fullConfig = {}, modelValue = '') {
 
     return {
         providerId: providerId || '',
+        providerName: provider?.name || providerId || '',
         modelName,
         provider,
         apiType: provider?.apiType || 'chat_completions',
@@ -1176,7 +1177,7 @@ ${userContext || 'No additional context provided.'}
         }
     };
 
-    log(`[Sub-Agent] Started. Route: ${normalizedModelRoute}. Model: ${model || 'N/A'}. Request Model: ${requestModelName || 'N/A'}. Provider: ${providerInfo.providerId || 'N/A'}. Max steps: ${MAX_STEPS}. Tools: ${availableTools.map(t => t.function.name).join(', ') || 'None'}`);
+    log(`[Sub-Agent] Started. Route: ${normalizedModelRoute}. Model: ${requestModelName || 'N/A'}. Provider: ${providerInfo.providerName || 'N/A'}. Max steps: ${MAX_STEPS}. Tools: ${availableTools.map(t => t.function.name).join(', ') || 'None'}`);
 
     const { invokeMcpTool } = await import('./mcp.js');
 

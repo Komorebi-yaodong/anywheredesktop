@@ -575,6 +575,23 @@ async function appendToTarget(target) {
   }
 }
 
+async function appendToDefaultTarget() {
+  if (!isAppendOnlyMode.value) return false
+
+  if (!appendTargets.value.length) {
+    await refreshAppendTargets()
+  }
+
+  const target = appendTargets.value.find((item) => item?.visible) || appendTargets.value[0]
+  if (!target?.id) {
+    ElMessage.warning('暂无可追问的目标窗口')
+    return true
+  }
+
+  await appendToTarget(target)
+  return true
+}
+
 async function restoreSession(candidate) {
   try {
     await window.api.openWindow('window', {
@@ -810,6 +827,10 @@ function handleKeydown(event) {
 
   if (event.key === 'Enter') {
     event.preventDefault()
+    if (isAppendOnlyMode.value) {
+      void appendToDefaultTarget()
+      return
+    }
     if (restoreCandidates.value.length > 0 && !queryText.value.trim() && attachment.value.type === 'files') {
       restoreSession(restoreCandidates.value[0])
       return

@@ -16,7 +16,7 @@
  */
 
 
-import { app, BrowserWindow, Menu, Tray, nativeTheme } from 'electron'
+import { app, BrowserWindow, Menu, Tray, nativeTheme, nativeImage } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
 import {
@@ -444,9 +444,25 @@ function buildTrayMenu() {
   ])
 }
 
+
+function createTrayIcon() {
+  const trayIcon = nativeImage.createFromPath(icon)
+
+  if (process.platform !== 'darwin') {
+    return trayIcon
+  }
+
+  const macTrayIcon = trayIcon.resize({
+    width: 18,
+    height: 18
+  })
+  macTrayIcon.setTemplateImage(true)
+  return macTrayIcon
+}
+
 function ensureTray() {
   if (appTray) return appTray
-  appTray = new Tray(icon)
+  appTray = new Tray(createTrayIcon())
   appTray.setToolTip('AI Anywhere Desktop')
   appTray.setContextMenu(buildTrayMenu())
   appTray.on('click', () => {

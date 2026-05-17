@@ -16,7 +16,7 @@
  */
 
 
-import { app, BrowserWindow, Menu, Tray, nativeTheme, nativeImage } from 'electron'
+import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
 import {
@@ -55,6 +55,8 @@ const debugMainLog = () => {}
 const debugMainError = () => {}
 
 let appTray = null
+let appQuitStarted = false
+
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -419,6 +421,16 @@ async function triggerPromptShortcut(promptKey = '') {
   }
 }
 
+
+function beginAppQuit() {
+  if (appQuitStarted) return
+  appQuitStarted = true
+  markAppQuitting(true)
+  clearDesktopShortcuts()
+  systemApi.stopClipboardWatcher()
+  dataApi.setWindowChannelNotifier(null)
+}
+
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
     {
@@ -437,7 +449,7 @@ function buildTrayMenu() {
     {
       label: '退出 Anywhere Desktop',
       click: () => {
-        markAppQuitting(true)
+        beginAppQuit()
         app.quit()
       }
     }
@@ -576,15 +588,17 @@ app.whenReady().then(async () => {
   await openWindow('main')
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) openWindow('main')
+    showMainWindow()
+  })
+
+  powerMonitor.on('shutdown', () => {
+    beginAppQuit()
+    app.quit()
   })
 })
 
 app.on('before-quit', () => {
-  markAppQuitting(true)
-  clearDesktopShortcuts()
-  systemApi.stopClipboardWatcher()
-  dataApi.setWindowChannelNotifier(null)
+  beginAppQuit()
 })
 
 app.on('window-all-closed', () => {

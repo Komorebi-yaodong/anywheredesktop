@@ -14,8 +14,10 @@ const shouldShowSelection = ref(false)
 const restoreCandidates = ref([])
 const attachment = ref(createEmptyAttachment())
 const inputRef = ref(null)
+const gridWrapRef = ref(null)
 const appendTargets = ref([])
 const quickMode = ref('default')
+const isAppendOnlyMode = computed(() => quickMode.value === 'append-only')
 
 function createEmptyAttachment() {
   return {
@@ -446,6 +448,55 @@ const selectedPrompt = computed(() => {
   return candidateSections.value.find((item) => item.key === selectedPromptKey.value) || candidateSections.value[0] || null
 })
 
+watch(
+  candidateSections,
+  (list = []) => {
+    if (isAppendOnlyMode.value) return
+
+    if (!Array.isArray(list) || list.length === 0) {
+      selectedPromptKey.value = ''
+      shouldShowSelection.value = false
+      return
+    }
+
+    if (!selectedPromptKey.value || !list.some((item) => item.key === selectedPromptKey.value)) {
+      selectedPromptKey.value = list[0].key
+    }
+
+    shouldShowSelection.value = true
+  },
+  { immediate: true }
+)
+
+function getPromptGridColumnCount() {
+  const element = gridWrapRef.value
+  if (!element || typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return 1
+
+  const gridTemplateColumns = window.getComputedStyle(element).gridTemplateColumns || ''
+  const count = gridTemplateColumns.split(/\s+/).filter(Boolean).length
+  return count > 0 ? count : 1
+}
+
+function movePromptSelection(direction = '') {
+  const list = candidateSections.value
+  if (!Array.isArray(list) || list.length === 0) return
+
+  const currentIndex = list.findIndex((item) => item.key === selectedPromptKey.value)
+  const safeIndex = currentIndex < 0 ? 0 : currentIndex
+  const columnCount = getPromptGridColumnCount()
+  let nextIndex = safeIndex
+
+  if (direction === 'left') nextIndex = safeIndex - 1
+  if (direction === 'right') nextIndex = safeIndex + 1
+  if (direction === 'up') nextIndex = safeIndex - columnCount
+  if (direction === 'down') nextIndex = safeIndex + columnCount
+
+  nextIndex = Math.max(0, Math.min(list.length - 1, nextIndex))
+  selectedPromptKey.value = list[nextIndex].key
+  shouldShowSelection.value = true
+}
+
+
 function resolveQuickDispatchPayload(prompt = null) {
   const payload = {}
   const trimmedQueryText = queryText.value.trim()
@@ -536,8 +587,6 @@ async function openPrompt(prompt) {
 
 
 const canAppendPayload = computed(() => resolveQuickDispatchPayload().type !== 'empty')
-
-const isAppendOnlyMode = computed(() => quickMode.value === 'append-only')
 
 
 async function refreshAppendTargets() {
@@ -803,25 +852,15 @@ async function handlePaste(event) {
 function handleKeydown(event) {
   if (event.isComposing) return
 
-  if (event.key === 'ArrowDown') {
+  if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
     event.preventDefault()
-    const list = candidateSections.value
-    if (!list.length) return
-    const currentIndex = list.findIndex((item) => item.key === selectedPromptKey.value)
-    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % list.length
-    selectedPromptKey.value = list[nextIndex].key
-    shouldShowSelection.value = true
-    return
-  }
-
-  if (event.key === 'ArrowUp') {
-    event.preventDefault()
-    const list = candidateSections.value
-    if (!list.length) return
-    const currentIndex = list.findIndex((item) => item.key === selectedPromptKey.value)
-    const nextIndex = currentIndex < 0 ? list.length - 1 : (currentIndex - 1 + list.length) % list.length
-    selectedPromptKey.value = list[nextIndex].key
-    shouldShowSelection.value = true
+    const directionMap = {
+      ArrowDown: 'down',
+      ArrowUp: 'up',
+      ArrowLeft: 'left',
+      ArrowRight: 'right'
+    }
+    movePromptSelection(directionMap[event.key])
     return
   }
 
@@ -1005,7 +1044,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div v-if="!isAppendOnlyMode" class="grid-wrap">
+      <div v-if="!isAppendOnlyMode" ref="gridWrapRef" class="grid-wrap">
         <button
           v-for="prompt in candidateSections"
           :key="prompt.key"

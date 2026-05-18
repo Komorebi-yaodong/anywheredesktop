@@ -13,11 +13,19 @@ const searchQuery = ref('');
 const availablePrompts = computed(() => {
     if (!currentConfig.value || !currentConfig.value.prompts) return [];
     const prompts = Object.entries(currentConfig.value.prompts)
-        .filter(([key, p]) => p.showMode === 'window')
-        .map(([key, p]) => ({ label: key, value: key }))
+        .filter(([, p]) => p.showMode === 'window' && p.enable !== false)
+        .map(([key]) => ({ label: key, value: key }))
         .sort((a, b) => a.label.localeCompare(b.label));
 
     return [{ label: t('tasks.defaultPromptLabel'), value: '__DEFAULT__' }, ...prompts];
+});
+
+const isSelectedTaskPromptUnavailable = computed(() => {
+    const promptKey = selectedTask.value?.promptKey;
+    if (!promptKey || promptKey === '__DEFAULT__') return false;
+
+    const promptConfig = currentConfig.value?.prompts?.[promptKey];
+    return !promptConfig || promptConfig.showMode !== 'window' || promptConfig.enable === false;
 });
 
 const availableModels = computed(() => {
@@ -641,6 +649,10 @@ async function openTaskChat(logFile) {
                                                 <el-option v-for="item in availablePrompts" :key="item.value"
                                                     :label="item.label" :value="item.value" />
                                             </el-select>
+                                            <el-alert v-if="isSelectedTaskPromptUnavailable"
+                                                :title="t('tasks.targetPromptUnavailableWarning')"
+                                                type="warning" :closable="false" show-icon
+                                                style="margin-top: 10px;" />
                                         </el-form-item>
                                         
                                         <el-form-item v-if="selectedTask.promptKey === '__DEFAULT__'"

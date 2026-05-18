@@ -4788,7 +4788,7 @@ const hasBuiltinMemoryMcpTools = computed(() => {
 
 const generateMcpSystemPrompt = () => {
   const memoryPriorityRule = hasBuiltinMemoryMcpTools.value
-    ? '8. **Memory First**: When the memory tools are available and user\'s demand  may depend on memory, you must first retrieve and verify the correct memory before completing the user\'s task.\n'
+    ? '8. **Memory First**: When memory tools are available and the user\'s request may depend on memory, you must first retrieve and verify the relevant memory before fulfilling the user\'s request.\n'
     : '';
 
   return `
@@ -7341,7 +7341,7 @@ html.dark .app-container {
   }
 
   &.user {
-    background: rgba(156, 163, 175, 0.72);
+    background: rgba(17, 24, 39, 0.82);
   }
 
   &.assistant {
@@ -7380,9 +7380,12 @@ html.dark {
     }
   }
 
-  .timeline-node.user,
+  .timeline-node.user {
+    background: rgba(255, 255, 255, 0.92);
+  }
+
   .timeline-node.assistant {
-    background: rgba(203, 213, 225, 0.56);
+    background: rgba(148, 163, 184, 0.58);
   }
 
   .timeline-node.active {

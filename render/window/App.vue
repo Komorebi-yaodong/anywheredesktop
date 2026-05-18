@@ -4788,7 +4788,7 @@ const hasBuiltinMemoryMcpTools = computed(() => {
 
 const generateMcpSystemPrompt = () => {
   const memoryPriorityRule = hasBuiltinMemoryMcpTools.value
-    ? '8. **Memory First**: When the built-in memory MCP tools are available and the task may depend on memory, you must first retrieve and verify the correct memory before completing the user\'s task.\n'
+    ? '8. **Memory First**: When the memory tools are available and user\'s demand  may depend on memory, you must first retrieve and verify the correct memory before completing the user\'s task.\n'
     : '';
 
   return `
@@ -6041,7 +6041,6 @@ const scrollToMessageByIndex = (index) => {
                     msg.role,
                     { 'active': focusedMessageIndex === msg.originalIndex }
                   ]" :data-role-label="msg.role === 'user' ? '你' : 'AI'">
-                    <span class="timeline-node-text">{{ getMessagePreviewText(msg) }}</span>
                   </div>
                 </el-tooltip>
               </div>
@@ -7218,59 +7217,58 @@ html.dark .app-container {
 
 .unified-nav-sidebar {
   position: absolute;
-  right: 12px;
+  right: 10px;
   top: calc(50% - var(--window-nav-raise));
   transform: translateY(-50%);
   height: min(var(--window-nav-height), calc(100% - var(--window-nav-safe-bottom)));
   max-height: calc(100% - var(--window-nav-safe-bottom));
   min-height: 240px;
-  width: 112px;
+  width: 30px;
   z-index: 90;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   pointer-events: none;
 }
 
 .nav-group {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
+  gap: 5px;
   pointer-events: auto;
   flex-shrink: 0;
   padding: 2px 0;
 }
 
 .nav-mini-btn {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: rgba(46, 41, 34, 0.76);
-  background: rgba(255, 255, 255, 0.22);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  color: rgba(46, 41, 34, 0.72);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: none;
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
   transition: all 0.2s ease;
   font-size: 14px;
   border-radius: 999px;
 
   &:hover {
     color: rgba(28, 25, 22, 0.96);
-    background: rgba(255, 255, 255, 0.34);
-    transform: translateX(-2px);
-    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+    box-shadow: none;
   }
 
   &.highlight-bottom {
     color: var(--el-color-primary);
-    border-color: rgba(64, 158, 255, 0.3);
-    background: rgba(64, 158, 255, 0.18);
+    border-color: rgba(64, 158, 255, 0.28);
+    background: rgba(64, 158, 255, 0.16);
   }
 }
 
@@ -7280,7 +7278,7 @@ html.dark .app-container {
   width: 100%;
   min-height: 0;
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   overflow: hidden;
   pointer-events: auto;
 }
@@ -7296,9 +7294,9 @@ html.dark .app-container {
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  padding: 6px 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
   scroll-behavior: smooth;
 
   &::-webkit-scrollbar {
@@ -7310,141 +7308,85 @@ html.dark .app-container {
 
 .timeline-node-wrapper {
   width: 100%;
+  min-height: 12px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
   position: relative;
-  padding: 0;
+  padding: 2px 0;
 
   &:hover .timeline-node {
-    transform: translateX(-6px);
+    opacity: 0.78;
+    transform: translateX(-1px);
   }
 
   &:hover .timeline-node.active {
-    transform: translateX(-12px);
+    transform: translateX(-4px);
   }
 }
 
 .timeline-node {
-  width: 72px;
-  min-height: 28px;
-  padding: 6px 10px 6px 12px;
-  border-radius: 12px 6px 6px 12px;
-  transition: all 0.2s ease;
-  border: 1px solid transparent;
-  opacity: 0.92;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.1);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  width: 9px;
+  height: 2px;
+  border-radius: 999px;
+  transition: all 0.18s ease;
+  box-shadow: none;
+  border: none;
+  opacity: 0.26;
 
   &::before {
-    content: attr(data-role-label);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    line-height: 1;
-    padding: 3px 5px;
-    border-radius: 999px;
-    flex-shrink: 0;
+    content: none;
   }
 
   &.user {
-    color: #fff;
-    background: linear-gradient(135deg, rgba(37, 99, 235, 0.94), rgba(14, 165, 233, 0.88));
-    border-color: rgba(59, 130, 246, 0.52);
-
-    &::before {
-      background: rgba(255, 255, 255, 0.16);
-      color: rgba(255, 255, 255, 0.96);
-    }
+    background: rgba(156, 163, 175, 0.72);
   }
 
   &.assistant {
-    color: rgba(49, 46, 129, 0.96);
-    background: linear-gradient(135deg, rgba(238, 242, 255, 0.92), rgba(224, 231, 255, 0.84));
-    border-color: rgba(129, 140, 248, 0.35);
-
-    &::before {
-      background: rgba(99, 102, 241, 0.12);
-      color: rgba(79, 70, 229, 0.96);
-    }
+    background: rgba(156, 163, 175, 0.72);
   }
 
   &.active {
-    width: 104px;
+    width: 15px;
+    height: 3px;
     opacity: 1;
-    transform: translateX(-12px);
-    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14), inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    transform: translateX(-4px);
+    background: rgba(64, 158, 255, 0.96);
   }
 }
 
 .timeline-node-text {
-  max-width: 42px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.2;
-  text-align: right;
-}
-
-.timeline-node.active .timeline-node-text {
-  max-width: 72px;
+  display: none;
 }
 
 html.dark {
   .nav-mini-btn {
-    color: rgba(235, 236, 240, 0.8);
-    background: rgba(17, 24, 39, 0.48);
-    border-color: rgba(148, 163, 184, 0.18);
-    box-shadow: 0 12px 28px rgba(2, 6, 23, 0.28);
+    color: rgba(235, 236, 240, 0.75);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: none;
 
     &:hover {
-      color: rgba(255, 255, 255, 0.98);
-      background: rgba(30, 41, 59, 0.72);
-      box-shadow: 0 16px 32px rgba(2, 6, 23, 0.34);
+      color: rgba(255, 255, 255, 0.96);
+      background: rgba(255, 255, 255, 0.12);
+      box-shadow: none;
     }
 
     &.highlight-bottom {
-      border-color: rgba(96, 165, 250, 0.38);
-      background: rgba(37, 99, 235, 0.3);
+      border-color: rgba(64, 158, 255, 0.32);
+      background: rgba(64, 158, 255, 0.18);
     }
   }
 
-  .timeline-node {
-    box-shadow: 0 10px 24px rgba(2, 6, 23, 0.32);
-  }
-
-  .timeline-node.user {
-    background: linear-gradient(135deg, rgba(37, 99, 235, 0.9), rgba(6, 182, 212, 0.82));
-    border-color: rgba(96, 165, 250, 0.32);
-
-    &::before {
-      background: rgba(255, 255, 255, 0.14);
-      color: rgba(255, 255, 255, 0.96);
-    }
-  }
-
+  .timeline-node.user,
   .timeline-node.assistant {
-    color: rgba(238, 242, 255, 0.96);
-    background: linear-gradient(135deg, rgba(67, 56, 202, 0.42), rgba(79, 70, 229, 0.3));
-    border-color: rgba(129, 140, 248, 0.28);
-
-    &::before {
-      background: rgba(199, 210, 254, 0.14);
-      color: rgba(224, 231, 255, 0.96);
-    }
+    background: rgba(203, 213, 225, 0.56);
   }
 
   .timeline-node.active {
-    box-shadow: 0 16px 34px rgba(2, 6, 23, 0.42), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    background: rgba(96, 165, 250, 0.98);
   }
 }
 

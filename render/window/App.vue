@@ -4768,7 +4768,29 @@ const getSystemTime = () => {
   return `${year}-${month}-${day} (${weekDay})`;
 }
 
+const MEMORY_MCP_TOOL_NAMES = new Set([
+  'create_memory',
+  'list_memories',
+  'get_memory_summary',
+  'get_full_memory',
+  'get_section',
+  'search_within_memory',
+  'update_section',
+  'add_to_list',
+  'update_list_item',
+  'move_list_item',
+  'delete_memory'
+]);
+
+const hasBuiltinMemoryMcpTools = computed(() => {
+  return openaiFormattedTools.value.some(tool => MEMORY_MCP_TOOL_NAMES.has(tool?.function?.name));
+});
+
 const generateMcpSystemPrompt = () => {
+  const memoryPriorityRule = hasBuiltinMemoryMcpTools.value
+    ? '8. **Memory First**: When the built-in memory MCP tools are available and the task may depend on memory, you must first retrieve and verify the correct memory before completing the user\'s task.\n'
+    : '';
+
   return `
 ## SYSTEM CONTEXT
 Current Time: **${getSystemTime()}**
@@ -4799,7 +4821,7 @@ Here are the rules you should always follow to solve your task:
     1.  **Comprehensive Risk Assessment**: Identify whether the operation involves sensitive data or irreversible data modification.
     2.  **Mandatory Warning Prompts**: For any risky operation, clear and detailed warnings must be issued to the user before execution, explaining potential consequences (e.g., exposure of sensitive information, data loss).
     3.  **Seek Explicit Confirmation**: Before executing irreversible or high-risk operations (e.g., deleting files, reading sensitive files), explicit secondary confirmation from the user must be required.
-`;
+${memoryPriorityRule}`;
 };
 
 const askAI = async (forceSend = false) => {
@@ -6010,7 +6032,6 @@ const scrollToMessageByIndex = (index) => {
           </div>
 
           <div class="nav-timeline-area">
-            <div class="timeline-track"></div>
             <div ref="navTimelineScrollerRef" class="timeline-scroller no-scrollbar">
               <div v-for="msg in navMessages" :key="msg.id" class="timeline-node-wrapper"
                 :data-original-index="msg.originalIndex" @click="scrollToMessageByIndex(msg.originalIndex)">
@@ -6019,7 +6040,8 @@ const scrollToMessageByIndex = (index) => {
                   <div class="timeline-node" :class="[
                     msg.role,
                     { 'active': focusedMessageIndex === msg.originalIndex }
-                  ]">
+                  ]" :data-role-label="msg.role === 'user' ? '你' : 'AI'">
+                    <span class="timeline-node-text">{{ getMessagePreviewText(msg) }}</span>
                   </div>
                 </el-tooltip>
               </div>
@@ -7196,58 +7218,59 @@ html.dark .app-container {
 
 .unified-nav-sidebar {
   position: absolute;
-  right: 10px;
+  right: 12px;
   top: calc(50% - var(--window-nav-raise));
   transform: translateY(-50%);
   height: min(var(--window-nav-height), calc(100% - var(--window-nav-safe-bottom)));
   max-height: calc(100% - var(--window-nav-safe-bottom));
   min-height: 240px;
-  width: 30px;
+  width: 112px;
   z-index: 90;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-end;
+  gap: 8px;
   pointer-events: none;
 }
 
 .nav-group {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  align-items: flex-end;
+  gap: 6px;
   pointer-events: auto;
   flex-shrink: 0;
   padding: 2px 0;
 }
 
 .nav-mini-btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: rgba(46, 41, 34, 0.72);
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: none;
-  backdrop-filter: blur(10px) saturate(120%);
-  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  color: rgba(46, 41, 34, 0.76);
+  background: rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
   transition: all 0.2s ease;
   font-size: 14px;
   border-radius: 999px;
 
   &:hover {
     color: rgba(28, 25, 22, 0.96);
-    background: rgba(255, 255, 255, 0.2);
-    transform: scale(1.05);
-    box-shadow: none;
+    background: rgba(255, 255, 255, 0.34);
+    transform: translateX(-2px);
+    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
   }
 
   &.highlight-bottom {
     color: var(--el-color-primary);
-    border-color: rgba(64, 158, 255, 0.28);
-    background: rgba(64, 158, 255, 0.16);
+    border-color: rgba(64, 158, 255, 0.3);
+    background: rgba(64, 158, 255, 0.18);
   }
 }
 
@@ -7257,22 +7280,13 @@ html.dark .app-container {
   width: 100%;
   min-height: 0;
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
   overflow: hidden;
   pointer-events: auto;
 }
 
-
-
 .timeline-track {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 1px;
-  background: linear-gradient(180deg, rgba(125, 114, 95, 0) 0%, rgba(125, 114, 95, 0.38) 14%, rgba(125, 114, 95, 0.38) 86%, rgba(125, 114, 95, 0) 100%);
-  transform: translateX(-0.5px);
-  z-index: -1;
+  display: none;
 }
 
 .timeline-scroller {
@@ -7282,9 +7296,9 @@ html.dark .app-container {
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 0;
+  align-items: stretch;
+  gap: 8px;
+  padding: 6px 0;
   scroll-behavior: smooth;
 
   &::-webkit-scrollbar {
@@ -7296,71 +7310,141 @@ html.dark .app-container {
 
 .timeline-node-wrapper {
   width: 100%;
-  min-height: 12px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   cursor: pointer;
   flex-shrink: 0;
   position: relative;
-  padding: 2px 0;
+  padding: 0;
 
   &:hover .timeline-node {
-    transform: scaleX(1.18);
-    opacity: 0.82;
+    transform: translateX(-6px);
+  }
+
+  &:hover .timeline-node.active {
+    transform: translateX(-12px);
   }
 }
 
 .timeline-node {
-  width: 10px;
-  height: 3px;
-  border-radius: 999px;
-  transition: all 0.18s ease;
-  box-shadow: none;
-  border: none;
-  opacity: 0.38;
+  width: 72px;
+  min-height: 28px;
+  padding: 6px 10px 6px 12px;
+  border-radius: 12px 6px 6px 12px;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+  opacity: 0.92;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.1);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+
+  &::before {
+    content: attr(data-role-label);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    padding: 3px 5px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
 
   &.user {
-    background: linear-gradient(90deg, rgba(84, 171, 255, 0.72), rgba(64, 158, 255, 0.92));
+    color: #fff;
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.94), rgba(14, 165, 233, 0.88));
+    border-color: rgba(59, 130, 246, 0.52);
+
+    &::before {
+      background: rgba(255, 255, 255, 0.16);
+      color: rgba(255, 255, 255, 0.96);
+    }
   }
 
   &.assistant {
-    background: linear-gradient(90deg, rgba(28, 25, 22, 0.42), rgba(28, 25, 22, 0.72));
+    color: rgba(49, 46, 129, 0.96);
+    background: linear-gradient(135deg, rgba(238, 242, 255, 0.92), rgba(224, 231, 255, 0.84));
+    border-color: rgba(129, 140, 248, 0.35);
+
+    &::before {
+      background: rgba(99, 102, 241, 0.12);
+      color: rgba(79, 70, 229, 0.96);
+    }
   }
 
   &.active {
+    width: 104px;
     opacity: 1;
-    width: 16px;
-    height: 4px;
-    box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.16);
+    transform: translateX(-12px);
+    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14), inset 0 0 0 1px rgba(255, 255, 255, 0.22);
   }
+}
+
+.timeline-node-text {
+  max-width: 42px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: right;
+}
+
+.timeline-node.active .timeline-node-text {
+  max-width: 72px;
 }
 
 html.dark {
   .nav-mini-btn {
-    color: rgba(235, 236, 240, 0.75);
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.1);
-    box-shadow: none;
+    color: rgba(235, 236, 240, 0.8);
+    background: rgba(17, 24, 39, 0.48);
+    border-color: rgba(148, 163, 184, 0.18);
+    box-shadow: 0 12px 28px rgba(2, 6, 23, 0.28);
 
     &:hover {
-      color: rgba(255, 255, 255, 0.96);
-      background: rgba(255, 255, 255, 0.12);
-      box-shadow: none;
+      color: rgba(255, 255, 255, 0.98);
+      background: rgba(30, 41, 59, 0.72);
+      box-shadow: 0 16px 32px rgba(2, 6, 23, 0.34);
     }
 
     &.highlight-bottom {
-      border-color: rgba(64, 158, 255, 0.32);
-      background: rgba(64, 158, 255, 0.18);
+      border-color: rgba(96, 165, 250, 0.38);
+      background: rgba(37, 99, 235, 0.3);
+    }
+  }
+
+  .timeline-node {
+    box-shadow: 0 10px 24px rgba(2, 6, 23, 0.32);
+  }
+
+  .timeline-node.user {
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.9), rgba(6, 182, 212, 0.82));
+    border-color: rgba(96, 165, 250, 0.32);
+
+    &::before {
+      background: rgba(255, 255, 255, 0.14);
+      color: rgba(255, 255, 255, 0.96);
     }
   }
 
   .timeline-node.assistant {
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.84));
+    color: rgba(238, 242, 255, 0.96);
+    background: linear-gradient(135deg, rgba(67, 56, 202, 0.42), rgba(79, 70, 229, 0.3));
+    border-color: rgba(129, 140, 248, 0.28);
+
+    &::before {
+      background: rgba(199, 210, 254, 0.14);
+      color: rgba(224, 231, 255, 0.96);
+    }
   }
 
   .timeline-node.active {
-    box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.2);
+    box-shadow: 0 16px 34px rgba(2, 6, 23, 0.42), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
   }
 }
 

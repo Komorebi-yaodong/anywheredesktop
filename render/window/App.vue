@@ -6058,7 +6058,7 @@ const scrollToMessageByIndex = (index) => {
             </el-tooltip>
 
             <el-tooltip content="跳到底部" placement="left" :show-after="500">
-              <div class="nav-mini-btn" :class="{ 'highlight-bottom': showScrollToBottomButton }"
+              <div class="nav-mini-btn"
                 @click="forceScrollToBottom">
                 <el-icon :size="16">
                   <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
@@ -7235,7 +7235,7 @@ html.dark .app-container {
 .nav-group {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 0px;
   pointer-events: auto;
   flex-shrink: 0;
   padding: 2px 0;
@@ -7249,8 +7249,8 @@ html.dark .app-container {
   justify-content: center;
   cursor: pointer;
   color: rgba(46, 41, 34, 0.72);
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent !important;
+  border: none;
   box-shadow: none;
   backdrop-filter: blur(10px) saturate(120%);
   -webkit-backdrop-filter: blur(10px) saturate(120%);
@@ -7265,11 +7265,6 @@ html.dark .app-container {
     box-shadow: none;
   }
 
-  &.highlight-bottom {
-    color: var(--el-color-primary);
-    border-color: rgba(64, 158, 255, 0.28);
-    background: rgba(64, 158, 255, 0.16);
-  }
 }
 
 .nav-timeline-area {
@@ -7318,7 +7313,6 @@ html.dark .app-container {
   padding: 2px 0;
 
   &:hover .timeline-node {
-    opacity: 0.78;
     transform: translateX(-1px);
   }
 
@@ -7334,18 +7328,18 @@ html.dark .app-container {
   transition: all 0.18s ease;
   box-shadow: none;
   border: none;
-  opacity: 0.26;
+  opacity: 1;
 
   &::before {
     content: none;
   }
 
   &.user {
-    background: rgba(17, 24, 39, 0.82);
+    background: rgba(64, 158, 255, 0.96);
   }
 
   &.assistant {
-    background: rgba(156, 163, 175, 0.72);
+    background: rgba(0, 0, 0, 0.96);
   }
 
   &.active {
@@ -7353,7 +7347,6 @@ html.dark .app-container {
     height: 3px;
     opacity: 1;
     transform: translateX(-4px);
-    background: rgba(64, 158, 255, 0.96);
   }
 }
 
@@ -7365,7 +7358,7 @@ html.dark {
   .nav-mini-btn {
     color: rgba(235, 236, 240, 0.75);
     background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.1);
+    border: none;
     box-shadow: none;
 
     &:hover {
@@ -7374,22 +7367,14 @@ html.dark {
       box-shadow: none;
     }
 
-    &.highlight-bottom {
-      border-color: rgba(64, 158, 255, 0.32);
-      background: rgba(64, 158, 255, 0.18);
-    }
   }
 
   .timeline-node.user {
-    background: rgba(255, 255, 255, 0.92);
+    background: rgba(96, 165, 250, 0.98);
   }
 
   .timeline-node.assistant {
-    background: rgba(148, 163, 184, 0.58);
-  }
-
-  .timeline-node.active {
-    background: rgba(96, 165, 250, 0.98);
+    background: rgba(255, 255, 255, 0.96);
   }
 }
 

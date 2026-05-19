@@ -2809,15 +2809,10 @@ onMounted(async () => {
   }
 });
 
-const AUTO_NAMING_TIMEOUT_MS = 12000;
-const AUTO_NAMING_SYSTEM_PROMPT = `你是一个专门为 AI 对话生成会话标题的命名助手。
-请根据用户首次发送的内容（可能包含文本与图片）生成一个简洁、准确、适合作为本地文件名的中文会话标题。
-要求：
-1. 只输出标题本身，不要解释，不要加引号，不要使用 Markdown。
-2. 标题应尽量概括用户真实意图，而不是机械截断原文。
-3. 长度控制在 6 到 24 个中文字符或等价长度内。
-4. 不要包含文件名非法字符：\\ / : * ? " < > |。
-5. 如果内容主要是图片，请结合图片与用户文本命名；如果无法判断图片内容，可使用“图片分析”“图片问答”等概括标题。`;
+const AUTO_NAMING_TIMEOUT_MS = 30000;
+const AUTO_NAMING_MAX_TEXT_CHARS = 1000;
+const AUTO_NAMING_MAX_IMAGES = 3;
+const AUTO_NAMING_SYSTEM_PROMPT = `Generate a short name (2-4 words) capturing the main topic in the conversation's language. Use lowercase words separated by hyphens (e.g., \`topic-name\` or \`主题-名称\`). Output only the name.`;
 
 const sanitizeConversationTitlePart = (value, maxLength = 30) => {
   const normalized = typeof value === 'string' ? value : String(value ?? '');
@@ -2888,56 +2883,94 @@ const isConfiguredFastModelAvailable = (modelKey = '') => {
   );
 };
 
-const buildAutoNamingUserContent = (firstUserMsg) => {
+const takeLastTextChars = (value, maxChars = AUTO_NAMING_MAX_TEXT_CHARS) => {
+  const normalized = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxChars) return normalized;
+  return normalized.slice(-maxChars);
+};
+
+const getCurrentConversationSystemPromptTail = () => {
+  return takeLastTextChars(currentSystemPrompt.value || '', AUTO_NAMING_MAX_TEXT_CHARS);
+};
+
+const getFirstUserMessageTextTail = (firstUserMsg) => {
   const content = firstUserMsg?.content;
 
   if (typeof content === 'string') {
-    return content.trim();
+    return takeLastTextChars(content, AUTO_NAMING_MAX_TEXT_CHARS);
   }
 
   if (!Array.isArray(content)) return '';
 
-  const userParts = [];
+  const textContent = content
+    .filter(part => part?.type === 'text' && typeof part.text === 'string' && part.text.trim())
+    .map(part => part.text.trim())
+    .join('\n');
+
+  return takeLastTextChars(textContent, AUTO_NAMING_MAX_TEXT_CHARS);
+};
+
+const buildAutoNamingUserMessageText = (firstUserMsg) => {
+  const sections = [];
+  const conversationSystemPrompt = getCurrentConversationSystemPromptTail();
+  const firstUserMessage = getFirstUserMessageTextTail(firstUserMsg);
   const fileNames = [];
 
-  content.forEach((part) => {
-    if (!part || typeof part !== 'object') return;
+  if (conversationSystemPrompt) {
+    sections.push(`Conversation system prompt:\n${conversationSystemPrompt}`);
+  }
 
-    if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
-      userParts.push({ type: 'text', text: part.text.trim().slice(0, 4000) });
-      return;
-    }
+  if (firstUserMessage) {
+    sections.push(`First user message:\n${firstUserMessage}`);
+  }
 
-    if (part.type === 'image_url') {
-      const imageUrl = part.image_url?.url || part.image_url;
-      if (imageUrl) {
-        userParts.push({
-          type: 'image_url',
-          image_url: typeof imageUrl === 'string' ? { url: imageUrl } : imageUrl
-        });
+  if (Array.isArray(firstUserMsg?.content)) {
+    firstUserMsg.content.forEach((part) => {
+      if (part?.type === 'file' || part?.type === 'input_file') {
+        const fileInput = part.file || part;
+        const fileName = fileInput?.filename || fileInput?.name;
+        if (fileName) fileNames.push(String(fileName));
       }
-      return;
-    }
-
-    if (part.type === 'file' || part.type === 'input_file') {
-      const fileInput = part.file || part;
-      const fileName = fileInput?.filename || fileInput?.name;
-      if (fileName) fileNames.push(String(fileName));
-    }
-  });
-
-  if (fileNames.length > 0) {
-    userParts.push({
-      type: 'text',
-      text: `用户还上传了文件：${fileNames.slice(0, 5).join('、')}`
     });
   }
 
-  if (userParts.length === 1 && userParts[0].type === 'text') {
-    return userParts[0].text;
+  if (fileNames.length > 0) {
+    sections.push(`Attached file names:\n${fileNames.slice(0, 10).join('\n')}`);
   }
 
-  return userParts;
+  return sections.join('\n\n').trim();
+};
+
+const buildAutoNamingImageParts = (firstUserMsg) => {
+  const content = firstUserMsg?.content;
+  if (!Array.isArray(content)) return [];
+
+  return content
+    .filter(part => part?.type === 'image_url')
+    .slice(0, AUTO_NAMING_MAX_IMAGES)
+    .map((part) => {
+      const imageUrl = part.image_url?.url || part.image_url;
+      if (!imageUrl) return null;
+      return {
+        type: 'image_url',
+        image_url: typeof imageUrl === 'string' ? { url: imageUrl } : imageUrl
+      };
+    })
+    .filter(Boolean);
+};
+
+const buildAutoNamingUserContent = (firstUserMsg) => {
+  const userMessageText = buildAutoNamingUserMessageText(firstUserMsg);
+  const imageParts = buildAutoNamingImageParts(firstUserMsg);
+
+  if (!userMessageText && imageParts.length === 0) return '';
+  if (imageParts.length === 0) return userMessageText;
+
+  return [
+    ...(userMessageText ? [{ type: 'text', text: userMessageText }] : []),
+    ...imageParts
+  ];
 };
 
 const extractAssistantTextFromContent = (content) => {

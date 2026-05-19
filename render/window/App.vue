@@ -2874,6 +2874,30 @@ const resolveUniqueConversationFileName = async (baseTitle = '', dirPath = '') =
   }
 };
 
+
+const buildLegacyFallbackConversationFileName = (namePrefix, force = false) => {
+  const safeNamePrefix = sanitizeConversationTitlePart(namePrefix, 36);
+  if (!safeNamePrefix) return '';
+  const safeCodeName = CODE.value.replace(/[\\/:*?"<>|]/g, '_');
+  const now = new Date();
+  const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+  return `${getAutoSavePrefixTag(force)}${safeNamePrefix}-${safeCodeName}-${timestamp}`;
+};
+
+const autoNamingAbortController = ref(null);
+const autoNamingPromise = ref(null);
+
+const cancelAutoNamingRequest = () => {
+  if (autoNamingAbortController.value) {
+    try {
+      autoNamingAbortController.value.abort();
+    } catch {
+      // ignore abort race
+    }
+    autoNamingAbortController.value = null;
+  }
+};
+
 const getFallbackConversationNamePrefix = (firstUserMsg) => {
   if (!firstUserMsg) return '';
   const content = firstUserMsg.content;
@@ -3048,7 +3072,7 @@ const extractAutoNamingResponseText = async (response, apiType = 'chat_completio
   return extractAssistantTextFromContent(response?.choices?.[0]?.message?.content);
 };
 
-const generateConversationNamePrefixWithFastModel = async (firstUserMsg) => {
+const generateConversationNamePrefixWithFastModel = async (firstUserMsg, signal = null) => {
   const fastModelKey = currentConfig.value?.defaultFastModel;
   if (!isConfiguredFastModelAvailable(fastModelKey)) return '';
 
@@ -3060,10 +3084,15 @@ const generateConversationNamePrefixWithFastModel = async (firstUserMsg) => {
 
   if (!userContent || (Array.isArray(userContent) && userContent.length === 0)) return '';
 
-  const namingController = new AbortController();
-  const timeoutId = setTimeout(() => namingController.abort(), AUTO_NAMING_TIMEOUT_MS);
+  const namingController = signal instanceof AbortSignal ? null : new AbortController();
+  const namingSignal = signal || namingController?.signal || null;
+  const timeoutId = namingController ? setTimeout(() => namingController.abort(), AUTO_NAMING_TIMEOUT_MS) : null;
 
   try {
+    if (namingSignal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
     const apiType = provider?.apiType || 'chat_completions';
     const response = await window.api.createChatCompletion({
       baseUrl: provider.url,
@@ -3075,20 +3104,86 @@ const generateConversationNamePrefixWithFastModel = async (firstUserMsg) => {
         { role: 'user', content: userContent }
       ],
       stream: false,
-      signal: namingController.signal,
+      signal: namingSignal,
       temperature: 0.2
     });
+
+    if (namingSignal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
 
     const rawTitle = await extractAutoNamingResponseText(response, apiType);
     return sanitizeConversationTitlePart(rawTitle, 30);
   } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     console.warn('[Auto Naming] fast model naming failed, fallback to local naming:', error);
     return '';
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 };
 
+
+
+const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSignal = null } = {}) => {
+  if (defaultConversationName.value || !currentConfig.value?.webdav?.localChatPath) {
+    return defaultConversationName.value || '';
+  }
+
+  const firstUserMsg = chat_show.value.find(msg => msg.role === 'user');
+  if (!firstUserMsg) return '';
+
+  cancelAutoNamingRequest();
+  const localController = requestSignal instanceof AbortSignal ? null : new AbortController();
+  const namingSignal = requestSignal || localController?.signal || null;
+  if (localController) {
+    autoNamingAbortController.value = localController;
+  }
+
+  const namingTask = (async () => {
+    try {
+      const aiNamePrefix = await generateConversationNamePrefixWithFastModel(firstUserMsg, namingSignal);
+      if (defaultConversationName.value) {
+        return defaultConversationName.value;
+      }
+
+      if (aiNamePrefix) {
+        const generatedBaseTitle = buildConversationTitleOnly(aiNamePrefix, force);
+        if (generatedBaseTitle) {
+          const resolvedName = await resolveUniqueConversationFileName(
+            generatedBaseTitle,
+            currentConfig.value.webdav.localChatPath
+          );
+          if (!defaultConversationName.value && resolvedName) {
+            defaultConversationName.value = resolvedName;
+          }
+          return defaultConversationName.value || resolvedName || '';
+        }
+      }
+
+      const fallbackNamePrefix = getFallbackConversationNamePrefix(firstUserMsg);
+      const fallbackFileName = buildLegacyFallbackConversationFileName(fallbackNamePrefix, force);
+      if (!defaultConversationName.value && fallbackFileName) {
+        defaultConversationName.value = fallbackFileName;
+      }
+      return defaultConversationName.value || fallbackFileName || '';
+    } finally {
+      if (autoNamingAbortController.value === localController) {
+        autoNamingAbortController.value = null;
+      }
+      if (autoNamingPromise.value === namingTask) {
+        autoNamingPromise.value = null;
+      }
+    }
+  })();
+
+  autoNamingPromise.value = namingTask;
+  return namingTask;
+};
 
 const autoSaveSession = async (force = false) => {
   if (!currentConfig.value?.webdav?.localChatPath) {
@@ -3103,21 +3198,7 @@ const autoSaveSession = async (force = false) => {
     return false;
   }
 
-  // 自动命名逻辑：优先使用默认助手路由 fast 快速模型；默认生成干净标题，仅在本地目录重名时补 -2/-3...
-  if (!defaultConversationName.value && chat_show.value.length > 0) {
-    const firstUserMsg = chat_show.value.find(msg => msg.role === 'user');
-    if (firstUserMsg) {
-      const aiNamePrefix = await generateConversationNamePrefixWithFastModel(firstUserMsg);
-      const fallbackNamePrefix = aiNamePrefix || getFallbackConversationNamePrefix(firstUserMsg);
-      const generatedBaseTitle = buildConversationTitleOnly(fallbackNamePrefix, force);
-      if (generatedBaseTitle) {
-        defaultConversationName.value = await resolveUniqueConversationFileName(
-          generatedBaseTitle,
-          currentConfig.value.webdav.localChatPath
-        );
-      }
-    }
-  }
+  // 自动命名已前移到首条消息发送阶段；自动保存阶段仅负责持久化已有会话名。
 
   // 5. 如果经过尝试后仍然没有对话名称（例如空对话），则不保存
   if (!defaultConversationName.value) {
@@ -5131,6 +5212,16 @@ const askAI = async (forceSend = false) => {
   signalController.value = new AbortController();
   const requestAbortController = signalController.value;
   const requestSignal = requestAbortController.signal;
+
+  const shouldTriggerAutoNaming = !defaultConversationName.value && chat_show.value.filter(msg => msg.role === 'user').length === 1;
+  if (shouldTriggerAutoNaming) {
+    triggerAutoNamingForFirstUserMessage({ force: false, requestSignal }).catch((error) => {
+      if (!isAbortError(error)) {
+        console.warn('[Auto Naming] trigger failed:', error);
+      }
+    });
+  }
+
   await nextTick();
 
   if (isAtBottom.value) {
@@ -5832,6 +5923,7 @@ const result = await window.api.invokeMcpTool(
 const cancelAskAI = () => {
   if (loading.value && signalController.value) {
     signalController.value.abort();
+    cancelAutoNamingRequest();
     toolCallControllers.value.forEach((controller) => {
       try {
         controller.abort();
@@ -5970,6 +6062,7 @@ const clearHistory = () => {
   collapsedMessages.value.clear();
   messageRefs.clear();
   focusedMessageIndex.value = null;
+  cancelAutoNamingRequest();
   defaultConversationName.value = "";
   chatInputRef.value?.focus({ cursor: 'end' });
   showDismissibleMessage.success('历史记录已清除');

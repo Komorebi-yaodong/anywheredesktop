@@ -1003,6 +1003,17 @@ const formatToolResult = (result) => {
   return String(result);
 };
 
+const resolvePendingToolApprovals = (isApproved = false) => {
+  pendingToolApprovals.value.forEach((resolve) => {
+    try {
+      resolve(isApproved);
+    } catch {
+      // ignore approval resolve race
+    }
+  });
+  pendingToolApprovals.value.clear();
+};
+
 const handleToolApproval = (toolCallId, isApproved) => {
   const resolver = pendingToolApprovals.value.get(toolCallId);
   if (resolver) {
@@ -1014,10 +1025,7 @@ const handleToggleAutoApprove = (val) => {
   isAutoApproveTools.value = val;
 
   if (val) {
-    pendingToolApprovals.value.forEach((resolve, id) => {
-      resolve(true);
-    });
-    pendingToolApprovals.value.clear();
+    resolvePendingToolApprovals(true);
 
     chat_show.value.forEach(msg => {
       if (msg.tool_calls) {
@@ -5669,17 +5677,21 @@ const askAI = async (forceSend = false) => {
                 if (!isApproved) {
                   if (uiToolCall) {
                     uiToolCall.approvalStatus = 'rejected';
-                    uiToolCall.result = '用户已取消执行';
+                    uiToolCall.result = requestSignal.aborted ? '[System Note]: Tool call was aborted by user.' : '用户已取消执行';
                   }
                   return {
                     tool_call_id: toolCall.id,
                     role: "tool",
                     name: toolCall.function.name,
-                    content: "User denied this tool execution."
+                    content: requestSignal.aborted ? '[System Note]: Tool call was aborted by user.' : 'User denied this tool execution.'
                   };
                 }
               } catch (e) {
               }
+            }
+
+            if (requestSignal.aborted) {
+              throw new DOMException('The operation was aborted.', 'AbortError');
             }
 
             if (uiToolCall) {
@@ -5927,19 +5939,36 @@ const result = await window.api.invokeMcpTool(
 };
 
 const cancelAskAI = () => {
-  if (loading.value && signalController.value) {
+  if (!loading.value) {
+    return;
+  }
+
+  if (signalController.value) {
     signalController.value.abort();
-    cancelAutoNamingRequest();
-    toolCallControllers.value.forEach((controller) => {
-      try {
-        controller.abort();
-      } catch {
-        // ignore abort race
+  }
+  cancelAutoNamingRequest();
+
+  resolvePendingToolApprovals(false);
+  toolCallControllers.value.forEach((controller) => {
+    try {
+      controller.abort();
+    } catch {
+      // ignore abort race
+    }
+  });
+
+  chat_show.value.forEach(msg => {
+    if (!Array.isArray(msg.tool_calls)) return;
+    msg.tool_calls.forEach(tc => {
+      if (tc.approvalStatus === 'waiting' || tc.approvalStatus === 'executing') {
+        tc.approvalStatus = 'rejected';
+        tc.result = '[System Note]: Tool call was aborted by user.';
       }
     });
-    scheduleAutoSave({ reason: 'assistant-cancelled', immediate: true });
-    chatInputRef.value?.focus();
-  }
+  });
+
+  scheduleAutoSave({ reason: 'assistant-cancelled', immediate: true });
+  chatInputRef.value?.focus();
 };
 const copyText = async (content, index) => { if (loading.value && index === chat_show.value.length - 1) return; await window.api.copyText(content); };
 const reaskAI = async () => {

@@ -882,7 +882,7 @@ defineExpose({ focus, senderRef });
                                         </svg>
                                     </el-icon>
                                 </el-button>
-                                <el-button v-else @click="onCancel" circle class="cancel-button-animated">
+                                <el-button v-else @click="onCancel" circle class="cancel-button-animated" type="default">
                                     <el-icon class="static-icon">
                                         <Close />
                                     </el-icon>
@@ -1634,12 +1634,14 @@ html.dark .el-button--success.is-plain:focus {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    cursor: pointer;
 }
 
 .static-icon {
     font-size: 16px;
     z-index: 1;
     color: var(--el-text-color-regular);
+    pointer-events: none;
 }
 
 .cancel-spinner {

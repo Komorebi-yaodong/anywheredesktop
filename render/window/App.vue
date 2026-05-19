@@ -2809,6 +2809,224 @@ onMounted(async () => {
   }
 });
 
+const AUTO_NAMING_TIMEOUT_MS = 12000;
+const AUTO_NAMING_SYSTEM_PROMPT = `你是一个专门为 AI 对话生成会话标题的命名助手。
+请根据用户首次发送的内容（可能包含文本与图片）生成一个简洁、准确、适合作为本地文件名的中文会话标题。
+要求：
+1. 只输出标题本身，不要解释，不要加引号，不要使用 Markdown。
+2. 标题应尽量概括用户真实意图，而不是机械截断原文。
+3. 长度控制在 6 到 24 个中文字符或等价长度内。
+4. 不要包含文件名非法字符：\\ / : * ? " < > |。
+5. 如果内容主要是图片，请结合图片与用户文本命名；如果无法判断图片内容，可使用“图片分析”“图片问答”等概括标题。`;
+
+const sanitizeConversationTitlePart = (value, maxLength = 30) => {
+  const normalized = typeof value === 'string' ? value : String(value ?? '');
+  return normalized
+    .replace(/^\s*(?:标题|会话标题|名称|命名)\s*[:：-]\s*/i, '')
+    .replace(/^[`'"“”‘’\s]+|[`'"“”‘’\s]+$/g, '')
+    .replace(/[\\/:*?"<>|\n\r]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength)
+    .trim();
+};
+
+const buildConversationTimestamp = () => {
+  const now = new Date();
+  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+};
+
+const getAutoSavePrefixTag = (force = false) => {
+  if (basic_msg.value?.type === "summon") return "召唤-";
+  if (force) return "关闭留档-";
+  return "";
+};
+
+const buildConversationFileBaseName = (namePrefix, force = false) => {
+  const safeNamePrefix = sanitizeConversationTitlePart(namePrefix, 36);
+  if (!safeNamePrefix) return '';
+  const safeCodeName = sanitizeConversationTitlePart(CODE.value, 40) || 'AI';
+  return `${getAutoSavePrefixTag(force)}${safeNamePrefix}-${safeCodeName}-${buildConversationTimestamp()}`;
+};
+
+const getFallbackConversationNamePrefix = (firstUserMsg) => {
+  if (!firstUserMsg) return '';
+  const content = firstUserMsg.content;
+
+  if (Array.isArray(content)) {
+    const hasImage = content.some(p => p?.type === 'image_url');
+    const hasFile = content.some(p => p?.type === 'file' || p?.type === 'input_file');
+    const textPart = content.find(p => p?.type === 'text' && typeof p.text === 'string' && p.text.trim());
+
+    if (hasImage) return '图片';
+    if (hasFile) return '文件';
+    if (textPart?.text) return sanitizeConversationTitlePart(textPart.text, 20);
+    return '';
+  }
+
+  if (typeof content === 'string') {
+    return sanitizeConversationTitlePart(content, 20);
+  }
+
+  return '';
+};
+
+const isConfiguredFastModelAvailable = (modelKey = '') => {
+  if (typeof modelKey !== 'string' || !modelKey.trim()) return false;
+  const separatorIndex = modelKey.indexOf('|');
+  if (separatorIndex <= 0) return false;
+
+  const providerId = modelKey.slice(0, separatorIndex);
+  const modelName = modelKey.slice(separatorIndex + 1);
+  const provider = currentConfig.value?.providers?.[providerId];
+  return Boolean(
+    provider &&
+    provider.enable !== false &&
+    modelName &&
+    Array.isArray(provider.modelList) &&
+    provider.modelList.includes(modelName)
+  );
+};
+
+const buildAutoNamingUserContent = (firstUserMsg) => {
+  const content = firstUserMsg?.content;
+
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+
+  if (!Array.isArray(content)) return '';
+
+  const userParts = [];
+  const fileNames = [];
+
+  content.forEach((part) => {
+    if (!part || typeof part !== 'object') return;
+
+    if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
+      userParts.push({ type: 'text', text: part.text.trim().slice(0, 4000) });
+      return;
+    }
+
+    if (part.type === 'image_url') {
+      const imageUrl = part.image_url?.url || part.image_url;
+      if (imageUrl) {
+        userParts.push({
+          type: 'image_url',
+          image_url: typeof imageUrl === 'string' ? { url: imageUrl } : imageUrl
+        });
+      }
+      return;
+    }
+
+    if (part.type === 'file' || part.type === 'input_file') {
+      const fileInput = part.file || part;
+      const fileName = fileInput?.filename || fileInput?.name;
+      if (fileName) fileNames.push(String(fileName));
+    }
+  });
+
+  if (fileNames.length > 0) {
+    userParts.push({
+      type: 'text',
+      text: `用户还上传了文件：${fileNames.slice(0, 5).join('、')}`
+    });
+  }
+
+  if (userParts.length === 1 && userParts[0].type === 'text') {
+    return userParts[0].text;
+  }
+
+  return userParts;
+};
+
+const extractAssistantTextFromContent = (content) => {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map(part => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        if (typeof part?.content === 'string') return part.content;
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text;
+    if (typeof content.content === 'string') return content.content;
+  }
+  return '';
+};
+
+const extractAutoNamingResponseText = async (response, apiType = 'chat_completions') => {
+  if (!response) return '';
+
+  if (isAsyncIterableResponse(response)) {
+    const message = await collectChatCompletionStreamToMessage(response, 'default');
+    return extractAssistantTextFromContent(message?.content);
+  }
+
+  if (apiType === 'responses') {
+    if (typeof response.output_text === 'string' && response.output_text.trim()) {
+      return response.output_text;
+    }
+
+    if (Array.isArray(response.output)) {
+      return response.output
+        .flatMap(item => Array.isArray(item?.content) ? item.content : [])
+        .map(part => part?.text || '')
+        .filter(Boolean)
+        .join(' ');
+    }
+  }
+
+  return extractAssistantTextFromContent(response?.choices?.[0]?.message?.content);
+};
+
+const generateConversationNamePrefixWithFastModel = async (firstUserMsg) => {
+  const fastModelKey = currentConfig.value?.defaultFastModel;
+  if (!isConfiguredFastModelAvailable(fastModelKey)) return '';
+
+  const separatorIndex = fastModelKey.indexOf('|');
+  const providerId = fastModelKey.slice(0, separatorIndex);
+  const modelName = fastModelKey.slice(separatorIndex + 1);
+  const provider = currentConfig.value.providers[providerId];
+  const userContent = buildAutoNamingUserContent(firstUserMsg);
+
+  if (!userContent || (Array.isArray(userContent) && userContent.length === 0)) return '';
+
+  const namingController = new AbortController();
+  const timeoutId = setTimeout(() => namingController.abort(), AUTO_NAMING_TIMEOUT_MS);
+
+  try {
+    const apiType = provider?.apiType || 'chat_completions';
+    const response = await window.api.createChatCompletion({
+      baseUrl: provider.url,
+      apiKey: provider.api_key,
+      model: modelName,
+      apiType,
+      messages: [
+        { role: 'system', content: AUTO_NAMING_SYSTEM_PROMPT },
+        { role: 'user', content: userContent }
+      ],
+      stream: false,
+      signal: namingController.signal,
+      temperature: 0.2
+    });
+
+    const rawTitle = await extractAutoNamingResponseText(response, apiType);
+    return sanitizeConversationTitlePart(rawTitle, 30);
+  } catch (error) {
+    console.warn('[Auto Naming] fast model naming failed, fallback to local naming:', error);
+    return '';
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+
 const autoSaveSession = async (force = false) => {
   if (!currentConfig.value?.webdav?.localChatPath) {
     return false;
@@ -2822,49 +3040,15 @@ const autoSaveSession = async (force = false) => {
     return false;
   }
 
-  // 自动命名逻辑：
+  // 自动命名逻辑：优先使用默认助手路由 fast 快速模型；失败或未配置时回退本地命名方案。
   if (!defaultConversationName.value && chat_show.value.length > 0) {
     const firstUserMsg = chat_show.value.find(msg => msg.role === 'user');
     if (firstUserMsg) {
-      let namePrefix = '';
-      const content = firstUserMsg.content;
-
-      // 提取并清洗用户输入内容，作为文件名前缀
-      if (Array.isArray(content)) {
-        const hasImage = content.some(p => p.type === 'image_url');
-        const hasFile = content.some(p => p.type === 'file');
-        const textPart = content.find(p => p.type === 'text');
-
-        if (hasImage) {
-          namePrefix = '图片';
-        } else if (hasFile) {
-          namePrefix = '文件';
-        } else if (textPart?.text) {
-          namePrefix = textPart.text.slice(0, 20).replace(/[\\/:*?"<>|\n\r]/g, '').trim();
-        }
-      } else if (typeof content === 'string') {
-        namePrefix = content.slice(0, 20).replace(/[\\/:*?"<>|\n\r]/g, '').trim();
-      }
-
-      if (namePrefix) {
-        // 清洗智能助手名称中的非法字符 (如 /, \, :, *, ?, ", <, >, |)
-        const safeCodeName = CODE.value.replace(/[\\/:*?"<>|]/g, '_');
-
-        // 添加时间戳避免文件名重复覆盖
-        const now = new Date();
-        const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-
-        // 判断上下文并添加合适的前缀
-        let prefixTag = "";
-        if (basic_msg.value?.type === "summon") {
-          prefixTag = "召唤-";
-        } else if (force) {
-          // force 为 true 通常是由 MCP 调用 close_agent_window 引起的强制保存关闭
-          prefixTag = "关闭留档-";
-        }
-
-        // 组合文件名
-        defaultConversationName.value = `${prefixTag}${namePrefix}-${safeCodeName}-${timestamp}`;
+      const aiNamePrefix = await generateConversationNamePrefixWithFastModel(firstUserMsg);
+      const fallbackNamePrefix = aiNamePrefix || getFallbackConversationNamePrefix(firstUserMsg);
+      const generatedName = buildConversationFileBaseName(fallbackNamePrefix, force);
+      if (generatedName) {
+        defaultConversationName.value = generatedName;
       }
     }
   }

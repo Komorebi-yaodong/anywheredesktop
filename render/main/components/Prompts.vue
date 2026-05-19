@@ -1364,7 +1364,12 @@ async function refreshPromptsConfig() {
         </el-form-item>
         <el-form-item>
           <template #label>
-            {{ t('tasks.defaultAssistantRoutes.fast.label') }}
+            <span>{{ t('tasks.defaultAssistantRoutes.fast.label') }}</span>
+            <el-tooltip :content="t('prompts.defaultAssistantRoutesFastTip')" placement="top">
+              <el-icon class="tip-icon" style="margin-left: 4px;">
+                <QuestionFilled />
+              </el-icon>
+            </el-tooltip>
           </template>
           <el-select v-model="currentConfig.defaultFastModel" filterable style="width: 100%;"
             @change="(val) => saveDefaultAssistantRouteModel('defaultFastModel', val)">

@@ -374,6 +374,7 @@
     
     "defaultAssistantRoutesButton": "Default Assistant Route",
     "defaultAssistantRoutesDialogTitle": "Default Assistant Route",
+    "defaultAssistantRoutesFastTip": "For the fast route, choose the quickest and most cost-effective model. It is suitable for simple sub-agent tasks, lightweight scheduled tasks, and automatic chat naming.",
 
 "replaceModels": "Replace Models",
     "replaceModelsDialog": {

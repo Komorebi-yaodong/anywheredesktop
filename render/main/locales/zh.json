@@ -374,6 +374,7 @@
     
     "defaultAssistantRoutesButton": "默认助手路由",
     "defaultAssistantRoutesDialogTitle": "默认助手路由",
+    "defaultAssistantRoutesFastTip": "快速模型建议选择回复快、性价比最高的模型，可用于子智能体简单任务、简单的定时任务与对话自动命名。",
 
 "replaceModels": "替换模型",
     "replaceModelsDialog": {

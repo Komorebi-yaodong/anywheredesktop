@@ -2826,22 +2826,52 @@ const sanitizeConversationTitlePart = (value, maxLength = 30) => {
     .trim();
 };
 
-const buildConversationTimestamp = () => {
-  const now = new Date();
-  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-};
-
 const getAutoSavePrefixTag = (force = false) => {
   if (basic_msg.value?.type === "summon") return "召唤-";
   if (force) return "关闭留档-";
   return "";
 };
 
-const buildConversationFileBaseName = (namePrefix, force = false) => {
+const buildConversationTitleOnly = (namePrefix, force = false) => {
   const safeNamePrefix = sanitizeConversationTitlePart(namePrefix, 36);
   if (!safeNamePrefix) return '';
-  const safeCodeName = sanitizeConversationTitlePart(CODE.value, 40) || 'AI';
-  return `${getAutoSavePrefixTag(force)}${safeNamePrefix}-${safeCodeName}-${buildConversationTimestamp()}`;
+  return `${getAutoSavePrefixTag(force)}${safeNamePrefix}`;
+};
+
+const resolveUniqueConversationFileName = async (baseTitle = '', dirPath = '') => {
+  const normalizedBaseTitle = sanitizeConversationTitlePart(baseTitle, 80);
+  const normalizedDirPath = typeof dirPath === 'string' ? dirPath.trim() : '';
+  if (!normalizedBaseTitle || !normalizedDirPath) return normalizedBaseTitle;
+
+  try {
+    const existingFiles = await window.api.listJsonFiles(normalizedDirPath);
+    const existingTitles = new Set(
+      (Array.isArray(existingFiles) ? existingFiles : [])
+        .map(item => {
+          const rawTitle = typeof item?.title === 'string' && item.title.trim()
+            ? item.title.trim()
+            : typeof item?.basename === 'string'
+              ? item.basename.replace(/\.json$/i, '').trim()
+              : '';
+          return rawTitle;
+        })
+        .filter(Boolean)
+    );
+
+    if (!existingTitles.has(normalizedBaseTitle)) {
+      return normalizedBaseTitle;
+    }
+
+    let suffix = 2;
+    while (existingTitles.has(`${normalizedBaseTitle}-${suffix}`)) {
+      suffix += 1;
+    }
+
+    return `${normalizedBaseTitle}-${suffix}`;
+  } catch (error) {
+    console.warn('[Auto Naming] failed to inspect existing local chat files, fallback to base title:', error);
+    return normalizedBaseTitle;
+  }
 };
 
 const getFallbackConversationNamePrefix = (firstUserMsg) => {
@@ -3073,15 +3103,18 @@ const autoSaveSession = async (force = false) => {
     return false;
   }
 
-  // 自动命名逻辑：优先使用默认助手路由 fast 快速模型；失败或未配置时回退本地命名方案。
+  // 自动命名逻辑：优先使用默认助手路由 fast 快速模型；默认生成干净标题，仅在本地目录重名时补 -2/-3...
   if (!defaultConversationName.value && chat_show.value.length > 0) {
     const firstUserMsg = chat_show.value.find(msg => msg.role === 'user');
     if (firstUserMsg) {
       const aiNamePrefix = await generateConversationNamePrefixWithFastModel(firstUserMsg);
       const fallbackNamePrefix = aiNamePrefix || getFallbackConversationNamePrefix(firstUserMsg);
-      const generatedName = buildConversationFileBaseName(fallbackNamePrefix, force);
-      if (generatedName) {
-        defaultConversationName.value = generatedName;
+      const generatedBaseTitle = buildConversationTitleOnly(fallbackNamePrefix, force);
+      if (generatedBaseTitle) {
+        defaultConversationName.value = await resolveUniqueConversationFileName(
+          generatedBaseTitle,
+          currentConfig.value.webdav.localChatPath
+        );
       }
     }
   }

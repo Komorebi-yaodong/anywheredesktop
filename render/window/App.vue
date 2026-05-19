@@ -4453,22 +4453,20 @@ const saveSessionAsImage = async () => {
 };
 
 const handleSaveAction = async () => {
-  if (loading.value) {
-    showDismissibleMessage.warning('请等待 AI 回复完成后再执行保存或重命名操作');
-    return;
-  }
-
   if (autoCloseOnBlur.value) handleTogglePin();
   const isCloudEnabled = currentConfig.value.webdav?.url && currentConfig.value.webdav?.data_path;
   const saveOptions = [];
 
-  // 只有当已存在本地文件名（即已保存过）且配置了本地路径时，才显示重命名选项
+  // 只有当已存在本地文件名（即已保存过）且配置了本地路径时，才显示重命名选项；请求中继续禁用重命名，避免路径竞态。
   if (currentConfig.value.webdav?.localChatPath && defaultConversationName.value) {
     saveOptions.push({
       title: '重命名对话',
-      description: '修改当前对话名称，并同步修改本地文件（以及云端文件）。',
+      description: loading.value
+        ? '当前 AI 仍在回复中，请等待本轮回复结束后再重命名，避免与自动保存路径产生竞态。'
+        : '修改当前对话名称，并同步修改本地文件（以及云端文件）。',
       buttonType: 'warning',
-      action: handleRenameSession
+      action: handleRenameSession,
+      disabled: loading.value
     });
   }
 
@@ -4482,15 +4480,23 @@ const handleSaveAction = async () => {
   saveOptions.push({ title: '保存为 图片', description: '将完整聊天记录保存为长图 (.png)。', buttonType: '', action: saveSessionAsImage });
 
   const messageVNode = h('div', { class: 'save-options-list' }, saveOptions.map(opt => {
-    const trigger = () => { ElMessageBox.close(); opt.action(); };
+    const trigger = () => {
+      if (opt.disabled) return;
+      ElMessageBox.close();
+      opt.action();
+    };
 
-    return h('div', { class: 'save-option-item', onClick: trigger }, [
+    return h('div', {
+      class: ['save-option-item', opt.disabled ? 'is-disabled' : ''],
+      onClick: trigger
+    }, [
       h('div', { class: 'save-option-text' }, [
         h('h4', null, opt.title), h('p', null, opt.description)
       ]),
       h(ElButton, {
         type: opt.buttonType,
         plain: true,
+        disabled: Boolean(opt.disabled),
         class: opt.isDefault ? 'default-save-target' : '',
         onClick: (e) => { e.stopPropagation(); trigger(); }
       }, { default: () => '选择' })

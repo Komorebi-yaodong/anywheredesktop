@@ -1920,6 +1920,17 @@ const inferImageExtension = (contentType = '', fallback = 'png') => {
   return fallback;
 };
 
+const inferImageContentTypeFromPath = (filePath = '') => {
+  const normalized = String(filePath || '').toLowerCase().split('?')[0].split('#')[0];
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) return 'image/jpeg';
+  if (normalized.endsWith('.webp')) return 'image/webp';
+  if (normalized.endsWith('.gif')) return 'image/gif';
+  if (normalized.endsWith('.bmp')) return 'image/bmp';
+  if (normalized.endsWith('.svg')) return 'image/svg+xml';
+  return 'image/png';
+};
+
+
 const parseDataImageUrl = (url = '') => {
   const match = String(url || '').match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
   if (!match) return null;
@@ -1928,6 +1939,34 @@ const parseDataImageUrl = (url = '') => {
     uint8: Uint8Array.from(atob(match[2]), char => char.charCodeAt(0))
   };
 };
+
+const uint8ToBase64 = (uint8 = new Uint8Array()) => {
+  const bytes = uint8 instanceof Uint8Array ? uint8 : new Uint8Array(uint8 || []);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+};
+
+const uint8ToDataUrl = (uint8, contentType = 'image/png') => {
+  const safeContentType = typeof contentType === 'string' && contentType.startsWith('image/') ? contentType : 'image/png';
+  return `data:${safeContentType};base64,${uint8ToBase64(uint8)}`;
+};
+
+const canvasToUint8Png = async (canvas) => {
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) resolve(result);
+      else reject(new Error('图片编码失败'));
+    }, 'image/png');
+  });
+  return new Uint8Array(await blob.arrayBuffer());
+};
+
+const waitForNextPaint = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
+
 
 const readImageBinaryFromSource = async (url) => {
   const normalizedUrl = String(url || '').trim();
@@ -1957,18 +1996,15 @@ const readImageBinaryFromSource = async (url) => {
     }
   }
 
-  const localFile = await window.api.readFile(localPath);
-  if (!localFile) {
+  const localBase64 = await window.api.readLocalFile(localPath, { encoding: 'base64' });
+  if (typeof localBase64 !== 'string' || !localBase64) {
     throw new Error('本地图片读取失败');
   }
 
-  const localFileUrl = typeof localFile.url === 'string' ? localFile.url : '';
-  const parsedLocalData = parseDataImageUrl(localFileUrl);
-  if (!parsedLocalData) {
-    throw new Error('本地图片数据格式无效');
-  }
-
-  return parsedLocalData;
+  return {
+    contentType: inferImageContentTypeFromPath(localPath),
+    uint8: Uint8Array.from(atob(localBase64), char => char.charCodeAt(0))
+  };
 };
 
 const handleCopyImageFromViewer = (url) => {
@@ -1976,28 +2012,13 @@ const handleCopyImageFromViewer = (url) => {
   (async () => {
     try {
       const { contentType, uint8 } = await readImageBinaryFromSource(url);
-      const blob = new Blob([uint8], { type: contentType });
+      const dataUrl = uint8ToDataUrl(uint8, contentType);
+      const result = await window.api.copyImage({ dataUrl });
 
-      try {
-        if (['image/png', 'image/jpeg'].includes(blob.type)) {
-          const item = new ClipboardItem({ [blob.type]: blob });
-          await navigator.clipboard.write([item]);
-          showDismissibleMessage.success('图片已复制到剪贴板 (WebAPI)');
-          return;
-        }
-      } catch (webErr) {
-        console.warn('Web Clipboard API 写入失败，尝试回退方案:', webErr);
+      if (!result?.ok) {
+        throw new Error(result?.message || result?.reason || '写入系统剪贴板失败');
       }
 
-      const base64Data = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 50));
-      await window.api.copyImage(base64Data);
       showDismissibleMessage.success('图片已复制到剪贴板');
     } catch (error) {
       console.error('复制图片失败:', error);
@@ -4261,6 +4282,7 @@ const saveSessionAsImage = async () => {
             const exportThinkingBg = isDarkScreenshot ? '#1F232B' : '#F4EEE4';
 
             const targetWidth = Math.max(chatMain.clientWidth, 800);
+            const exportScale = Math.min(1.5, Math.max(1, Number(window.devicePixelRatio) || 1));
 
             // 1. 创建离线渲染容器
             const renderWrapper = document.createElement('div');
@@ -4275,8 +4297,8 @@ const saveSessionAsImage = async () => {
             chatMain.appendChild(renderWrapper);
 
             // ================== 分组分块渲染 ==================
-            const chunkDataUrls = [];
-            const CHUNK_SIZE = 8;
+            const chunkCanvases = [];
+            const CHUNK_SIZE = 10;
 
             for (let i = 0; i < messageNodes.length; i += CHUNK_SIZE) {
               const chunkNodes = messageNodes.slice(i, i + CHUNK_SIZE);
@@ -4382,73 +4404,71 @@ const saveSessionAsImage = async () => {
                 });
               }));
 
-              await new Promise(r => setTimeout(r, 100)); // 让浏览器消化重绘队列
+              await waitForNextPaint();
 
-              // 生成透明底的局部碎片
+              // 生成局部碎片。降低倍率并保留 Canvas，避免 dataURL 编解码和二次 DOM 截图。
               const msgCanvas = await html2canvas(renderWrapper, {
                 useCORS: true,
                 allowTaint: true,
                 backgroundColor: exportBubbleBg,
-                scale: 2,
+                scale: exportScale,
                 logging: false
               });
 
-              chunkDataUrls.push(msgCanvas.toDataURL('image/png'));
+              chunkCanvases.push(msgCanvas);
             }
 
-            // ================== 上下拼接与背景合成 ==================
-            renderWrapper.innerHTML = '';
-            renderWrapper.style.padding = '0'; // 消除内边距避免组装缝隙
+            // ================== Canvas 直接拼接与背景合成 ==================
+            const finalPadding = Math.round(12 * exportScale);
+            const finalGap = Math.round(12 * exportScale);
+            const finalRadius = Math.round(24 * exportScale);
+            const chunkRadius = Math.round(18 * exportScale);
+            const finalCanvas = document.createElement('canvas');
+            const finalWidth = Math.max(...chunkCanvases.map(canvas => canvas.width), Math.round(targetWidth * exportScale)) + finalPadding * 2;
+            const finalHeight = chunkCanvases.reduce((sum, canvas) => sum + canvas.height, finalPadding * 2 + finalGap * Math.max(0, chunkCanvases.length - 1));
+            finalCanvas.width = finalWidth;
+            finalCanvas.height = finalHeight;
+            const ctx = finalCanvas.getContext('2d');
 
-            const finalContainer = document.createElement('div');
-            finalContainer.style.width = '100%';
-            finalContainer.style.display = 'flex';
-            finalContainer.style.flexDirection = 'column';
+            const fillRoundedRect = (context, x, y, width, height, radius, fillStyle) => {
+              const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+              context.save();
+              context.beginPath();
+              context.moveTo(x + safeRadius, y);
+              context.lineTo(x + width - safeRadius, y);
+              context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+              context.lineTo(x + width, y + height - safeRadius);
+              context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+              context.lineTo(x + safeRadius, y + height);
+              context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+              context.lineTo(x, y + safeRadius);
+              context.quadraticCurveTo(x, y, x + safeRadius, y);
+              context.closePath();
+              context.fillStyle = fillStyle;
+              context.fill();
+              context.restore();
+            };
 
-            // 截图导出使用简约纯底，避免毛玻璃/背景图带来的黑边与额外渲染负担
-            finalContainer.style.background = themeBgColor;
-            finalContainer.style.borderRadius = '24px';
-            finalContainer.style.overflow = 'hidden';
-            finalContainer.style.padding = '12px';
-            finalContainer.style.gap = '12px';
-            finalContainer.style.boxSizing = 'border-box';
+            fillRoundedRect(ctx, 0, 0, finalWidth, finalHeight, finalRadius, themeBgColor);
 
-            // 将刚才分批截好的块贴入大容器中，并为每块提供稳定纯底
-            const chunkSurfaceColor = document.documentElement.classList.contains('dark') ? '#23262D' : '#FFFFFF';
-            for (const dataUrl of chunkDataUrls) {
-              const img = document.createElement('img');
-              img.src = dataUrl;
-              img.style.width = '100%';
-              img.style.height = 'auto';
-              img.style.display = 'block';
-              img.style.background = chunkSurfaceColor;
-              img.style.borderRadius = '18px';
-              finalContainer.appendChild(img);
+            let drawY = finalPadding;
+            for (const canvas of chunkCanvases) {
+              const drawX = Math.round((finalWidth - canvas.width) / 2);
+              fillRoundedRect(ctx, drawX, drawY, canvas.width, canvas.height, chunkRadius, exportBubbleBg);
+              ctx.drawImage(canvas, drawX, drawY);
+              drawY += canvas.height + finalGap;
             }
 
-            renderWrapper.appendChild(finalContainer);
-
-            await new Promise(r => setTimeout(r, 200));
-
-            // 进行快速合影
-            const finalCanvas = await html2canvas(finalContainer, {
-              useCORS: true,
-              allowTaint: true,
-              backgroundColor: themeBgColor,
-              scale: 2,
-              logging: false
-            });
-
-            chatMain.removeChild(renderWrapper);
-
-            // 导出与保存
-            const finalDataUrl = finalCanvas.toDataURL('image/png');
-            const byteString = atob(finalDataUrl.split(',')[1]);
-            const ab = new ArrayBuffer(byteString.length);
-            const ia = new Uint8Array(ab);
-            for (let i = 0; i < byteString.length; i++) {
-              ia[i] = byteString.charCodeAt(i);
+            try {
+              if (chatMain.contains(renderWrapper)) {
+                chatMain.removeChild(renderWrapper);
+              }
+            } catch {
+              renderWrapper.remove();
             }
+
+            // 导出与保存：使用 toBlob，避免超大 dataURL 字符串转换拖慢主线程。
+            const ia = await canvasToUint8Png(finalCanvas);
 
             await window.api.saveFile({
               title: '保存为图片',
@@ -4458,10 +4478,11 @@ const saveSessionAsImage = async () => {
               fileContent: ia
             });
 
-            finalContainer.querySelectorAll('img').forEach((img) => {
-              img.src = '';
+            chunkCanvases.forEach((canvas) => {
+              canvas.width = 0;
+              canvas.height = 0;
             });
-            chunkDataUrls.length = 0;
+            chunkCanvases.length = 0;
             finalCanvas.width = 0;
             finalCanvas.height = 0;
 

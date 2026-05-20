@@ -127,9 +127,10 @@ function normalizeConfigPayload(result) {
 const initialDarkMode = window.__ANYWHERE_INITIAL_DARK__ === true;
 
 function resolveDocumentDarkMode(nextConfig = null) {
-  const themeMode = typeof nextConfig?.themeMode === 'string' ? nextConfig.themeMode : 'system';
+  const themeMode = typeof nextConfig?.themeMode === 'string' ? nextConfig.themeMode : '';
   if (themeMode === 'dark') return true;
   if (themeMode === 'light') return false;
+  if (typeof nextConfig?.isDarkMode === 'boolean') return nextConfig.isDarkMode;
   return initialDarkMode;
 }
 

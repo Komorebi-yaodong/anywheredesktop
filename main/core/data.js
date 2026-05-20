@@ -659,6 +659,12 @@ const rootDefaults = {
     changed = true
   }
 
+  if (typeof config.themeMode !== 'string' || !['system', 'dark', 'light'].includes(config.themeMode)) {
+    config.themeMode = config.isDarkMode === true ? 'dark' : config.isDarkMode === false ? 'light' : 'system'
+    changed = true
+  }
+
+
   if (typeof config.defaultSuperiorModel !== 'string') {
     config.defaultSuperiorModel = ''
     changed = true

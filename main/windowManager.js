@@ -15,9 +15,10 @@ const __dirname = path.dirname(__filename)
 const MAIN_WINDOW_DARK_BACKGROUND = '#17171c'
 const MAIN_WINDOW_LIGHT_BACKGROUND = '#fffdf7'
 function resolveEffectiveDarkMode(config = {}) {
-  const themeMode = typeof config?.themeMode === 'string' ? config.themeMode : 'system'
+  const themeMode = typeof config?.themeMode === 'string' ? config.themeMode : ''
   if (themeMode === 'dark') return true
   if (themeMode === 'light') return false
+  if (typeof config?.isDarkMode === 'boolean') return config.isDarkMode
   return nativeTheme.shouldUseDarkColors
 }
 

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, nextTick } from 'vue';
+import { computed, ref, nextTick, watch } from 'vue';
 import { Bubble, Thinking, XMarkdown } from 'vue-element-plus-x';
 import { ElTooltip, ElButton, ElInput, ElCollapse, ElCollapseItem, ElIcon, ElCheckbox, ElTag, ElMessage } from 'element-plus';
 import { DocumentCopy, Refresh, Delete, Document, CaretTop, CaretBottom, Edit, Check, Close, CloseBold, Picture } from '@element-plus/icons-vue';
@@ -621,6 +621,22 @@ const renderedMarkdownContent = computed(() => {
   return finalContent || '';
 });
 
+const reasoningContent = computed(() => {
+  if (typeof props.message.reasoning_content !== 'string') return '';
+  return props.message.reasoning_content.trim();
+});
+
+const hasReasoningContent = computed(() => reasoningContent.value.length > 0);
+const isThinkingExpanded = ref(false);
+
+watch(() => props.message?.id, () => {
+  isThinkingExpanded.value = false;
+});
+
+const collapseThinking = () => {
+  isThinkingExpanded.value = false;
+};
+
 const hasContentToShow = computed(() => {
   const hasText = renderedMarkdownContent.value && renderedMarkdownContent.value.trim().length > 0;
   const hasTools = props.message.tool_calls && props.message.tool_calls.length > 0;
@@ -734,8 +750,19 @@ const truncateFilename = (filename, maxLength = 30) => {
         :class="{ 'no-content': !hasContentToShow }"
         :loading="showBubbleLoading">
         <template #header>
-          <Thinking v-if="message.reasoning_content && message.reasoning_content.trim().length > 0" maxWidth="90%"
-            :content="(message.reasoning_content || '').trim()" :modelValue="false" :status="message.status">
+          <Thinking v-if="hasReasoningContent" v-model="isThinkingExpanded" maxWidth="90%"
+            :content="reasoningContent" :status="message.status" class="message-thinking">
+            <template #content="{ content }">
+              <div class="thinking-panel">
+                <div class="thinking-panel-content">{{ content }}</div>
+                <div class="thinking-panel-actions">
+                  <el-button class="thinking-collapse-btn" size="small" @click.stop="collapseThinking">
+                    <el-icon><CaretTop /></el-icon>
+                    <span>收起思考内容</span>
+                  </el-button>
+                </div>
+              </div>
+            </template>
           </Thinking>
         </template>
         <template #content v-if="hasContentToShow">
@@ -1753,41 +1780,179 @@ html.dark .user-name {
   flex-shrink: 0;
 }
 
+.message-thinking {
+  display: block;
+}
+
+.ai-bubble :deep(.el-thinking .trigger) {
+  border-radius: 18px !important;
+  padding: 11px 14px !important;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.64), rgba(255, 255, 255, 0.38)) !important;
+  border: 1px solid rgba(255, 255, 255, 0.28) !important;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.10) !important;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: var(--el-text-color-primary, #1F2937) !important;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.ai-bubble :deep(.el-thinking .trigger:hover) {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.14) !important;
+  border-color: rgba(255, 255, 255, 0.38) !important;
+}
+
+.ai-bubble :deep(.el-thinking .trigger .label),
+.ai-bubble :deep(.el-thinking .trigger .text) {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.ai-bubble :deep(.el-thinking .el-icon) {
+  color: var(--el-text-color-secondary, #667085);
+}
+
+:deep(.el-thinking-popper) {
+  max-width: min(85vw, 880px) !important;
+  border-radius: 20px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(250, 250, 252, 0.70)) !important;
+  border: 1px solid rgba(255, 255, 255, 0.34) !important;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18) !important;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+:deep(.el-thinking-popper .el-popper__arrow::before) {
+  background: rgba(255, 255, 255, 0.74) !important;
+  border-color: rgba(255, 255, 255, 0.34) !important;
+}
+
+.thinking-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 16px 12px;
+}
+
+.thinking-panel-content {
+  margin: 0;
+  color: var(--el-text-color-regular, #344054);
+  font-size: 13px;
+  line-height: 1.72;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: min(52vh, 460px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.thinking-panel-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.thinking-panel-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.thinking-panel-content::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.46);
+  border-radius: 999px;
+}
+
+.thinking-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.thinking-collapse-btn {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.52);
+  color: var(--el-text-color-secondary, #475467);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.thinking-collapse-btn:hover {
+  color: var(--el-text-color-primary, #1F2937);
+  border-color: rgba(99, 102, 241, 0.20);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.thinking-collapse-btn :deep(.el-icon) {
+  margin-right: 4px;
+}
+
+.ai-bubble :deep(.el-thinking .content pre) {
+  border-radius: 14px !important;
+  max-width: 100%;
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.36);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
 html.dark .ai-bubble :deep(.el-thinking .trigger) {
-  border-radius: var(--bubble-radius) !important;
-  background-color: var(--el-fill-color-darker, #2c2e33);
-  color: var(--el-text-color-primary, #F9FAFB);
-  border-color: var(--el-border-color-dark, #373A40);
+  background: linear-gradient(135deg, rgba(37, 43, 56, 0.82), rgba(24, 29, 39, 0.72)) !important;
+  color: var(--el-text-color-primary, #F5F7FA) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28) !important;
+}
+
+html.dark .ai-bubble :deep(.el-thinking .trigger:hover) {
+  border-color: rgba(96, 165, 250, 0.24) !important;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32) !important;
 }
 
 html.dark .ai-bubble :deep(.el-thinking .el-icon) {
   color: var(--el-text-color-secondary, #A0A5B1);
 }
 
-html.dark .ai-bubble :deep(.el-thinking-popper) {
-  max-width: 85vw;
-  background-color: var(--bg-tertiary, #2c2e33) !important;
-  border-color: var(--border-primary, #373A40) !important;
+html.dark :deep(.el-thinking-popper) {
+  background: linear-gradient(180deg, rgba(24, 29, 39, 0.92), rgba(17, 24, 39, 0.86)) !important;
+  border-color: rgba(71, 85, 105, 0.34) !important;
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.34) !important;
 }
 
-html.dark .ai-bubble :deep(.el-thinking-popper .el-popper__arrow::before) {
-  background: var(--bg-tertiary, #2c2e33) !important;
-  border-color: var(--border-primary, #373A40) !important;
+html.dark :deep(.el-thinking-popper .el-popper__arrow::before) {
+  background: rgba(24, 29, 39, 0.92) !important;
+  border-color: rgba(71, 85, 105, 0.34) !important;
 }
 
-.ai-bubble :deep(.el-thinking .content pre) {
-  border-radius: var(--bubble-radius) !important;
-  max-width: 100%;
-  margin-bottom: 10px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  box-sizing: border-box;
+html.dark .thinking-panel-content {
+  color: var(--el-text-color-regular, #D0D5DD);
+}
+
+html.dark .thinking-panel-content::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.6);
+}
+
+html.dark .thinking-panel-actions {
+  border-top-color: rgba(71, 85, 105, 0.32);
+}
+
+html.dark .thinking-collapse-btn {
+  background: rgba(51, 65, 85, 0.52);
+  border-color: rgba(100, 116, 139, 0.28);
+  color: var(--el-text-color-secondary, #CBD5E1);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+
+html.dark .thinking-collapse-btn:hover {
+  background: rgba(71, 85, 105, 0.64);
+  color: var(--el-text-color-primary, #F8FAFC);
+  border-color: rgba(96, 165, 250, 0.28);
 }
 
 html.dark .ai-bubble :deep(.el-thinking .content pre) {
-  background-color: var(--el-fill-color-darker);
+  background: rgba(30, 41, 59, 0.62);
   color: var(--el-text-color-regular, #E5E7EB);
-  border: 1px solid var(--border-primary, #373A40);
+  border: 1px solid rgba(71, 85, 105, 0.36);
 }
 
 .tool-calls-container {

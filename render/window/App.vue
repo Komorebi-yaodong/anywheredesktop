@@ -3203,6 +3203,7 @@ const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSign
           );
           if (!defaultConversationName.value && resolvedName) {
             defaultConversationName.value = resolvedName;
+            scheduleAutoSave({ reason: 'auto-naming-completed', immediate: true });
           }
           return defaultConversationName.value || resolvedName || '';
         }
@@ -3212,6 +3213,7 @@ const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSign
       const fallbackFileName = buildLegacyFallbackConversationFileName(fallbackNamePrefix, force);
       if (!defaultConversationName.value && fallbackFileName) {
         defaultConversationName.value = fallbackFileName;
+        scheduleAutoSave({ reason: 'auto-naming-fallback-completed', immediate: true });
       }
       return defaultConversationName.value || fallbackFileName || '';
     } finally {

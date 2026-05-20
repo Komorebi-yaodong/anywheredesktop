@@ -70,8 +70,6 @@ async function readLatestVersionFromPackage(fileApi, source, url) {
 
 const liveSignalControllers = new Map()
 
-const debugIpcLog = () => {}
-const debugIpcError = () => {}
 
 
 function getLiveSignalKey(senderId, token = '') {
@@ -89,16 +87,12 @@ function handleInvoke(channel, handler, options = {}) {
       }
     })()
 
-    debugIpcLog('invoke:before', { channel, senderRef, args })
-
     try {
       const result = await handler(event, ...args)
       const serialized = await serializeIpcPayload(result, options)
-      debugIpcLog('invoke:after', { channel, senderRef, result: serialized })
       return serialized
     } catch (error) {
       const serializedError = serializeError(error)
-      debugIpcError('invoke:error', { channel, senderRef, args, error: serializedError })
       return {
         ok: false,
         error: serializedError
@@ -231,14 +225,11 @@ export function registerIpcHandlers({
           ? input.windowRef
           : fallbackRef
 
-    debugIpcLog('send:before', { channel: 'window:close', senderRef: event.sender?.id || null, args: [input], windowRef })
-
     try {
-      const result = closeWindow(windowRef)
-      debugIpcLog('send:after', { channel: 'window:close', senderRef: event.sender?.id || null, result })
+      closeWindow(windowRef)
     } catch (error) {
       const serializedError = serializeError(error)
-      debugIpcError('send:error', {
+      console.error('[IPC] window:close failed', {
         channel: 'window:close',
         senderRef: event.sender?.id || null,
         args: [input],

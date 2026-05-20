@@ -51,8 +51,6 @@ import * as chatApi from './core/chat.js'
 import * as mcpApi from './core/mcp.js'
 import * as skillApi from './core/skill.js'
 
-const debugMainLog = () => {}
-const debugMainError = () => {}
 
 let appTray = null
 let appQuitStarted = false
@@ -99,15 +97,15 @@ function syncNativeThemeFromConfig(config = {}) {
 
 
 process.on('uncaughtException', (error) => {
-  debugMainError('process:uncaughtException', error)
+  console.error('[main] uncaughtException', error)
 })
 
 process.on('unhandledRejection', (reason) => {
-  debugMainError('process:unhandledRejection', reason)
+  console.error('[main] unhandledRejection', reason)
 })
 
 app.on('child-process-gone', (_event, details) => {
-  debugMainError('app-event:child-process-gone', details)
+  console.error('[main] child-process-gone', details)
 })
 
 function buildQuickPayloadFromClipboardResult(result = {}) {
@@ -269,7 +267,7 @@ async function triggerQuickSummon() {
         pushQuickPayloadToVisibleWindow(fallbackPayload)
       })
       .catch((error) => {
-        debugMainError('quick:file-fallback-collect-failed', error)
+        console.error('quick:file-fallback-collect-failed', error)
       })
   }
 
@@ -356,13 +354,13 @@ async function triggerAppendFollowUpShortcut() {
           })
         })
         .catch((error) => {
-          debugMainError('append-shortcut:file-fallback-collect-failed', error)
+          console.error('append-shortcut:file-fallback-collect-failed', error)
         })
     }
 
     return openResult
   } catch (error) {
-    debugMainError('shortcut:append-follow-up-failed', error)
+    console.error('shortcut:append-follow-up-failed', error)
     return { ok: false, reason: 'append_follow_up_failed', error: error?.message || String(error) }
   }
 }
@@ -407,21 +405,21 @@ async function triggerPromptShortcut(promptKey = '') {
           if (!fallbackPayload || fallbackPayload.type === 'empty') return
           const delivered = await dispatchShortcutPayloadToWindow(openResult?.id, fallbackPayload, normalizedPromptKey)
           if (!delivered) {
-            debugMainError('shortcut:file-fallback-dispatch-timeout', {
+            console.error('shortcut:file-fallback-dispatch-timeout', {
               promptKey: normalizedPromptKey,
               targetWindowId: openResult?.id || null
             })
           }
         })
         .catch((error) => {
-          debugMainError('shortcut:file-fallback-collect-failed', {
+          console.error('shortcut:file-fallback-collect-failed', {
             promptKey: normalizedPromptKey,
             error: error?.message || error
           })
         })
     }
   } catch (error) {
-    debugMainError('shortcut:prompt-trigger-failed', { promptKey, error: error?.message || error })
+    console.error('shortcut:prompt-trigger-failed', { promptKey, error: error?.message || error })
   }
 }
 
@@ -520,7 +518,7 @@ async function syncDesktopRuntimeFromConfig() {
       desktop: syncResult.desktop
     }
   } catch (error) {
-    debugMainError('desktop-shortcuts:sync-failed', {
+    console.error('desktop-shortcuts:sync-failed', {
       error: error?.message || String(error),
       desktop
     })
@@ -537,10 +535,6 @@ app.whenReady().then(async () => {
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
-
-    debugMainLog('app-event:browser-window-created', {
-      browserWindowId: window.id
-    })
   })
 
   dataApi.setWindowChannelNotifier((channel, payload) => {
@@ -557,7 +551,7 @@ app.whenReady().then(async () => {
 
     if (channel === 'window:configUpdated' || channel === 'config-updated') {
       syncDesktopRuntimeFromConfig().catch((error) => {
-        debugMainError('desktop-shortcuts:resync-failed', error)
+        console.error('desktop-shortcuts:resync-failed', error)
       })
     }
   })

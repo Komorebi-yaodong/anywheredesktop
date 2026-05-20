@@ -1347,8 +1347,6 @@ export async function saveMcpToolCache(serverId, tools = [], options = {}) {
 
 
 
-const debugDataLog = () => {}
-const debugDataError = () => {}
 
 export function notifySkillsUpdated() {
   emitWindowChannel('window:skillsUpdated')
@@ -1373,15 +1371,11 @@ export async function getUser() {
   }
 }
 
-export async function savePromptWindowSettings(promptKey, settings = {}) {
-  debugDataLog('savePromptWindowSettings:enter', { promptKey, settings })
-  if (typeof promptKey !== 'string' || !promptKey.trim()) {
+export async function savePromptWindowSettings(promptKey, settings = {}) {  if (typeof promptKey !== 'string' || !promptKey.trim()) {
     const result = {
       success: false,
       message: 'promptKey is required'
-    }
-    debugDataError('savePromptWindowSettings:invalid-prompt-key', result)
-    return result
+    }    return result
   }
 
   const normalizedPromptKey = promptKey.trim()
@@ -1398,7 +1392,6 @@ export async function savePromptWindowSettings(promptKey, settings = {}) {
       success: false,
       message: `Prompt '${normalizedPromptKey}' not found`
     }
-    debugDataError('savePromptWindowSettings:prompt-not-found', result)
     return result
   }
 
@@ -1407,21 +1400,12 @@ export async function savePromptWindowSettings(promptKey, settings = {}) {
     ...nextSettings
   }
 
-  debugDataLog('savePromptWindowSettings:before-updateConfigWithoutFeatures', {
-    promptKey: normalizedPromptKey,
-    nextPromptConfig: currentFullConfig.prompts[normalizedPromptKey]
-  })
-
   await updateConfigWithoutFeatures({ config: currentFullConfig })
 
   const result = {
     success: true,
     message: ''
   }
-  debugDataLog('savePromptWindowSettings:success', {
-    promptKey: normalizedPromptKey,
-    result
-  })
   return result
 }
 

@@ -164,9 +164,6 @@ showDismissibleMessage.error = (message) => showDismissibleMessage({ message, ty
 showDismissibleMessage.info = (message) => showDismissibleMessage({ message, type: 'info' });
 showDismissibleMessage.warning = (message) => showDismissibleMessage({ message, type: 'warning' });
 
-const WINDOW_DEBUG_PREFIX = '[AnywhereWindow Debug]';
-const debugWindowLog = (...args) => console.log(WINDOW_DEBUG_PREFIX, ...args);
-const debugWindowError = (...args) => console.error(WINDOW_DEBUG_PREFIX, ...args);
 
 
 const handleMinimize = () => window.api.windowControl('minimize-window');
@@ -3429,27 +3426,12 @@ const saveWindowSize = async () => {
     position_y: window.screenY,
   };
 
-  debugWindowLog('saveWindowSize:prepared', {
-    code: CODE.value,
-    settingsToSave,
-    currentPromptExists: Boolean(currentConfig.value?.prompts?.[CODE.value])
-  });
-
   isSavingWindowSettings.value = true;
-  debugWindowLog('saveWindowSize:mark-saving-true');
 
   try {
-    debugWindowLog('saveWindowSize:invoke:before', { code: CODE.value, settingsToSave });
     const result = await window.api.savePromptWindowSettings(CODE.value, settingsToSave);
-    debugWindowLog('saveWindowSize:invoke:after', result);
     const isSuccess = Boolean(result?.success || result?.ok);
     const errorMessage = getErrorMessage(result, '保存失败');
-
-    debugWindowLog('saveWindowSize:result:normalized', {
-      isSuccess,
-      errorMessage,
-      rawResult: result
-    });
 
     if (isSuccess) {
       showDismissibleMessage.success('当前快捷助手的窗口大小、位置与缩放已保存');
@@ -3461,25 +3443,15 @@ const saveWindowSize = async () => {
       }
       applyZoomFactor(settingsToSave.zoom);
     } else {
-      debugWindowError('saveWindowSize:result:failed', {
-        rawResult: result,
-        errorMessage
-      });
       showDismissibleMessage.error(`保存失败: ${errorMessage}`);
     }
   } catch (error) {
     const message = getErrorMessage(error, '保存窗口设置时出错');
-    debugWindowError('saveWindowSize:invoke:error', error, {
-      message,
-      code: CODE.value,
-      settingsToSave
-    });
     console.error('Error saving window settings:', error);
     showDismissibleMessage.error(`保存失败: ${message}`);
   } finally {
     setTimeout(() => {
       isSavingWindowSettings.value = false;
-      debugWindowLog('saveWindowSize:mark-saving-false');
     }, 200);
   }
 }

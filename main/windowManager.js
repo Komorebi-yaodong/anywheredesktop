@@ -98,8 +98,6 @@ const singletonCloseBehavior = {
 let appQuitting = false
 
 
-const debugWindowManagerLog = () => {}
-const debugWindowManagerError = () => {}
 
 const FAST_INPUT_DEFAULT_VERTICAL_RATIO = 0.85
 const FAST_INPUT_POSITION_SAVE_DEBOUNCE_MS = 120
@@ -742,15 +740,6 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   win.__didFinishLoad = false
   win.__readyToShow = false
 
-  debugWindowManagerLog('createBrowserWindow:created', {
-    type,
-    windowRef,
-    browserWindowId,
-    webContentsId,
-    title: config.title,
-    bounds: win.getBounds()
-  })
-
   win.on('ready-to-show', () => {
     win.__readyToShow = true
     try {
@@ -979,11 +968,6 @@ const dynamicBaseConfig =
 
     win.on('closed', () => {
       unbindWindowRefByWebContentsId(webContentsId)
-      debugWindowManagerLog('singleton-window:closed-cleanup', {
-        type: targetType,
-        windowRef: targetType,
-        webContentsId
-      })
       singletonStore.delete(targetType)
     })
 
@@ -1048,11 +1032,6 @@ const dynamicBaseConfig =
     multiStore.delete(id)
     windowMetadataStore.delete(id)
 
-    debugWindowManagerLog('multi-window:closed-cleanup', {
-      type: targetType,
-      windowRef: id,
-      webContentsId
-    })
     const indexSet = multiTypeIndex.get(targetType)
     if (indexSet) {
       indexSet.delete(id)
@@ -1268,25 +1247,14 @@ export function maximizeOrRestoreWindow(windowRef = '') {
 }
 
 export function closeWindow(windowRef = '') {
-  debugWindowManagerLog('closeWindow:enter', { windowRef })
   const resolved = resolveActionWindow(windowRef)
   if (!resolved.ok) {
-    const result = { ok: false, error: resolved.error, windowRef: resolved.windowRef }
-    debugWindowManagerError('closeWindow:resolve-failed', result)
-    return result
+    return { ok: false, error: resolved.error, windowRef: resolved.windowRef }
   }
 
   const isDialogWindow = multiStore.has(resolved.windowRef)
   const isQuickSingleton = resolved.windowRef === 'quick'
   const isFastSingleton = resolved.windowRef === 'fast'
-
-  debugWindowManagerLog('closeWindow:resolved', {
-    windowRef: resolved.windowRef,
-    browserWindowId: resolved.win?.id,
-    isDestroyed: resolved.win?.isDestroyed?.() ?? null,
-    isVisible: resolved.win?.isVisible?.() ?? null,
-    strategy: isDialogWindow ? 'destroy' : isQuickSingleton ? 'hide' : isFastSingleton ? 'destroy' : 'close'
-  })
 
   if (isQuickSingleton) {
     try {
@@ -1296,9 +1264,7 @@ export function closeWindow(windowRef = '') {
     } catch {
       // ignore quick hide failure during teardown
     }
-    const result = { ok: true, action: 'hide', windowRef: resolved.windowRef }
-    debugWindowManagerLog('closeWindow:after-hide-call', result)
-    return result
+    return { ok: true, action: 'hide', windowRef: resolved.windowRef }
   }
 
   if (isFastSingleton) {
@@ -1313,22 +1279,16 @@ export function closeWindow(windowRef = '') {
       // ignore fast session cancellation failure during teardown
     }
     resolved.win.destroy()
-    const result = { ok: true, action: 'destroy', windowRef: resolved.windowRef }
-    debugWindowManagerLog('closeWindow:after-destroy-call', result)
-    return result
+    return { ok: true, action: 'destroy', windowRef: resolved.windowRef }
   }
 
   if (isDialogWindow) {
     resolved.win.destroy()
-    const result = { ok: true, action: 'destroy', windowRef: resolved.windowRef }
-    debugWindowManagerLog('closeWindow:after-destroy-call', result)
-    return result
+    return { ok: true, action: 'destroy', windowRef: resolved.windowRef }
   }
 
   resolved.win.close()
-  const result = { ok: true, action: 'close', windowRef: resolved.windowRef }
-  debugWindowManagerLog('closeWindow:after-close-call', result)
-  return result
+  return { ok: true, action: 'close', windowRef: resolved.windowRef }
 }
 
 export function toggleAlwaysOnTop(windowRef = '', nextState) {

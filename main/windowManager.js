@@ -819,20 +819,8 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
     }
   })
 
-  
-  try {
-    console.log('[theme-debug][main:windowManager] loadMainRenderer', {
-      isDev: is.dev,
-      rendererUrl: process.env.ELECTRON_RENDERER_URL || '',
-      devPath: config.devPath,
-      html: config.html,
-      initialThemeSearch: config.initialThemeSearch || ''
-    })
-  } catch {
-    // ignore debug log failure
-  }
 
-if (is.dev && process.env.ELECTRON_RENDERER_URL) {
+  if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${config.devPath}`)
   } else {
     const rendererFilePath = path.join(__dirname, `../renderer/${config.html}`)

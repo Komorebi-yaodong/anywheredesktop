@@ -14,6 +14,7 @@
     (() => {
       const params = new URLSearchParams(window.location.search)
       const isDarkMode = params.get('dark') === '1'
+      window.__ANYWHERE_INITIAL_DARK__ = isDarkMode
       if (isDarkMode) {
         document.documentElement.classList.add('dark')
       }

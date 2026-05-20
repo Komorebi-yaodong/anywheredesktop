@@ -122,18 +122,37 @@ function normalizeConfigPayload(result) {
 }
 
 
-//将 config provide 给所有子组件
-provide('config', config);
 
-// This watcher is now very effective because of the CSS variables and shared state.
-watch(() => config.value?.isDarkMode, (isDark) => {
-  if (isDark === undefined) return;
+
+const initialDarkMode = window.__ANYWHERE_INITIAL_DARK__ === true;
+
+function resolveDocumentDarkMode(nextConfig = null) {
+  const themeMode = typeof nextConfig?.themeMode === 'string' ? nextConfig.themeMode : 'system';
+  if (themeMode === 'dark') return true;
+  if (themeMode === 'light') return false;
+  return initialDarkMode;
+}
+
+function applyDocumentTheme(isDark) {
   if (isDark) {
     document.documentElement.classList.add('dark');
   } else {
     document.documentElement.classList.remove('dark');
   }
-}, { deep: true });
+}
+
+//将 config provide 给所有子组件
+provide('config', config);
+
+// 主题 class 必须基于 themeMode 统一判定，避免 config 刚注入时的旧 isDarkMode 覆盖首屏主题。
+watch(
+  () => [config.value?.themeMode, config.value?.isDarkMode],
+  () => {
+    if (!config.value) return;
+    applyDocumentTheme(resolveDocumentDarkMode(config.value));
+  },
+  { deep: true }
+);
 
 const handleGlobalEsc = (e) => {
   if (e.key === 'Escape') {
@@ -656,10 +675,10 @@ onMounted(async () => {
     config.value = normalizeConfigPayload(result);
 
     if (config.value.themeMode === 'system') {
-      const systemDark = mediaQuery.matches;
-      if (config.value.isDarkMode !== systemDark) {
-        config.value.isDarkMode = systemDark;
-        window.api.saveSetting('isDarkMode', systemDark);
+      const preferredDark = initialDarkMode;
+      if (config.value.isDarkMode !== preferredDark) {
+        config.value.isDarkMode = preferredDark;
+        window.api.saveSetting('isDarkMode', preferredDark);
       }
     }
 
@@ -669,11 +688,7 @@ onMounted(async () => {
     config.value = normalizeConfigPayload(null);
   }
   // Immediately apply dark mode on mount
-  if (config.value?.isDarkMode) {
-    document.documentElement.classList.add('dark');
-  } else {
-    document.documentElement.classList.remove('dark');
-  }
+  applyDocumentTheme(resolveDocumentDarkMode(config.value));
 
   await nextTick();
   requestAnimationFrame(() => {

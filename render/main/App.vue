@@ -151,6 +151,13 @@ watch(
   () => {
     if (!config.value) return;
     applyDocumentTheme(resolveDocumentDarkMode(config.value));
+
+    console.log('[theme-debug][render:App] after-applyDocumentTheme', {
+      finalHasDarkClass: document.documentElement.classList.contains('dark'),
+      resolvedDocumentDarkMode: resolveDocumentDarkMode(config.value),
+      themeMode: config.value?.themeMode,
+      isDarkMode: config.value?.isDarkMode
+    });
   },
   { deep: true }
 );
@@ -675,6 +682,16 @@ onMounted(async () => {
     const result = await window.api.getConfig();
     config.value = normalizeConfigPayload(result);
 
+    console.log('[theme-debug][render:App] config-loaded', {
+      initialDarkMode,
+      themeMode: config.value?.themeMode,
+      isDarkMode: config.value?.isDarkMode,
+      resolvedDocumentDarkMode: resolveDocumentDarkMode(config.value),
+      search: window.location.search,
+      hasDarkClassBeforeApply: document.documentElement.classList.contains('dark')
+    });
+
+
     if (config.value.themeMode === 'system') {
       const preferredDark = initialDarkMode;
       if (config.value.isDarkMode !== preferredDark) {
@@ -689,6 +706,15 @@ onMounted(async () => {
     config.value = normalizeConfigPayload(null);
   }
   // Immediately apply dark mode on mount
+
+  console.log('[theme-debug][render:App] after-mount-applyDocumentTheme', {
+    finalHasDarkClass: document.documentElement.classList.contains('dark'),
+    resolvedDocumentDarkMode: resolveDocumentDarkMode(config.value),
+    themeMode: config.value?.themeMode,
+    isDarkMode: config.value?.isDarkMode,
+    search: window.location.search
+  });
+
   applyDocumentTheme(resolveDocumentDarkMode(config.value));
 
   await nextTick();

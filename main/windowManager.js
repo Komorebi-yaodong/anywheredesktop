@@ -819,7 +819,20 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
     }
   })
 
-  if (is.dev && process.env.ELECTRON_RENDERER_URL) {
+  
+  try {
+    console.log('[theme-debug][main:windowManager] loadMainRenderer', {
+      isDev: is.dev,
+      rendererUrl: process.env.ELECTRON_RENDERER_URL || '',
+      devPath: config.devPath,
+      html: config.html,
+      initialThemeSearch: config.initialThemeSearch || ''
+    })
+  } catch {
+    // ignore debug log failure
+  }
+
+if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${config.devPath}`)
   } else {
     const rendererFilePath = path.join(__dirname, `../renderer/${config.html}`)
@@ -872,7 +885,8 @@ export async function openWindow(type = 'main', payload = null) {
 
   const isDarkMode = resolveEffectiveDarkMode(fullConfig)
 
-  const dynamicBaseConfig =
+
+const dynamicBaseConfig =
     targetType === 'main'
       ? {
           ...baseConfig,
@@ -886,6 +900,22 @@ export async function openWindow(type = 'main', payload = null) {
           }
         }
       : baseConfig
+
+  if (targetType === 'main') {
+    try {
+      console.log('[theme-debug][main:windowManager] openWindow(main)', {
+        themeMode: fullConfig?.themeMode,
+        isDarkMode: fullConfig?.isDarkMode,
+        nativeShouldUseDarkColors: nativeTheme.shouldUseDarkColors,
+        resolvedDark: isDarkMode,
+        devPath: dynamicBaseConfig?.devPath,
+        initialThemeSearch: dynamicBaseConfig?.initialThemeSearch,
+        backgroundColor: dynamicBaseConfig?.options?.backgroundColor
+      })
+    } catch {
+      // ignore debug log failure
+    }
+  }
 
   if (!baseConfig) {
     throw new Error(`[window] unknown window type: ${targetType}`)

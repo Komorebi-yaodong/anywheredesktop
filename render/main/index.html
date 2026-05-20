@@ -15,6 +15,14 @@
       const params = new URLSearchParams(window.location.search)
       const isDarkMode = params.get('dark') === '1'
       window.__ANYWHERE_INITIAL_DARK__ = isDarkMode
+
+      console.log('[theme-debug][render:index.html] startup', {
+        search: window.location.search,
+        darkParam: params.get('dark'),
+        initialDarkMode: isDarkMode,
+        documentHasDarkClass: document.documentElement.classList.contains('dark')
+      })
+
       if (isDarkMode) {
         document.documentElement.classList.add('dark')
       }

@@ -94,6 +94,18 @@ function resolveNativeThemeSource(config = {}) {
 
 function syncNativeThemeFromConfig(config = {}) {
   nativeTheme.themeSource = resolveNativeThemeSource(config)
+
+  try {
+    console.log('[theme-debug][main:index] syncNativeThemeFromConfig', {
+      themeMode: config?.themeMode,
+      isDarkMode: config?.isDarkMode,
+      resolvedThemeSource: nativeTheme.themeSource,
+      shouldUseDarkColors: nativeTheme.shouldUseDarkColors
+    })
+  } catch {
+    // ignore debug log failure
+  }
+
 }
 
 

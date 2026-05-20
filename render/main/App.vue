@@ -674,12 +674,33 @@ onMounted(async () => {
   } else {
     document.documentElement.classList.remove('dark');
   }
+
+  await nextTick();
+  requestAnimationFrame(() => {
+    hideStartupSplash();
+  });
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalEsc, true);
   mediaQuery.removeEventListener('change', handleSystemThemeChange);
 });
+
+
+
+function hideStartupSplash() {
+  try {
+    if (typeof window.__ANYWHERE_HIDE_STARTUP_SPLASH__ === 'function') {
+      window.__ANYWHERE_HIDE_STARTUP_SPLASH__();
+      return;
+    }
+  } catch (error) {
+    console.warn('Failed to hide startup splash:', error);
+  }
+
+  document.body?.classList.add('app-ready');
+  document.getElementById('startup-splash')?.remove();
+}
 
 function changeTab(newTab) {
   tab.value = newTab;

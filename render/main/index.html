@@ -8,7 +8,7 @@
 
   <meta
     http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' http: https:; img-src 'self' data: blob: http: https: file:; connect-src 'self' data: blob: http: https: ws: wss: file:; font-src 'self' data: http: https:; media-src 'self' data: blob: http: https: file:"
+    content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' http: https:; img-src 'self' data: blob: http: https: file:; connect-src 'self' data: blob: http: https: ws: wss: file:; font-src 'self' data: http: https:; media-src 'self' data: blob: http: https: file:"
   />
   <script>
     (() => {
@@ -16,12 +16,6 @@
       const isDarkMode = params.get('dark') === '1'
       window.__ANYWHERE_INITIAL_DARK__ = isDarkMode
 
-      console.log('[theme-debug][render:index.html] startup', {
-        search: window.location.search,
-        darkParam: params.get('dark'),
-        initialDarkMode: isDarkMode,
-        documentHasDarkClass: document.documentElement.classList.contains('dark')
-      })
 
       if (isDarkMode) {
         document.documentElement.classList.add('dark')

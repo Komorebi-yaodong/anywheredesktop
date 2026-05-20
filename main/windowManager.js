@@ -901,21 +901,6 @@ const dynamicBaseConfig =
         }
       : baseConfig
 
-  if (targetType === 'main') {
-    try {
-      console.log('[theme-debug][main:windowManager] openWindow(main)', {
-        themeMode: fullConfig?.themeMode,
-        isDarkMode: fullConfig?.isDarkMode,
-        nativeShouldUseDarkColors: nativeTheme.shouldUseDarkColors,
-        resolvedDark: isDarkMode,
-        devPath: dynamicBaseConfig?.devPath,
-        initialThemeSearch: dynamicBaseConfig?.initialThemeSearch,
-        backgroundColor: dynamicBaseConfig?.options?.backgroundColor
-      })
-    } catch {
-      // ignore debug log failure
-    }
-  }
 
   if (!baseConfig) {
     throw new Error(`[window] unknown window type: ${targetType}`)

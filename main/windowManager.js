@@ -1,4 +1,4 @@
-import { BrowserWindow, shell, screen } from 'electron'
+import { BrowserWindow, shell, screen, nativeTheme } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -14,6 +14,14 @@ const __dirname = path.dirname(__filename)
 
 const MAIN_WINDOW_DARK_BACKGROUND = '#17171c'
 const MAIN_WINDOW_LIGHT_BACKGROUND = '#fffdf7'
+function resolveEffectiveDarkMode(config = {}) {
+  const themeMode = typeof config?.themeMode === 'string' ? config.themeMode : 'system'
+  if (themeMode === 'dark') return true
+  if (themeMode === 'light') return false
+  return nativeTheme.shouldUseDarkColors
+}
+
+
 
 const WINDOWS = {
   main: {
@@ -635,7 +643,7 @@ function resolveDialogWindowConfig(baseConfig, fullConfig = {}, payload = null) 
   const promptCode = resolvePromptCode(payload)
   const promptConfig = resolvePromptConfig(fullConfig, payload, promptCode)
   const placement = avoidDialogWindowOverlap(calculateDialogWindowBounds(fullConfig, payload, promptCode, promptConfig))
-  const isDarkMode = Boolean(fullConfig?.isDarkMode)
+  const isDarkMode = resolveEffectiveDarkMode(fullConfig)
   const backgroundColor = isDarkMode ? 'rgba(33, 33, 33, 1)' : 'rgba(255, 255, 253, 1)'
   const alwaysOnTop =
     typeof payload?.alwaysOnTop === 'boolean'
@@ -861,13 +869,17 @@ export async function openWindow(type = 'main', payload = null) {
       ? configResult.config
       : defaultConfig.config
 
+  const isDarkMode = resolveEffectiveDarkMode(fullConfig)
+
   const dynamicBaseConfig =
     targetType === 'main'
       ? {
           ...baseConfig,
+          devPath: isDarkMode ? `${baseConfig.devPath}?dark=1` : baseConfig.devPath,
+          initialThemeSearch: isDarkMode ? '?dark=1' : '',
           options: {
             ...(baseConfig?.options || {}),
-            backgroundColor: Boolean(fullConfig?.isDarkMode)
+            backgroundColor: isDarkMode
               ? MAIN_WINDOW_DARK_BACKGROUND
               : MAIN_WINDOW_LIGHT_BACKGROUND
           }

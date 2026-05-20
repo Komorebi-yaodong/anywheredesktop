@@ -1909,6 +1909,32 @@ const handleWindowFocus = () => {
 };
 
 
+
+const decodeSerializedBinaryToUint8 = (data) => {
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  if (Array.isArray(data)) return new Uint8Array(data);
+
+  if (
+    data &&
+    typeof data === 'object' &&
+    typeof data.__type === 'string' &&
+    typeof data.data === 'string' &&
+    data.encoding === 'base64'
+  ) {
+    return Uint8Array.from(atob(data.data), char => char.charCodeAt(0));
+  }
+
+  if (data && typeof data === 'object' && Array.isArray(data.data)) {
+    return new Uint8Array(data.data);
+  }
+
+  return new Uint8Array();
+};
+
 const inferImageExtension = (contentType = '', fallback = 'png') => {
   const normalized = String(contentType || '').toLowerCase();
   if (normalized.includes('jpeg') || normalized.includes('jpg')) return 'jpg';
@@ -1982,9 +2008,15 @@ const readImageBinaryFromSource = async (url) => {
   if (/^https?:\/\//i.test(normalizedUrl)) {
     const response = await window.api.readRemoteBinary(normalizedUrl);
     if (!response?.ok) throw new Error(response?.message || '远程读取失败');
+
+    const uint8 = decodeSerializedBinaryToUint8(response.data);
+    if (uint8.length === 0) {
+      throw new Error('远程图片数据为空');
+    }
+
     return {
       contentType: typeof response.contentType === 'string' && response.contentType ? response.contentType : 'image/png',
-      uint8: response.data instanceof Uint8Array ? response.data : new Uint8Array(response.data || [])
+      uint8
     };
   }
 

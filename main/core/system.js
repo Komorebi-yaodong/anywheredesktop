@@ -88,6 +88,7 @@ function toSerializableSource(source) {
   }
 }
 
+
 function normalizeDesktopOptions(options = {}) {
   const types = Array.isArray(options.types) && options.types.length > 0 ? options.types : ['screen', 'window']
   const fetchWindowIcons = options.fetchWindowIcons !== false

@@ -2820,7 +2820,22 @@ onMounted(async () => {
 const AUTO_NAMING_TIMEOUT_MS = 30000;
 const AUTO_NAMING_MAX_TEXT_CHARS = 1000;
 const AUTO_NAMING_MAX_IMAGES = 3;
-const AUTO_NAMING_SYSTEM_PROMPT = `Generate a short name (2-4 words) capturing the main topic in the conversation's language. Use lowercase words separated by hyphens (e.g., \`topic-name\` or \`主题-名称\`). Output only the name.`;
+const buildAutoNamingSystemPrompt = () => {
+  const locale = currentConfig.value?.language === 'en'
+    ? 'English'
+    : currentConfig.value?.language === 'zh'
+      ? 'Chinese'
+      : (currentConfig.value?.language || 'the user primary language');
+
+  return `You are a conversation title generator. I will provide dialogue content in a <content> block. Summarize the conversation between the user and assistant into a short title that captures the main topic of this conversation.
+
+Rules:
+1. The title language must match the user's primary language.
+2. Do not use punctuation, separators, quotes, emoji, or other special symbols.
+3. Reply directly with the title only.
+4. If the user's primary language is unclear, summarize using ${locale}.
+5. The title must not exceed 10 characters.`;
+};
 
 const sanitizeConversationTitlePart = (value, maxLength = 30) => {
   const normalized = typeof value === 'string' ? value : String(value ?? '');
@@ -2833,6 +2848,14 @@ const sanitizeConversationTitlePart = (value, maxLength = 30) => {
     .slice(0, maxLength)
     .trim();
 };
+
+
+const sanitizeAutoNamingTitlePart = (value) => sanitizeConversationTitlePart(value, 30)
+  .replace(/[^\p{L}\p{N}\s]/gu, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, 10)
+  .trim();
 
 const getAutoSavePrefixTag = (force = false) => {
   if (basic_msg.value?.type === "summon") return "召唤-";
@@ -2894,6 +2917,12 @@ const buildLegacyFallbackConversationFileName = (namePrefix, force = false) => {
 
 const autoNamingAbortController = ref(null);
 const autoNamingPromise = ref(null);
+
+
+const isCurrentPromptAutoSaveEnabled = () => {
+  const promptConfig = currentConfig.value?.prompts?.[CODE.value];
+  return Boolean(promptConfig?.autoSaveChat);
+};
 
 const cancelAutoNamingRequest = () => {
   if (autoNamingAbortController.value) {
@@ -3022,15 +3051,17 @@ const buildAutoNamingImageParts = (firstUserMsg) => {
     .filter(Boolean);
 };
 
+const buildAutoNamingPromptText = (content) => `<content>\n${content}\n</content>`;
+
 const buildAutoNamingUserContent = (firstUserMsg) => {
   const userMessageText = buildAutoNamingUserMessageText(firstUserMsg);
   const imageParts = buildAutoNamingImageParts(firstUserMsg);
 
   if (!userMessageText && imageParts.length === 0) return '';
-  if (imageParts.length === 0) return userMessageText;
+  if (imageParts.length === 0) return buildAutoNamingPromptText(userMessageText);
 
   return [
-    ...(userMessageText ? [{ type: 'text', text: userMessageText }] : []),
+    ...(userMessageText ? [{ type: 'text', text: buildAutoNamingPromptText(userMessageText) }] : []),
     ...imageParts
   ];
 };
@@ -3108,7 +3139,7 @@ const generateConversationNamePrefixWithFastModel = async (firstUserMsg, signal 
       model: modelName,
       apiType,
       messages: [
-        { role: 'system', content: AUTO_NAMING_SYSTEM_PROMPT },
+        { role: 'system', content: buildAutoNamingSystemPrompt() },
         { role: 'user', content: userContent }
       ],
       stream: false,
@@ -3121,7 +3152,7 @@ const generateConversationNamePrefixWithFastModel = async (firstUserMsg, signal 
     }
 
     const rawTitle = await extractAutoNamingResponseText(response, apiType);
-    return sanitizeConversationTitlePart(rawTitle, 30);
+    return sanitizeAutoNamingTitlePart(rawTitle);
   } catch (error) {
     if (isAbortError(error)) {
       throw error;
@@ -3138,6 +3169,10 @@ const generateConversationNamePrefixWithFastModel = async (firstUserMsg, signal 
 
 
 const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSignal = null } = {}) => {
+  if (!force && !isCurrentPromptAutoSaveEnabled()) {
+    return '';
+  }
+
   if (defaultConversationName.value || !currentConfig.value?.webdav?.localChatPath) {
     return defaultConversationName.value || '';
   }
@@ -3199,10 +3234,9 @@ const autoSaveSession = async (force = false) => {
   }
 
   // 2. 获取当前快捷助手的配置
-  const promptConfig = currentConfig.value?.prompts?.[CODE.value];
-  const isAutoSaveConfigEnabled = promptConfig?.autoSaveChat ?? false;
+  const isAutoSaveConfigEnabled = isCurrentPromptAutoSaveEnabled();
 
-  if (!defaultConversationName.value && !isAutoSaveConfigEnabled && !force) {
+  if (!isAutoSaveConfigEnabled && !force) {
     return false;
   }
 
@@ -3237,9 +3271,7 @@ const clearScheduledAutoSave = () => {
 
 const executeAutoSaveRequest = async (request = {}) => {
   if (!request || !request.force) {
-    const promptConfig = currentConfig.value?.prompts?.[CODE.value];
-    const isAutoSaveConfigEnabled = promptConfig?.autoSaveChat ?? false;
-    if (!defaultConversationName.value && !isAutoSaveConfigEnabled) {
+    if (!isCurrentPromptAutoSaveEnabled()) {
       return false;
     }
   }
@@ -3269,9 +3301,7 @@ const executeAutoSaveRequest = async (request = {}) => {
 };
 
 const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false, delay = 0 } = {}) => {
-  const promptConfig = currentConfig.value?.prompts?.[CODE.value];
-  const isAutoSaveConfigEnabled = promptConfig?.autoSaveChat ?? false;
-  if (!force && !defaultConversationName.value && !isAutoSaveConfigEnabled) {
+  if (!force && !isCurrentPromptAutoSaveEnabled()) {
     return;
   }
 

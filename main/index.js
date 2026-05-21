@@ -81,12 +81,9 @@ if (!hasSingleInstanceLock) {
 
 
 function resolveNativeThemeSource(config = {}) {
-  const themeMode = typeof config?.themeMode === 'string' ? config.themeMode : ''
+  const themeMode = typeof config?.themeMode === 'string' ? config.themeMode : 'system'
   if (themeMode === 'dark') return 'dark'
   if (themeMode === 'light') return 'light'
-  if (typeof config?.isDarkMode === 'boolean') {
-    return config.isDarkMode ? 'dark' : 'light'
-  }
   return 'system'
 }
 

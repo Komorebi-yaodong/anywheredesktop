@@ -3218,6 +3218,72 @@ const generateConversationNamePrefixWithFastModel = async (firstUserMsg, signal 
 
 
 
+
+const generateSuggestedConversationBasename = async ({
+  force = false,
+  uniqueDirPath = '',
+  signal = null,
+  firstUserMsg = null,
+  allowFastModel = true
+} = {}) => {
+  const targetFirstUserMsg = firstUserMsg || chat_show.value.find(msg => msg.role === 'user') || null;
+  const fallbackNamePrefix = getFallbackConversationNamePrefix(targetFirstUserMsg) || CODE.value || 'AI';
+  let generatedBaseTitle = '';
+
+  if (targetFirstUserMsg && allowFastModel && isConfiguredFastModelAvailable(currentConfig.value?.defaultFastModel)) {
+    const aiNamePrefix = await generateConversationNamePrefixWithFastModel(targetFirstUserMsg, signal);
+    if (aiNamePrefix) {
+      generatedBaseTitle = buildConversationTitleOnly(aiNamePrefix, force);
+    }
+  }
+
+  if (!generatedBaseTitle) {
+    generatedBaseTitle = buildLegacyFallbackConversationFileName(fallbackNamePrefix, force)
+      || buildLegacyFallbackConversationFileName(CODE.value || 'AI', force);
+  }
+
+  if (!generatedBaseTitle) return '';
+  return resolveUniqueConversationFileName(generatedBaseTitle, uniqueDirPath);
+};
+
+const renderFilenameAutoNamingButton = ({ canUseAutoNaming = false, isAutoNaming, onClick }) => {
+  if (!canUseAutoNaming) return null;
+  return h('div', { class: 'filename-auto-name-row' }, [
+    h(ElButton, {
+      size: 'small',
+      loading: Boolean(isAutoNaming?.value),
+      disabled: Boolean(isAutoNaming?.value),
+      onClick
+    }, () => isAutoNaming?.value ? '命名中...' : '自动命名')
+  ]);
+};
+
+const createManualAutoNamingHandler = ({ inputValue, isAutoNaming, uniqueDirPath = '', fallbackBasename = '' }) => async () => {
+  if (isAutoNaming.value) return;
+  isAutoNaming.value = true;
+  try {
+    const generatedName = await generateSuggestedConversationBasename({
+      uniqueDirPath,
+      allowFastModel: true
+    });
+    const nextName = sanitizeConversationTitlePart(generatedName || fallbackBasename || CODE.value || 'AI', 80);
+    if (nextName) {
+      inputValue.value = nextName;
+    } else {
+      showDismissibleMessage.warning('当前对话内容不足，无法自动命名');
+    }
+  } catch (error) {
+    console.warn('[Auto Naming] manual naming failed:', error);
+    const fallbackName = sanitizeConversationTitlePart(fallbackBasename || CODE.value || 'AI', 80);
+    if (fallbackName) {
+      inputValue.value = fallbackName;
+    }
+  } finally {
+    isAutoNaming.value = false;
+  }
+};
+
+
 const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSignal = null } = {}) => {
   if (!force && !isCurrentPromptAutoSaveEnabled()) {
     return '';
@@ -3239,33 +3305,22 @@ const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSign
 
   const namingTask = (async () => {
     try {
-      const aiNamePrefix = await generateConversationNamePrefixWithFastModel(firstUserMsg, namingSignal);
-      if (defaultConversationName.value) {
-        return defaultConversationName.value;
+      const generatedName = await generateSuggestedConversationBasename({
+        force,
+        uniqueDirPath: currentConfig.value.webdav.localChatPath,
+        signal: namingSignal,
+        firstUserMsg
+      });
+      if (!defaultConversationName.value && generatedName) {
+        defaultConversationName.value = generatedName;
+        scheduleAutoSave({
+          reason: isConfiguredFastModelAvailable(currentConfig.value?.defaultFastModel)
+            ? 'auto-naming-completed'
+            : 'auto-naming-fallback-completed',
+          immediate: true
+        });
       }
-
-      if (aiNamePrefix) {
-        const generatedBaseTitle = buildConversationTitleOnly(aiNamePrefix, force);
-        if (generatedBaseTitle) {
-          const resolvedName = await resolveUniqueConversationFileName(
-            generatedBaseTitle,
-            currentConfig.value.webdav.localChatPath
-          );
-          if (!defaultConversationName.value && resolvedName) {
-            defaultConversationName.value = resolvedName;
-            scheduleAutoSave({ reason: 'auto-naming-completed', immediate: true });
-          }
-          return defaultConversationName.value || resolvedName || '';
-        }
-      }
-
-      const fallbackNamePrefix = getFallbackConversationNamePrefix(firstUserMsg);
-      const fallbackFileName = buildLegacyFallbackConversationFileName(fallbackNamePrefix, force);
-      if (!defaultConversationName.value && fallbackFileName) {
-        defaultConversationName.value = fallbackFileName;
-        scheduleAutoSave({ reason: 'auto-naming-fallback-completed', immediate: true });
-      }
-      return defaultConversationName.value || fallbackFileName || '';
+      return defaultConversationName.value || generatedName || '';
     } finally {
       if (autoNamingAbortController.value === localController) {
         autoNamingAbortController.value = null;
@@ -3479,6 +3534,14 @@ const saveSessionToCloud = async () => {
   const minutes = String(now.getMinutes()).toString().padStart(2, '0');
   const defaultBasename = defaultConversationName.value || `${CODE.value || 'AI'}-${year}${month}${day}-${hours}${minutes}`;
   const inputValue = ref(defaultBasename);
+  const isAutoNaming = ref(false);
+  const canUseAutoNaming = isConfiguredFastModelAvailable(currentConfig.value?.defaultFastModel);
+  const handleManualAutoNaming = createManualAutoNamingHandler({
+    inputValue,
+    isAutoNaming,
+    uniqueDirPath: currentConfig.value?.webdav?.localChatPath || '',
+    fallbackBasename: defaultBasename
+  });
   try {
     await ElMessageBox({
       title: '保存到云端',
@@ -3500,7 +3563,13 @@ const saveSessionToCloud = async () => {
             }
           }
         },
-          { append: () => h('div', { class: 'input-suffix-display' }, '.json') })]),
+          { append: () => h('div', { class: 'input-suffix-display' }, '.json') }),
+        renderFilenameAutoNamingButton({
+          canUseAutoNaming,
+          isAutoNaming,
+          onClick: handleManualAutoNaming
+        })
+      ].filter(Boolean)),
       showCancelButton: true, confirmButtonText: '确认', cancelButtonText: '取消', customClass: 'filename-prompt-dialog',
       beforeClose: async (action, instance, done) => {
         if (action === 'confirm') {
@@ -4054,6 +4123,14 @@ const saveSessionAsJson = async () => {
   const fileTimestamp = `${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
   const defaultBasename = defaultConversationName.value || `${CODE.value || 'AI'}-${fileTimestamp}`;
   const inputValue = ref(defaultBasename);
+  const isAutoNaming = ref(false);
+  const canUseAutoNaming = isConfiguredFastModelAvailable(currentConfig.value?.defaultFastModel);
+  const handleManualAutoNaming = createManualAutoNamingHandler({
+    inputValue,
+    isAutoNaming,
+    uniqueDirPath: currentConfig.value?.webdav?.localChatPath || '',
+    fallbackBasename: defaultBasename
+  });
   try {
     await ElMessageBox({
       title: '保存为 JSON',
@@ -4075,7 +4152,13 @@ const saveSessionAsJson = async () => {
             }
           }
         },
-          { append: () => h('div', { class: 'input-suffix-display' }, '.json') })]),
+          { append: () => h('div', { class: 'input-suffix-display' }, '.json') }),
+        renderFilenameAutoNamingButton({
+          canUseAutoNaming,
+          isAutoNaming,
+          onClick: handleManualAutoNaming
+        })
+      ].filter(Boolean)),
       showCancelButton: true, confirmButtonText: '保存', cancelButtonText: '取消', customClass: 'filename-prompt-dialog',
       beforeClose: async (action, instance, done) => {
         if (action === 'confirm') {
@@ -7027,6 +7110,20 @@ html.dark .filename-prompt-dialog .el-input-group__append {
   color: var(--el-text-color-placeholder);
   border-color: var(--el-border-color);
 }
+
+.filename-auto-name-row {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.filename-auto-name-row .el-button {
+  border-radius: 8px;
+}
+
 
 /* Custom Viewer Actions */
 .custom-viewer-actions {

@@ -3248,15 +3248,23 @@ const generateSuggestedConversationBasename = async ({
 
 const renderFilenameAutoNamingButton = ({ canUseAutoNaming = false, isAutoNaming, onClick }) => {
   if (!canUseAutoNaming) return null;
-  return h('div', { class: 'filename-auto-name-row' }, [
-    h(ElButton, {
-      size: 'small',
-      loading: Boolean(isAutoNaming?.value),
-      disabled: Boolean(isAutoNaming?.value),
-      onClick
-    }, () => isAutoNaming?.value ? '命名中...' : '自动命名')
-  ]);
+  return h(ElButton, {
+    class: 'filename-auto-name-button',
+    size: 'small',
+    loading: Boolean(isAutoNaming?.value),
+    disabled: Boolean(isAutoNaming?.value),
+    onClick
+  }, () => isAutoNaming?.value ? '命名中...' : '自动命名');
 };
+
+const renderFilenamePromptTitleRow = ({ text = '请输入文件名。', canUseAutoNaming = false, isAutoNaming, onClick }) => h(
+  'div',
+  { class: 'filename-prompt-title-row' },
+  [
+    h('p', { class: 'filename-prompt-title-text' }, text),
+    renderFilenameAutoNamingButton({ canUseAutoNaming, isAutoNaming, onClick })
+  ].filter(Boolean)
+);
 
 const createManualAutoNamingHandler = ({ inputValue, isAutoNaming, uniqueDirPath = '', fallbackBasename = '' }) => async () => {
   if (isAutoNaming.value) return;
@@ -3546,7 +3554,12 @@ const saveSessionToCloud = async () => {
     await ElMessageBox({
       title: '保存到云端',
       message: () => h('div', null, [
-        h('p', { style: 'margin-bottom: 15px; font-size: 14px; color: var(--el-text-color-regular);' }, '请输入要保存到云端的会话名称。'),
+        renderFilenamePromptTitleRow({
+          text: '请输入要保存到云端的会话名称。',
+          canUseAutoNaming,
+          isAutoNaming,
+          onClick: handleManualAutoNaming
+        }),
         h(ElInput, {
           modelValue: inputValue.value,
           'onUpdate:modelValue': (val) => { inputValue.value = val; },
@@ -3563,13 +3576,7 @@ const saveSessionToCloud = async () => {
             }
           }
         },
-          { append: () => h('div', { class: 'input-suffix-display' }, '.json') }),
-        renderFilenameAutoNamingButton({
-          canUseAutoNaming,
-          isAutoNaming,
-          onClick: handleManualAutoNaming
-        })
-      ].filter(Boolean)),
+          { append: () => h('div', { class: 'input-suffix-display' }, '.json') })]),
       showCancelButton: true, confirmButtonText: '确认', cancelButtonText: '取消', customClass: 'filename-prompt-dialog',
       beforeClose: async (action, instance, done) => {
         if (action === 'confirm') {
@@ -4135,7 +4142,12 @@ const saveSessionAsJson = async () => {
     await ElMessageBox({
       title: '保存为 JSON',
       message: () => h('div', null, [
-        h('p', { style: 'margin-bottom: 15px; font-size: 14px; color: var(--el-text-color-regular);' }, '请输入文件名。'),
+        renderFilenamePromptTitleRow({
+          text: '请输入文件名。',
+          canUseAutoNaming,
+          isAutoNaming,
+          onClick: handleManualAutoNaming
+        }),
         h(ElInput, {
           modelValue: inputValue.value,
           'onUpdate:modelValue': (val) => { inputValue.value = val; },
@@ -4152,13 +4164,7 @@ const saveSessionAsJson = async () => {
             }
           }
         },
-          { append: () => h('div', { class: 'input-suffix-display' }, '.json') }),
-        renderFilenameAutoNamingButton({
-          canUseAutoNaming,
-          isAutoNaming,
-          onClick: handleManualAutoNaming
-        })
-      ].filter(Boolean)),
+          { append: () => h('div', { class: 'input-suffix-display' }, '.json') })]),
       showCancelButton: true, confirmButtonText: '保存', cancelButtonText: '取消', customClass: 'filename-prompt-dialog',
       beforeClose: async (action, instance, done) => {
         if (action === 'confirm') {
@@ -7111,16 +7117,24 @@ html.dark .filename-prompt-dialog .el-input-group__append {
   border-color: var(--el-border-color);
 }
 
-.filename-auto-name-row {
+.filename-prompt-title-row {
   width: 100%;
   max-width: 520px;
   display: flex;
-  justify-content: flex-start;
   align-items: center;
-  margin-top: 12px;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 15px;
 }
 
-.filename-auto-name-row .el-button {
+.filename-prompt-title-text {
+  margin: 0;
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+
+.filename-auto-name-button {
+  flex-shrink: 0;
   border-radius: 8px;
 }
 

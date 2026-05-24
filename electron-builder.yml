@@ -47,6 +47,7 @@ mac:
 dmg:
   artifactName: ${env.BUILD_ARTIFACT_NAME}-${version}${env.BUILD_SUFFIX}.${ext}
 linux:
+  executableName: anywhere-desktop
   icon: build/icon.png
   target:
     - AppImage

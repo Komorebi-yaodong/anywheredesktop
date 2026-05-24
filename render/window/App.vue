@@ -2974,6 +2974,16 @@ const isCurrentPromptAutoSaveEnabled = () => {
   return Boolean(promptConfig?.autoSaveChat);
 };
 
+const isNamedLocalConversationAvailable = () => Boolean(
+  currentConfig.value?.webdav?.localChatPath &&
+  typeof defaultConversationName.value === 'string' &&
+  defaultConversationName.value.trim()
+);
+
+const shouldPersistCurrentSessionAutomatically = () => {
+  return isCurrentPromptAutoSaveEnabled() || isNamedLocalConversationAvailable();
+};
+
 const cancelAutoNamingRequest = () => {
   if (autoNamingAbortController.value) {
     try {
@@ -3349,9 +3359,9 @@ const autoSaveSession = async (force = false) => {
   }
 
   // 2. 获取当前快捷助手的配置
-  const isAutoSaveConfigEnabled = isCurrentPromptAutoSaveEnabled();
+  const shouldAutoSave = shouldPersistCurrentSessionAutomatically();
 
-  if (!isAutoSaveConfigEnabled && !force) {
+  if (!shouldAutoSave && !force) {
     return false;
   }
 
@@ -3386,7 +3396,7 @@ const clearScheduledAutoSave = () => {
 
 const executeAutoSaveRequest = async (request = {}) => {
   if (!request || !request.force) {
-    if (!isCurrentPromptAutoSaveEnabled()) {
+    if (!shouldPersistCurrentSessionAutomatically()) {
       return false;
     }
   }
@@ -3416,7 +3426,7 @@ const executeAutoSaveRequest = async (request = {}) => {
 };
 
 const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false, delay = 0 } = {}) => {
-  if (!force && !isCurrentPromptAutoSaveEnabled()) {
+  if (!force && !shouldPersistCurrentSessionAutomatically()) {
     return;
   }
 

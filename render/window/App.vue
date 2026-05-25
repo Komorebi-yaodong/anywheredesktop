@@ -4272,88 +4272,132 @@ const handleRenameSession = async () => {
   const oldFilename = `${oldBaseName}.json`;
   // 简单拼接路径，electron/node 环境下通常能正确处理
   const oldFilePath = `${localPath}/${oldFilename}`;
+  const inputValue = ref(oldBaseName);
 
   try {
-    const { value: userInput } = await ElMessageBox.prompt(
-      '请输入新的会话名称',
-      '重命名对话',
-      {
-        inputValue: oldBaseName,
-        confirmButtonText: '确认',
-        cancelButtonText: '取消',
-        inputValidator: (val) => {
-          if (!val || !val.trim()) return '名称不能为空';
-          if (/[\\/:*?"<>|]/.test(val)) return '文件名包含非法字符';
-          return true;
-        },
-        customClass: 'filename-prompt-dialog', // 复用已有的弹窗样式
-      }
-    );
-
-    let newBaseName = (userInput || "").trim();
-    if (newBaseName.toLowerCase().endsWith('.json')) newBaseName = newBaseName.slice(0, -5);
-
-    if (newBaseName === oldBaseName) return;
-
-    const newFilename = `${newBaseName}.json`;
-    const newFilePath = `${localPath}/${newFilename}`;
-
-    // 检查本地是否存在同名文件
-    const files = await window.api.listJsonFiles(localPath);
-    if (files.some(f => f.basename === newFilename)) {
-      showDismissibleMessage.error(`文件名 "${newFilename}" 已存在，操作取消`);
-      return;
-    }
-
-    // 执行本地重命名
-    await window.api.renameLocalFile(oldFilePath, newFilePath);
-    defaultConversationName.value = newBaseName;
-    showDismissibleMessage.success('本地重命名成功');
-
-    // 尝试同步重命名云端文件
-    const { url, username, password, data_path } = currentConfig.value.webdav || {};
-    if (url && data_path) {
-      try {
-        const remoteDir = data_path.endsWith('/') ? data_path.slice(0, -1) : data_path;
-        const webdavConfig = {
-          url,
-          username,
-          password,
-          path: remoteDir
-        };
-        const remoteSourceFile = await window.api.readWebdavBackup({
-          webdavConfig,
-          filename: oldFilename
-        });
-
-        if (remoteSourceFile?.ok === false) {
-          if (remoteSourceFile.reason === 'webdav_file_not_found') {
-            return;
+    await ElMessageBox({
+      title: '重命名对话',
+      message: () => h('div', null, [
+        renderFilenamePromptTitleRow({
+          text: '请输入新的会话名称',
+          canUseAutoNaming: false,
+          isAutoNaming: null,
+          onClick: null
+        }),
+        h(ElInput, {
+          modelValue: inputValue.value,
+          'onUpdate:modelValue': (val) => { inputValue.value = val; },
+          placeholder: '会话名称',
+          ref: (elInputInstance) => {
+            if (elInputInstance) {
+              setTimeout(() => elInputInstance.focus(), 100);
+            }
+          },
+          onKeydown: (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              document.querySelector('.filename-prompt-dialog .el-message-box__btns .el-button--primary')?.click();
+            }
           }
-          throw new Error(remoteSourceFile.message || '检查云端会话文件失败');
+        })
+      ]),
+      showCancelButton: true,
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      customClass: 'filename-prompt-dialog',
+      beforeClose: async (action, instance, done) => {
+        if (action !== 'confirm') {
+          done();
+          return;
         }
 
-        await ElMessageBox.confirm(
-          '云端也存在同名文件，是否同步重命名？',
-          '同步操作提示',
-          { confirmButtonText: '是', cancelButtonText: '否', type: 'info' }
-        );
-        const moveResult = await window.api.moveWebdavFile({
-          webdavConfig,
-          fromFilename: oldFilename,
-          toFilename: newFilename
-        });
-        if (moveResult?.ok === false) {
-          throw new Error(moveResult.message || '云端同步重命名失败');
+        let newBaseName = (inputValue.value || '').trim();
+        if (!newBaseName) {
+          showDismissibleMessage.error('名称不能为空');
+          return;
         }
-        showDismissibleMessage.success('云端同步重命名成功');
-      } catch (e) {
-        if (e !== 'cancel' && e !== 'close') {
-          console.warn('Cloud rename skipped:', e);
+        if (/[\\/:*?"<>|]/.test(newBaseName)) {
+          showDismissibleMessage.error('文件名包含非法字符');
+          return;
+        }
+        if (newBaseName.toLowerCase().endsWith('.json')) newBaseName = newBaseName.slice(0, -5);
+        if (!newBaseName) {
+          showDismissibleMessage.error('名称不能为空');
+          return;
+        }
+        if (newBaseName === oldBaseName) {
+          done();
+          return;
+        }
+
+        const newFilename = `${newBaseName}.json`;
+        const newFilePath = `${localPath}/${newFilename}`;
+
+        // 检查本地是否存在同名文件
+        const files = await window.api.listJsonFiles(localPath);
+        if (files.some(f => f.basename === newFilename)) {
+          showDismissibleMessage.error(`文件名 "${newFilename}" 已存在，操作取消`);
+          return;
+        }
+
+        instance.confirmButtonLoading = true;
+        try {
+          // 执行本地重命名
+          await window.api.renameLocalFile(oldFilePath, newFilePath);
+          defaultConversationName.value = newBaseName;
+          showDismissibleMessage.success('本地重命名成功');
+          done();
+
+          // 尝试同步重命名云端文件
+          const { url, username, password, data_path } = currentConfig.value.webdav || {};
+          if (url && data_path) {
+            try {
+              const remoteDir = data_path.endsWith('/') ? data_path.slice(0, -1) : data_path;
+              const webdavConfig = {
+                url,
+                username,
+                password,
+                path: remoteDir
+              };
+              const remoteSourceFile = await window.api.readWebdavBackup({
+                webdavConfig,
+                filename: oldFilename
+              });
+
+              if (remoteSourceFile?.ok === false) {
+                if (remoteSourceFile.reason === 'webdav_file_not_found') {
+                  return;
+                }
+                throw new Error(remoteSourceFile.message || '检查云端会话文件失败');
+              }
+
+              await ElMessageBox.confirm(
+                '云端也存在同名文件，是否同步重命名？',
+                '同步操作提示',
+                { confirmButtonText: '是', cancelButtonText: '否', type: 'info' }
+              );
+              const moveResult = await window.api.moveWebdavFile({
+                webdavConfig,
+                fromFilename: oldFilename,
+                toFilename: newFilename
+              });
+              if (moveResult?.ok === false) {
+                throw new Error(moveResult.message || '云端同步重命名失败');
+              }
+              showDismissibleMessage.success('云端同步重命名成功');
+            } catch (e) {
+              if (e !== 'cancel' && e !== 'close') {
+                console.warn('Cloud rename skipped:', e);
+              }
+            }
+          }
+        } catch (error) {
+          showDismissibleMessage.error(`操作失败: ${error.message}`);
+        } finally {
+          instance.confirmButtonLoading = false;
         }
       }
-    }
-
+    });
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') {
       showDismissibleMessage.error(`操作失败: ${error.message}`);

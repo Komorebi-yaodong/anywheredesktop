@@ -46,7 +46,7 @@ const tokenUsageDisplay = computed(() => {
   const completionTokens = Number(usage.completion_tokens ?? usage.output_tokens);
   if (!Number.isFinite(promptTokens) && !Number.isFinite(completionTokens)) return '';
 
-  return `总输入 ${formatTokenCount(promptTokens)} · 本次输出 ${formatTokenCount(completionTokens)}`;
+  return `总输入 ${formatTokenCount(promptTokens)} · 输出 ${formatTokenCount(completionTokens)}`;
 });
 
 

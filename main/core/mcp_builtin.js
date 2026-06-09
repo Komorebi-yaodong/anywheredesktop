@@ -8,7 +8,7 @@ import { createChatCompletion } from './chat.js'
 import { get as dbGet, put as dbPut, remove as dbRemove, allDocs as dbAllDocs } from './db.js'
 import { getConfig, updateConfigWithoutFeatures, resolveDefaultAssistantModel } from './data.js'
 import { fetchWithProxy } from './net.js'
-import Markitdown from 'markitdown-js'
+import * as MarkitdownModule from 'markitdown-js'
 import { openWindow, getWindowByRef, listWindows } from '../windowManager.js'
 import { dispatchWindowEvent } from '../eventBus.js'
 
@@ -231,6 +231,24 @@ function convertHtmlToMarkdown(html, baseUrl = '') {
 }
 
 
+function resolveMarkitdownConstructor() {
+    const candidates = [
+        MarkitdownModule,
+        MarkitdownModule?.default,
+        MarkitdownModule?.MarkItDown,
+        MarkitdownModule?.default?.default,
+        MarkitdownModule?.default?.MarkItDown
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate === 'function') return candidate;
+    }
+
+    const exportKeys = MarkitdownModule && typeof MarkitdownModule === 'object' ? Object.keys(MarkitdownModule).join(', ') : typeof MarkitdownModule;
+    throw new Error(`markitdown_js_constructor_not_found: exports=${exportKeys}`);
+}
+
+
 function decodeHtmlEntitiesForMarkdown(str = '') {
     const entities = {
         '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#x27;': "'",
@@ -315,7 +333,8 @@ async function convertHtmlWithMarkitdownJs(html, baseUrl = '') {
         const sanitizedHtml = sanitizeHtmlForMarkitdownJs(html, baseUrl);
         await fs.promises.writeFile(tempFile, sanitizedHtml, 'utf8');
 
-        const converter = new Markitdown();
+        const MarkitdownConstructor = resolveMarkitdownConstructor();
+        const converter = new MarkitdownConstructor();
         const conversionPromise = converter.convert(tempFile, { fileExtension: '.html' });
         const timeoutPromise = new Promise((_, reject) => {
             timeoutId = setTimeout(() => reject(new Error('markitdown_js_conversion_timeout')), 30000);

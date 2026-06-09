@@ -53,6 +53,9 @@ importers:
       markitdown-js:
         specifier: ^0.0.14
         version: 0.0.14(typescript@5.9.3)
+      mime-db:
+        specifier: ^1.54.0
+        version: 1.54.0
       node-domexception:
         specifier: ^1.0.0
         version: 1.0.0

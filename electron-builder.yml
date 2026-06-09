@@ -25,7 +25,7 @@ win:
     - en-US
 
 nsis:
-  artifactName: ${env.BUILD_ARTIFACT_NAME}-${version}${env.BUILD_SUFFIX}-setup.${ext}
+  artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -45,7 +45,7 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${env.BUILD_ARTIFACT_NAME}-${version}${env.BUILD_SUFFIX}.${ext}
+  artifactName: ${name}-${version}.${ext}
 linux:
   executableName: anywhere-desktop
   icon: build/icon.png
@@ -54,7 +54,7 @@ linux:
   maintainer: komorebi
   category: Utility
 appImage:
-  artifactName: ${env.BUILD_ARTIFACT_NAME}-${version}${env.BUILD_SUFFIX}.${ext}
+  artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
   provider: github

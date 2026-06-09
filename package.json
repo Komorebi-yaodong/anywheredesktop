@@ -26,6 +26,7 @@
     "release:linux": "pnpm run build && electron-builder --linux AppImage --publish always"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1064.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@langchain/core": "^1.1.39",
@@ -35,6 +36,7 @@
     "data-uri-to-buffer": "^4.0.1",
     "dompurify": "^3.3.3",
     "electron-updater": "^6.3.9",
+    "es-object-atoms": "^1.1.2",
     "fetch-blob": "^3.2.0",
     "formdata-polyfill": "^4.0.10",
     "lowdb": "^7.0.1",

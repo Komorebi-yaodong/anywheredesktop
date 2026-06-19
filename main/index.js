@@ -476,9 +476,11 @@ function ensureTray() {
   appTray = new Tray(createTrayIcon())
   appTray.setToolTip('AI Anywhere Desktop')
   appTray.setContextMenu(buildTrayMenu())
-  appTray.on('click', () => {
-    showMainWindow()
-  })
+  if (process.platform !== 'darwin') {
+    appTray.on('click', () => {
+      showMainWindow()
+    })
+  }
   return appTray
 }
 

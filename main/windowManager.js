@@ -70,11 +70,13 @@ const WINDOWS = {
     height: 420,
     options: {
       frame: false,
-      titleBarStyle: 'hidden',
       transparent: false,
       roundedCorners: true,
       alwaysOnTop: true,
       resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
       skipTaskbar: true,
       hasShadow: true,
       backgroundColor: '#1d1f25'

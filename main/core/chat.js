@@ -277,6 +277,7 @@ function convertMessagesToResponsesInput(messages = []) {
       // 只有当 contentList 不为空时才添加 message item
       if (contentList.length > 0) {
         inputItems.push({
+          type: 'message',
           role,
           content: contentList
         })

@@ -641,7 +641,8 @@
     "apiTypeTooltip": "选择 API 协议类型",
     "apiTypes": {
       "chatCompletions": "OpenAI-Chat",
-      "responses": "OpenAI-Response"
+      "responses": "OpenAI-Response",
+      "codex": "Codex"
     },
     "apiKeyLabel": "API 密钥",
     "apiKeyPlaceholder": "输入 API 密钥 (可输入多个，用逗号分隔)",

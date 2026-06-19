@@ -7,3 +7,7 @@ out
 result.txt
 
 进度.md
+.claude/*
+.agents/*
+CLAUDE.md
+AGENTS.md

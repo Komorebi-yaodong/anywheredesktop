@@ -641,7 +641,8 @@
     "apiTypeTooltip": "Select API Protocol",
     "apiTypes": {
       "chatCompletions": "OpenAI-Chat",
-      "responses": "OpenAI-Response"
+      "responses": "OpenAI-Response",
+      "codex": "Codex"
     },
     "apiKeyLabel": "API Key",
     "apiKeyPlaceholder": "Enter API Key (multiple can be entered, separated by commas)",

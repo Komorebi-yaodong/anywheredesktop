@@ -3246,7 +3246,7 @@ const extractAutoNamingResponseText = async (response, apiType = 'chat_completio
     return extractAssistantTextFromContent(message?.content);
   }
 
-  if (apiType === 'responses') {
+  if (apiType === 'responses' || apiType === 'codex') {
     if (typeof response.output_text === 'string' && response.output_text.trim()) {
       return response.output_text;
     }
@@ -5712,7 +5712,7 @@ const askAI = async (forceSend = false) => {
           if (part?.usage) {
             aggregatedUsage = part.usage;
           }
-          if (apiType === 'responses') {
+          if (apiType === 'responses' || apiType === 'codex') {
             if (part.type === 'response.completed' && part.response?.usage) {
               aggregatedUsage = part.response.usage;
             }
@@ -5858,7 +5858,7 @@ const askAI = async (forceSend = false) => {
           throw new DOMException('The operation was aborted.', 'AbortError');
         }
 
-        if (apiType === 'responses') {
+        if (apiType === 'responses' || apiType === 'codex') {
           let contentText = "";
           let toolCalls = [];
           let reasoningText = "";

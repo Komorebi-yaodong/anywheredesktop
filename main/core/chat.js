@@ -11,6 +11,10 @@ const DEFAULT_CHAT_HEADERS = {
 // 不允许用户自定义、可能破坏请求的请求头（小写比较）
 const FORBIDDEN_HEADER_NAMES = new Set(['host', 'content-length', 'transfer-encoding', 'connection'])
 
+// Codex 客户端指纹：anyrouter 等服务商会校验请求是否来自官方 Codex CLI
+const CODEX_USER_AGENT = 'codex_cli_rs/0.114.0 (Mac OS 14.2.0; x86_64) vscode/1.111.0'
+const CODEX_ORIGINATOR = 'codex-tui'
+
 // 归一化服务商自定义请求头：过滤空值、含换行符与危险请求头，返回普通对象
 function normalizeProviderHeaders(headers) {
   const result = {}
@@ -334,7 +338,8 @@ export async function createChatCompletion(params = {}) {
   })
 
   try {
-    if (apiType === 'responses') {
+    if (apiType === 'responses' || apiType === 'codex') {
+      const isCodex = apiType === 'codex'
       const convertedInput = convertMessagesToResponsesInput(openAiParams.messages)
 
       // Responses API 参数映射
@@ -368,11 +373,26 @@ export async function createChatCompletion(params = {}) {
         }
       }
 
-      if (openAiParams.temperature !== undefined) {
+      if (isCodex) {
+        // Codex Responses 必备字段；Codex 上游拒绝 temperature/top_p 等
+        responseParams.instructions = typeof openAiParams.instructions === 'string' ? openAiParams.instructions : ''
+        responseParams.store = false
+        responseParams.include = ['reasoning.encrypted_content']
+        responseParams.parallel_tool_calls = true
+      } else if (openAiParams.temperature !== undefined) {
         responseParams.temperature = openAiParams.temperature
       }
 
-      return await client.responses.create(responseParams, { signal })
+      const responsesRequestOptions = { signal }
+      if (isCodex) {
+        // Codex 客户端指纹：codex UA（经中转头绕过 Chromium 限制）+ Originator；用户自定义 headers 优先
+        responsesRequestOptions.headers = applyUserAgentBridge(mergeHeaders(
+          { 'User-Agent': CODEX_USER_AGENT, 'Originator': CODEX_ORIGINATOR },
+          normalizeProviderHeaders(providerHeaders)
+        ))
+      }
+
+      return await client.responses.create(responseParams, responsesRequestOptions)
     }
 
     // 标准 Chat Completions API

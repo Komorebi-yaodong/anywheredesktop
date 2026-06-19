@@ -50,6 +50,7 @@ import * as webdavApi from './core/webdav.js'
 import * as chatApi from './core/chat.js'
 import * as mcpApi from './core/mcp.js'
 import * as skillApi from './core/skill.js'
+import * as screenshotApi from './core/screenshot.js'
 
 
 let appTray = null
@@ -104,6 +105,30 @@ process.on('unhandledRejection', (reason) => {
 app.on('child-process-gone', (_event, details) => {
   console.error('[main] child-process-gone', details)
 })
+
+
+function isRasterImageDataUrl(value = '') {
+  return /^data:image\/(png|jpe?g|webp|gif|bmp);base64,/i.test(String(value || '').trim())
+}
+
+function normalizeImagePayloadToPngDataUrl(payload = null) {
+  if (!payload || payload.type !== 'img' || !isRasterImageDataUrl(payload.payload)) {
+    return null
+  }
+
+  const image = nativeImage.createFromDataURL(String(payload.payload || ''))
+  if (!image || image.isEmpty()) {
+    return null
+  }
+
+  const pngBuffer = image.toPNG()
+  return {
+    ...payload,
+    type: 'img',
+    payload: pngBuffer.length > 0 ? nativeImage.createFromBuffer(pngBuffer).toDataURL() : image.toDataURL()
+  }
+}
+
 
 function buildQuickPayloadFromClipboardResult(result = {}) {
   const filePaths = Array.isArray(result.filePaths) ? result.filePaths : []
@@ -220,6 +245,29 @@ async function collectQuickFilePayloadFallback() {
 async function openQuickWindowPreservingMain(payload = null) {
   return openWindow('quick', payload)
 }
+
+async function startScreenshotPromptWorkflow(input = {}) {
+  return screenshotApi.startScreenshotPrompt(input, {
+    openWindow,
+    closeWindow,
+    systemApi
+  })
+}
+
+async function confirmScreenshotPromptWorkflow(input = {}) {
+  return screenshotApi.confirmScreenshotPrompt(input, {
+    openWindow,
+    closeWindow
+  })
+}
+
+async function cancelScreenshotPromptWorkflow(input = {}) {
+  return screenshotApi.cancelScreenshotPrompt(input, {
+    closeWindow
+  })
+}
+
+
 
 function pushQuickPayloadToVisibleWindow(payload = null) {
   const quickWindow = getWindowByRef('quick')
@@ -379,6 +427,21 @@ async function triggerPromptShortcut(promptKey = '') {
         quickPayload = await collectQuickFilePayloadFallback()
       }
 
+      if (promptConfig.type === 'img') {
+        const imagePayload = normalizeImagePayloadToPngDataUrl(quickPayload)
+        if (!imagePayload) {
+          await startScreenshotPromptWorkflow({
+            code: normalizedPromptKey,
+            promptKey: normalizedPromptKey,
+            showMode: 'fast',
+            triggerMode: 'shortcut',
+            source: 'prompt-shortcut-img-helper'
+          })
+          return
+        }
+        quickPayload = imagePayload
+      }
+
       await openWindow('fast', {
         code: normalizedPromptKey,
         ...quickPayload,
@@ -389,6 +452,29 @@ async function triggerPromptShortcut(promptKey = '') {
     }
 
     const quickPayload = await collectQuickPayloadFast()
+
+    if (promptConfig.type === 'img') {
+      const imagePayload = normalizeImagePayloadToPngDataUrl(quickPayload)
+      if (imagePayload) {
+        await openWindow('window', {
+          code: normalizedPromptKey,
+          ...imagePayload,
+          promptKey: normalizedPromptKey,
+          triggerMode: 'shortcut'
+        })
+        return
+      }
+
+      await startScreenshotPromptWorkflow({
+        code: normalizedPromptKey,
+        promptKey: normalizedPromptKey,
+        showMode: 'window',
+        triggerMode: 'shortcut',
+        source: 'prompt-shortcut-img-helper'
+      })
+      return
+    }
+
     const openResult = await openWindow('window', {
       code: normalizedPromptKey,
       ...quickPayload,
@@ -576,7 +662,10 @@ app.whenReady().then(async () => {
     closeWindow,
     toggleAlwaysOnTop,
     handleFastInputWindowEvent,
-    appendPayloadToWindow
+    appendPayloadToWindow,
+    startScreenshotPromptWorkflow,
+    confirmScreenshotPromptWorkflow,
+    cancelScreenshotPromptWorkflow
   })
 
   systemApi.startClipboardWatcher()

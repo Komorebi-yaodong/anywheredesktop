@@ -26,7 +26,8 @@ export default defineConfig({
           main_preload: resolve('preload/main_preload.js'),
           window_preload: resolve('preload/window_preload.js'),
           fast_input_preload: resolve('preload/fast_input_preload.js'),
-          quick_preload: resolve('preload/quick_preload.js')
+          quick_preload: resolve('preload/quick_preload.js'),
+          screenshot_preload: resolve('preload/screenshot_preload.js')
         }
       }
     }
@@ -47,7 +48,8 @@ export default defineConfig({
           main: resolve('render/main/index.html'),
           window: resolve('render/window/index.html'),
           fast_input: resolve('render/fast_input/index.html'),
-          quick: resolve('render/quick/index.html')
+          quick: resolve('render/quick/index.html'),
+          screenshot: resolve('render/screenshot/index.html')
         }
       }
     },

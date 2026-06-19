@@ -381,7 +381,7 @@ const candidateSections = computed(() => {
       return score
     }
 
-    if (promptType === 'general') {
+    if (promptType === 'general' || promptType === 'img') {
       return 1200
     }
 
@@ -565,6 +565,54 @@ function resolveQuickOpenPayload(prompt) {
   }
 }
 
+function isRasterImageDataUrl(value = '') {
+  return /^data:image\/(png|jpe?g|webp|gif|bmp);base64,/i.test(String(value || '').trim())
+}
+
+function isPngDataUrl(value = '') {
+  return /^data:image\/png;base64,/i.test(String(value || '').trim())
+}
+
+async function normalizeImageDataUrlToPng(dataUrl = '') {
+  const normalized = String(dataUrl || '').trim()
+  if (!isRasterImageDataUrl(normalized)) return ''
+  if (isPngDataUrl(normalized)) return normalized
+
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = image.naturalWidth || image.width
+        canvas.height = image.naturalHeight || image.height
+        const ctx = canvas.getContext('2d')
+        if (!ctx || canvas.width <= 0 || canvas.height <= 0) {
+          resolve('')
+          return
+        }
+        ctx.drawImage(image, 0, 0)
+        resolve(canvas.toDataURL('image/png'))
+      } catch {
+        resolve('')
+      }
+    }
+    image.onerror = () => resolve('')
+    image.src = normalized
+  })
+}
+
+async function resolveExistingImagePayloadAsPng(payload = null) {
+  if (!payload || payload.type !== 'img') return null
+  const pngDataUrl = await normalizeImageDataUrlToPng(payload.payload)
+  if (!pngDataUrl) return null
+  return {
+    ...payload,
+    type: 'img',
+    payload: pngDataUrl
+  }
+}
+
+
 async function hideQuick() {
   try {
     await window.api.closeWindow('quick')
@@ -577,7 +625,29 @@ async function openPrompt(prompt) {
   if (!prompt) return
   try {
     const payload = resolveQuickOpenPayload(prompt)
+    const promptType = normalizePromptType(prompt.type)
     const showMode = prompt.showMode === 'fastinput' ? 'fast' : 'window'
+
+    if (promptType === 'img') {
+      const existingImagePayload = await resolveExistingImagePayloadAsPng(payload)
+      if (existingImagePayload) {
+        await window.api.openWindow(showMode, existingImagePayload)
+        await hideQuick()
+        return
+      }
+
+      await window.api.startScreenshotPrompt?.({
+        code: prompt.key,
+        promptKey: prompt.key,
+        showMode,
+        userText: queryText.value.trim(),
+        triggerMode: 'quick-screenshot',
+        source: 'quick-img-helper'
+      })
+      await hideQuick()
+      return
+    }
+
     await window.api.openWindow(showMode, payload)
     await hideQuick()
   } catch (error) {

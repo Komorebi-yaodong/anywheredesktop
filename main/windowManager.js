@@ -81,10 +81,31 @@ const WINDOWS = {
       hasShadow: true,
       backgroundColor: '#1d1f25'
     }
+  },
+  screenshot: {
+    title: 'AI Anywhere Desktop - Screenshot',
+    preload: 'screenshot_preload.js',
+    html: 'screenshot/index.html',
+    devPath: '/screenshot/index.html',
+    width: 1200,
+    height: 800,
+    options: {
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      backgroundColor: '#00000000'
+    }
   }
 }
 
-const SINGLETON_TYPES = new Set(['main', 'fast', 'quick'])
+const SINGLETON_TYPES = new Set(['main', 'fast', 'quick', 'screenshot'])
 const singletonStore = new Map()
 const multiStore = new Map()
 const multiTypeIndex = new Map()
@@ -718,6 +739,18 @@ async function buildQuickWindowInitMessage(payload = {}) {
   }
 }
 
+async function buildScreenshotWindowInitMessage(payload = {}) {
+  return {
+    captureId: typeof payload?.captureId === 'string' ? payload.captureId : '',
+    sourceId: typeof payload?.sourceId === 'string' ? payload.sourceId : '',
+    sourceName: typeof payload?.sourceName === 'string' ? payload.sourceName : '',
+    thumbnailDataUrl: typeof payload?.thumbnailDataUrl === 'string' ? payload.thumbnailDataUrl : '',
+    display: payload?.display && typeof payload.display === 'object' ? payload.display : null,
+    prompt: payload?.prompt && typeof payload.prompt === 'object' ? payload.prompt : null
+  }
+}
+
+
 function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', initMessage = null) {
   const title = titleSuffix ? `${config.title} (${titleSuffix})` : config.title
 
@@ -895,8 +928,25 @@ const dynamicBaseConfig =
       if (targetType === 'fast') {
         applyQuickWindowBounds(existing, config)
       }
+      if (targetType === 'screenshot') {
+        applyQuickWindowBounds(existing, config)
+      }
+
       activateWindow(existing)
-      if (targetType === 'quick' && openPayload) {
+            if (targetType === 'screenshot' && openPayload) {
+        const screenshotInitMessage = await buildScreenshotWindowInitMessage(openPayload)
+        try {
+          existing.webContents.send(WINDOW_INIT_CHANNEL, {
+            senderId: targetType,
+            windowType: targetType,
+            ...screenshotInitMessage
+          })
+        } catch {
+          // ignore screenshot re-init delivery failure
+        }
+      }
+
+if (targetType === 'quick' && openPayload) {
         const quickInitMessage = await buildQuickWindowInitMessage(openPayload)
         try {
           existing.__quickTriggerMode = quickInitMessage.triggerMode || ''
@@ -955,7 +1005,9 @@ const dynamicBaseConfig =
               promptKey: typeof openPayload?.promptKey === 'string' ? openPayload.promptKey : '',
               triggerMode: typeof openPayload?.triggerMode === 'string' ? openPayload.triggerMode : ''
             }
-          : null
+          : targetType === 'screenshot'
+            ? await buildScreenshotWindowInitMessage(openPayload || {})
+            : null
     const win = createBrowserWindow(targetType, config, '', targetType, initMessage)
     if (targetType === 'quick') {
       try {
@@ -1257,6 +1309,8 @@ export function closeWindow(windowRef = '') {
   const isDialogWindow = multiStore.has(resolved.windowRef)
   const isQuickSingleton = resolved.windowRef === 'quick'
   const isFastSingleton = resolved.windowRef === 'fast'
+  const isScreenshotSingleton = resolved.windowRef === 'screenshot'
+
 
   if (isQuickSingleton) {
     try {
@@ -1269,7 +1323,13 @@ export function closeWindow(windowRef = '') {
     return { ok: true, action: 'hide', windowRef: resolved.windowRef }
   }
 
-  if (isFastSingleton) {
+    if (isScreenshotSingleton) {
+    resolved.win.destroy()
+    return { ok: true, action: 'destroy', windowRef: resolved.windowRef }
+  }
+
+
+if (isFastSingleton) {
     try {
       void persistFastInputPositionNow(resolved.win)
     } catch {

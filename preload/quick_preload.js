@@ -71,6 +71,7 @@ const api = {
   listAppendTargets,
   emitWindowEvent: (input) => electronAPI.ipcRenderer.invoke('window:event:emit', input),
   appendToWindow,
+  startScreenshotPrompt: (payload = {}) => invokeOrThrow('quick:screenshot:startPrompt', payload),
   onWindowEvent: (callback) => {
     if (typeof callback !== 'function') return
     electronAPI.ipcRenderer.on('window:event-bus', (_event, data) => callback(data))

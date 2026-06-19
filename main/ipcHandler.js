@@ -122,7 +122,10 @@ export function registerIpcHandlers({
   closeWindow,
   toggleAlwaysOnTop,
   handleFastInputWindowEvent,
-  appendPayloadToWindow
+  appendPayloadToWindow,
+  startScreenshotPromptWorkflow,
+  confirmScreenshotPromptWorkflow,
+  cancelScreenshotPromptWorkflow
 }) {
   ipcMain.on('ping', () => {})
 
@@ -315,6 +318,28 @@ export function registerIpcHandlers({
   handleInvoke('system:desktop:getSources', async (_event, options = {}) => {
     return systemApi.getDesktopSources(options)
   })
+
+  handleInvoke('quick:screenshot:startPrompt', async (_event, input = {}) => {
+    if (typeof startScreenshotPromptWorkflow !== 'function') {
+      return { ok: false, error: { message: 'screenshot_workflow_unavailable' } }
+    }
+    return startScreenshotPromptWorkflow(input)
+  })
+
+  handleInvoke('screenshot:confirm', async (_event, input = {}) => {
+    if (typeof confirmScreenshotPromptWorkflow !== 'function') {
+      return { ok: false, error: { message: 'screenshot_confirm_unavailable' } }
+    }
+    return confirmScreenshotPromptWorkflow(input)
+  })
+
+  handleInvoke('screenshot:cancel', async (_event, input = {}) => {
+    if (typeof cancelScreenshotPromptWorkflow !== 'function') {
+      return { ok: false, error: { message: 'screenshot_cancel_unavailable' } }
+    }
+    return cancelScreenshotPromptWorkflow(input)
+  })
+
 
 
   handleInvoke('db:isReady', async () => {

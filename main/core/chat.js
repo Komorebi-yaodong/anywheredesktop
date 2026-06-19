@@ -387,7 +387,15 @@ export async function createChatCompletion(params = {}) {
 
       if (isCodex) {
         // Codex Responses 必备字段；Codex 上游拒绝 temperature/top_p 等
-        responseParams.instructions = typeof openAiParams.instructions === 'string' ? openAiParams.instructions : ''
+        // 将 system/developer 提升为顶层 instructions，input 仅保留对话（符合 Codex 语义）
+        const developerTexts = convertedInput
+          .filter((item) => item.role === 'developer')
+          .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+          .map((c) => (typeof c?.text === 'string' ? c.text : ''))
+          .filter(Boolean)
+        const explicitInstructions = typeof openAiParams.instructions === 'string' ? openAiParams.instructions : ''
+        responseParams.instructions = explicitInstructions || developerTexts.join('\n\n')
+        responseParams.input = convertedInput.filter((item) => item.role !== 'developer')
         responseParams.store = false
         responseParams.include = ['reasoning.encrypted_content']
         responseParams.parallel_tool_calls = true

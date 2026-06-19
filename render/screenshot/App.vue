@@ -470,11 +470,15 @@ onBeforeUnmount(() => {
   z-index: 10;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 999px;
-  background: rgba(20, 22, 28, 0.9);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  background: linear-gradient(180deg, rgba(33, 37, 46, 0.94), rgba(18, 20, 26, 0.92));
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
 }
 
 .tool-chip,
@@ -482,39 +486,84 @@ onBeforeUnmount(() => {
   border: 0;
   color: #fff;
   cursor: pointer;
+  outline: none;
+  user-select: none;
+  transition:
+    transform 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease,
+    opacity 120ms ease;
 }
 
 .tool-chip {
-  height: 32px;
-  padding: 0 10px;
+  height: 34px;
+  min-width: 48px;
+  padding: 0 13px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.86);
   font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.tool-chip:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
 }
 
 .tool-chip.active {
-  background: #3867d6;
+  background: linear-gradient(135deg, #3867ff, #2853d8);
+  color: #fff;
+  box-shadow:
+    0 5px 14px rgba(56, 103, 255, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .tool-chip:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.38;
+  color: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: none;
 }
 
 .tool-button {
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
-  font-size: 22px;
-  line-height: 34px;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+}
+
+.tool-button:hover {
+  transform: translateY(-1px) scale(1.04);
+}
+
+.tool-button:active,
+.tool-chip:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
 }
 
 .tool-button.confirm {
-  background: #20bf6b;
+  background: linear-gradient(135deg, #22c774, #11a95c);
+  box-shadow:
+    0 6px 16px rgba(18, 185, 101, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
 .tool-button.cancel {
-  background: #eb3b5a;
+  background: linear-gradient(135deg, #ff4b69, #de2e50);
+  box-shadow:
+    0 6px 16px rgba(235, 59, 90, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .hint {

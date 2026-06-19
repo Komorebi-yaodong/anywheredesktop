@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { fetchWithProxy } from './net.js'
+import { fetchWithProxy, BRIDGE_UA_HEADER } from './net.js'
 
 const CHAT_REQUEST_TIMEOUT_MS = 120_000
 
@@ -52,6 +52,19 @@ function mergeHeaders(...headerGroups) {
   return merged
 }
 
+// User-Agent 会被 Electron net.fetch 丢弃（Chromium 受保护头），改写为中转头，由主进程 onBeforeSendHeaders 还原为真正的 User-Agent
+function applyUserAgentBridge(headers) {
+  const result = {}
+  for (const [key, value] of Object.entries(headers || {})) {
+    if (key.toLowerCase() === 'user-agent') {
+      result[BRIDGE_UA_HEADER] = value
+    } else {
+      result[key] = value
+    }
+  }
+  return result
+}
+
 /**
  * 随机获取列表中的一项（用于 API Key 负载均衡）
  * @param {string | string[] | unknown} list
@@ -94,10 +107,10 @@ export async function listProviderModels(params = {}) {
   const apiKey = getRandomItem(params?.apiKey)
   const endpoint = buildModelsEndpoint(baseUrl)
 
-  const headers = mergeHeaders(
+  const headers = applyUserAgentBridge(mergeHeaders(
     { 'Content-Type': 'application/json' },
     normalizeProviderHeaders(params?.headers)
-  )
+  ))
 
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`
@@ -317,7 +330,7 @@ export async function createChatCompletion(params = {}) {
         ...init,
         timeoutMs: init?.timeoutMs ?? CHAT_REQUEST_TIMEOUT_MS
       }),
-    defaultHeaders: mergeHeaders(DEFAULT_CHAT_HEADERS, normalizeProviderHeaders(providerHeaders))
+    defaultHeaders: applyUserAgentBridge(mergeHeaders(DEFAULT_CHAT_HEADERS, normalizeProviderHeaders(providerHeaders)))
   })
 
   try {

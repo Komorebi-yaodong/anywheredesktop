@@ -1,4 +1,4 @@
-import { net } from 'electron'
+import { net, session } from 'electron'
 
 function buildHeadersCompat(inputHeaders = {}) {
   try {
@@ -110,4 +110,41 @@ export async function fetchWithProxy(input, init = {}) {
   } finally {
     timeoutContext.cleanup()
   }
+}
+
+// User-Agent 是 Chromium 受保护请求头，net.fetch 会丢弃 RequestInit.headers 中的 User-Agent 并回退到 session UA。
+// 因此调用方把目标 User-Agent 放入中转请求头 BRIDGE_UA_HEADER，由本拦截器在请求发出前还原为真正的 User-Agent。
+export const BRIDGE_UA_HEADER = 'X-Anywhere-User-Agent'
+
+let requestHeaderBridgeInstalled = false
+
+export function installRequestHeaderBridge() {
+  if (requestHeaderBridgeInstalled) return
+  const targetSession = session?.defaultSession
+  if (!targetSession?.webRequest) return
+
+  targetSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = details.requestHeaders || {}
+    let bridgedUserAgent = ''
+
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === BRIDGE_UA_HEADER.toLowerCase()) {
+        bridgedUserAgent = headers[key]
+        delete headers[key]
+      }
+    }
+
+    if (bridgedUserAgent) {
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === 'user-agent') {
+          delete headers[key]
+        }
+      }
+      headers['User-Agent'] = bridgedUserAgent
+    }
+
+    callback({ requestHeaders: headers })
+  })
+
+  requestHeaderBridgeInstalled = true
 }

@@ -51,6 +51,7 @@ import * as chatApi from './core/chat.js'
 import * as mcpApi from './core/mcp.js'
 import * as skillApi from './core/skill.js'
 import * as screenshotApi from './core/screenshot.js'
+import { installRequestHeaderBridge } from './core/net.js'
 
 
 let appTray = null
@@ -630,6 +631,8 @@ async function syncDesktopRuntimeFromConfig() {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.anywhere.desktop')
+
+  installRequestHeaderBridge()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

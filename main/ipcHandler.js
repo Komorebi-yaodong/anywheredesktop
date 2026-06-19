@@ -114,6 +114,7 @@ export function registerIpcHandlers({
   dataApi,
   fileApi,
   webdavApi,
+  projectsApi,
   chatApi,
   mcpApi,
   skillApi,
@@ -1018,5 +1019,35 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
 
   handleInvoke('webdav:deleteBackups', async (_event, input = {}) => {
     return webdavApi.deleteBackups(input)
+  })
+
+  handleInvoke('projects:readLocal', async (_event, dirPath = '') => {
+    return projectsApi.readLocalProjects(dirPath)
+  })
+
+  handleInvoke('projects:writeLocal', async (_event, dirPath = '', data = {}) => {
+    return projectsApi.writeLocalProjects(dirPath, data)
+  })
+
+  handleInvoke('projects:readCloud', async (_event, input = {}) => {
+    return projectsApi.readCloudProjects(input?.webdavConfig)
+  })
+
+  handleInvoke('projects:writeCloud', async (_event, input = {}, data = {}) => {
+    return projectsApi.writeCloudProjects(input?.webdavConfig, data)
+  })
+
+  handleInvoke('projects:mergeFileCloud', async (_event, input = {}, assignment = {}) => {
+    const current = await projectsApi.readCloudProjects(input?.webdavConfig)
+    const merged = projectsApi.mergeFileAssignment(current, assignment)
+    await projectsApi.writeCloudProjects(input?.webdavConfig, merged)
+    return { ok: true, data: merged }
+  })
+
+  handleInvoke('projects:mergeProjectCloud', async (_event, input = {}, project = {}) => {
+    const current = await projectsApi.readCloudProjects(input?.webdavConfig)
+    const merged = projectsApi.mergeProjectAssignment(current, project)
+    await projectsApi.writeCloudProjects(input?.webdavConfig, merged)
+    return { ok: true, data: merged }
   })
 }

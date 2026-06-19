@@ -433,7 +433,14 @@ const api = {
   moveWebdavFile: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:moveFile', input),
   deleteWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteBackup', input),
   deleteWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteBackups', input),
-
+  readLocalProjects: (dirPath = '') => invokeOrThrow('projects:readLocal', dirPath),
+  writeLocalProjects: (dirPath = '', data = {}) =>
+    invokeOrThrow('projects:writeLocal', dirPath, toPlainPayload(data)),
+  readCloudProjects: (input = {}) => invokeOrThrow('projects:readCloud', input),
+  writeCloudProjects: (input = {}, data = {}) =>
+    invokeOrThrow('projects:writeCloud', input, toPlainPayload(data)),
+  mergeFileCloudProjects: (input = {}, assignment = {}) =>
+    invokeOrThrow('projects:mergeFileCloud', input, toPlainPayload(assignment)),
   handleCodeClick,
   minimizeWindow: (windowRef = '') => electronAPI.ipcRenderer.invoke('window:minimize', { windowRef }),
   maximizeOrRestoreWindow: (windowRef = '') => electronAPI.ipcRenderer.invoke('window:maximizeOrRestore', { windowRef }),

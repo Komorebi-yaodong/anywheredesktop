@@ -77,6 +77,25 @@ function normalizeSourcesOptions(display = null) {
   }
 }
 
+function delay(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)))
+}
+
+async function hideQuickWindowBeforeCapture(deps = {}) {
+  if (typeof deps.getWindowByRef !== 'function') return
+  const quickWindow = deps.getWindowByRef('quick')
+  if (!quickWindow || quickWindow.isDestroyed?.() || !quickWindow.isVisible?.()) return
+
+  try {
+    quickWindow.hide()
+  } catch {
+    // ignore quick hide failure; capture will still proceed
+  }
+
+  await delay(180)
+}
+
+
 function ensureActiveCapture(captureId = '') {
   if (!activeCapture || !activeCapture.captureId) {
     throw new Error('screenshot_capture_not_active')
@@ -102,6 +121,9 @@ export async function startScreenshotPrompt(input = {}, deps = {}) {
   }
 
   const display = resolveCaptureDisplay(input)
+
+  await hideQuickWindowBeforeCapture(deps)
+
   const sourcesResult = await deps.systemApi.getDesktopSources(normalizeSourcesOptions(display))
   const sources = Array.isArray(sourcesResult?.sources) ? sourcesResult.sources : []
   const source = chooseScreenSource(sources, display)

@@ -621,6 +621,13 @@ async function hideQuick() {
   }
 }
 
+function waitForQuickHiddenBeforeCapture(delayMs = 180) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs)
+  })
+}
+
+
 async function openPrompt(prompt) {
   if (!prompt) return
   try {
@@ -636,6 +643,8 @@ async function openPrompt(prompt) {
         return
       }
 
+      await hideQuick()
+      await waitForQuickHiddenBeforeCapture()
       await window.api.startScreenshotPrompt?.({
         code: prompt.key,
         promptKey: prompt.key,
@@ -644,7 +653,6 @@ async function openPrompt(prompt) {
         triggerMode: 'quick-screenshot',
         source: 'quick-img-helper'
       })
-      await hideQuick()
       return
     }
 

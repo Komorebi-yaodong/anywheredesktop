@@ -250,6 +250,7 @@ async function startScreenshotPromptWorkflow(input = {}) {
   return screenshotApi.startScreenshotPrompt(input, {
     openWindow,
     closeWindow,
+    getWindowByRef,
     systemApi
   })
 }

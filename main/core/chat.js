@@ -3,6 +3,55 @@ import { fetchWithProxy } from './net.js'
 
 const CHAT_REQUEST_TIMEOUT_MS = 120_000
 
+const DEFAULT_CHAT_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+}
+
+// 不允许用户自定义、可能破坏请求的请求头（小写比较）
+const FORBIDDEN_HEADER_NAMES = new Set(['host', 'content-length', 'transfer-encoding', 'connection'])
+
+// 归一化服务商自定义请求头：过滤空值、含换行符与危险请求头，返回普通对象
+function normalizeProviderHeaders(headers) {
+  const result = {}
+  if (!headers || typeof headers !== 'object') return result
+
+  for (const [rawKey, rawValue] of Object.entries(headers)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : ''
+    const value = rawValue == null ? '' : String(rawValue).trim()
+
+    if (!key || !value) continue
+    if (/[\r\n]/.test(key) || /[\r\n]/.test(value)) continue
+    if (FORBIDDEN_HEADER_NAMES.has(key.toLowerCase())) continue
+
+    result[key] = value
+  }
+
+  return result
+}
+
+// 合并多组请求头，后者覆盖前者；按名称大小写不敏感去重（保留最后出现的键名与值）
+function mergeHeaders(...headerGroups) {
+  const merged = {}
+  const lowerKeyToActualKey = new Map()
+
+  for (const group of headerGroups) {
+    if (!group || typeof group !== 'object') continue
+    for (const [key, value] of Object.entries(group)) {
+      if (!key) continue
+      const lowerKey = key.toLowerCase()
+      const existingKey = lowerKeyToActualKey.get(lowerKey)
+      if (existingKey && existingKey !== key) {
+        delete merged[existingKey]
+      }
+      merged[key] = value
+      lowerKeyToActualKey.set(lowerKey, key)
+    }
+  }
+
+  return merged
+}
+
 /**
  * 随机获取列表中的一项（用于 API Key 负载均衡）
  * @param {string | string[] | unknown} list
@@ -45,9 +94,10 @@ export async function listProviderModels(params = {}) {
   const apiKey = getRandomItem(params?.apiKey)
   const endpoint = buildModelsEndpoint(baseUrl)
 
-  const headers = {
-    'Content-Type': 'application/json'
-  }
+  const headers = mergeHeaders(
+    { 'Content-Type': 'application/json' },
+    normalizeProviderHeaders(params?.headers)
+  )
 
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`
@@ -251,7 +301,7 @@ function convertMessagesToResponsesInput(messages = []) {
  * @returns {Promise<any>} 返回流 (Stream) 或完整响应对象
  */
 export async function createChatCompletion(params = {}) {
-  const { baseUrl, apiKey, signal, apiType = 'chat_completions', ...openAiParams } = params
+  const { baseUrl, apiKey, signal, apiType = 'chat_completions', headers: providerHeaders, ...openAiParams } = params
 
   if (!baseUrl || typeof baseUrl !== 'string') {
     throw new Error('[Chat] baseUrl is required')
@@ -267,10 +317,7 @@ export async function createChatCompletion(params = {}) {
         ...init,
         timeoutMs: init?.timeoutMs ?? CHAT_REQUEST_TIMEOUT_MS
       }),
-    defaultHeaders: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-    }
+    defaultHeaders: mergeHeaders(DEFAULT_CHAT_HEADERS, normalizeProviderHeaders(providerHeaders))
   })
 
   try {

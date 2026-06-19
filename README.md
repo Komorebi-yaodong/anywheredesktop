@@ -239,7 +239,6 @@ Anywhere Desktop 是一个持续进化的开源项目，欢迎交流、反馈与
 * **主程序仓库**：[https://github.com/Komorebi-yaodong/anywheredesktop](https://github.com/Komorebi-yaodong/anywheredesktop)
 * **文档仓库**：[https://github.com/Komorebi-yaodong/anywhere_doc](https://github.com/Komorebi-yaodong/anywhere_doc)
 * **Gitee 文档镜像**：[https://gitee.com/Komorebi-yaodong/anywhere_](https://gitee.com/Komorebi-yaodong/anywhere_)
-* **QQ 交流群**：`1065512489`
 
 如果你发现“主程序行为”和“文档描述”不一致，建议同时提及对应代码仓与文档仓，便于同步修正。
 

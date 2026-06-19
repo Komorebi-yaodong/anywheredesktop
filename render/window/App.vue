@@ -3290,6 +3290,7 @@ const generateConversationNamePrefixWithFastModel = async (firstUserMsg, signal 
       apiKey: provider.api_key,
       model: modelName,
       apiType,
+      headers: JSON.parse(JSON.stringify(provider?.headers || {})),
       messages: [
         { role: 'system', content: buildAutoNamingSystemPrompt() },
         { role: 'user', content: userContent }
@@ -5619,6 +5620,7 @@ const askAI = async (forceSend = false) => {
         apiKey: api_key.value,
         model: model.value.split("|")[1],
         apiType: apiType,
+        headers: JSON.parse(JSON.stringify(currentConfig.value.providers?.[currentProviderID.value]?.headers || {})),
         messages: messagesForThisRequest,
         stream: useStream,
         signal: requestSignal

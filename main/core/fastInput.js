@@ -70,7 +70,8 @@ function resolveProviderConfig(fullConfig = {}, promptConfig = {}) {
     provider: provider || null,
     apiType: provider?.apiType || 'chat_completions',
     baseUrl: provider?.url || '',
-    apiKey: provider?.api_key || ''
+    apiKey: provider?.api_key || '',
+    headers: provider?.headers || {}
   }
 }
 
@@ -402,6 +403,7 @@ function buildCreateRequestParams(initPayload = {}, messages = [], signal = unde
     apiKey: providerInfo.apiKey,
     model: providerInfo.modelName,
     apiType: providerInfo.apiType || 'chat_completions',
+    headers: providerInfo.headers || {},
     messages: applyIfTextNecessary(messages, Boolean(promptConfig?.ifTextNecessary)),
     stream: promptConfig?.stream !== false,
     signal

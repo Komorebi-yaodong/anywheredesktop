@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, onMounted, onActivated, onDeactivated, onBeforeUnmount, computed, inject } from 'vue'
+import { ref, reactive, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, computed, inject } from 'vue'
 import { Plus, Delete, Edit, ArrowUp, ArrowDown, Refresh, CirclePlus, Remove, Search, Folder, FolderOpened, FolderAdd } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -374,7 +374,8 @@ async function activate_get_model_function() {
   try {
     const result = await window.api.listProviderModels({
       baseUrl: selectedProvider.value.url,
-      apiKey: selectedProvider.value.api_key
+      apiKey: selectedProvider.value.api_key,
+      headers: JSON.parse(JSON.stringify(selectedProvider.value.headers || {}))
     });
 
     if (!result) {
@@ -499,6 +500,50 @@ async function saveSingleProviderSetting(key, value) {
   } catch (e) {
     ElMessage.error(t('providers.alerts.saveFailed'));
   }
+}
+
+// --- 服务商自定义请求头 ---
+let headerRowIdSeq = 0;
+const headerRows = ref([]);
+
+function createHeaderRow(key = '', value = '') {
+  headerRowIdSeq += 1;
+  return { _id: `hr_${headerRowIdSeq}`, key, value };
+}
+
+function rebuildHeaderRows() {
+  const headers = (selectedProvider.value && selectedProvider.value.headers && typeof selectedProvider.value.headers === 'object')
+    ? selectedProvider.value.headers
+    : {};
+  headerRows.value = Object.entries(headers).map(([key, value]) => createHeaderRow(String(key), value == null ? '' : String(value)));
+}
+
+// 仅在切换服务商时重建；编辑过程中绝不重建，避免正在填写的半成品行消失
+watch(provider_key, () => { rebuildHeaderRows(); }, { immediate: true });
+
+function persistProviderHeaders() {
+  if (!provider_key.value) return;
+  const normalized = {};
+  for (const row of headerRows.value) {
+    const key = String(row?.key || '').trim();
+    const value = String(row?.value || '').trim();
+    if (!key || !value) continue;
+    if (/[\r\n]/.test(key) || /[\r\n]/.test(value)) continue;
+    normalized[key] = value;
+  }
+  atomicSave(config => {
+    const provider = config.providers[provider_key.value];
+    if (provider) provider.headers = normalized;
+  });
+}
+
+function addHeaderRow() {
+  headerRows.value.push(createHeaderRow());
+}
+
+function removeHeaderRow(index) {
+  headerRows.value.splice(index, 1);
+  persistProviderHeaders();
 }
 
 const apiKeyCount = computed(() => {
@@ -666,6 +711,26 @@ const apiKeyCount = computed(() => {
                     </div>
                   </div>
                 </div>
+
+                <!-- 自定义请求头编辑器 -->
+                <el-form-item :label="t('providers.headersLabel')">
+                  <div class="provider-headers-editor">
+                    <div v-for="(row, index) in headerRows" :key="row._id" class="header-row">
+                      <el-input v-model="row.key" :placeholder="t('providers.headerKeyPlaceholder')"
+                        class="header-key-input" @change="persistProviderHeaders" />
+                      <el-input v-model="row.value" :placeholder="t('providers.headerValuePlaceholder')"
+                        class="header-value-input" @change="persistProviderHeaders" />
+                      <el-button :icon="Delete" plain circle class="header-delete-btn"
+                        @click="removeHeaderRow(index)" />
+                    </div>
+                    <div v-if="headerRows.length === 0" class="no-headers-message">
+                      {{ t('providers.noHeaders') }}
+                    </div>
+                    <el-button :icon="Plus" plain class="add-header-btn" @click="addHeaderRow">
+                      {{ t('providers.addHeaderBtn') }}
+                    </el-button>
+                  </div>
+                </el-form-item>
 
                 <!-- 文件夹位置选择器 -->
                 <el-form-item :label="t('providers.folders.floder_label')">
@@ -1173,6 +1238,44 @@ html.dark .model-tag :deep(.el-tag__close:hover) {
 .models-list-wrapper {
   margin-left: 0px;
   margin-bottom: 18px;
+}
+
+/* 自定义请求头编辑器样式 */
+.provider-headers-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-key-input {
+  flex: 0 0 35%;
+}
+
+.header-value-input {
+  flex: 1 1 auto;
+}
+
+.header-delete-btn {
+  flex: 0 0 auto;
+}
+
+.add-header-btn {
+  align-self: flex-start;
+}
+
+.no-headers-message {
+  width: 100%;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 4px 0;
 }
 
 /* 文件夹相关样式 */

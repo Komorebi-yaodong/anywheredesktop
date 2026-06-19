@@ -229,6 +229,7 @@ export const defaultConfig = {
         url: 'https://api.openai.com/v1',
         api_key: '',
         apiType: 'chat_completions',
+        headers: {},
         modelList: [],
         enable: true
       }
@@ -653,6 +654,17 @@ const rootDefaults = {
   config.tasks = ensureObject(config.tasks, {})
   config.providerFolders = ensureObject(config.providerFolders, {})
   config.tags = ensureObject(config.tags, {})
+
+  // 为历史/缺失 headers 字段的服务商补齐空请求头配置
+  for (const providerId of Object.keys(config.providers)) {
+    const provider = config.providers[providerId]
+    if (provider && typeof provider === 'object' && !Array.isArray(provider)) {
+      if (!provider.headers || typeof provider.headers !== 'object' || Array.isArray(provider.headers)) {
+        provider.headers = {}
+        changed = true
+      }
+    }
+  }
 
   if (typeof config.defaultTaskModel !== 'string') {
     config.defaultTaskModel = ''

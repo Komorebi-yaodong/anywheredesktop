@@ -192,6 +192,24 @@
       "selectAll": "全选",
       "selectedCount": "已选 {count} 项",
       "empty": "暂无对话"
+    },
+    "projects": {
+      "create": "新建项目",
+      "rename": "重命名项目",
+      "delete": "删除项目",
+      "ungrouped": "未分组",
+      "createPrompt": "请输入项目名称",
+      "renamePrompt": "请输入新的项目名称",
+      "deleteConfirm": "确定删除项目「{name}」吗？项目内的对话不会被删除，将移回未分组。",
+      "nameRequired": "项目名称不能为空",
+      "nameExists": "已存在同名项目",
+      "createSuccess": "项目已创建",
+      "renameSuccess": "项目已重命名",
+      "deleteSuccess": "项目已删除",
+      "moveToProject": "移动到项目",
+      "removeFromProject": "移出项目",
+      "moveSuccess": "已更新项目归属",
+      "moveFailed": "更新项目归属失败"
     }
   },
   "tasks": {

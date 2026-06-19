@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, watch, onUnmounted, nextTick, onActivated, onDeactivated, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { createClient } from "webdav/web";
-import { Refresh, Delete as DeleteIcon, ChatDotRound, Edit, Upload, Download, Switch, QuestionFilled, Brush, FolderOpened, Share } from '@element-plus/icons-vue'
+import { Refresh, Delete as DeleteIcon, ChatDotRound, Edit, Upload, Download, Switch, QuestionFilled, Brush, FolderOpened, Share, ArrowRight, Folder, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const { t } = useI18n();
@@ -42,6 +42,26 @@ function persistChatHistoryPageSize(value) {
     }
 }
 
+const COLLAPSED_PROJECTS_STORAGE_KEY = 'chats-collapsed-projects';
+
+function loadCollapsedProjectIds() {
+    try {
+        const raw = localStorage.getItem(COLLAPSED_PROJECTS_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+    } catch {
+        return [];
+    }
+}
+
+function persistCollapsedProjectIds(ids) {
+    try {
+        localStorage.setItem(COLLAPSED_PROJECTS_STORAGE_KEY, JSON.stringify(Array.from(ids)));
+    } catch {
+        // ignore localStorage persistence failure
+    }
+}
+
 const localChatFiles = ref([]);
 const cloudChatFiles = ref([]);
 const isTableLoading = ref(false);
@@ -52,6 +72,11 @@ const singleFileSyncing = ref({});
 const isDeletingFiles = ref(false);
 const sortMode = ref('createdAt');
 const sortDirection = ref('desc');
+
+// --- 项目（目录）分组状态 ---
+const localProjects = ref({ version: 1, projects: [] });
+const cloudProjects = ref({ version: 1, projects: [] });
+const collapsedProjectIds = ref(new Set(loadCollapsedProjectIds()));
 
 watch(() => currentConfig.value?.webdav, (newWebdav) => {
     if (newWebdav) {
@@ -124,6 +149,80 @@ const paginatedFiles = computed(() => {
     const end = start + pageSize.value;
     return currentFiles.value.slice(start, end);
 });
+
+// --- 项目分组视图 ---
+const activeProjectsData = computed(() =>
+    activeView.value === 'local' ? localProjects.value : cloudProjects.value
+);
+
+const fileByBasename = computed(() => {
+    const fileList = activeView.value === 'local' ? localChatFiles.value : cloudChatFiles.value;
+    return new Map(fileList.map((f) => [f.basename, f]));
+});
+
+const assignedBasenames = computed(() => {
+    const set = new Set();
+    const projects = Array.isArray(activeProjectsData.value?.projects) ? activeProjectsData.value.projects : [];
+    projects.forEach((project) => {
+        (Array.isArray(project?.files) ? project.files : []).forEach((bn) => set.add(bn));
+    });
+    return set;
+});
+
+// 项目按 name 字典序置顶；项目内文件按当前排序模式排序；保留空项目以便拖入。
+const projectGroups = computed(() => {
+    const projects = Array.isArray(activeProjectsData.value?.projects) ? [...activeProjectsData.value.projects] : [];
+    projects.sort((a, b) =>
+        String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { numeric: true, sensitivity: 'base' })
+    );
+    const map = fileByBasename.value;
+    return projects.map((project) => {
+        const files = (Array.isArray(project?.files) ? project.files : [])
+            .map((bn) => map.get(bn))
+            .filter(Boolean)
+            .sort(compareFilesBySortMode);
+        return {
+            id: project.id,
+            name: project.name || project.id,
+            files,
+            count: files.length,
+            collapsed: collapsedProjectIds.value.has(project.id)
+        };
+    });
+});
+
+// 未分组文件（参与分页）
+const ungroupedFiles = computed(() => {
+    const assigned = assignedBasenames.value;
+    return currentFiles.value.filter((f) => !assigned.has(f.basename));
+});
+
+const paginatedUngrouped = computed(() => {
+    const start = (currentPage.value - 1) * pageSize.value;
+    const end = start + pageSize.value;
+    return ungroupedFiles.value.slice(start, end);
+});
+
+// 扁平渲染行：项目头 + 项目内文件 + 未分组标签 + 未分组文件
+const displayRows = computed(() => {
+    const rows = [];
+    const groups = projectGroups.value;
+    groups.forEach((group) => {
+        rows.push({ kind: 'project', id: group.id, name: group.name, count: group.count, collapsed: group.collapsed });
+        if (!group.collapsed) {
+            group.files.forEach((file) => rows.push({ kind: 'file', file, projectId: group.id }));
+        }
+    });
+    const ungrouped = paginatedUngrouped.value;
+    if (groups.length > 0 && ungrouped.length > 0) {
+        rows.push({ kind: 'ungrouped-label' });
+    }
+    ungrouped.forEach((file) => rows.push({ kind: 'file', file, projectId: null }));
+    return rows;
+});
+
+// 当前可见文件（用于全选/框选）
+const visibleFiles = computed(() => displayRows.value.filter((r) => r.kind === 'file').map((r) => r.file));
 
 // --- Helper Functions ---
 const normalizeDateValue = (value) => {
@@ -421,8 +520,8 @@ onUnmounted(() => {
 const onMouseDown = (e) => {
     if (e.button !== 0) return; // 仅左键
 
-    // 排除特定交互元素（避免点复选框或按钮时触发选框）
-    if (e.target.closest('.list-checkbox') || e.target.closest('.list-actions') || e.target.closest('.el-button')) {
+    // 排除特定交互元素（避免点复选框、按钮、项目头时触发选框）
+    if (e.target.closest('.list-checkbox') || e.target.closest('.list-actions') || e.target.closest('.el-button') || e.target.closest('.project-header')) {
         return;
     }
 
@@ -501,10 +600,12 @@ const updateSelectionInvert = () => {
 
     const currentInBox = new Set();
 
-    // 1. 找出当前所有在框内的文件
-    items.forEach((item, index) => {
+    // 1. 找出当前所有在框内的文件（以 data-basename 标识，兼容分组渲染）
+    items.forEach((item) => {
+        const basename = item.dataset?.basename;
+        if (!basename) return;
         const itemRect = item.getBoundingClientRect();
-        
+
         // AABB 碰撞检测
         const isIntersecting = !(
             boxRect.left > itemRect.right ||
@@ -514,19 +615,12 @@ const updateSelectionInvert = () => {
         );
 
         if (isIntersecting) {
-            const file = paginatedFiles.value[index];
-            if (file) currentInBox.add(file.basename);
+            currentInBox.add(basename);
         }
     });
 
-    // 2. 应用反转逻辑 (XOR)
-    // 最终状态 = 初始状态 XOR 框选状态
-    // - 原来已选 && 在框内 -> 变未选
-    // - 原来已选 && 不在框内 -> 保持已选
-    // - 原来未选 && 在框内 -> 变已选
-    // - 原来未选 && 不在框内 -> 保持未选
-    
-    selectedFiles.value = paginatedFiles.value.filter(file => {
+    // 2. 应用反转逻辑 (XOR)，仅作用于当前可见文件
+    selectedFiles.value = visibleFiles.value.filter(file => {
         const wasSelected = initialSelectionSnap.has(file.basename);
         const isInBox = currentInBox.has(file.basename);
 
@@ -610,7 +704,7 @@ watch(pageSize, (newValue, oldValue) => {
     persistChatHistoryPageSize(normalizedValue);
 });
 
-watch(currentFiles, (files) => {
+watch(ungroupedFiles, (files) => {
     const totalPages = Math.max(1, Math.ceil((Array.isArray(files) ? files.length : 0) / pageSize.value));
     if (currentPage.value > totalPages) {
         currentPage.value = totalPages;
@@ -638,6 +732,167 @@ watch(activeView, async (newView) => {
 });
 
 // --- Main Functions ---
+const normalizeProjectsResult = (result) => {
+    const projects = Array.isArray(result?.projects) ? result.projects : [];
+    return {
+        version: Number(result?.version) || 1,
+        projects: projects
+            .filter((p) => p && typeof p === 'object')
+            .map((p) => ({
+                id: String(p.id || '').trim(),
+                name: String(p.name || '').trim() || String(p.id || '').trim(),
+                files: Array.isArray(p.files) ? p.files.map((f) => String(f || '').trim()).filter(Boolean) : []
+            }))
+            .filter((p) => p.id)
+    };
+};
+
+async function fetchLocalProjects() {
+    if (!localChatPath.value) {
+        localProjects.value = { version: 1, projects: [] };
+        return;
+    }
+    try {
+        const result = await window.api.readLocalProjects(localChatPath.value);
+        localProjects.value = normalizeProjectsResult(result);
+    } catch (error) {
+        console.warn('[chats] 读取本地项目失败:', error);
+        localProjects.value = { version: 1, projects: [] };
+    }
+}
+
+async function fetchCloudProjects() {
+    if (!isWebdavConfigValid.value) {
+        cloudProjects.value = { version: 1, projects: [] };
+        return;
+    }
+    try {
+        const result = await window.api.readCloudProjects(buildWebdavInput());
+        cloudProjects.value = normalizeProjectsResult(result);
+    } catch (error) {
+        console.warn('[chats] 读取云端项目失败:', error);
+        cloudProjects.value = { version: 1, projects: [] };
+    }
+}
+
+async function persistLocalProjects() {
+    if (!localChatPath.value) return;
+    await window.api.writeLocalProjects(localChatPath.value, localProjects.value);
+}
+
+async function persistCloudProjects() {
+    if (!isWebdavConfigValid.value) return;
+    await window.api.writeCloudProjects(buildWebdavInput(), cloudProjects.value);
+}
+
+const toggleProjectCollapse = (projectId) => {
+    const id = String(projectId || '');
+    if (!id) return;
+    const next = new Set(collapsedProjectIds.value);
+    if (next.has(id)) {
+        next.delete(id);
+    } else {
+        next.add(id);
+    }
+    collapsedProjectIds.value = next;
+    persistCollapsedProjectIds(next);
+};
+
+// --- 项目 CRUD ---
+const setActiveProjectsData = (data) => {
+    if (activeView.value === 'local') {
+        localProjects.value = data;
+    } else {
+        cloudProjects.value = data;
+    }
+};
+
+async function persistActiveProjects() {
+    if (activeView.value === 'local') {
+        await persistLocalProjects();
+    } else {
+        await persistCloudProjects();
+    }
+}
+
+function generateProjectId(name) {
+    const base = String(name || '').trim().toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, '-')
+        .replace(/^-+|-+$/g, '');
+    let id = base || `project-${Date.now().toString(36)}`;
+    const existing = new Set((activeProjectsData.value.projects || []).map((p) => p.id));
+    if (!existing.has(id)) return id;
+    let suffix = 2;
+    while (existing.has(`${id}-${suffix}`)) suffix += 1;
+    return `${id}-${suffix}`;
+}
+
+async function createProject() {
+    if (activeView.value === 'local' ? !localChatPath.value : !isWebdavConfigValid.value) return;
+    try {
+        const { value } = await ElMessageBox.prompt(t('chats.projects.createPrompt'), t('chats.projects.create'), {
+            inputPattern: /\S/,
+            inputErrorMessage: t('chats.projects.nameRequired')
+        });
+        const name = String(value || '').trim();
+        if (!name) return;
+        const projects = [...(activeProjectsData.value.projects || [])];
+        if (projects.some((p) => p.name === name)) {
+            ElMessage.warning(t('chats.projects.nameExists'));
+            return;
+        }
+        projects.push({ id: generateProjectId(name), name, files: [] });
+        setActiveProjectsData({ version: activeProjectsData.value.version || 1, projects });
+        await persistActiveProjects();
+        ElMessage.success(t('chats.projects.createSuccess'));
+    } catch (error) {
+        if (error !== 'cancel' && error !== 'close') ElMessage.error(String(error?.message || error));
+    }
+}
+
+async function renameProject(projectId) {
+    const project = (activeProjectsData.value.projects || []).find((p) => p.id === projectId);
+    if (!project) return;
+    try {
+        const { value } = await ElMessageBox.prompt(t('chats.projects.renamePrompt'), t('chats.projects.rename'), {
+            inputValue: project.name,
+            inputPattern: /\S/,
+            inputErrorMessage: t('chats.projects.nameRequired')
+        });
+        const name = String(value || '').trim();
+        if (!name || name === project.name) return;
+        if ((activeProjectsData.value.projects || []).some((p) => p.id !== projectId && p.name === name)) {
+            ElMessage.warning(t('chats.projects.nameExists'));
+            return;
+        }
+        const projects = (activeProjectsData.value.projects || []).map((p) =>
+            p.id === projectId ? { ...p, name } : p
+        );
+        setActiveProjectsData({ version: activeProjectsData.value.version || 1, projects });
+        await persistActiveProjects();
+        ElMessage.success(t('chats.projects.renameSuccess'));
+    } catch (error) {
+        if (error !== 'cancel' && error !== 'close') ElMessage.error(String(error?.message || error));
+    }
+}
+
+async function deleteProject(projectId) {
+    const project = (activeProjectsData.value.projects || []).find((p) => p.id === projectId);
+    if (!project) return;
+    try {
+        await ElMessageBox.confirm(t('chats.projects.deleteConfirm', { name: project.name }), t('chats.projects.delete'), {
+            type: 'warning'
+        });
+        // 删除项目仅解组（文件不再归属任何项目，自动落入未分组），不删除对话文件
+        const projects = (activeProjectsData.value.projects || []).filter((p) => p.id !== projectId);
+        setActiveProjectsData({ version: activeProjectsData.value.version || 1, projects });
+        await persistActiveProjects();
+        ElMessage.success(t('chats.projects.deleteSuccess'));
+    } catch (error) {
+        if (error !== 'cancel' && error !== 'close') ElMessage.error(String(error?.message || error));
+    }
+}
+
 async function fetchLocalFiles(silent = false) {
     if (!localChatPath.value) return;
     if (!silent) isTableLoading.value = true;
@@ -646,6 +901,7 @@ async function fetchLocalFiles(silent = false) {
         const files = Array.isArray(result) ? result : [];
         const normalizedFiles = files.map((item) => normalizeChatFile(item, 'local'));
         localChatFiles.value = normalizedFiles;
+        await fetchLocalProjects();
     } catch (error) {
         ElMessage.error(`${t('chats.alerts.localListFailed')}: ${error.message}`);
         localChatFiles.value = [];
@@ -665,6 +921,7 @@ async function fetchCloudFiles(silent = false) {
 
         if (!result.exists) {
             cloudChatFiles.value = [];
+            await fetchCloudProjects();
             return true;
         }
 
@@ -673,6 +930,7 @@ async function fetchCloudFiles(silent = false) {
             .map((item) => normalizeChatFile(item, 'cloud'))
             .filter((item) => item.type === 'file' && item.basename && item.basename.endsWith('.json'));
         cloudChatFiles.value = normalizedFiles;
+        await fetchCloudProjects();
         return true;
     } catch (error) {
         ElMessage.error(`${t('chats.alerts.fetchFailed')}: ${error.message}`);
@@ -1130,16 +1388,16 @@ const formatFilenameDisplay = (basename) => {
 };
 
 const isAllSelected = computed(() => {
-    if (paginatedFiles.value.length === 0) return false;
-    return paginatedFiles.value.every(f => isFileSelected(f));
+    if (visibleFiles.value.length === 0) return false;
+    return visibleFiles.value.every(f => isFileSelected(f));
 });
 
 const toggleSelectAll = () => {
     if (isAllSelected.value) {
-        const visibleNames = new Set(paginatedFiles.value.map(f => f.basename));
+        const visibleNames = new Set(visibleFiles.value.map(f => f.basename));
         selectedFiles.value = selectedFiles.value.filter(f => !visibleNames.has(f.basename));
     } else {
-        paginatedFiles.value.forEach(f => {
+        visibleFiles.value.forEach(f => {
             if (!isFileSelected(f)) selectedFiles.value.push(f);
         });
     }
@@ -1167,6 +1425,10 @@ const toggleSelectAll = () => {
                     </el-tooltip>
                     <el-tooltip :content="t('chats.clean.button')" placement="bottom">
                         <el-button :icon="Brush" circle @click="openCleanDialog" />
+                    </el-tooltip>
+                    <el-tooltip :content="t('chats.projects.create')" placement="bottom">
+                        <el-button :icon="Plus" circle @click="createProject"
+                            :disabled="activeView === 'local' ? !localChatPath : !isWebdavConfigValid" />
                     </el-tooltip>
                 </div>
                 <div class="view-selector">
@@ -1233,7 +1495,7 @@ const toggleSelectAll = () => {
                 </div>
 
                 <!-- 空状态：无文件 -->
-                <div v-else-if="paginatedFiles.length === 0 && !isTableLoading" class="config-prompt-small">
+                <div v-else-if="displayRows.length === 0 && !isTableLoading" class="config-prompt-small">
                     <el-empty :description="t('chats.selection.empty')" :image-size="80" />
                 </div>
 
@@ -1266,59 +1528,88 @@ const toggleSelectAll = () => {
                     <el-scrollbar view-class="chat-list-view">
                     <!-- 绑定 mousedown 启动框选 -->
                     <div class="chat-list" ref="chatListRef" @mousedown="onMouseDown">
-                        <div v-for="file in paginatedFiles" :key="file.basename" class="chat-list-item"
-                            :class="{ 'is-selected': isFileSelected(file) }"
-                            @click="handleItemClick(file)"
-                            @contextmenu.prevent.stop="handleItemContextMenu(file, $event)">
+                        <template v-for="row in displayRows" :key="row.kind === 'file' ? `file-${row.file.basename}` : (row.kind === 'project' ? `proj-${row.id}` : 'ungrouped-label')">
 
-                            <!-- 左侧：选择框 -->
-                            <div class="list-checkbox">
-                                <el-checkbox :model-value="isFileSelected(file)"
-                                    @change="(val) => toggleFileSelection(file, val)" @click.stop />
+                            <!-- 项目头行 -->
+                            <div v-if="row.kind === 'project'" class="project-header"
+                                @click="toggleProjectCollapse(row.id)">
+                                <el-icon class="project-caret" :class="{ expanded: !row.collapsed }"><ArrowRight /></el-icon>
+                                <el-icon class="project-folder"><Folder /></el-icon>
+                                <span class="project-name" :title="row.name">{{ row.name }}</span>
+                                <span class="project-count">{{ row.count }}</span>
+                                <div class="project-actions" @click.stop>
+                                    <el-tooltip :content="t('chats.projects.rename')" placement="top" :show-after="500">
+                                        <el-button link type="warning" :icon="Edit" class="action-icon-btn"
+                                            @click.stop="renameProject(row.id)" />
+                                    </el-tooltip>
+                                    <el-tooltip :content="t('chats.projects.delete')" placement="top" :show-after="500">
+                                        <el-button link type="danger" :icon="DeleteIcon" class="action-icon-btn"
+                                            @click.stop="deleteProject(row.id)" />
+                                    </el-tooltip>
+                                </div>
                             </div>
 
-                            <div class="list-title" :title="normalizeTitleValue(file)">
-                                {{ normalizeTitleValue(file) }}
+                            <!-- 未分组分隔标签 -->
+                            <div v-else-if="row.kind === 'ungrouped-label'" class="ungrouped-label">
+                                {{ t('chats.projects.ungrouped') }}
                             </div>
-                            <div v-if="showCreatedAtColumn" class="meta-created">{{ formatDate(file.createdAt || file.lastmod) }}</div>
-                            <div class="meta-updated">{{ formatDate(file.updatedAt || file.lastmod || file.createdAt) }}</div>
-                            <div class="meta-size">{{ formatBytes(file.size) }}</div>
 
-                            <div class="list-actions">
-                                <!-- 1. 聊天按钮 -->
-                                <el-tooltip :content="t('chats.actions.chat')" placement="top" :show-after="500">
-                                    <el-button link type="primary" :icon="ChatDotRound"
-                                        class="action-icon-btn chat-highlight" @click.stop="startChat(file)" />
-                                </el-tooltip>
+                            <!-- 文件行 -->
+                            <div v-else class="chat-list-item"
+                                :class="{ 'is-selected': isFileSelected(row.file), 'in-project': row.projectId }"
+                                :data-basename="row.file.basename"
+                                @click="handleItemClick(row.file)"
+                                @contextmenu.prevent.stop="handleItemContextMenu(row.file, $event)">
 
-                                <!-- 2. 分享/导出按钮（仅本地） -->
-                                <el-tooltip v-if="activeView === 'local'" :content="t('chats.actions.share')" placement="top" :show-after="500">
-                                    <el-button link type="success" :icon="Share" class="action-icon-btn"
-                                        @click.stop="exportLocalChat(file)" />
-                                </el-tooltip>
+                                <!-- 左侧：选择框 -->
+                                <div class="list-checkbox">
+                                    <el-checkbox :model-value="isFileSelected(row.file)"
+                                        @change="(val) => toggleFileSelection(row.file, val)" @click.stop />
+                                </div>
 
-                                <!-- 3. 同步按钮 -->
-                                <el-tooltip
-                                    :content="activeView === 'local' ? t('chats.tooltips.forceUpload') : t('chats.tooltips.forceDownload')"
-                                    placement="top" :show-after="500">
-                                    <el-button link type="primary" :icon="Switch" class="action-icon-btn"
-                                        @click.stop="forceSyncFile(file.basename, activeView === 'local' ? 'upload' : 'download')"
-                                        :loading="singleFileSyncing[file.basename]" />
-                                </el-tooltip>
+                                <div class="list-title" :title="normalizeTitleValue(row.file)">
+                                    {{ normalizeTitleValue(row.file) }}
+                                </div>
+                                <div v-if="showCreatedAtColumn" class="meta-created">{{ formatDate(row.file.createdAt || row.file.lastmod) }}</div>
+                                <div class="meta-updated">{{ formatDate(row.file.updatedAt || row.file.lastmod || row.file.createdAt) }}</div>
+                                <div class="meta-size">{{ formatBytes(row.file.size) }}</div>
 
-                                <!-- 4. 重命名按钮 -->
-                                <el-tooltip :content="t('chats.actions.rename')" placement="top" :show-after="500">
-                                    <el-button link type="warning" :icon="Edit" class="action-icon-btn"
-                                        @click.stop="renameFile(file)" />
-                                </el-tooltip>
+                                <div class="list-actions">
+                                    <!-- 1. 聊天按钮 -->
+                                    <el-tooltip :content="t('chats.actions.chat')" placement="top" :show-after="500">
+                                        <el-button link type="primary" :icon="ChatDotRound"
+                                            class="action-icon-btn chat-highlight" @click.stop="startChat(row.file)" />
+                                    </el-tooltip>
 
-                                <!-- 5. 删除按钮 -->
-                                <el-tooltip :content="t('chats.actions.delete')" placement="top" :show-after="500">
-                                    <el-button link type="danger" :icon="DeleteIcon" class="action-icon-btn"
-                                        @click.stop="deleteFiles([file])" />
-                                </el-tooltip>
+                                    <!-- 2. 分享/导出按钮（仅本地） -->
+                                    <el-tooltip v-if="activeView === 'local'" :content="t('chats.actions.share')" placement="top" :show-after="500">
+                                        <el-button link type="success" :icon="Share" class="action-icon-btn"
+                                            @click.stop="exportLocalChat(row.file)" />
+                                    </el-tooltip>
+
+                                    <!-- 3. 同步按钮 -->
+                                    <el-tooltip
+                                        :content="activeView === 'local' ? t('chats.tooltips.forceUpload') : t('chats.tooltips.forceDownload')"
+                                        placement="top" :show-after="500">
+                                        <el-button link type="primary" :icon="Switch" class="action-icon-btn"
+                                            @click.stop="forceSyncFile(row.file.basename, activeView === 'local' ? 'upload' : 'download')"
+                                            :loading="singleFileSyncing[row.file.basename]" />
+                                    </el-tooltip>
+
+                                    <!-- 4. 重命名按钮 -->
+                                    <el-tooltip :content="t('chats.actions.rename')" placement="top" :show-after="500">
+                                        <el-button link type="warning" :icon="Edit" class="action-icon-btn"
+                                            @click.stop="renameFile(row.file)" />
+                                    </el-tooltip>
+
+                                    <!-- 5. 删除按钮 -->
+                                    <el-tooltip :content="t('chats.actions.delete')" placement="top" :show-after="500">
+                                        <el-button link type="danger" :icon="DeleteIcon" class="action-icon-btn"
+                                            @click.stop="deleteFiles([row.file])" />
+                                    </el-tooltip>
+                                </div>
                             </div>
-                        </div>
+                        </template>
                     </div>
                 </el-scrollbar>
                 </div>
@@ -1327,12 +1618,12 @@ const toggleSelectAll = () => {
             <div class="footer-bar">
                 <div class="footer-left">
                     <el-checkbox :model-value="isAllSelected" @change="toggleSelectAll" :label="t('chats.selection.selectAll')" size="large"
-                        :disabled="paginatedFiles.length === 0" />
+                        :disabled="visibleFiles.length === 0" />
                     <span v-if="selectedFiles.length > 0" class="selection-count">{{ t('chats.selection.selectedCount', { count: selectedFiles.length }) }}</span>
                 </div>
                 <div class="footer-center">
-                    <el-pagination v-if="currentFiles.length > 0" v-model:current-page="currentPage"
-                        v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="currentFiles.length"
+                    <el-pagination v-if="ungroupedFiles.length > 0" v-model:current-page="currentPage"
+                        v-model:page-size="pageSize" :page-sizes="[10, 20, 50, 100]" :total="ungroupedFiles.length"
                         layout="total, sizes, prev, pager, next, jumper" background size="small" />
                 </div>
                 <div class="footer-right">
@@ -1556,6 +1847,88 @@ const toggleSelectAll = () => {
     padding-right: 10px;
     min-height: 100%; /* 确保拖拽空白处也能触发 */
     cursor: default;  /* 默认鼠标 */
+}
+
+/* 项目头行 */
+.project-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-top: 2px;
+    border-radius: 10px;
+    cursor: pointer;
+    user-select: none;
+    background-color: var(--bg-tertiary);
+    transition: background-color 0.2s;
+}
+
+.project-header:hover {
+    background-color: var(--bg-accent-soft, var(--bg-tertiary));
+}
+
+.project-caret {
+    font-size: 14px;
+    color: var(--text-tertiary);
+    transition: transform 0.2s ease;
+}
+
+.project-caret.expanded {
+    transform: rotate(90deg);
+}
+
+.project-folder {
+    font-size: 15px;
+    color: var(--el-color-primary);
+}
+
+.project-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex: 0 1 auto;
+}
+
+.project-count {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    background-color: var(--bg-primary);
+    border-radius: 10px;
+    padding: 0 8px;
+    line-height: 18px;
+    min-width: 18px;
+    text-align: center;
+}
+
+.project-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.project-header:hover .project-actions {
+    opacity: 1;
+}
+
+/* 未分组分隔标签 */
+.ungrouped-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    padding: 10px 12px 4px;
+    letter-spacing: 0.02em;
+}
+
+/* 项目内文件行缩进 */
+.chat-list-item.in-project {
+    padding-left: 28px;
 }
 
 .chat-table-shell :deep(.el-scrollbar) {

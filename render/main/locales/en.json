@@ -192,6 +192,24 @@
       "selectAll": "Select All",
       "selectedCount": "{count} selected",
       "empty": "No chats yet"
+    },
+    "projects": {
+      "create": "New Project",
+      "rename": "Rename Project",
+      "delete": "Delete Project",
+      "ungrouped": "Ungrouped",
+      "createPrompt": "Enter project name",
+      "renamePrompt": "Enter new project name",
+      "deleteConfirm": "Delete project \"{name}\"? Chats inside will not be deleted and will move back to Ungrouped.",
+      "nameRequired": "Project name cannot be empty",
+      "nameExists": "A project with this name already exists",
+      "createSuccess": "Project created",
+      "renameSuccess": "Project renamed",
+      "deleteSuccess": "Project deleted",
+      "moveToProject": "Move to project",
+      "removeFromProject": "Remove from project",
+      "moveSuccess": "Project assignment updated",
+      "moveFailed": "Failed to update project assignment"
     }
   },
   "tasks": {

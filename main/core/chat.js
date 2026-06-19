@@ -386,23 +386,22 @@ export async function createChatCompletion(params = {}) {
         }
       }
 
+      const responsesRequestOptions = { signal }
       if (isCodex) {
-        // 完全对齐 CPA(ConvertOpenAIRequestToCodex)：instructions 留空，system 保留在 input 的 developer 项
+        // 对齐 CPA 出口：instructions 留空；补 prompt_cache_key 与 session_id（缺失会被 anyrouter 判 invalid codex request）
+        const codexSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`
         responseParams.instructions = typeof openAiParams.instructions === 'string' ? openAiParams.instructions : ''
         responseParams.store = false
         responseParams.include = ['reasoning.encrypted_content']
         responseParams.parallel_tool_calls = true
-      } else if (openAiParams.temperature !== undefined) {
-        responseParams.temperature = openAiParams.temperature
-      }
-
-      const responsesRequestOptions = { signal }
-      if (isCodex) {
-        // Codex 客户端指纹：codex UA（经中转头绕过 Chromium 限制）+ Originator；用户自定义 headers 优先
+        responseParams.prompt_cache_key = codexSessionId
+        // Codex 客户端指纹：codex UA（经中转头绕过 Chromium 限制）+ Originator + session_id；用户自定义 headers 优先
         responsesRequestOptions.headers = applyUserAgentBridge(mergeHeaders(
-          { 'User-Agent': CODEX_USER_AGENT, 'Originator': CODEX_ORIGINATOR },
+          { 'User-Agent': CODEX_USER_AGENT, 'Originator': CODEX_ORIGINATOR, 'session_id': codexSessionId },
           normalizeProviderHeaders(providerHeaders)
         ))
+      } else if (openAiParams.temperature !== undefined) {
+        responseParams.temperature = openAiParams.temperature
       }
 
       return await client.responses.create(responseParams, responsesRequestOptions)

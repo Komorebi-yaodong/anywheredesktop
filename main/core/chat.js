@@ -110,15 +110,23 @@ function buildModelsEndpoint(baseUrl = '') {
 export async function listProviderModels(params = {}) {
   const baseUrl = typeof params?.baseUrl === 'string' ? params.baseUrl : ''
   const apiKey = getRandomItem(params?.apiKey)
-  const endpoint = buildModelsEndpoint(baseUrl)
+  const isClaude = params?.apiType === 'claude'
 
   const headers = applyUserAgentBridge(mergeHeaders(
     { 'Content-Type': 'application/json' },
     normalizeProviderHeaders(params?.headers)
   ))
 
-  if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`
+  let endpoint
+  if (isClaude) {
+    // Anthropic：URL 不含 /v1，模型端点为 /v1/models，认证用 x-api-key + anthropic-version
+    const base = baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '')
+    endpoint = `${base}/v1/models`
+    if (apiKey) headers['x-api-key'] = apiKey
+    headers['anthropic-version'] = '2023-06-01'
+  } else {
+    endpoint = buildModelsEndpoint(baseUrl)
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`
   }
 
   const response = await fetchWithProxy(endpoint, {

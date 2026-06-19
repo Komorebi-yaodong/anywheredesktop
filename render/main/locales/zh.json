@@ -650,6 +650,7 @@
     "apiKeyDescription": "可以输入多个 API 密钥，用逗号分隔",
     "apiUrlLabel": "API URL",
     "apiUrlPlaceholder": "例如, https://api.openai.com/v1",
+    "apiUrlPlaceholderClaude": "例如, https://api.anthropic.com",
     "modelsLabel": "模型",
     "searchModelsPlaceholder": "搜索模型",
     "noModelsAdded": "尚未添加模型",

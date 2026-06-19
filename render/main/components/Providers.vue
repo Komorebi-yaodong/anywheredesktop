@@ -375,6 +375,7 @@ async function activate_get_model_function() {
     const result = await window.api.listProviderModels({
       baseUrl: selectedProvider.value.url,
       apiKey: selectedProvider.value.api_key,
+      apiType: selectedProvider.value.apiType,
       headers: JSON.parse(JSON.stringify(selectedProvider.value.headers || {}))
     });
 
@@ -681,7 +682,7 @@ const apiKeyCount = computed(() => {
                     @change="(value) => saveSingleProviderSetting('api_key', value)" />
                 </el-form-item>
                 <el-form-item :label="t('providers.apiUrlLabel')">
-                  <el-input v-model="selectedProvider.url" :placeholder="t('providers.apiUrlPlaceholder')" clearable
+                  <el-input v-model="selectedProvider.url" :placeholder="selectedProvider.apiType === 'claude' ? t('providers.apiUrlPlaceholderClaude') : t('providers.apiUrlPlaceholder')" clearable
                     @change="(value) => saveSingleProviderSetting('url', value)" />
                 </el-form-item>
 

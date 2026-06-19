@@ -285,7 +285,8 @@ export async function createAnthropicCompletion(params = {}) {
       fetchWithProxy(input, { ...init, timeoutMs: init?.timeoutMs ?? CHAT_REQUEST_TIMEOUT_MS })
   }
   if (baseUrl && typeof baseUrl === 'string') {
-    clientOptions.baseURL = baseUrl
+    // Anthropic SDK 会自动追加 /v1/messages，去掉用户 URL 末尾的 /v1 避免出现 /v1/v1/messages
+    clientOptions.baseURL = baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '')
   }
   if (providerHeaders && typeof providerHeaders === 'object') {
     clientOptions.defaultHeaders = providerHeaders

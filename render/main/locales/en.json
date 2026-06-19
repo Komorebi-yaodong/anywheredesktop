@@ -650,6 +650,7 @@
     "apiKeyDescription": "You can enter multiple API keys separated by commas.",
     "apiUrlLabel": "API URL",
     "apiUrlPlaceholder": "e.g., https://api.openai.com/v1",
+    "apiUrlPlaceholderClaude": "e.g., https://api.anthropic.com",
     "modelsLabel": "Models",
     "searchModelsPlaceholder": "Search models",
     "noModelsAdded": "No models added yet.",

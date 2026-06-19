@@ -741,6 +741,7 @@ async function buildQuickWindowInitMessage(payload = {}) {
 
 async function buildScreenshotWindowInitMessage(payload = {}) {
   return {
+    preloadOnly: payload?.preloadOnly === true,
     captureId: typeof payload?.captureId === 'string' ? payload.captureId : '',
     sourceId: typeof payload?.sourceId === 'string' ? payload.sourceId : '',
     sourceName: typeof payload?.sourceName === 'string' ? payload.sourceName : '',
@@ -774,6 +775,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   const webContentsId = win.webContents?.id ?? null
   win.__didFinishLoad = false
   win.__readyToShow = false
+  win.__preloadOnly = Boolean(initMessage?.preloadOnly)
 
   win.on('ready-to-show', () => {
     win.__readyToShow = true
@@ -782,8 +784,13 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
     } catch {
       // ignore suppress blur mark failure during ready-to-show
     }
+
+    if (win.__preloadOnly === true) {
+      return
+    }
+
     win.show()
-    if (type === 'fast' || type === 'quick') {
+    if (type === 'fast' || type === 'quick' || type === 'screenshot') {
       try {
         win.moveTop?.()
       } catch {
@@ -932,8 +939,20 @@ const dynamicBaseConfig =
         applyQuickWindowBounds(existing, config)
       }
 
-      activateWindow(existing)
-            if (targetType === 'screenshot' && openPayload) {
+      const shouldPreloadOnly = Boolean(openPayload?.preloadOnly)
+      if (targetType === 'screenshot') {
+        try {
+          existing.__preloadOnly = shouldPreloadOnly
+        } catch {
+          // ignore preload state cache failure
+        }
+      }
+
+      if (!shouldPreloadOnly) {
+        activateWindow(existing)
+      }
+
+      if (targetType === 'screenshot' && openPayload) {
         const screenshotInitMessage = await buildScreenshotWindowInitMessage(openPayload)
         try {
           existing.webContents.send(WINDOW_INIT_CHANNEL, {
@@ -946,7 +965,7 @@ const dynamicBaseConfig =
         }
       }
 
-if (targetType === 'quick' && openPayload) {
+      if (targetType === 'quick' && openPayload) {
         const quickInitMessage = await buildQuickWindowInitMessage(openPayload)
         try {
           existing.__quickTriggerMode = quickInitMessage.triggerMode || ''

@@ -268,6 +268,18 @@ async function cancelScreenshotPromptWorkflow(input = {}) {
   })
 }
 
+async function preheatScreenshotWindow() {
+  try {
+    await openWindow('screenshot', {
+      preloadOnly: true,
+      source: 'app-start-preheat'
+    })
+  } catch (error) {
+    console.warn('[screenshot] preheat failed', error?.message || error)
+  }
+}
+
+
 
 
 function pushQuickPayloadToVisibleWindow(payload = null) {
@@ -673,6 +685,9 @@ app.whenReady().then(async () => {
   await syncDesktopRuntimeFromConfig()
   ensureTray()
   await openWindow('main')
+  setTimeout(() => {
+    preheatScreenshotWindow()
+  }, 800)
 
   app.on('activate', () => {
     showMainWindow()

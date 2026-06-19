@@ -58,6 +58,10 @@ const renderedAnnotations = computed(() => {
 })
 
 function applyInit(data = {}) {
+  if (data?.preloadOnly === true) {
+    return
+  }
+
   capture.captureId = typeof data.captureId === 'string' ? data.captureId : ''
   capture.thumbnailDataUrl = typeof data.thumbnailDataUrl === 'string' ? data.thumbnailDataUrl : ''
   capture.sourceName = typeof data.sourceName === 'string' ? data.sourceName : ''

@@ -714,23 +714,25 @@ const apiKeyCount = computed(() => {
 
                 <!-- 自定义请求头编辑器 -->
                 <el-form-item :label="t('providers.headersLabel')">
-                  <div class="provider-headers-editor">
-                    <div v-for="(row, index) in headerRows" :key="row._id" class="header-row">
-                      <el-input v-model="row.key" :placeholder="t('providers.headerKeyPlaceholder')"
-                        class="header-key-input" @change="persistProviderHeaders" />
-                      <el-input v-model="row.value" :placeholder="t('providers.headerValuePlaceholder')"
-                        class="header-value-input" @change="persistProviderHeaders" />
-                      <el-button :icon="Delete" plain circle class="header-delete-btn"
-                        @click="removeHeaderRow(index)" />
-                    </div>
-                    <div v-if="headerRows.length === 0" class="no-headers-message">
-                      {{ t('providers.noHeaders') }}
-                    </div>
-                    <el-button :icon="Plus" plain class="add-header-btn" @click="addHeaderRow">
-                      {{ t('providers.addHeaderBtn') }}
-                    </el-button>
+                  <div class="header-actions-row">
+                    <el-button :icon="Plus" plain @click="addHeaderRow">{{
+                      t('providers.addHeaderBtn')
+                    }}</el-button>
                   </div>
                 </el-form-item>
+                <div class="provider-headers-list">
+                  <div v-for="(row, index) in headerRows" :key="row._id" class="header-row">
+                    <el-input v-model="row.key" :placeholder="t('providers.headerKeyPlaceholder')"
+                      class="header-key-input" @change="persistProviderHeaders" />
+                    <el-input v-model="row.value" :placeholder="t('providers.headerValuePlaceholder')"
+                      class="header-value-input" @change="persistProviderHeaders" />
+                    <el-button :icon="Delete" plain circle class="header-delete-btn"
+                      @click="removeHeaderRow(index)" />
+                  </div>
+                  <div v-if="headerRows.length === 0" class="no-headers-message">
+                    {{ t('providers.noHeaders') }}
+                  </div>
+                </div>
 
                 <!-- 文件夹位置选择器 -->
                 <el-form-item :label="t('providers.folders.floder_label')">
@@ -1241,7 +1243,12 @@ html.dark .model-tag :deep(.el-tag__close:hover) {
 }
 
 /* 自定义请求头编辑器样式 */
-.provider-headers-editor {
+.header-actions-row {
+  display: flex;
+  gap: 10px;
+}
+
+.provider-headers-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1265,10 +1272,6 @@ html.dark .model-tag :deep(.el-tag__close:hover) {
 
 .header-delete-btn {
   flex: 0 0 auto;
-}
-
-.add-header-btn {
-  align-self: flex-start;
 }
 
 .no-headers-message {

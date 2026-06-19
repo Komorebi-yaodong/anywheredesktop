@@ -642,7 +642,8 @@
     "apiTypes": {
       "chatCompletions": "OpenAI-Chat",
       "responses": "OpenAI-Response",
-      "codex": "Codex"
+      "codex": "Codex",
+      "claude": "Claude"
     },
     "apiKeyLabel": "API Key",
     "apiKeyPlaceholder": "Enter API Key (multiple can be entered, separated by commas)",

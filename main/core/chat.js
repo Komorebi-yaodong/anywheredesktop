@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import { fetchWithProxy, BRIDGE_UA_HEADER } from './net.js'
+import { createAnthropicCompletion } from './anthropic.js'
 
 const CHAT_REQUEST_TIMEOUT_MS = 120_000
 
@@ -322,6 +323,17 @@ export async function createChatCompletion(params = {}) {
 
   if (!baseUrl || typeof baseUrl !== 'string') {
     throw new Error('[Chat] baseUrl is required')
+  }
+
+  if (apiType === 'claude') {
+    return await createAnthropicCompletion({
+      baseUrl,
+      apiKey,
+      signal,
+      stream: params.stream ?? true,
+      headers: applyUserAgentBridge(mergeHeaders(DEFAULT_CHAT_HEADERS, normalizeProviderHeaders(providerHeaders))),
+      ...openAiParams
+    })
   }
 
   const client = new OpenAI({

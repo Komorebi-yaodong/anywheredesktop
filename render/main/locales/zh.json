@@ -642,7 +642,8 @@
     "apiTypes": {
       "chatCompletions": "OpenAI-Chat",
       "responses": "OpenAI-Response",
-      "codex": "Codex"
+      "codex": "Codex",
+      "claude": "Claude"
     },
     "apiKeyLabel": "API 密钥",
     "apiKeyPlaceholder": "输入 API 密钥 (可输入多个，用逗号分隔)",

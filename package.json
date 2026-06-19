@@ -26,6 +26,7 @@
     "release:linux": "pnpm run build && electron-builder --linux AppImage --publish always"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.105.0",
     "@aws-sdk/client-s3": "^3.1064.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",

@@ -660,6 +660,7 @@ const apiKeyCount = computed(() => {
                       <el-option :label="t('providers.apiTypes.chatCompletions')" value="chat_completions" />
                       <el-option :label="t('providers.apiTypes.responses')" value="responses" />
                       <el-option :label="t('providers.apiTypes.codex')" value="codex" />
+                      <el-option :label="t('providers.apiTypes.claude')" value="claude" />
                     </el-select>
                   </el-tooltip>
                   <el-switch v-model="selectedProvider.enable"

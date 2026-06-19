@@ -72,6 +72,8 @@ const singleFileSyncing = ref({});
 const isDeletingFiles = ref(false);
 const sortMode = ref('createdAt');
 const sortDirection = ref('desc');
+const draggedFileBasenames = ref([]);
+const dragOverProjectTarget = ref('');
 
 // --- 项目（目录）分组状态 ---
 const localProjects = ref({ version: 1, projects: [] });
@@ -127,6 +129,7 @@ let initialSelectionSnap = new Set();
 
 // --- Computed Properties ---
 const getFileMap = (fileList) => new Map(fileList.map(f => [f.basename, f]));
+const PROJECT_UNGROUPED_DROP_ID = '__ungrouped__';
 
 const uploadableCount = computed(() => {
     if (!isWebdavConfigValid.value) return 0;
@@ -160,11 +163,36 @@ const fileByBasename = computed(() => {
     return new Map(fileList.map((f) => [f.basename, f]));
 });
 
+const getJsonBasenameCandidate = (value) => {
+    const basename = String(value || '').trim();
+    if (!basename) return '';
+    return basename.toLowerCase().endsWith('.json') ? basename : `${basename}.json`;
+};
+
+const resolveProjectFileBasename = (value, map = fileByBasename.value) => {
+    const basename = String(value || '').trim();
+    if (!basename) return '';
+    if (map.has(basename)) return basename;
+    const jsonBasename = getJsonBasenameCandidate(basename);
+    return map.has(jsonBasename) ? jsonBasename : basename;
+};
+
+const isSameProjectFile = (projectFile, basename) => {
+    const rawProjectFile = String(projectFile || '').trim();
+    const rawBasename = String(basename || '').trim();
+    if (!rawProjectFile || !rawBasename) return false;
+    return rawProjectFile === rawBasename || getJsonBasenameCandidate(rawProjectFile) === rawBasename;
+};
+
 const assignedBasenames = computed(() => {
     const set = new Set();
     const projects = Array.isArray(activeProjectsData.value?.projects) ? activeProjectsData.value.projects : [];
+    const map = fileByBasename.value;
     projects.forEach((project) => {
-        (Array.isArray(project?.files) ? project.files : []).forEach((bn) => set.add(bn));
+        (Array.isArray(project?.files) ? project.files : []).forEach((bn) => {
+            const basename = resolveProjectFileBasename(bn, map);
+            if (basename) set.add(basename);
+        });
     });
     return set;
 });
@@ -178,7 +206,7 @@ const projectGroups = computed(() => {
     const map = fileByBasename.value;
     return projects.map((project) => {
         const files = (Array.isArray(project?.files) ? project.files : [])
-            .map((bn) => map.get(bn))
+            .map((bn) => map.get(resolveProjectFileBasename(bn, map)))
             .filter(Boolean)
             .sort(compareFilesBySortMode);
         return {
@@ -214,7 +242,7 @@ const displayRows = computed(() => {
         }
     });
     const ungrouped = paginatedUngrouped.value;
-    if (groups.length > 0 && ungrouped.length > 0) {
+    if (groups.length > 0) {
         rows.push({ kind: 'ungrouped-label' });
     }
     ungrouped.forEach((file) => rows.push({ kind: 'file', file, projectId: null }));
@@ -520,8 +548,8 @@ onUnmounted(() => {
 const onMouseDown = (e) => {
     if (e.button !== 0) return; // 仅左键
 
-    // 排除特定交互元素（避免点复选框、按钮、项目头时触发选框）
-    if (e.target.closest('.list-checkbox') || e.target.closest('.list-actions') || e.target.closest('.el-button') || e.target.closest('.project-header')) {
+    // 排除特定交互元素（名称区改用拖拽改归属，时间/大小区才触发框选）
+    if (e.target.closest('.list-checkbox') || e.target.closest('.list-actions') || e.target.closest('.el-button') || e.target.closest('.project-header') || e.target.closest('.list-title')) {
         return;
     }
 
@@ -891,6 +919,68 @@ async function deleteProject(projectId) {
     } catch (error) {
         if (error !== 'cancel' && error !== 'close') ElMessage.error(String(error?.message || error));
     }
+}
+
+// --- 拖拽改归属 ---
+const onFileDragStart = (file, event) => {
+    const names = (isFileSelected(file) && selectedFiles.value.length > 0)
+        ? selectedFiles.value.map((f) => f.basename)
+        : [file.basename];
+    draggedFileBasenames.value = names;
+    if (event?.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        try { event.dataTransfer.setData('text/plain', names.join('\n')); } catch { /* ignore */ }
+    }
+};
+
+const onFileDragEnd = () => {
+    draggedFileBasenames.value = [];
+    dragOverProjectTarget.value = '';
+};
+
+const onProjectDragOver = (targetId, event) => {
+    if (!draggedFileBasenames.value.length) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    dragOverProjectTarget.value = targetId;
+};
+
+const onProjectDragLeave = (targetId) => {
+    if (dragOverProjectTarget.value === targetId) dragOverProjectTarget.value = '';
+};
+
+async function assignFilesToProject(basenames, projectId) {
+    if (!Array.isArray(basenames) || basenames.length === 0) return;
+    try {
+        const draggedSet = new Set(basenames.map((n) => getJsonBasenameCandidate(n)));
+        // 先从所有项目移除（兼容带/不带 .json），保证单一归属
+        let projects = (activeProjectsData.value.projects || []).map((p) => ({
+            ...p,
+            files: (Array.isArray(p.files) ? p.files : []).filter((f) => !draggedSet.has(getJsonBasenameCandidate(f)))
+        }));
+        if (projectId) {
+            if (!projects.some((p) => p.id === projectId)) return;
+            projects = projects.map((p) =>
+                p.id === projectId ? { ...p, files: [...p.files, ...basenames] } : p
+            );
+        }
+        setActiveProjectsData({ version: activeProjectsData.value.version || 1, projects });
+        await persistActiveProjects();
+        selectedFiles.value = [];
+        ElMessage.success(t('chats.projects.moveSuccess'));
+    } catch (error) {
+        ElMessage.error(`${t('chats.projects.moveFailed')}: ${error?.message || error}`);
+    }
+}
+
+async function onDropToProject(targetId, event) {
+    event?.preventDefault?.();
+    const basenames = [...draggedFileBasenames.value];
+    draggedFileBasenames.value = [];
+    dragOverProjectTarget.value = '';
+    if (!basenames.length) return;
+    const projectId = targetId === PROJECT_UNGROUPED_DROP_ID ? '' : targetId;
+    await assignFilesToProject(basenames, projectId);
 }
 
 async function fetchLocalFiles(silent = false) {
@@ -1532,7 +1622,11 @@ const toggleSelectAll = () => {
 
                             <!-- 项目头行 -->
                             <div v-if="row.kind === 'project'" class="project-header"
-                                @click="toggleProjectCollapse(row.id)">
+                                :class="{ 'drag-over': dragOverProjectTarget === row.id }"
+                                @click="toggleProjectCollapse(row.id)"
+                                @dragover="onProjectDragOver(row.id, $event)"
+                                @dragleave="onProjectDragLeave(row.id)"
+                                @drop="onDropToProject(row.id, $event)">
                                 <el-icon class="project-caret" :class="{ expanded: !row.collapsed }"><ArrowRight /></el-icon>
                                 <el-icon class="project-folder"><Folder /></el-icon>
                                 <span class="project-name" :title="row.name">{{ row.name }}</span>
@@ -1549,8 +1643,12 @@ const toggleSelectAll = () => {
                                 </div>
                             </div>
 
-                            <!-- 未分组分隔标签 -->
-                            <div v-else-if="row.kind === 'ungrouped-label'" class="ungrouped-label">
+                            <!-- 未分组分隔标签（同时作为"移出项目"放置目标） -->
+                            <div v-else-if="row.kind === 'ungrouped-label'" class="ungrouped-label"
+                                :class="{ 'drag-over': dragOverProjectTarget === PROJECT_UNGROUPED_DROP_ID }"
+                                @dragover="onProjectDragOver(PROJECT_UNGROUPED_DROP_ID, $event)"
+                                @dragleave="onProjectDragLeave(PROJECT_UNGROUPED_DROP_ID)"
+                                @drop="onDropToProject(PROJECT_UNGROUPED_DROP_ID, $event)">
                                 {{ t('chats.projects.ungrouped') }}
                             </div>
 
@@ -1567,7 +1665,10 @@ const toggleSelectAll = () => {
                                         @change="(val) => toggleFileSelection(row.file, val)" @click.stop />
                                 </div>
 
-                                <div class="list-title" :title="normalizeTitleValue(row.file)">
+                                <div class="list-title" :title="normalizeTitleValue(row.file)"
+                                    draggable="true"
+                                    @dragstart="onFileDragStart(row.file, $event)"
+                                    @dragend="onFileDragEnd">
                                     {{ normalizeTitleValue(row.file) }}
                                 </div>
                                 <div v-if="showCreatedAtColumn" class="meta-created">{{ formatDate(row.file.createdAt || row.file.lastmod) }}</div>
@@ -1867,6 +1968,19 @@ const toggleSelectAll = () => {
     background-color: var(--bg-accent-soft, var(--bg-tertiary));
 }
 
+.project-header.drag-over {
+    outline: 2px dashed var(--el-color-primary);
+    outline-offset: -2px;
+    background-color: var(--el-color-primary-light-9);
+}
+
+.ungrouped-label.drag-over {
+    outline: 2px dashed var(--el-color-primary);
+    outline-offset: -2px;
+    border-radius: 8px;
+    color: var(--el-color-primary);
+}
+
 .project-caret {
     font-size: 14px;
     color: var(--text-tertiary);
@@ -1998,6 +2112,11 @@ const toggleSelectAll = () => {
     min-width: 0;
     padding-right: 8px;
     transition: transform 0.2s ease;
+    cursor: grab;
+}
+
+.list-title:active {
+    cursor: grabbing;
 }
 
 .meta-created,

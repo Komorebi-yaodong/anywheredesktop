@@ -1,6 +1,8 @@
 import { screen } from 'electron'
 
 const SCREENSHOT_CAPTURE_TIMEOUT_MS = 5 * 60 * 1000
+const QUICK_HIDE_MIN_CAPTURE_DELAY_MS = 120
+const SCREENSHOT_THUMBNAIL_MAX_SIDE = 2560
 
 let activeCapture = null
 
@@ -68,8 +70,13 @@ function chooseScreenSource(sources = [], display = null) {
 
 function normalizeSourcesOptions(display = null) {
   const bounds = display?.bounds || display?.size || {}
-  const width = Math.max(800, Math.round(Number(bounds.width) || 1920))
-  const height = Math.max(600, Math.round(Number(bounds.height) || 1080))
+  const rawWidth = Math.max(800, Math.round(Number(bounds.width) || 1920))
+  const rawHeight = Math.max(600, Math.round(Number(bounds.height) || 1080))
+  const maxSide = Math.max(rawWidth, rawHeight)
+  const scale = maxSide > SCREENSHOT_THUMBNAIL_MAX_SIDE ? SCREENSHOT_THUMBNAIL_MAX_SIDE / maxSide : 1
+  const width = Math.max(800, Math.round(rawWidth * scale))
+  const height = Math.max(600, Math.round(rawHeight * scale))
+
   return {
     types: ['screen'],
     fetchWindowIcons: false,
@@ -81,18 +88,34 @@ function delay(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)))
 }
 
-async function hideQuickWindowBeforeCapture(deps = {}) {
-  if (typeof deps.getWindowByRef !== 'function') return
-  const quickWindow = deps.getWindowByRef('quick')
-  if (!quickWindow || quickWindow.isDestroyed?.() || !quickWindow.isVisible?.()) return
+async function hideQuickWindowBeforeCapture(deps = {}, input = {}) {
+  const quickHiddenAt = Number(input?.quickHiddenAt || 0)
+  let shouldWaitForHide = false
 
-  try {
-    quickWindow.hide()
-  } catch {
-    // ignore quick hide failure; capture will still proceed
+  if (typeof deps.getWindowByRef === 'function') {
+    const quickWindow = deps.getWindowByRef('quick')
+    if (quickWindow && !quickWindow.isDestroyed?.() && quickWindow.isVisible?.()) {
+      try {
+        quickWindow.hide()
+      } catch {
+        // ignore quick hide failure; capture will still proceed
+      }
+      shouldWaitForHide = true
+    }
   }
 
-  await delay(180)
+  if (quickHiddenAt > 0) {
+    const elapsed = Math.max(0, Date.now() - quickHiddenAt)
+    const remaining = QUICK_HIDE_MIN_CAPTURE_DELAY_MS - elapsed
+    if (remaining > 0) {
+      await delay(remaining)
+    }
+    return
+  }
+
+  if (shouldWaitForHide) {
+    await delay(QUICK_HIDE_MIN_CAPTURE_DELAY_MS)
+  }
 }
 
 
@@ -122,7 +145,7 @@ export async function startScreenshotPrompt(input = {}, deps = {}) {
 
   const display = resolveCaptureDisplay(input)
 
-  await hideQuickWindowBeforeCapture(deps)
+  await hideQuickWindowBeforeCapture(deps, input)
 
   const sourcesResult = await deps.systemApi.getDesktopSources(normalizeSourcesOptions(display))
   const sources = Array.isArray(sourcesResult?.sources) ? sourcesResult.sources : []

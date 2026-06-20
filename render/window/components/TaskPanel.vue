@@ -91,16 +91,19 @@ onBeforeUnmount(() => {
       <div v-if="tasks.length === 0" class="task-empty">暂无任务</div>
       <div v-for="task in tasks" :key="task.id" class="task-item">
         <div class="task-row">
-          <span class="task-status-dot" :class="task.status">
-            <el-icon v-if="task.status === 'completed'" :size="11"><Check /></el-icon>
-            <el-icon v-else-if="task.status === 'in_progress'" :size="11" class="spin"><Loading /></el-icon>
+          <span class="task-status">
+            <el-icon v-if="task.status === 'completed'" :size="16" class="ts-done"><Check /></el-icon>
+            <el-icon v-else-if="task.status === 'in_progress'" :size="15" class="ts-loading spin"><Loading /></el-icon>
+            <span v-else class="ts-pending"></span>
           </span>
           <span class="task-content" :class="{ done: task.status === 'completed' }">{{ task.content }}</span>
         </div>
         <div v-if="task.steps && task.steps.length" class="task-steps">
           <div v-for="(step, si) in task.steps" :key="si" class="step-row">
-            <span class="step-status-dot" :class="step.status">
-              <el-icon v-if="step.status === 'completed'" :size="9"><Check /></el-icon>
+            <span class="step-status">
+              <el-icon v-if="step.status === 'completed'" :size="13" class="ts-done"><Check /></el-icon>
+              <el-icon v-else-if="step.status === 'in_progress'" :size="12" class="ts-loading spin"><Loading /></el-icon>
+              <span v-else class="ts-pending ts-pending-sm"></span>
             </span>
             <span class="step-content" :class="{ done: step.status === 'completed' }">{{ step.content }}</span>
           </div>
@@ -204,35 +207,51 @@ html.dark .task-panel {
   gap: 8px;
 }
 
-.task-status-dot {
+.task-status {
   flex-shrink: 0;
   width: 16px;
   height: 16px;
   margin-top: 1px;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1.5px solid var(--el-border-color);
-  color: #fff;
-  line-height: 0;
 }
 
-.task-status-dot :deep(.el-icon),
-.step-status-dot :deep(.el-icon) {
+.step-status {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-status :deep(.el-icon),
+.step-status :deep(.el-icon) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-.task-status-dot.in_progress {
-  border-color: var(--el-color-primary);
+.ts-done {
+  color: var(--el-color-success);
+}
+
+.ts-loading {
   color: var(--el-color-primary);
 }
 
-.task-status-dot.completed {
-  background-color: var(--el-color-success);
-  border-color: var(--el-color-success);
+.ts-pending {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--el-text-color-placeholder);
+}
+
+.ts-pending-sm {
+  width: 6px;
+  height: 6px;
 }
 
 .task-content {
@@ -258,30 +277,6 @@ html.dark .task-panel {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-}
-
-.step-status-dot {
-  flex-shrink: 0;
-  width: 12px;
-  height: 12px;
-  margin-top: 3px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--el-border-color);
-  color: #fff;
-  line-height: 0;
-}
-
-.step-status-dot.in_progress {
-  border-color: var(--el-color-primary);
-  background-color: var(--el-color-primary);
-}
-
-.step-status-dot.completed {
-  border-color: var(--el-color-success);
-  background-color: var(--el-color-success);
 }
 
 .step-content {

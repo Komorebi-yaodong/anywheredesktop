@@ -2107,7 +2107,7 @@ const toggleSelectAll = () => {
 
     <!-- 删除项目：三选项 -->
     <el-dialog v-model="projectDeleteDialog.visible" :title="t('chats.projects.delete')" width="420px" append-to-body
-        class="project-delete-dialog">
+        align-center class="project-delete-dialog">
         <p class="project-delete-message">{{ t('chats.projects.deleteDialogMessage', { name: projectDeleteDialog.name }) }}</p>
         <div class="project-delete-options">
             <button type="button" class="project-delete-option" :disabled="projectDeleteDialog.busy"
@@ -2846,5 +2846,27 @@ html.dark .custom-clean-scrollbar :deep(.el-scrollbar__thumb:hover) {
     flex-shrink: 0;
     color: var(--text-tertiary);
     margin-right: 12px;
+}
+</style>
+
+<!-- 非 scoped：el-dialog 内部结构在 append-to-body 后无 data-v 标记，需全局选择器统一内边距/对齐 -->
+<style>
+.project-delete-dialog .el-dialog__header {
+    padding: 20px 20px 14px;
+    margin-right: 0;
+    border-bottom: 1px solid var(--border-primary);
+}
+
+.project-delete-dialog .el-dialog__body {
+    padding: 18px 20px 6px;
+}
+
+.project-delete-dialog .el-dialog__footer {
+    padding: 8px 20px 18px;
+}
+
+.project-delete-dialog .el-dialog__title {
+    font-size: 16px;
+    font-weight: 600;
 }
 </style>

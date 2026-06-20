@@ -22,9 +22,12 @@ watch(
   (v) => {
     if (v && !initialized.value) {
       nextTick(() => {
-        // 默认放左上：系统提示词下方、右侧导航列左侧，避免遮挡 header 与导航列
-        pos.x = 16;
-        pos.y = 96;
+        // 默认放右上：header（系统提示词）下方、右侧导航列左侧，避免遮挡两者
+        const w = panelRef.value?.offsetWidth || 300;
+        const navClearance = 50; // 右侧导航列 width 30 + right 10 + 间距
+        pos.x = Math.max(12, window.innerWidth - w - navClearance);
+        const mainTop = document.querySelector('.chat-main')?.getBoundingClientRect().top;
+        pos.y = (typeof mainTop === 'number' && mainTop > 8) ? mainTop + 8 : 96;
         initialized.value = true;
       });
     }

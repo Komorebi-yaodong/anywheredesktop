@@ -596,13 +596,17 @@ const flushPendingWindowPayloadQueue = async () => {
 };
 
 
-const handleAppendMessageEvent = async (data) => {
+const handleAppendMessageEvent = async (data, options = {}) => {
   if (!data) return;
 
-  if (loading.value) {
-    cancelAskAI();
-    showDismissibleMessage.info('已中断当前生成，开始处理追问');
-    await new Promise(r => setTimeout(r, 100));
+  if (!options.deferSend && (loading.value || isPreparingSend.value)) {
+    pendingAppendBuffer.value.push({
+      kind: 'window',
+      data,
+      preview: getAppendPayloadPreview(data)
+    });
+    showDismissibleMessage.info('正在生成，追问已加入缓冲区，将在本轮结束后自动发送');
+    return;
   }
 
   let isFileDirectSend = false;
@@ -696,6 +700,13 @@ const handleAppendMessageEvent = async (data) => {
   }
 
   scrollToBottom();
+  if (options.deferSend) {
+    // 延迟发送：把可能仍留在 fileList 的文件折叠进历史，避免随后 askAI(true) 跳过输入处理
+    if (fileList.value.length > 0) {
+      await appendCurrentInputToHistory();
+    }
+    return;
+  }
   if (isFileDirectSend) {
     await askAI(false);
   } else {
@@ -982,6 +993,75 @@ const pendingToolApprovals = ref(new Map());
 const pendingChoices = ref(new Map());
 const taskList = ref([]);
 const taskPanelVisible = ref(false);
+
+// --- 追加消息缓冲区：loading 期间发送的消息暂存于此，本轮结束后自动追加并续请求 ---
+const pendingAppendBuffer = ref([]);
+
+const enqueueInputToBuffer = () => {
+  const text = prompt.value.trim();
+  const files = Array.isArray(fileList.value) ? fileList.value.slice() : [];
+  if (!text && files.length === 0) return;
+  pendingAppendBuffer.value.push({
+    kind: 'input',
+    text,
+    files,
+    preview: text || `[${files.length} 个文件]`
+  });
+  prompt.value = "";
+  fileList.value = [];
+  showDismissibleMessage.info('正在生成，消息已加入缓冲区，将在本轮结束后自动发送');
+};
+
+const removeBufferedMessage = (index) => {
+  if (index >= 0 && index < pendingAppendBuffer.value.length) {
+    pendingAppendBuffer.value.splice(index, 1);
+  }
+};
+
+const getAppendPayloadPreview = (data) => {
+  if (!data) return '追问';
+  if (data.type === 'img') return '[图片]';
+  if (data.type === 'files') return '[文件]';
+  const text = typeof data.payload === 'string' ? data.payload : (data.userText || '');
+  return text ? text.slice(0, 40) : '追问';
+};
+
+const flushAppendBuffer = async () => {
+  if (loading.value || isPreparingSend.value) return;
+  if (pendingAppendBuffer.value.length === 0) return;
+  const items = pendingAppendBuffer.value.splice(0, pendingAppendBuffer.value.length);
+  // 还原用户在缓冲期间可能输入但尚未发送的内容
+  const savedPrompt = prompt.value;
+  const savedFiles = Array.isArray(fileList.value) ? fileList.value.slice() : [];
+  let appendedAny = false;
+  for (const item of items) {
+    if (item.kind === 'input') {
+      prompt.value = item.text || '';
+      fileList.value = Array.isArray(item.files) ? item.files : [];
+      isPreparingSend.value = true;
+      try {
+        const added = await appendCurrentInputToHistory();
+        if (added) appendedAny = true;
+      } finally {
+        isPreparingSend.value = false;
+      }
+    } else if (item.kind === 'window' && item.data) {
+      await handleAppendMessageEvent(item.data, { deferSend: true });
+      appendedAny = true;
+    }
+  }
+  prompt.value = savedPrompt;
+  fileList.value = savedFiles;
+  if (appendedAny) {
+    await askAI(true);
+  }
+};
+
+watch(loading, (now, prev) => {
+  if (prev && !now) {
+    nextTick(() => { flushAppendBuffer(); });
+  }
+});
 
 const isAbortError = (error) => {
   if (!error) return false;
@@ -2007,7 +2087,13 @@ const onAvatarClick = async (role, event) => {
   }, roleMessageIndices.includes(chat_show.value.length - 1));
 };
 
-const handleSubmit = () => askAI(false);
+const handleSubmit = () => {
+  if (loading.value || isPreparingSend.value || isMcpLoading.value) {
+    enqueueInputToBuffer();
+    return;
+  }
+  askAI(false);
+};
 const handleCancel = () => cancelAskAI();
 const handleClearHistory = () => clearHistory();
 const handleRemoveFile = (index) => fileList.value.splice(index, 1);
@@ -5102,6 +5188,7 @@ const loadSession = async (jsonData) => {
   focusedMessageIndex.value = null;
   taskList.value = [];
   taskPanelVisible.value = false;
+  pendingAppendBuffer.value = [];
 
   try {
     CODE.value = jsonData.CODE;
@@ -5741,6 +5828,42 @@ Here are the rules you should always follow to solve your task:
 ${memoryPriorityRule}`;
 };
 
+const appendCurrentInputToHistory = async () => {
+  const promptText = prompt.value.trim();
+  const hasPendingFiles = fileList.value.length > 0;
+  const userTimestamp = new Date().toLocaleString('sv-SE');
+
+  if (!hasPendingFiles && promptText) {
+    history.value.push({ role: "user", content: promptText });
+    chat_show.value.push({
+      id: messageIdCounter.value++,
+      role: "user",
+      content: [{ type: "text", text: promptText }],
+      timestamp: userTimestamp
+    });
+    prompt.value = "";
+    scheduleAutoSave({ reason: 'user-message', immediate: true });
+    return true;
+  }
+
+  const file_content = await sendFile();
+  if ((file_content && file_content.length > 0) || promptText) {
+    const userContentList = [];
+    if (promptText) userContentList.push({ type: "text", text: promptText });
+    if (file_content && file_content.length > 0) userContentList.push(...file_content);
+    if (userContentList.length === 0) return false;
+    const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
+      ? userContentList[0].text
+      : userContentList;
+    history.value.push({ role: "user", content: contentForHistory });
+    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
+    prompt.value = "";
+    scheduleAutoSave({ reason: 'user-message', immediate: true });
+    return true;
+  }
+  return false;
+};
+
 const askAI = async (forceSend = false) => {
   if (loading.value || isPreparingSend.value) return;
   if (isMcpLoading.value) {
@@ -5751,45 +5874,13 @@ const askAI = async (forceSend = false) => {
   // --- 1. 处理用户输入 ---
   if (!forceSend) {
     isPreparingSend.value = true;
+    let added = false;
     try {
-      const promptText = prompt.value.trim();
-      const hasPendingFiles = fileList.value.length > 0;
-      const userTimestamp = new Date().toLocaleString('sv-SE');
-
-      if (!hasPendingFiles && promptText) {
-        history.value.push({ role: "user", content: promptText });
-        chat_show.value.push({
-          id: messageIdCounter.value++,
-          role: "user",
-          content: [{ type: "text", text: promptText }],
-          timestamp: userTimestamp
-        });
-        prompt.value = "";
-        scheduleAutoSave({ reason: 'user-message', immediate: true });
-      } else {
-        let file_content = await sendFile();
-        if ((file_content && file_content.length > 0) || promptText) {
-          const userContentList = [];
-          if (promptText) userContentList.push({ type: "text", text: promptText });
-          if (file_content && file_content.length > 0) userContentList.push(...file_content);
-          if (userContentList.length > 0) {
-            const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
-              ? userContentList[0].text
-              : userContentList;
-            history.value.push({ role: "user", content: contentForHistory });
-            chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
-          } else {
-            return;
-          }
-        } else {
-          return;
-        }
-        prompt.value = "";
-        scheduleAutoSave({ reason: 'user-message', immediate: true });
-      }
+      added = await appendCurrentInputToHistory();
     } finally {
       isPreparingSend.value = false;
     }
+    if (!added) return;
   }
 
   // --- 2. 初始化 AI 回合 ---
@@ -6706,6 +6797,7 @@ const clearHistory = () => {
   focusedMessageIndex.value = null;
   taskList.value = [];
   taskPanelVisible.value = false;
+  pendingAppendBuffer.value = [];
   cancelAutoNamingRequest();
   defaultConversationName.value = "";
   chatInputRef.value?.focus({ cursor: 'end' });
@@ -7072,7 +7164,8 @@ const scrollToMessageByIndex = (index) => {
           @clear-history="handleClearHistory" @remove-file="handleRemoveFile" @upload="handleUpload"
           @send-audio="handleSendAudio" @open-mcp-dialog="handleOpenMcpDialog" @pick-file-start="handlePickFileStart"
           @toggle-mcp="handleQuickMcpToggle" @toggle-skill="handleQuickSkillToggle"
-          @open-skill-dialog="toggleSkillDialog" />
+          @open-skill-dialog="toggleSkillDialog" :append-buffer="pendingAppendBuffer"
+          @cancel-buffer="removeBufferedMessage" />
       </div>
     </el-container>
   </main>

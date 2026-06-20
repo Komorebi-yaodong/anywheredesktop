@@ -120,15 +120,15 @@ onBeforeUnmount(() => {
   flex-direction: column;
   border-radius: 12px;
   overflow: hidden;
-  background-color: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(12px) saturate(120%);
-  -webkit-backdrop-filter: blur(12px) saturate(120%);
+  background-color: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
   border: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
 }
 
 html.dark .task-panel {
-  background-color: rgba(40, 40, 40, 0.74);
+  background-color: rgba(32, 32, 32, 0.5);
   border-color: rgba(255, 255, 255, 0.1);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
 }
@@ -210,11 +210,17 @@ html.dark .task-panel {
   height: 16px;
   margin-top: 1px;
   border-radius: 50%;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   border: 1.5px solid var(--el-border-color);
   color: #fff;
+  line-height: 0;
+}
+
+.task-status-dot :deep(.el-icon),
+.step-status-dot :deep(.el-icon) {
+  display: block;
 }
 
 .task-status-dot.in_progress {
@@ -258,11 +264,12 @@ html.dark .task-panel {
   height: 12px;
   margin-top: 3px;
   border-radius: 50%;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--el-border-color);
   color: #fff;
+  line-height: 0;
 }
 
 .step-status-dot.in_progress {
@@ -289,6 +296,7 @@ html.dark .task-panel {
 
 .spin {
   animation: task-spin 1s linear infinite;
+  transform-origin: center;
 }
 
 @keyframes task-spin {

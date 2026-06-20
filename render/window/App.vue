@@ -1026,9 +1026,8 @@ const getAppendPayloadPreview = (data) => {
   return text ? text.slice(0, 40) : '追问';
 };
 
-const flushAppendBuffer = async () => {
-  if (loading.value || isPreparingSend.value) return;
-  if (pendingAppendBuffer.value.length === 0) return;
+const drainBufferIntoHistory = async () => {
+  if (pendingAppendBuffer.value.length === 0) return false;
   const items = pendingAppendBuffer.value.splice(0, pendingAppendBuffer.value.length);
   // 还原用户在缓冲期间可能输入但尚未发送的内容
   const savedPrompt = prompt.value;
@@ -1052,6 +1051,12 @@ const flushAppendBuffer = async () => {
   }
   prompt.value = savedPrompt;
   fileList.value = savedFiles;
+  return appendedAny;
+};
+
+const flushAppendBuffer = async () => {
+  if (loading.value || isPreparingSend.value) return;
+  const appendedAny = await drainBufferIntoHistory();
   if (appendedAny) {
     await askAI(true);
   }
@@ -1172,18 +1177,18 @@ const handleChoiceSubmit = (toolCallId, payload) => {
 
 const buildChoiceResultText = (questions, answer) => {
   if (!answer || !Array.isArray(answer.responses)) {
-    return '用户取消了本次选择（请求被中断）。';
+    return 'The user cancelled the selection (the request was interrupted).';
   }
   const lines = answer.responses.map((r, i) => {
     const q = questions[r.questionIndex] || questions[i] || {};
-    const qText = q.question || r.question || `问题 ${i + 1}`;
+    const qText = q.question || r.question || `Question ${i + 1}`;
     if (r.type === 'discuss') {
-      return `Q: ${qText}\nA: 用户希望就此问题继续讨论，请先主动追问/澄清，再继续推进。`;
+      return `Q: ${qText}\nA: The user wants to discuss this question further. Proactively ask clarifying follow-up questions before proceeding.`;
     }
     if (r.type === 'custom') {
-      return `Q: ${qText}\nA（用户自定义输入）: ${r.customText || ''}`;
+      return `Q: ${qText}\nA (user's own input): ${r.customText || ''}`;
     }
-    const selected = Array.isArray(r.selected) ? r.selected.join('；') : '';
+    const selected = Array.isArray(r.selected) ? r.selected.join('; ') : '';
     return `Q: ${qText}\nA: ${selected}`;
   });
   return lines.join('\n\n');
@@ -1223,8 +1228,8 @@ const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
   if (toolCall.function.name === 'ask_user_choice') {
     const questions = Array.isArray(args?.questions) ? args.questions : [];
     if (questions.length === 0) {
-      if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = '没有提供任何问题。'; }
-      return '没有提供任何问题。';
+      if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = 'No questions were provided.'; }
+      return 'No questions were provided.';
     }
     if (uiToolCall) {
       uiToolCall.choiceData = { questions };
@@ -1246,7 +1251,7 @@ const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
     applyTaskList(tasks);
     const total = taskList.value.length;
     const done = taskList.value.filter(t => t.status === 'completed').length;
-    const ack = `任务列表已更新：共 ${total} 个任务，已完成 ${done} 个。`;
+    const ack = `Task list updated: ${total} task(s) total, ${done} completed.`;
     if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = ack; }
     return ack;
   }
@@ -6522,6 +6527,8 @@ const result = await window.api.invokeMcpTool(
 
         history.value.push(...toolMessages);
         scheduleAutoSave({ reason: 'tool-calls-completed', immediate: true });
+        // 工具调用完成后，把缓冲区消息插入历史，使下一轮请求即可纳入
+        await drainBufferIntoHistory();
       } else {
         if (isVoiceReply && responseMessage.audio) {
           currentBubble.content = currentBubble.content || [];
@@ -6948,6 +6955,13 @@ const handleGlobalKeyDown = (event) => {
       return;
     }
     handleSaveAction();
+    return;
+  }
+
+  // Ctrl + T: 切换任务进度面板
+  if (isCtrl && event.key.toLowerCase() === 't') {
+    event.preventDefault();
+    taskPanelVisible.value = !taskPanelVisible.value;
     return;
   }
 

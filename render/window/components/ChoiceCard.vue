@@ -1,7 +1,7 @@
 <script setup>
-import { reactive, computed } from 'vue';
+import { reactive, ref, computed } from 'vue';
 import { ElButton, ElInput, ElTag, ElIcon } from 'element-plus';
-import { Check, ChatLineRound, EditPen } from '@element-plus/icons-vue';
+import { Check, ChatLineRound, EditPen, ArrowLeft, ArrowRight } from '@element-plus/icons-vue';
 
 const props = defineProps({
   questions: { type: Array, default: () => [] }
@@ -13,6 +13,10 @@ const emit = defineEmits(['submit']);
 const drafts = reactive(
   props.questions.map(() => ({ mode: '', selected: [], customText: '' }))
 );
+
+const currentIndex = ref(0);
+const total = computed(() => props.questions.length);
+const currentQuestion = computed(() => props.questions[currentIndex.value] || {});
 
 const optionLetter = (index) => String.fromCharCode(65 + index);
 
@@ -66,8 +70,21 @@ const isAnswered = (qi) => {
 
 const allAnswered = computed(() => props.questions.every((_, i) => isAnswered(i)));
 
+const goPrev = () => {
+  if (currentIndex.value > 0) currentIndex.value -= 1;
+};
+
+const goNext = () => {
+  if (currentIndex.value < total.value - 1) currentIndex.value += 1;
+};
+
 const onSubmit = () => {
-  if (!allAnswered.value) return;
+  if (!allAnswered.value) {
+    // 跳到第一个未作答的问题
+    const firstUnanswered = props.questions.findIndex((_, i) => !isAnswered(i));
+    if (firstUnanswered >= 0) currentIndex.value = firstUnanswered;
+    return;
+  }
   const responses = props.questions.map((q, i) => {
     const d = drafts[i];
     if (d.mode === 'discuss') return { questionIndex: i, type: 'discuss', question: q.question };
@@ -80,40 +97,55 @@ const onSubmit = () => {
 
 <template>
   <div class="choice-card">
-    <div v-for="(q, qi) in questions" :key="qi" class="choice-question">
+    <div v-if="total > 1" class="choice-progress">
+      <span class="choice-progress-text">问题 {{ currentIndex + 1 }} / {{ total }}</span>
+      <div class="choice-dots">
+        <span
+          v-for="(q, i) in questions"
+          :key="i"
+          class="choice-dot"
+          :class="{ active: i === currentIndex, answered: isAnswered(i) }"
+          @click="currentIndex = i"
+        ></span>
+      </div>
+    </div>
+
+    <div class="choice-question">
       <div class="choice-q-head">
-        <el-tag v-if="q.header" size="small" effect="plain" round class="choice-header-tag">{{ q.header }}</el-tag>
-        <span class="choice-q-text">{{ q.question }}</span>
+        <el-tag v-if="currentQuestion.header" size="small" effect="plain" round class="choice-header-tag">
+          {{ currentQuestion.header }}
+        </el-tag>
+        <span class="choice-q-text">{{ currentQuestion.question }}</span>
       </div>
 
       <div class="choice-options">
         <div
-          v-for="(opt, oi) in (q.options || [])"
+          v-for="(opt, oi) in (currentQuestion.options || [])"
           :key="oi"
           class="choice-option"
-          :class="{ 'is-selected': isOptionSelected(qi, opt.label) }"
-          @click="selectOption(qi, opt.label)"
+          :class="{ 'is-selected': isOptionSelected(currentIndex, opt.label) }"
+          @click="selectOption(currentIndex, opt.label)"
         >
           <span class="choice-letter">{{ optionLetter(oi) }}</span>
           <div class="choice-option-body">
             <div class="choice-option-label">{{ opt.label }}</div>
             <div v-if="opt.description" class="choice-option-desc">{{ opt.description }}</div>
           </div>
-          <el-icon v-if="isOptionSelected(qi, opt.label)" class="choice-check"><Check /></el-icon>
+          <el-icon v-if="isOptionSelected(currentIndex, opt.label)" class="choice-check"><Check /></el-icon>
         </div>
 
         <!-- 倒数第二项：其他想法（输入框） -->
         <div
           class="choice-option choice-special"
-          :class="{ 'is-selected': drafts[qi].mode === 'custom' }"
-          @click="chooseCustom(qi)"
+          :class="{ 'is-selected': drafts[currentIndex].mode === 'custom' }"
+          @click="chooseCustom(currentIndex)"
         >
           <span class="choice-letter"><el-icon :size="13"><EditPen /></el-icon></span>
           <div class="choice-option-body">
             <div class="choice-option-label">其他想法（自己输入）</div>
             <el-input
-              v-if="drafts[qi].mode === 'custom'"
-              v-model="drafts[qi].customText"
+              v-if="drafts[currentIndex].mode === 'custom'"
+              v-model="drafts[currentIndex].customText"
               type="textarea"
               :autosize="{ minRows: 1, maxRows: 4 }"
               resize="none"
@@ -127,8 +159,8 @@ const onSubmit = () => {
         <!-- 最后一项：聊聊这个 -->
         <div
           class="choice-option choice-special"
-          :class="{ 'is-selected': drafts[qi].mode === 'discuss' }"
-          @click="chooseDiscuss(qi)"
+          :class="{ 'is-selected': drafts[currentIndex].mode === 'discuss' }"
+          @click="chooseDiscuss(currentIndex)"
         >
           <span class="choice-letter"><el-icon :size="13"><ChatLineRound /></el-icon></span>
           <div class="choice-option-body">
@@ -139,7 +171,14 @@ const onSubmit = () => {
     </div>
 
     <div class="choice-actions">
-      <el-button type="primary" size="small" :icon="Check" :disabled="!allAnswered" @click="onSubmit">
+      <el-button v-if="total > 1" size="small" text :icon="ArrowLeft" :disabled="currentIndex === 0" @click="goPrev">
+        上一题
+      </el-button>
+      <div class="choice-actions-spacer"></div>
+      <el-button v-if="currentIndex < total - 1" size="small" @click="goNext">
+        下一题<el-icon class="el-icon--right"><ArrowRight /></el-icon>
+      </el-button>
+      <el-button v-else type="primary" size="small" :icon="Check" :disabled="!allAnswered" @click="onSubmit">
         提交选择
       </el-button>
     </div>
@@ -161,10 +200,40 @@ const onSubmit = () => {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.choice-question + .choice-question {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--el-border-color);
+.choice-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.choice-progress-text {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.choice-dots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.choice-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--el-border-color);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.choice-dot.answered {
+  background-color: var(--el-color-success);
+}
+
+.choice-dot.active {
+  background-color: var(--el-color-primary);
+  transform: scale(1.3);
 }
 
 .choice-q-head {
@@ -173,10 +242,6 @@ const onSubmit = () => {
   gap: 6px;
   margin-bottom: 8px;
   flex-wrap: wrap;
-}
-
-.choice-header-tag {
-  flex-shrink: 0;
 }
 
 .choice-q-text {
@@ -201,7 +266,7 @@ const onSubmit = () => {
   background-color: var(--el-bg-color);
   border: 1px solid var(--el-border-color-lighter);
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
 }
 
 .choice-option:hover {
@@ -211,14 +276,15 @@ const onSubmit = () => {
 
 .choice-option.is-selected {
   border-color: var(--el-color-primary);
-  background-color: var(--el-color-primary-light-9);
+  /* 用基于主色的半透明色，深浅模式下都能保持对比 */
+  background-color: color-mix(in srgb, var(--el-color-primary) 14%, transparent);
 }
 
 .choice-letter {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
@@ -228,7 +294,21 @@ const onSubmit = () => {
   background-color: var(--el-fill-color);
 }
 
+.choice-letter :deep(.el-icon) {
+  display: block;
+}
+
 .choice-option.is-selected .choice-letter {
+  color: #fff;
+  background-color: var(--el-color-primary);
+}
+
+.choice-special .choice-letter {
+  color: var(--el-color-primary);
+  background-color: var(--el-fill-color);
+}
+
+.choice-special.is-selected .choice-letter {
   color: #fff;
   background-color: var(--el-color-primary);
 }
@@ -258,16 +338,16 @@ const onSubmit = () => {
 .choice-check {
   flex-shrink: 0;
   color: var(--el-color-primary);
-  margin-top: 2px;
-}
-
-.choice-special .choice-letter {
-  color: var(--el-color-primary);
+  margin-top: 3px;
 }
 
 .choice-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   margin-top: 12px;
+}
+
+.choice-actions-spacer {
+  flex: 1;
 }
 </style>

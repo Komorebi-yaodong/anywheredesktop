@@ -1623,11 +1623,11 @@ const handlers = {
     // Better Work (interactive: actually handled in the chat window UI; these are graceful fallbacks for non-UI contexts such as sub-agents)
     ask_user_choice: async ({ questions } = {}) => {
         const count = Array.isArray(questions) ? questions.length : 0;
-        return `[Better Work] ask_user_choice 需要在交互式对话窗口中由用户点选作答；当前执行环境（如子智能体/无 UI）无法采集用户选择。请改为在正文中直接向用户提问。(questions: ${count})`;
+        return `[Better Work] ask_user_choice must be answered by the user in the interactive chat window. The current execution context (e.g. a sub-agent with no UI) cannot collect a user selection, so ask the user directly in your message text instead. (questions: ${count})`;
     },
     task_write: async ({ tasks } = {}) => {
         const count = Array.isArray(tasks) ? tasks.length : 0;
-        return `[Better Work] 任务列表已接收（${count} 项）。任务进度面板仅在交互式对话窗口中展示。`;
+        return `[Better Work] Received the task list (${count} item(s)). The task progress panel is only shown in the interactive chat window.`;
     },
     // Python
     list_python_interpreters: async () => {

@@ -1703,9 +1703,15 @@ html.dark .cancel-spinner {
     margin-bottom: 8px;
     padding: 8px 10px;
     border-radius: 10px;
-    background-color: var(--el-fill-color-light);
+    background-color: rgba(255, 255, 255, 0.45);
+    backdrop-filter: blur(8px) saturate(115%);
+    -webkit-backdrop-filter: blur(8px) saturate(115%);
     border: 1px dashed var(--el-border-color);
     box-sizing: border-box;
+}
+
+html.dark .append-buffer-container {
+    background-color: rgba(40, 40, 40, 0.4);
 }
 
 .append-buffer-title {

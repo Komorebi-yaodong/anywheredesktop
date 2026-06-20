@@ -40,6 +40,7 @@
     "es-object-atoms": "^1.1.2",
     "fetch-blob": "^3.2.0",
     "formdata-polyfill": "^4.0.10",
+    "gpt-tokenizer": "^3.4.0",
     "js-yaml": "^4.2.0",
     "lowdb": "^7.0.1",
     "mammoth": "^1.12.0",

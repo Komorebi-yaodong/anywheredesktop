@@ -261,7 +261,12 @@ export const defaultConfig = {
         position_y: 0,
         autoCloseOnBlur: true,
         isAlwaysOnTop: true,
-        autoSaveChat: false
+        autoSaveChat: false,
+        contextWindow: 256000,
+        autoCompact: true,
+        compactTriggerRatio: 0.8,
+        compactKeepRounds: 3,
+        compactReserveOutput: 8000
       }
     },
     settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],

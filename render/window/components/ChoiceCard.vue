@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref, computed } from 'vue';
+import { reactive, ref, computed, nextTick } from 'vue';
 import { ElButton, ElInput, ElTag, ElIcon } from 'element-plus';
 import { Check, ChatLineRound, EditPen, ArrowLeft, ArrowRight } from '@element-plus/icons-vue';
 
@@ -32,11 +32,15 @@ const selectOption = (qi, label) => {
   d.customText = '';
 };
 
+const customInputRef = ref(null);
 const chooseCustom = (qi) => {
   const d = drafts[qi];
   if (!d) return;
   d.mode = 'custom';
   d.selected = [];
+  nextTick(() => {
+    customInputRef.value?.focus?.();
+  });
 };
 
 const chooseDiscuss = (qi) => {
@@ -66,9 +70,21 @@ const goNext = () => {
   if (currentIndex.value < total.value - 1) currentIndex.value += 1;
 };
 
-// 在"其他想法"输入框按回车：直接进入下一题或提交（Shift+Enter 才换行）
+// 在"其他想法"输入框：Ctrl+Enter 换行；普通 Enter 进入下一题或提交
 const handleCustomEnter = (e) => {
-  if (e.shiftKey) return;
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    const textarea = e.target;
+    const d = drafts[currentIndex.value];
+    if (!d || !textarea) return;
+    const start = textarea.selectionStart ?? d.customText.length;
+    const end = textarea.selectionEnd ?? d.customText.length;
+    d.customText = d.customText.slice(0, start) + '\n' + d.customText.slice(end);
+    nextTick(() => {
+      textarea.selectionStart = textarea.selectionEnd = start + 1;
+    });
+    return;
+  }
   e.preventDefault();
   if (currentIndex.value < total.value - 1) goNext();
   else onSubmit();
@@ -141,11 +157,12 @@ const onSubmit = () => {
             <div class="choice-option-label">其他想法（自己输入）</div>
             <el-input
               v-if="drafts[currentIndex].mode === 'custom'"
+              ref="customInputRef"
               v-model="drafts[currentIndex].customText"
               type="textarea"
               :autosize="{ minRows: 1, maxRows: 4 }"
               resize="none"
-              placeholder="输入你的想法…（回车下一题/提交，Shift+Enter 换行）"
+              placeholder="输入你的想法…"
               class="choice-custom-input"
               @click.stop
               @keydown.enter="handleCustomEnter"

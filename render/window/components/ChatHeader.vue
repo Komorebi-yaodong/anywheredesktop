@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { ElHeader, ElIcon, ElTooltip } from 'element-plus';
-import { Loading, Edit, List } from '@element-plus/icons-vue'; // List 用于任务进度按钮
+import { Loading, Edit, List, Check } from '@element-plus/icons-vue'; // List 任务按钮 / Check 完成态
 
 const props = defineProps({
   modelMap: Object,
@@ -97,6 +97,7 @@ const logoColor = computed(() => {
             <el-icon :size="14" class="header-icon"><List /></el-icon>
             <span v-if="taskStatus" class="task-status-badge" :class="taskStatus">
               <el-icon v-if="taskStatus === 'in_progress'" class="spin" :size="10"><Loading /></el-icon>
+              <el-icon v-else-if="taskStatus === 'completed'" :size="12"><Check /></el-icon>
             </span>
           </div>
         </el-tooltip>
@@ -314,7 +315,10 @@ html.dark .prompt-text {
 }
 
 .task-status-badge.completed {
-  background-color: var(--el-color-success);
+  width: auto;
+  height: auto;
+  background-color: transparent;
+  color: var(--el-color-success);
 }
 
 .task-status-badge.in_progress {

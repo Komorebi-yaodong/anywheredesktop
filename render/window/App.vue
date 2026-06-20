@@ -3959,7 +3959,8 @@ const getSessionDataAsObject = () => {
     draftFileList: fileList.value,
     activeMcpServerIds: sessionMcpServerIds.value || [],
     activeSkillIds: sessionSkillIds.value || [],
-    isAutoApproveTools: isAutoApproveTools.value
+    isAutoApproveTools: isAutoApproveTools.value,
+    taskList: taskList.value
   };
 }
 const saveSessionToCloud = async () => {
@@ -5210,7 +5211,7 @@ const loadSession = async (jsonData) => {
   collapsedMessages.value.clear();
   messageRefs.clear();
   focusedMessageIndex.value = null;
-  taskList.value = [];
+  taskList.value = Array.isArray(jsonData.taskList) ? normalizeTaskList(jsonData.taskList) : [];
   taskPanelVisible.value = false;
   pendingAppendBuffer.value = [];
 

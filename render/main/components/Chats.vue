@@ -74,11 +74,16 @@ const sortMode = ref('createdAt');
 const sortDirection = ref('desc');
 const draggedFileBasenames = ref([]);
 const dragOverProjectTarget = ref('');
+const isProjectDragging = ref(false);
+const dragGhostX = ref(0);
+const dragGhostY = ref(0);
+const dragGhostLabel = ref('');
 
 // --- 项目（目录）分组状态 ---
 const localProjects = ref({ version: 1, projects: [] });
 const cloudProjects = ref({ version: 1, projects: [] });
 const collapsedProjectIds = ref(new Set(loadCollapsedProjectIds()));
+const projectDeleteDialog = ref({ visible: false, id: '', name: '', busy: false });
 
 watch(() => currentConfig.value?.webdav, (newWebdav) => {
     if (newWebdav) {
@@ -526,6 +531,7 @@ onActivated(() => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('mouseup', onGlobalMouseUp);
     window.addEventListener('mousemove', onGlobalMouseMove);
+    window.addEventListener('wheel', onProjectDragWheel, { passive: false });
     refreshData(true);
 });
 
@@ -534,6 +540,8 @@ onDeactivated(() => {
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('mouseup', onGlobalMouseUp);
     window.removeEventListener('mousemove', onGlobalMouseMove);
+    window.removeEventListener('wheel', onProjectDragWheel);
+    resetProjectDragState();
 });
 
 onUnmounted(() => {
@@ -541,6 +549,8 @@ onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('mouseup', onGlobalMouseUp);
     window.removeEventListener('mousemove', onGlobalMouseMove);
+    window.removeEventListener('wheel', onProjectDragWheel);
+    resetProjectDragState();
 });
 
 // --- 框选核心逻辑 ---
@@ -577,6 +587,10 @@ const onMouseDown = (e) => {
 };
 
 const onGlobalMouseMove = (e) => {
+    if (dragPending) {
+        handleProjectDragMove(e);
+        return;
+    }
     if (!isMouseDown) return;
 
     const currentX = e.clientX;
@@ -661,6 +675,10 @@ const updateSelectionInvert = () => {
 };
 
 const onGlobalMouseUp = (e) => {
+    if (dragPending) {
+        finishProjectDrag();
+        return;
+    }
     if (isMouseDown) {
         // 如果没有发生拖拽，且没有按住 Ctrl/Shift，且点击的是空白处（不是列表项），则清空选择
         // 这是为了符合“点击空白处取消选择”的直觉
@@ -686,8 +704,8 @@ const onGlobalMouseUp = (e) => {
 
 // 列表项点击处理 (保持原有逻辑)
 const handleItemClick = (file) => {
-    // 如果刚刚发生了拖拽，则忽略此次点击（避免抬起鼠标时触发 click 导致状态再次反转）
-    if (hasMoved) return;
+    // 如果刚刚发生了框选或项目拖拽，则忽略此次点击（避免抬起鼠标时触发 click 导致状态再次反转）
+    if (hasMoved || justDraggedProject) return;
 
     toggleFileSelection(file, !isFileSelected(file));
 };
@@ -904,60 +922,76 @@ async function renameProject(projectId) {
     }
 }
 
-async function deleteProject(projectId) {
+function deleteProject(projectId) {
     const project = (activeProjectsData.value.projects || []).find((p) => p.id === projectId);
     if (!project) return;
+    projectDeleteDialog.value = { visible: true, id: project.id, name: project.name, busy: false };
+}
+
+// 仅删除项目：内部对话移回未分组，不删除对话文件
+async function confirmDeleteProjectKeepChats() {
+    const { id } = projectDeleteDialog.value;
+    if (!id) return;
+    projectDeleteDialog.value.busy = true;
     try {
-        await ElMessageBox.confirm(t('chats.projects.deleteConfirm', { name: project.name }), t('chats.projects.delete'), {
-            type: 'warning'
-        });
-        // 删除项目仅解组（文件不再归属任何项目，自动落入未分组），不删除对话文件
-        const projects = (activeProjectsData.value.projects || []).filter((p) => p.id !== projectId);
+        const projects = (activeProjectsData.value.projects || []).filter((p) => p.id !== id);
         setActiveProjectsData({ version: activeProjectsData.value.version || 1, projects });
         await persistActiveProjects();
         ElMessage.success(t('chats.projects.deleteSuccess'));
+        projectDeleteDialog.value.visible = false;
     } catch (error) {
-        if (error !== 'cancel' && error !== 'close') ElMessage.error(String(error?.message || error));
+        ElMessage.error(String(error?.message || error));
+    } finally {
+        projectDeleteDialog.value.busy = false;
     }
 }
 
-// --- 拖拽改归属 ---
-const onFileDragStart = (file, event) => {
-    const names = (isFileSelected(file) && selectedFiles.value.length > 0)
-        ? selectedFiles.value.map((f) => f.basename)
-        : [file.basename];
-    draggedFileBasenames.value = names;
-    if (event?.dataTransfer) {
-        event.dataTransfer.effectAllowed = 'move';
-        try { event.dataTransfer.setData('text/plain', names.join('\n')); } catch { /* ignore */ }
-        // 批量拖拽时显示数量角标，明确正在拖动多个对话
-        if (names.length > 1 && typeof event.dataTransfer.setDragImage === 'function') {
-            try {
-                const ghost = document.createElement('div');
-                ghost.textContent = String(names.length);
-                ghost.style.cssText = [
-                    'position:fixed', 'top:-1000px', 'left:-1000px',
-                    'min-width:24px', 'height:24px', 'padding:0 8px',
-                    'display:flex', 'align-items:center', 'justify-content:center',
-                    'background:var(--el-color-primary,#409eff)', 'color:#fff',
-                    'border-radius:12px', 'font-size:12px', 'font-weight:600',
-                    'box-shadow:0 2px 8px rgba(0,0,0,0.2)'
-                ].join(';');
-                document.body.appendChild(ghost);
-                event.dataTransfer.setDragImage(ghost, 12, 12);
-                setTimeout(() => ghost.remove(), 0);
-            } catch { /* ignore drag image failure */ }
+// 删除项目及其内部对话历史（真实删除对话文件）
+async function confirmDeleteProjectWithChats() {
+    const { id } = projectDeleteDialog.value;
+    if (!id) return;
+    projectDeleteDialog.value.busy = true;
+    try {
+        const group = projectGroups.value.find((g) => g.id === id);
+        const files = group ? group.files : [];
+        for (const file of files) {
+            if (activeView.value === 'local') {
+                const localPath = getSafeString(file?.path) || `${localChatPath.value}/${file.basename}`;
+                await window.api.deleteLocalFile(localPath);
+                if (isWebdavConfigValid.value && cloudChatFiles.value.some((f) => f.basename === file.basename)) {
+                    // 本地视图下不强制删云端，保持与单文件删除一致：仅删本地
+                }
+            } else {
+                ensureWebdavResult(
+                    await window.api.deleteWebdavBackup(buildWebdavInput({ filename: file.basename })),
+                    'webdav_delete_failed'
+                );
+            }
         }
+        const projects = (activeProjectsData.value.projects || []).filter((p) => p.id !== id);
+        setActiveProjectsData({ version: activeProjectsData.value.version || 1, projects });
+        await persistActiveProjects();
+        ElMessage.success(t('chats.projects.deleteWithChatsSuccess', { count: files.length }));
+        projectDeleteDialog.value.visible = false;
+        selectedFiles.value = [];
+        await refreshData();
+    } catch (error) {
+        ElMessage.error(String(error?.message || error));
+    } finally {
+        projectDeleteDialog.value.busy = false;
     }
-};
+}
 
-const onFileDragEnd = () => {
-    draggedFileBasenames.value = [];
-    dragOverProjectTarget.value = '';
-    stopProjectAutoScroll();
-};
+// --- 自定义指针拖拽改归属（不用原生 HTML5 DnD，以便拖拽时滚轮可用、命中更可靠）---
+let dragPending = false;
+let dragActivated = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragPendingBasenames = [];
+let lastDragClientX = 0;
+let lastDragClientY = 0;
+let justDraggedProject = false;
 
-// 拖拽时的边缘自动滚动（原生 DnD 期间 Chromium 不派发 wheel 事件，改用边缘检测滚动）
 let projectAutoScrollRAF = null;
 let projectAutoScrollDir = 0;
 const PROJECT_AUTOSCROLL_EDGE = 56;
@@ -975,43 +1009,114 @@ const stopProjectAutoScroll = () => {
 
 const runProjectAutoScroll = () => {
     const wrap = getChatScrollWrap();
-    if (!wrap || !projectAutoScrollDir || !draggedFileBasenames.value.length) {
+    if (!wrap || !projectAutoScrollDir || !isProjectDragging.value) {
         projectAutoScrollRAF = null;
         projectAutoScrollDir = 0;
         return;
     }
     wrap.scrollTop += projectAutoScrollDir * PROJECT_AUTOSCROLL_SPEED;
+    // 滚动后重新计算高亮目标
+    updateDragTarget(lastDragClientX, lastDragClientY);
     projectAutoScrollRAF = requestAnimationFrame(runProjectAutoScroll);
 };
 
-const onChatListDragOver = (event) => {
-    if (!draggedFileBasenames.value.length) return;
+const updateAutoScrollByY = (y) => {
     const wrap = getChatScrollWrap();
     if (!wrap) return;
     const rect = wrap.getBoundingClientRect();
-    const y = event.clientY;
     let dir = 0;
     if (y < rect.top + PROJECT_AUTOSCROLL_EDGE) dir = -1;
     else if (y > rect.bottom - PROJECT_AUTOSCROLL_EDGE) dir = 1;
     projectAutoScrollDir = dir;
     if (dir) {
-        // 允许在列表空白区也持续接收 dragover 事件
-        event.preventDefault();
         if (!projectAutoScrollRAF) projectAutoScrollRAF = requestAnimationFrame(runProjectAutoScroll);
     } else {
         stopProjectAutoScroll();
     }
 };
 
-const onProjectDragOver = (targetId, event) => {
-    if (!draggedFileBasenames.value.length) return;
-    event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-    dragOverProjectTarget.value = targetId;
+// 命中检测：返回项目 id、PROJECT_UNGROUPED_DROP_ID 或 ''（无效目标）
+const resolveDropTarget = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return '';
+    const header = el.closest('.project-header');
+    if (header) return header.dataset.projectId || '';
+    const label = el.closest('.ungrouped-label');
+    if (label) return PROJECT_UNGROUPED_DROP_ID;
+    const row = el.closest('.chat-list-item');
+    if (row) return row.dataset.projectId ? row.dataset.projectId : PROJECT_UNGROUPED_DROP_ID;
+    if (el.closest('.chat-list')) return PROJECT_UNGROUPED_DROP_ID;
+    return '';
 };
 
-const onProjectDragLeave = (targetId) => {
-    if (dragOverProjectTarget.value === targetId) dragOverProjectTarget.value = '';
+const updateDragTarget = (x, y) => {
+    dragOverProjectTarget.value = resolveDropTarget(x, y);
+};
+
+const onTitleMouseDown = (file, event) => {
+    if (event.button !== 0) return;
+    dragPendingBasenames = (isFileSelected(file) && selectedFiles.value.length > 0)
+        ? selectedFiles.value.map((f) => f.basename)
+        : [file.basename];
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    lastDragClientX = event.clientX;
+    lastDragClientY = event.clientY;
+    dragPending = true;
+    dragActivated = false;
+};
+
+const handleProjectDragMove = (event) => {
+    lastDragClientX = event.clientX;
+    lastDragClientY = event.clientY;
+    if (!dragActivated) {
+        if (Math.abs(event.clientX - dragStartX) <= 5 && Math.abs(event.clientY - dragStartY) <= 5) {
+            return;
+        }
+        dragActivated = true;
+        isProjectDragging.value = true;
+        draggedFileBasenames.value = dragPendingBasenames;
+        dragGhostLabel.value = dragPendingBasenames.length > 1
+            ? t('chats.projects.dragCount', { count: dragPendingBasenames.length })
+            : formatFilenameDisplay(dragPendingBasenames[0]);
+        window.getSelection()?.removeAllRanges();
+    }
+    dragGhostX.value = event.clientX + 14;
+    dragGhostY.value = event.clientY + 14;
+    updateDragTarget(event.clientX, event.clientY);
+    updateAutoScrollByY(event.clientY);
+};
+
+const resetProjectDragState = () => {
+    dragPending = false;
+    dragActivated = false;
+    dragPendingBasenames = [];
+    isProjectDragging.value = false;
+    draggedFileBasenames.value = [];
+    dragOverProjectTarget.value = '';
+    stopProjectAutoScroll();
+};
+
+async function finishProjectDrag() {
+    const wasActivated = dragActivated;
+    const basenames = [...draggedFileBasenames.value];
+    const target = dragOverProjectTarget.value;
+    resetProjectDragState();
+    if (!wasActivated || !basenames.length) return;
+    justDraggedProject = true;
+    setTimeout(() => { justDraggedProject = false; }, 0);
+    if (!target) return; // 拖到列表外，视为取消
+    const projectId = target === PROJECT_UNGROUPED_DROP_ID ? '' : target;
+    await assignFilesToProject(basenames, projectId);
+}
+
+const onProjectDragWheel = (event) => {
+    if (!isProjectDragging.value) return;
+    const wrap = getChatScrollWrap();
+    if (!wrap) return;
+    event.preventDefault();
+    wrap.scrollTop += event.deltaY;
+    updateDragTarget(lastDragClientX, lastDragClientY);
 };
 
 async function assignFilesToProject(basenames, projectId) {
@@ -1036,17 +1141,6 @@ async function assignFilesToProject(basenames, projectId) {
     } catch (error) {
         ElMessage.error(`${t('chats.projects.moveFailed')}: ${error?.message || error}`);
     }
-}
-
-async function onDropToProject(targetId, event) {
-    event?.preventDefault?.();
-    stopProjectAutoScroll();
-    const basenames = [...draggedFileBasenames.value];
-    draggedFileBasenames.value = [];
-    dragOverProjectTarget.value = '';
-    if (!basenames.length) return;
-    const projectId = targetId === PROJECT_UNGROUPED_DROP_ID ? '' : targetId;
-    await assignFilesToProject(basenames, projectId);
 }
 
 async function fetchLocalFiles(silent = false) {
@@ -1682,17 +1776,15 @@ const toggleSelectAll = () => {
                         <div class="chat-column chat-column-actions">{{ t('chats.table.actions') }}</div>
                     </div>
                     <el-scrollbar view-class="chat-list-view">
-                    <!-- 绑定 mousedown 启动框选；dragover 实现拖拽时边缘自动滚动 -->
-                    <div class="chat-list" ref="chatListRef" @mousedown="onMouseDown" @dragover="onChatListDragOver">
+                    <!-- 绑定 mousedown 启动框选；项目拖拽改用自定义指针拖拽（见 onTitleMouseDown） -->
+                    <div class="chat-list" ref="chatListRef" @mousedown="onMouseDown">
                         <template v-for="row in displayRows" :key="row.kind === 'file' ? `file-${row.file.basename}` : (row.kind === 'project' ? `proj-${row.id}` : 'ungrouped-label')">
 
                             <!-- 项目头行 -->
                             <div v-if="row.kind === 'project'" class="project-header"
                                 :class="{ 'drag-over': dragOverProjectTarget === row.id }"
-                                @click="toggleProjectCollapse(row.id)"
-                                @dragover="onProjectDragOver(row.id, $event)"
-                                @dragleave="onProjectDragLeave(row.id)"
-                                @drop="onDropToProject(row.id, $event)">
+                                :data-project-id="row.id"
+                                @click="toggleProjectCollapse(row.id)">
                                 <el-icon class="project-caret" :class="{ expanded: !row.collapsed }"><ArrowRight /></el-icon>
                                 <el-icon class="project-folder"><Folder /></el-icon>
                                 <span class="project-name" :title="row.name">{{ row.name }}</span>
@@ -1711,10 +1803,7 @@ const toggleSelectAll = () => {
 
                             <!-- 未分组分隔标签（同时作为"移出项目"放置目标） -->
                             <div v-else-if="row.kind === 'ungrouped-label'" class="ungrouped-label"
-                                :class="{ 'drag-over': dragOverProjectTarget === PROJECT_UNGROUPED_DROP_ID }"
-                                @dragover="onProjectDragOver(PROJECT_UNGROUPED_DROP_ID, $event)"
-                                @dragleave="onProjectDragLeave(PROJECT_UNGROUPED_DROP_ID)"
-                                @drop="onDropToProject(PROJECT_UNGROUPED_DROP_ID, $event)">
+                                :class="{ 'drag-over': dragOverProjectTarget === PROJECT_UNGROUPED_DROP_ID }">
                                 {{ t('chats.projects.ungrouped') }}
                             </div>
 
@@ -1722,6 +1811,7 @@ const toggleSelectAll = () => {
                             <div v-else class="chat-list-item"
                                 :class="{ 'is-selected': isFileSelected(row.file), 'in-project': row.projectId }"
                                 :data-basename="row.file.basename"
+                                :data-project-id="row.projectId || ''"
                                 @click="handleItemClick(row.file)"
                                 @contextmenu.prevent.stop="handleItemContextMenu(row.file, $event)">
 
@@ -1732,9 +1822,7 @@ const toggleSelectAll = () => {
                                 </div>
 
                                 <div class="list-title" :title="normalizeTitleValue(row.file)"
-                                    draggable="true"
-                                    @dragstart="onFileDragStart(row.file, $event)"
-                                    @dragend="onFileDragEnd">
+                                    @mousedown="onTitleMouseDown(row.file, $event)">
                                     {{ normalizeTitleValue(row.file) }}
                                 </div>
                                 <div v-if="showCreatedAtColumn" class="meta-created">{{ formatDate(row.file.createdAt || row.file.lastmod) }}</div>
@@ -1858,6 +1946,29 @@ const toggleSelectAll = () => {
             </el-button>
         </template>
     </el-dialog>
+
+    <!-- 删除项目：三选项 -->
+    <el-dialog v-model="projectDeleteDialog.visible" :title="t('chats.projects.delete')" width="460px" append-to-body>
+        <p class="project-delete-message">{{ t('chats.projects.deleteDialogMessage', { name: projectDeleteDialog.name }) }}</p>
+        <template #footer>
+            <div class="project-delete-actions">
+                <el-button :disabled="projectDeleteDialog.busy" @click="projectDeleteDialog.visible = false">
+                    {{ t('chats.projects.deleteCancel') }}
+                </el-button>
+                <el-button :loading="projectDeleteDialog.busy" @click="confirmDeleteProjectKeepChats">
+                    {{ t('chats.projects.deleteKeepChats') }}
+                </el-button>
+                <el-button type="danger" :loading="projectDeleteDialog.busy" @click="confirmDeleteProjectWithChats">
+                    {{ t('chats.projects.deleteWithChats') }}
+                </el-button>
+            </div>
+        </template>
+    </el-dialog>
+
+    <!-- 自定义拖拽悬浮提示 -->
+    <div v-show="isProjectDragging" class="drag-ghost" :style="{ top: dragGhostY + 'px', left: dragGhostX + 'px' }">
+        {{ dragGhostLabel }}
+    </div>
 </template>
 
 <style scoped>
@@ -2109,6 +2220,38 @@ const toggleSelectAll = () => {
 /* 项目内文件行缩进 */
 .chat-list-item.in-project {
     padding-left: 28px;
+}
+
+/* 自定义拖拽悬浮提示 */
+.drag-ghost {
+    position: fixed;
+    z-index: 99999;
+    pointer-events: none;
+    max-width: 260px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background-color: var(--el-color-primary);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.project-delete-message {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-primary);
+}
+
+.project-delete-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
 }
 
 .chat-table-shell :deep(.el-scrollbar) {

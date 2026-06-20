@@ -209,7 +209,13 @@
       "moveToProject": "Move to project",
       "removeFromProject": "Remove from project",
       "moveSuccess": "Project assignment updated",
-      "moveFailed": "Failed to update project assignment"
+      "moveFailed": "Failed to update project assignment",
+      "dragCount": "{count} chats",
+      "deleteDialogMessage": "How do you want to delete project \"{name}\"?",
+      "deleteWithChats": "Delete project & chats",
+      "deleteKeepChats": "Keep chats (move to Ungrouped)",
+      "deleteCancel": "Cancel",
+      "deleteWithChatsSuccess": "Deleted project and {count} chats"
     }
   },
   "tasks": {

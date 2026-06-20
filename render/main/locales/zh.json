@@ -209,7 +209,13 @@
       "moveToProject": "移动到项目",
       "removeFromProject": "移出项目",
       "moveSuccess": "已更新项目归属",
-      "moveFailed": "更新项目归属失败"
+      "moveFailed": "更新项目归属失败",
+      "dragCount": "{count} 个对话",
+      "deleteDialogMessage": "如何删除项目「{name}」？",
+      "deleteWithChats": "删除项目及对话",
+      "deleteKeepChats": "仅删项目，对话移回未分组",
+      "deleteCancel": "取消",
+      "deleteWithChatsSuccess": "已删除项目及 {count} 个对话"
     }
   },
   "tasks": {

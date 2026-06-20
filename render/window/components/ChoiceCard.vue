@@ -66,6 +66,14 @@ const goNext = () => {
   if (currentIndex.value < total.value - 1) currentIndex.value += 1;
 };
 
+// 在"其他想法"输入框按回车：直接进入下一题或提交（Shift+Enter 才换行）
+const handleCustomEnter = (e) => {
+  if (e.shiftKey) return;
+  e.preventDefault();
+  if (currentIndex.value < total.value - 1) goNext();
+  else onSubmit();
+};
+
 const onSubmit = () => {
   if (!allAnswered.value) {
     // 跳到第一个未作答的问题
@@ -137,9 +145,10 @@ const onSubmit = () => {
               type="textarea"
               :autosize="{ minRows: 1, maxRows: 4 }"
               resize="none"
-              placeholder="输入你的想法…"
+              placeholder="输入你的想法…（回车下一题/提交，Shift+Enter 换行）"
               class="choice-custom-input"
               @click.stop
+              @keydown.enter="handleCustomEnter"
             />
           </div>
         </div>

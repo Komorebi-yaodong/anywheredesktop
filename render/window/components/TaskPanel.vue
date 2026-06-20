@@ -22,9 +22,9 @@ watch(
   (v) => {
     if (v && !initialized.value) {
       nextTick(() => {
-        const w = panelRef.value?.offsetWidth || 300;
-        pos.x = Math.max(12, window.innerWidth - w - 20);
-        pos.y = 64;
+        // 默认放左上：系统提示词下方、右侧导航列左侧，避免遮挡 header 与导航列
+        pos.x = 16;
+        pos.y = 96;
         initialized.value = true;
       });
     }

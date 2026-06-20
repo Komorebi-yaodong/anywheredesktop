@@ -764,6 +764,7 @@ const chat_show = ref([]);
 const loading = ref(false);
 const prompt = ref("");
 const signalController = ref(null);
+const activeAssistantTurnId = ref(0);
 const fileList = ref([]);
 const zoomLevel = ref(1);
 const collapsedMessages = ref(new Set());
@@ -986,6 +987,7 @@ const imageViewerInitialIndex = ref(0);
 const currentImageViewerIndex = ref(0);
 
 const toolCallControllers = ref(new Map());
+let activeAssistantTurnMeta = null;
 const tempSessionMcpServerIds = ref([]);
 
 const isAutoApproveTools = ref(true);
@@ -1073,6 +1075,15 @@ const isAbortError = (error) => {
   return error.name === 'AbortError' || String(error?.message || '').includes('aborted');
 };
 
+const createAbortError = () => {
+  if (typeof DOMException === 'function') {
+    return new DOMException('The operation was aborted.', 'AbortError');
+  }
+  const error = new Error('The operation was aborted.');
+  error.name = 'AbortError';
+  return error;
+};
+
 const normalizeAssistantMessageContent = (content) => {
   if (Array.isArray(content)) return content.filter(part => part && typeof part === 'object');
   if (typeof content === 'string') {
@@ -1084,6 +1095,10 @@ const normalizeAssistantMessageContent = (content) => {
 const appendTerminalNoticeToAssistantContent = (content, terminalNotice) => {
   const normalizedContent = normalizeAssistantMessageContent(content);
   if (!terminalNotice || !terminalNotice.trim()) {
+    return normalizedContent;
+  }
+  const noticeText = terminalNotice.trim();
+  if (noticeText && normalizedContent.some(part => part?.type === 'text' && typeof part.text === 'string' && part.text.includes(noticeText))) {
     return normalizedContent;
   }
 
@@ -1104,11 +1119,115 @@ const appendTerminalNoticeToAssistantContent = (content, terminalNotice) => {
   return nextContent;
 };
 
+const ASSISTANT_CANCELLED_NOTICE_MARKDOWN = "\n\n> **请求已取消**";
+
 const getAssistantTerminalNoticeMarkdown = (aborted, errorDisplay) => {
   if (aborted) {
-    return "\n\n> **请求已取消**";
+    return ASSISTANT_CANCELLED_NOTICE_MARKDOWN;
   }
   return `\n\n> **错误信息**：${errorDisplay}`;
+};
+
+const getCurrentAssistantDisplayName = () => {
+  return modelMap.value[model.value] || model.value.split('|')[1] || model.value || '';
+};
+
+const findAssistantTurnBubbleIndex = (turnMeta = activeAssistantTurnMeta) => {
+  const assistantMessageId = turnMeta?.assistantMessageId;
+  if (assistantMessageId !== undefined && assistantMessageId !== null) {
+    const index = chat_show.value.findIndex(msg => msg?.role === 'assistant' && msg.id === assistantMessageId);
+    if (index !== -1) return index;
+  }
+
+  for (let index = chat_show.value.length - 1; index >= 0; index -= 1) {
+    const message = chat_show.value[index];
+    if (message?.role === 'assistant' && !message.endTime && !message.completedTimestamp) {
+      return index;
+    }
+  }
+  return -1;
+};
+
+const buildMissingToolAbortMessages = () => {
+  let assistantIndex = -1;
+  for (let index = history.value.length - 1; index >= 0; index -= 1) {
+    const message = history.value[index];
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      assistantIndex = index;
+      break;
+    }
+    if (message?.role !== 'tool') {
+      break;
+    }
+  }
+
+  if (assistantIndex === -1) return [];
+  const trailingMessages = history.value.slice(assistantIndex + 1);
+  if (trailingMessages.some(message => message?.role !== 'tool')) return [];
+
+  const respondedToolCallIds = new Set(
+    trailingMessages
+      .filter(message => message?.role === 'tool' && message.tool_call_id)
+      .map(message => message.tool_call_id)
+  );
+
+  return history.value[assistantIndex].tool_calls
+    .filter(toolCall => toolCall?.id && !respondedToolCallIds.has(toolCall.id))
+    .map(toolCall => ({
+      tool_call_id: toolCall.id,
+      role: 'tool',
+      name: toolCall.function?.name || toolCall.name || '',
+      content: '[System Note]: Tool call was aborted by user.'
+    }));
+};
+
+const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
+  let assistantBubbleIndex = findAssistantTurnBubbleIndex(turnMeta);
+  if (assistantBubbleIndex === -1) {
+    chat_show.value.push({
+      id: messageIdCounter.value++,
+      role: 'assistant',
+      content: [],
+      reasoning_content: "",
+      status: "",
+      aiName: getCurrentAssistantDisplayName(),
+      voiceName: selectedVoice.value,
+      tool_calls: [],
+      startTime: Date.now()
+    });
+    assistantBubbleIndex = chat_show.value.length - 1;
+    if (turnMeta) {
+      turnMeta.assistantMessageId = chat_show.value[assistantBubbleIndex].id;
+    }
+  }
+
+  const currentBubble = chat_show.value[assistantBubbleIndex];
+  const finalContent = appendTerminalNoticeToAssistantContent(currentBubble.content, ASSISTANT_CANCELLED_NOTICE_MARKDOWN);
+  const finalReasoningContent = typeof currentBubble.reasoning_content === 'string'
+    ? currentBubble.reasoning_content
+    : (currentBubble.reasoning_content ? String(currentBubble.reasoning_content) : '');
+  const endTime = Date.now();
+
+  currentBubble.content = finalContent;
+  currentBubble.reasoning_content = finalReasoningContent;
+  currentBubble.status = 'cancelled';
+  currentBubble.endTime = endTime;
+  currentBubble.completedTimestamp = new Date().toLocaleString('sv-SE');
+
+  if (turnMeta && !turnMeta.cancellationRecorded) {
+    const missingToolMessages = buildMissingToolAbortMessages();
+    if (missingToolMessages.length > 0) {
+      history.value.push(...missingToolMessages);
+    }
+    history.value.push({
+      role: 'assistant',
+      content: finalContent,
+      reasoning_content: finalReasoningContent || null
+    });
+    turnMeta.cancellationRecorded = true;
+  }
+
+  return assistantBubbleIndex;
 };
 
 const formatToolResult = (result) => {
@@ -5921,9 +6040,26 @@ const askAI = async (forceSend = false) => {
   // --- 2. 初始化 AI 回合 ---
   loading.value = true;
   syncAutoCloseOnBlurListener();
+  const turnId = activeAssistantTurnId.value + 1;
+  activeAssistantTurnId.value = turnId;
   signalController.value = new AbortController();
   const requestAbortController = signalController.value;
   const requestSignal = requestAbortController.signal;
+  const turnMeta = {
+    id: turnId,
+    controller: requestAbortController,
+    assistantMessageId: null,
+    cancellationRecorded: false,
+    cancelledByUser: false
+  };
+  activeAssistantTurnMeta = turnMeta;
+  const isCurrentAssistantTurn = () => activeAssistantTurnId.value === turnId && activeAssistantTurnMeta === turnMeta;
+  const isTurnAborted = () => requestSignal.aborted || !isCurrentAssistantTurn();
+  const throwIfTurnAborted = () => {
+    if (isTurnAborted()) {
+      throw createAbortError();
+    }
+  };
 
   const shouldTriggerAutoNaming = !defaultConversationName.value && chat_show.value.filter(msg => msg.role === 'user').length === 1;
   if (shouldTriggerAutoNaming) {
@@ -5935,6 +6071,7 @@ const askAI = async (forceSend = false) => {
   }
 
   await nextTick();
+  if (isTurnAborted()) return;
 
   if (isAtBottom.value) {
     isSticky.value = true;
@@ -5954,7 +6091,7 @@ const askAI = async (forceSend = false) => {
 
   try {
     // --- 3. 开始工具调用循环 ---
-    while (!requestSignal.aborted) {
+    while (!isTurnAborted()) {
       // chatInputRef.value?.focus({ cursor: 'end' });
 
       // --- 为本次请求创建临时消息列表 ---
@@ -6048,8 +6185,10 @@ const askAI = async (forceSend = false) => {
       if (sessionSkillIds.value.length > 0) {
         try {
           const runtimeSkillPath = await getRuntimeSkillPath();
+          throwIfTurnAborted();
           if (runtimeSkillPath) {
             const skillToolDef = await window.api.getSkillToolDefinition(runtimeSkillPath, sessionSkillIds.value);
+            throwIfTurnAborted();
             if (skillToolDef) {
               activeTools.push(skillToolDef);
             }
@@ -6071,6 +6210,7 @@ const askAI = async (forceSend = false) => {
         requestParams.audio = { voice: selectedVoice.value.split('-')[0].trim(), format: "wav" };
       }
 
+      throwIfTurnAborted();
       const assistantMessageId = messageIdCounter.value++;
       chat_show.value.push({
         id: assistantMessageId,
@@ -6079,6 +6219,7 @@ const askAI = async (forceSend = false) => {
         voiceName: selectedVoice.value, tool_calls: [],
         startTime: Date.now()
       });
+      turnMeta.assistantMessageId = assistantMessageId;
       currentAssistantChatShowIndex = chat_show.value.length - 1;
 
       if (isAtBottom.value) scrollToBottom('auto');
@@ -6100,7 +6241,7 @@ const askAI = async (forceSend = false) => {
         const responsesItemIdToIndexMap = new Map();
 
         const flushStreamingDisplay = (force = false) => {
-          if ((!force && requestSignal.aborted) || currentAssistantChatShowIndex < 0 || !chat_show.value[currentAssistantChatShowIndex]) {
+          if ((!force && isTurnAborted()) || currentAssistantChatShowIndex < 0 || !chat_show.value[currentAssistantChatShowIndex]) {
             return;
           }
 
@@ -6118,7 +6259,7 @@ const askAI = async (forceSend = false) => {
         };
 
         for await (const part of stream) {
-          if (requestSignal.aborted) {
+          if (isTurnAborted()) {
             break;
           }
           // console.log(part);
@@ -6227,7 +6368,7 @@ const askAI = async (forceSend = false) => {
           if (currentTotalLength > 4000) throttleDelay = 250;
           if (currentTotalLength > 8000) throttleDelay = 400;
 
-          if (requestSignal.aborted) {
+          if (isTurnAborted()) {
             break;
           }
 
@@ -6235,9 +6376,11 @@ const askAI = async (forceSend = false) => {
             flushStreamingDisplay();
           }
         }
-        if (requestSignal.aborted) {
-          flushStreamingDisplay(true);
-          throw new DOMException('The operation was aborted.', 'AbortError');
+        if (isTurnAborted()) {
+          if (isCurrentAssistantTurn()) {
+            flushStreamingDisplay(true);
+          }
+          throw createAbortError();
         }
         flushStreamingDisplay(true);
 
@@ -6267,9 +6410,7 @@ const askAI = async (forceSend = false) => {
       } else {
         // --- 非流式处理 ---
         const response = await window.api.createChatCompletion(requestParams);
-        if (requestSignal.aborted) {
-          throw new DOMException('The operation was aborted.', 'AbortError');
-        }
+        throwIfTurnAborted();
 
         if (apiType === 'responses' || apiType === 'codex') {
           let contentText = "";
@@ -6320,6 +6461,7 @@ const askAI = async (forceSend = false) => {
           // Chat Completions
           if (isAsyncIterableResponse(response)) {
             responseMessage = await collectChatCompletionStreamToMessage(response, tempReasoningEffort.value);
+            throwIfTurnAborted();
           } else {
             responseMessage = response.choices[0].message;
             responseMessage.tokenUsage = normalizeAssistantTokenUsage(response.usage);
@@ -6335,9 +6477,7 @@ const askAI = async (forceSend = false) => {
         });
       }
 
-      if (requestSignal.aborted) {
-        throw new DOMException('The operation was aborted.', 'AbortError');
-      }
+      throwIfTurnAborted();
 
       ensureAssistantReasoningContentForThinkingMode([responseMessage], tempReasoningEffort.value);
       if (!responseMessage.tokenUsage) {
@@ -6347,6 +6487,7 @@ const askAI = async (forceSend = false) => {
 
 
       history.value.push(responseMessage);
+      throwIfTurnAborted();
 
       // --- 更新 UI 气泡 ---
       const currentBubble = chat_show.value[currentAssistantChatShowIndex];
@@ -6381,6 +6522,7 @@ const askAI = async (forceSend = false) => {
         }));
 
         await nextTick();
+        throwIfTurnAborted();
 
         // 工具调用执行逻辑
         const toolMessages = await Promise.all(
@@ -6393,7 +6535,11 @@ const askAI = async (forceSend = false) => {
               try {
                 const bwArgs = JSON.parse(toolCall.function.arguments || '{}');
                 toolContent = await handleBetterWorkTool(toolCall, bwArgs, uiToolCall);
+                throwIfTurnAborted();
               } catch (e) {
+                if (isTurnAborted()) {
+                  throw createAbortError();
+                }
                 toolContent = `{'result':'Better Work tool error: ${e.message}'}`;
                 if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = toolContent; }
               }
@@ -6422,9 +6568,7 @@ const askAI = async (forceSend = false) => {
               }
             }
 
-            if (requestSignal.aborted) {
-              throw new DOMException('The operation was aborted.', 'AbortError');
-            }
+            throwIfTurnAborted();
 
             if (uiToolCall) {
               uiToolCall.approvalStatus = 'executing';
@@ -6449,7 +6593,7 @@ const askAI = async (forceSend = false) => {
                 const currentModelName = model.value.split('|')[1] || model.value;
 
                 const onUpdateCallback = (logContent) => {
-                  if (uiToolCall) {
+                  if (!isTurnAborted() && uiToolCall) {
                     uiToolCall.result = logContent + "\n\n[Skill (Sub-Agent) Running...]";
                   }
                 };
@@ -6472,6 +6616,8 @@ const askAI = async (forceSend = false) => {
                   executionContext,
                   toolCallControllers.value.get(toolCall.id)?.signal || requestSignal
                 );
+
+                throwIfTurnAborted();
 
                 if (uiToolCall) {
                   if (toolContent.includes("[Sub-Agent]")) {
@@ -6497,7 +6643,7 @@ const askAI = async (forceSend = false) => {
                   const toolsContext = activeTools.filter(t => t.function.name !== 'sub_agent');
 
                   const onUpdateCallback = (logContent) => {
-                    if (uiToolCall) {
+                    if (!isTurnAborted() && uiToolCall) {
                       uiToolCall.result = logContent + "\n\n[Sub-Agent 执行中...]";
                     }
                   };
@@ -6522,6 +6668,7 @@ const result = await window.api.invokeMcpTool(
                 );
 
                 toolContent = formatToolResult(result);
+                throwIfTurnAborted();
 
                 if (uiToolCall) {
                   if (toolCall.function.name === 'sub_agent') {
@@ -6537,7 +6684,7 @@ const result = await window.api.invokeMcpTool(
                 }
               }
 
-              if (uiToolCall) uiToolCall.approvalStatus = 'finished';
+              if (!isTurnAborted() && uiToolCall) uiToolCall.approvalStatus = 'finished';
 
             } catch (e) {
               if (e.name === 'AbortError') {
@@ -6545,9 +6692,9 @@ const result = await window.api.invokeMcpTool(
                 if (uiToolCall) uiToolCall.approvalStatus = 'rejected';
               } else {
                 toolContent = `{'result':'工具执行或参数解析错误: ${e.message}'}`;
-                if (uiToolCall) uiToolCall.approvalStatus = 'finished';
+                if (!isTurnAborted() && uiToolCall) uiToolCall.approvalStatus = 'finished';
               }
-              if (uiToolCall) uiToolCall.result = toolContent;
+              if (!isTurnAborted() && uiToolCall) uiToolCall.result = toolContent;
             } finally {
               toolCallControllers.value.delete(toolCall.id);
             }
@@ -6555,10 +6702,13 @@ const result = await window.api.invokeMcpTool(
           })
         );
 
+        throwIfTurnAborted();
         history.value.push(...toolMessages);
         scheduleAutoSave({ reason: 'tool-calls-completed', immediate: true });
         // 工具调用完成后，把缓冲区消息插入历史，使下一轮请求即可纳入
+        throwIfTurnAborted();
         await drainBufferIntoHistory();
+        throwIfTurnAborted();
       } else {
         if (isVoiceReply && responseMessage.audio) {
           currentBubble.content = currentBubble.content || [];
@@ -6586,6 +6736,16 @@ const result = await window.api.invokeMcpTool(
     }
   } catch (error) {
     const aborted = isAbortError(error);
+    const staleTurn = !isCurrentAssistantTurn();
+    if (staleTurn) {
+      if (!aborted) {
+        console.warn('[askAI] Ignored stale assistant turn error:', error);
+      }
+      return;
+    }
+    if (aborted && turnMeta.cancellationRecorded) {
+      return;
+    }
     let errorDisplay = `发生错误: ${formatErrorMessageForDisplay(error)}`;
     if (aborted) errorDisplay = "请求已取消";
 
@@ -6598,28 +6758,42 @@ const result = await window.api.invokeMcpTool(
     }
 
     const currentBubble = chat_show.value[errorBubbleIndex];
-    const terminalNotice = getAssistantTerminalNoticeMarkdown(aborted, errorDisplay);
-    const finalContent = appendTerminalNoticeToAssistantContent(currentBubble.content, terminalNotice);
-    const finalReasoningContent = typeof currentBubble.reasoning_content === 'string'
-      ? currentBubble.reasoning_content
-      : (currentBubble.reasoning_content ? String(currentBubble.reasoning_content) : '');
+    let finalContent;
+    let finalReasoningContent;
+    if (aborted) {
+      finalizeCancelledAssistantTurn(turnMeta);
+      finalContent = currentBubble.content;
+      finalReasoningContent = currentBubble.reasoning_content;
+    } else {
+      const terminalNotice = getAssistantTerminalNoticeMarkdown(aborted, errorDisplay);
+      finalContent = appendTerminalNoticeToAssistantContent(currentBubble.content, terminalNotice);
+      finalReasoningContent = typeof currentBubble.reasoning_content === 'string'
+        ? currentBubble.reasoning_content
+        : (currentBubble.reasoning_content ? String(currentBubble.reasoning_content) : '');
 
-    currentBubble.content = finalContent;
-    currentBubble.reasoning_content = finalReasoningContent;
-    currentBubble.status = aborted ? 'cancelled' : 'error';
+      currentBubble.content = finalContent;
+      currentBubble.reasoning_content = finalReasoningContent;
+      currentBubble.status = 'error';
 
-    history.value.push({
-      role: 'assistant',
-      content: finalContent,
-      reasoning_content: finalReasoningContent || null
-    });
+      history.value.push({
+        role: 'assistant',
+        content: finalContent,
+        reasoning_content: finalReasoningContent || null
+      });
+    }
     scheduleAutoSave({ reason: aborted ? 'assistant-cancelled-error' : 'assistant-error', immediate: true });
 
   } finally {
-    loading.value = false;
-    syncAutoCloseOnBlurListener();
-    signalController.value = null;
-    if (currentAssistantChatShowIndex > -1) {
+    const stillOwnsTurn = activeAssistantTurnMeta === turnMeta;
+    const stillOwnsSignal = signalController.value === requestAbortController;
+    if (stillOwnsTurn || stillOwnsSignal) {
+      loading.value = false;
+      syncAutoCloseOnBlurListener();
+    }
+    if (stillOwnsSignal) {
+      signalController.value = null;
+    }
+    if (currentAssistantChatShowIndex > -1 && !turnMeta.cancellationRecorded) {
       const endTime = Date.now();
       chat_show.value[currentAssistantChatShowIndex].endTime = endTime;
       chat_show.value[currentAssistantChatShowIndex].completedTimestamp = new Date().toLocaleString('sv-SE');
@@ -6669,6 +6843,9 @@ const result = await window.api.invokeMcpTool(
     } else {
       scheduleAutoSave({ reason: 'assistant-turn-finalized', immediate: true }); // 普通对话的自动保存
     }
+    if (stillOwnsTurn) {
+      activeAssistantTurnMeta = null;
+    }
   }
 };
 
@@ -6677,8 +6854,14 @@ const cancelAskAI = () => {
     return;
   }
 
-  if (signalController.value) {
-    signalController.value.abort();
+  const turnMeta = activeAssistantTurnMeta;
+  const requestAbortController = signalController.value;
+  if (turnMeta) {
+    turnMeta.cancelledByUser = true;
+  }
+
+  if (requestAbortController) {
+    requestAbortController.abort();
   }
   cancelAutoNamingRequest();
 
@@ -6702,6 +6885,21 @@ const cancelAskAI = () => {
     });
   });
 
+  finalizeCancelledAssistantTurn(turnMeta);
+  if (turnMeta) {
+    activeAssistantTurnId.value = Math.max(activeAssistantTurnId.value, turnMeta.id) + 1;
+    if (activeAssistantTurnMeta === turnMeta) {
+      activeAssistantTurnMeta = null;
+    }
+  } else {
+    activeAssistantTurnId.value += 1;
+  }
+  toolCallControllers.value.clear();
+  if (signalController.value === requestAbortController) {
+    signalController.value = null;
+  }
+  loading.value = false;
+  syncAutoCloseOnBlurListener();
   scheduleAutoSave({ reason: 'assistant-cancelled', immediate: true });
   chatInputRef.value?.focus();
 };

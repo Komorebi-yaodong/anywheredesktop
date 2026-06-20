@@ -1060,7 +1060,7 @@ IMPORTANT:
         },
         {
             name: "task_write",
-            description: "Create or update the temporary task list for the CURRENT conversation, shown in a floating panel so the user can watch your progress in real time (a live to-do checklist). This is NOT a scheduled/cron task. ALWAYS pass the FULL list every time (full snapshot / overwrite): include every task with its current status and update statuses as you progress. Break the work into a few tasks, each optionally with sub-steps.",
+            description: "Create or update the temporary task list for the CURRENT conversation, shown in a floating panel so the user can watch your progress in real time (a live to-do checklist). This is NOT a scheduled/cron task. WORKFLOW: (1) ALWAYS call task_read FIRST to fetch the latest list before writing, so you never drop existing tasks or steps; (2) pass the FULL list every time (full snapshot / overwrite) — include every task with its current status; (3) the MOMENT you finish a task or step, immediately call task_write again to mark it 'completed' and set the next item to 'in_progress', so the user can track up-to-date progress at all times. Break the work into a few tasks, each optionally with sub-steps.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -1094,7 +1094,7 @@ IMPORTANT:
         },
         {
             name: "task_read",
-            description: "Read back the current task list for this conversation (the same list maintained via task_write and shown in the task panel). Use this to re-orient yourself on progress — for example after a long conversation or a context compaction — so you do not lose track of what is done and what remains. Returns every task with its status and steps.",
+            description: "Read back the current task list for this conversation (the same list maintained via task_write and shown in the task panel). Use this to re-orient yourself on progress — for example after a long conversation or a context compaction — so you do not lose track of what is done and what remains, and ALWAYS call it right before task_write to fetch the latest state. Returns every task with its status and steps.",
             inputSchema: { type: "object", properties: {} }
         }
     ],

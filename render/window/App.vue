@@ -5814,6 +5814,16 @@ const hasTaskMcpTool = computed(() => {
   return openaiFormattedTools.value.some(tool => TASK_MCP_TOOL_NAMES.has(tool?.function?.name));
 });
 
+const taskOverallStatus = computed(() => {
+  const tasks = taskList.value;
+  if (!Array.isArray(tasks) || tasks.length === 0) return '';
+  const isActive = (t) => t.status === 'in_progress'
+    || (Array.isArray(t.steps) && t.steps.some(s => s.status === 'in_progress'));
+  if (tasks.some(isActive)) return 'in_progress';
+  if (tasks.every(t => t.status === 'completed')) return 'completed';
+  return 'pending';
+});
+
 const generateMcpSystemPrompt = () => {
   const memoryPriorityRule = hasBuiltinMemoryMcpTools.value
     ? '8. **Memory First**: When memory tools are available and the user\'s request may depend on memory, you must first retrieve and verify the relevant memory before fulfilling the user\'s request.\n'
@@ -7102,7 +7112,7 @@ const scrollToMessageByIndex = (index) => {
         @toggle-pin="handleTogglePin" @toggle-always-on-top="handleToggleAlwaysOnTop" @minimize="handleMinimize"
         @maximize="handleMaximize" @close="handleCloseWindow" />
       <ChatHeader :modelMap="modelMap" :model="model" :is-mcp-loading="isMcpLoading" :systemPrompt="currentSystemPrompt"
-        :has-task-tool="hasTaskMcpTool" :task-panel-visible="taskPanelVisible" :task-count="taskList.length"
+        :has-task-tool="hasTaskMcpTool" :task-panel-visible="taskPanelVisible" :task-status="taskOverallStatus"
         @open-model-dialog="handleOpenModelDialog" @show-system-prompt="handleShowSystemPrompt"
         @toggle-task-panel="taskPanelVisible = !taskPanelVisible" />
 

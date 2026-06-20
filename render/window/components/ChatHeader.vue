@@ -10,7 +10,7 @@ const props = defineProps({
   systemPrompt: String,
   hasTaskTool: Boolean,
   taskPanelVisible: Boolean,
-  taskCount: { type: Number, default: 0 },
+  taskStatus: { type: String, default: '' },
 });
 
 const emit = defineEmits([
@@ -95,7 +95,9 @@ const logoColor = computed(() => {
           <div class="model-pill icon-pill task-pill" :class="{ 'is-active': taskPanelVisible }"
             @click="emit('toggle-task-panel')">
             <el-icon :size="14" class="header-icon"><List /></el-icon>
-            <span v-if="taskCount > 0" class="task-count-badge">{{ taskCount }}</span>
+            <span v-if="taskStatus" class="task-status-badge" :class="taskStatus">
+              <el-icon v-if="taskStatus === 'in_progress'" class="spin" :size="10"><Loading /></el-icon>
+            </span>
           </div>
         </el-tooltip>
 
@@ -295,20 +297,39 @@ html.dark .prompt-text {
   color: var(--el-color-primary);
 }
 
-.task-count-badge {
+.task-status-badge {
   position: absolute;
-  top: -3px;
+  top: -2px;
   right: -3px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  box-sizing: border-box;
-  border-radius: 7px;
-  background-color: var(--el-color-primary);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 14px;
-  text-align: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-status-badge.pending {
+  background-color: var(--el-text-color-placeholder);
+}
+
+.task-status-badge.completed {
+  background-color: var(--el-color-success);
+}
+
+.task-status-badge.in_progress {
+  width: auto;
+  height: auto;
+  background-color: transparent;
+  color: var(--el-color-primary);
+}
+
+.task-status-badge.in_progress .spin {
+  animation: task-badge-spin 1s linear infinite;
+}
+
+@keyframes task-badge-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

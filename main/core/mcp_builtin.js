@@ -21,10 +21,32 @@ let bashCwd = os.homedir();
 const backgroundShells = new Map();
 const MAX_BG_LOG_SIZE = 1024 * 1024; // 1MB 日志上限
 
+const COLORLESS_COMMAND_ENV = {
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+    CLICOLOR: '0',
+    npm_config_color: 'false',
+    PNPM_COLOR: 'never',
+    YARN_ENABLE_COLORS: '0'
+};
+
+const stripTerminalControlSequences = (text = '') => {
+    if (typeof text !== 'string' || text.length === 0) return '';
+    return text
+        .replace(/\x1B\][\s\S]*?(?:\x07|\x1B\\)/g, '')
+        .replace(/\x1B[PX^_][\s\S]*?\x1B\\/g, '')
+        .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\u009B[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\x1B[@-Z\\-_]/g, '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/\u0008/g, '');
+};
+
 function appendBgLog(id, text) {
     const proc = backgroundShells.get(id);
     if (!proc) return;
-    proc.logs += text;
+    proc.logs += stripTerminalControlSequences(text);
     if (proc.logs.length > MAX_BG_LOG_SIZE) {
         proc.logs = "[...Logs Truncated...]\n" + proc.logs.slice(proc.logs.length - (MAX_BG_LOG_SIZE / 2));
     }
@@ -2300,7 +2322,14 @@ ${contextBlock}
             tempFile = path.join(tempDir, `anywhere_cmd_${Date.now()}_${scriptId}.ps1`);
             const preamble = `
 $OutputEncoding = [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-$PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
+$PSDefaultParameterValues['*:Encoding'] = 'utf8';
+$env:NO_COLOR = '1';
+$env:FORCE_COLOR = '0';
+$env:CLICOLOR = '0';
+$env:npm_config_color = 'false';
+$env:PNPM_COLOR = 'never';
+$env:YARN_ENABLE_COLORS = '0';
+if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputRendering = 'PlainText' }\n`;
             fs.writeFileSync(tempFile, '\uFEFF' + preamble + '\n' + command, { encoding: 'utf8' });
             shellToUse = 'powershell.exe';
             spawnArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tempFile];
@@ -2342,7 +2371,7 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
                 try {
                     const child = spawn(shellToUse, spawnArgs, {
                         cwd: bashCwd,
-                        env: { ...process.env, FORCE_COLOR: '1' },
+                        env: { ...process.env, ...COLORLESS_COMMAND_ENV },
                         detached: !isWin
                     });
                     backgroundShells.set(shellId, {
@@ -2368,7 +2397,7 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
 
             const child = spawn(shellToUse, spawnArgs, {
                 cwd: bashCwd,
-                env: process.env,
+                env: { ...process.env, ...COLORLESS_COMMAND_ENV },
                 detached: !isWin
             });
 
@@ -2438,8 +2467,8 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
                     return str;
                 };
 
-                let result = decode(outChunks);
-                const errorStr = decode(errChunks);
+                let result = stripTerminalControlSequences(decode(outChunks));
+                const errorStr = stripTerminalControlSequences(decode(errChunks));
                 if (errorStr) result += `\n[Stderr]:\n${errorStr}`;
 
                 if (!result.trim()) result = "Command executed successfully.";
@@ -2484,8 +2513,9 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8';\n`;
         const safeOffset = Math.max(0, offset);
         const safeLength = Math.min(length, MAX_READ);
 
-        const chunk = fullLogs.substring(safeOffset, safeOffset + safeLength);
-        const nextOffset = safeOffset + chunk.length;
+        const rawChunk = fullLogs.substring(safeOffset, safeOffset + safeLength);
+        const chunk = stripTerminalControlSequences(rawChunk);
+        const nextOffset = safeOffset + rawChunk.length;
 
         let statusInfo = `[Process State: ${proc.active ? 'Running' : 'Exited'}]`;
         let footer = "";

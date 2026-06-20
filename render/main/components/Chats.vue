@@ -930,12 +930,77 @@ const onFileDragStart = (file, event) => {
     if (event?.dataTransfer) {
         event.dataTransfer.effectAllowed = 'move';
         try { event.dataTransfer.setData('text/plain', names.join('\n')); } catch { /* ignore */ }
+        // 批量拖拽时显示数量角标，明确正在拖动多个对话
+        if (names.length > 1 && typeof event.dataTransfer.setDragImage === 'function') {
+            try {
+                const ghost = document.createElement('div');
+                ghost.textContent = String(names.length);
+                ghost.style.cssText = [
+                    'position:fixed', 'top:-1000px', 'left:-1000px',
+                    'min-width:24px', 'height:24px', 'padding:0 8px',
+                    'display:flex', 'align-items:center', 'justify-content:center',
+                    'background:var(--el-color-primary,#409eff)', 'color:#fff',
+                    'border-radius:12px', 'font-size:12px', 'font-weight:600',
+                    'box-shadow:0 2px 8px rgba(0,0,0,0.2)'
+                ].join(';');
+                document.body.appendChild(ghost);
+                event.dataTransfer.setDragImage(ghost, 12, 12);
+                setTimeout(() => ghost.remove(), 0);
+            } catch { /* ignore drag image failure */ }
+        }
     }
 };
 
 const onFileDragEnd = () => {
     draggedFileBasenames.value = [];
     dragOverProjectTarget.value = '';
+    stopProjectAutoScroll();
+};
+
+// 拖拽时的边缘自动滚动（原生 DnD 期间 Chromium 不派发 wheel 事件，改用边缘检测滚动）
+let projectAutoScrollRAF = null;
+let projectAutoScrollDir = 0;
+const PROJECT_AUTOSCROLL_EDGE = 56;
+const PROJECT_AUTOSCROLL_SPEED = 14;
+
+const getChatScrollWrap = () => chatListRef.value?.closest('.el-scrollbar__wrap') || null;
+
+const stopProjectAutoScroll = () => {
+    if (projectAutoScrollRAF) {
+        cancelAnimationFrame(projectAutoScrollRAF);
+        projectAutoScrollRAF = null;
+    }
+    projectAutoScrollDir = 0;
+};
+
+const runProjectAutoScroll = () => {
+    const wrap = getChatScrollWrap();
+    if (!wrap || !projectAutoScrollDir || !draggedFileBasenames.value.length) {
+        projectAutoScrollRAF = null;
+        projectAutoScrollDir = 0;
+        return;
+    }
+    wrap.scrollTop += projectAutoScrollDir * PROJECT_AUTOSCROLL_SPEED;
+    projectAutoScrollRAF = requestAnimationFrame(runProjectAutoScroll);
+};
+
+const onChatListDragOver = (event) => {
+    if (!draggedFileBasenames.value.length) return;
+    const wrap = getChatScrollWrap();
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const y = event.clientY;
+    let dir = 0;
+    if (y < rect.top + PROJECT_AUTOSCROLL_EDGE) dir = -1;
+    else if (y > rect.bottom - PROJECT_AUTOSCROLL_EDGE) dir = 1;
+    projectAutoScrollDir = dir;
+    if (dir) {
+        // 允许在列表空白区也持续接收 dragover 事件
+        event.preventDefault();
+        if (!projectAutoScrollRAF) projectAutoScrollRAF = requestAnimationFrame(runProjectAutoScroll);
+    } else {
+        stopProjectAutoScroll();
+    }
 };
 
 const onProjectDragOver = (targetId, event) => {
@@ -975,6 +1040,7 @@ async function assignFilesToProject(basenames, projectId) {
 
 async function onDropToProject(targetId, event) {
     event?.preventDefault?.();
+    stopProjectAutoScroll();
     const basenames = [...draggedFileBasenames.value];
     draggedFileBasenames.value = [];
     dragOverProjectTarget.value = '';
@@ -1616,8 +1682,8 @@ const toggleSelectAll = () => {
                         <div class="chat-column chat-column-actions">{{ t('chats.table.actions') }}</div>
                     </div>
                     <el-scrollbar view-class="chat-list-view">
-                    <!-- 绑定 mousedown 启动框选 -->
-                    <div class="chat-list" ref="chatListRef" @mousedown="onMouseDown">
+                    <!-- 绑定 mousedown 启动框选；dragover 实现拖拽时边缘自动滚动 -->
+                    <div class="chat-list" ref="chatListRef" @mousedown="onMouseDown" @dragover="onChatListDragOver">
                         <template v-for="row in displayRows" :key="row.kind === 'file' ? `file-${row.file.basename}` : (row.kind === 'project' ? `proj-${row.id}` : 'ungrouped-label')">
 
                             <!-- 项目头行 -->

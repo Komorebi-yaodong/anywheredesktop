@@ -2088,7 +2088,7 @@ const onAvatarClick = async (role, event) => {
 };
 
 const handleSubmit = () => {
-  if (loading.value || isPreparingSend.value || isMcpLoading.value) {
+  if (loading.value || isPreparingSend.value) {
     enqueueInputToBuffer();
     return;
   }

@@ -760,6 +760,9 @@ async function handleClipboardPayload(result = {}, forceOverride = false) {
 
   if (nextFilePaths.length > 0) {
     await applyFileAttachment(nextFilePaths)
+    if (nextText.trim()) {
+      queryText.value = nextText.trim()
+    }
     resetAutoUploadContext()
     return
   }

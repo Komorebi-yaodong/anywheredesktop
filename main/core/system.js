@@ -545,12 +545,57 @@ function filterRegularFilePaths(paths = []) {
     })
 }
 
+function splitSelectionPathsByType(paths = []) {
+  const filePaths = []
+  const folderPaths = []
+  const normalized = (Array.isArray(paths) ? paths : [])
+    .map((item) => path.normalize(String(item || '')).trim())
+    .filter(Boolean)
+  for (const item of normalized) {
+    try {
+      const stat = fs.statSync(item)
+      if (stat.isFile()) {
+        filePaths.push(item)
+      } else if (stat.isDirectory()) {
+        folderPaths.push(item)
+      }
+    } catch {
+      // 无法 stat 的路径丢弃，与 filterRegularFilePaths 保持一致
+    }
+  }
+  return { filePaths, folderPaths }
+}
+
+function buildSelectionFolderText(folderPaths = []) {
+  const normalized = (Array.isArray(folderPaths) ? folderPaths : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+  if (normalized.length === 0) {
+    return ''
+  }
+  return normalized.map((item) => '`' + item + '`').join('\n')
+}
+
 
 function buildClipboardPayloadFromKind(kind = 'empty', source = 'clipboard', formats = []) {
-  const filteredFilePaths = kind === 'files' ? filterRegularFilePaths(clipboardTimeline.files.value) : []
+  const { filePaths: filteredFilePaths, folderPaths } = kind === 'files'
+    ? splitSelectionPathsByType(clipboardTimeline.files.value)
+    : { filePaths: [], folderPaths: [] }
+  const folderText = buildSelectionFolderText(folderPaths)
+  // files 来源但只剩文件夹（无可用文件）时，作为文本字符串输出
+  const folderOnly = kind === 'files' && filteredFilePaths.length === 0 && Boolean(folderText)
+
   const effectiveKind = kind === 'files' && filteredFilePaths.length === 0 ? 'empty' : kind
-  const finalKind = effectiveKind === 'files' ? 'files' : effectiveKind === 'image' ? 'img' : effectiveKind === 'text' ? 'over' : 'empty'
-  const timestamp = effectiveKind === 'files'
+  const finalKind = folderOnly
+    ? 'over'
+    : effectiveKind === 'files'
+      ? 'files'
+      : effectiveKind === 'image'
+        ? 'img'
+        : effectiveKind === 'text'
+          ? 'over'
+          : 'empty'
+  const timestamp = (effectiveKind === 'files' || folderOnly)
     ? clipboardTimeline.files.timestamp
     : effectiveKind === 'image'
       ? clipboardTimeline.image.timestamp
@@ -559,13 +604,22 @@ function buildClipboardPayloadFromKind(kind = 'empty', source = 'clipboard', for
         : 0
   const ageMs = timestamp > 0 ? Math.max(0, Date.now() - timestamp) : Number.POSITIVE_INFINITY
 
+  // text 来源：纯文本走剪贴板文本；files 来源把文件夹路径并入 text（与文件附件共存）
+  const resolvedText = folderOnly
+    ? folderText
+    : effectiveKind === 'text'
+      ? clipboardTimeline.text.value
+      : effectiveKind === 'files'
+        ? folderText
+        : ''
+
   return {
     ok: true,
     kind: finalKind,
-    text: effectiveKind === 'text' ? clipboardTimeline.text.value : '',
+    text: resolvedText,
     imageDataUrl: effectiveKind === 'image' ? clipboardTimeline.image.value : '',
     filePaths: effectiveKind === 'files' ? filteredFilePaths : [],
-    hasText: effectiveKind === 'text' && Boolean(clipboardTimeline.text.value?.trim()),
+    hasText: Boolean(resolvedText?.trim()),
     hasImage: effectiveKind === 'image' && Boolean(clipboardTimeline.image.value),
     hasFiles: effectiveKind === 'files' && filteredFilePaths.length > 0,
     formats,
@@ -584,21 +638,23 @@ function getFreshClipboardPayload(source = 'clipboard', preferredKinds = ['files
 }
 
 function buildFreshFilePayloadFromState(filePaths = [], timestamp = 0, source = 'selection', formats = []) {
-  const normalizedFilePaths = filterRegularFilePaths(filePaths)
+  const { filePaths: normalizedFilePaths, folderPaths } = splitSelectionPathsByType(filePaths)
+  const folderText = buildSelectionFolderText(folderPaths)
   const ageMs = timestamp > 0 ? Math.max(0, Date.now() - timestamp) : Number.POSITIVE_INFINITY
-  if (normalizedFilePaths.length === 0 || ageMs > CLIPBOARD_FRESHNESS_MS) {
+  if ((normalizedFilePaths.length === 0 && folderPaths.length === 0) || ageMs > CLIPBOARD_FRESHNESS_MS) {
     return null
   }
 
+  const hasFiles = normalizedFilePaths.length > 0
   return {
     ok: true,
-    kind: 'files',
-    text: '',
+    kind: hasFiles ? 'files' : 'over',
+    text: folderText,
     imageDataUrl: '',
     filePaths: normalizedFilePaths,
-    hasText: false,
+    hasText: Boolean(folderText),
     hasImage: false,
-    hasFiles: true,
+    hasFiles,
     formats,
     timestamp,
     ageMs,

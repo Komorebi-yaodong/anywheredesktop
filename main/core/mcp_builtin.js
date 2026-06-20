@@ -436,6 +436,16 @@ const BUILTIN_SERVERS = {
         tags: ["memory", "storage", "sync"],
         logoUrl: "https://api.iconify.design/lucide:brain.svg"
     },
+    "builtin_betterwork": {
+        id: "builtin_betterwork",
+        name: "Better Work",
+        description: "主动向用户发起选择题确认（多问题多选项），并维护当前对话的临时任务清单与进度展示。",
+        type: "builtin",
+        isActive: true,
+        isPersistent: false,
+        tags: ["interactive", "task", "confirm"],
+        logoUrl: "https://api.iconify.design/lucide:list-checks.svg"
+    },
 };
 
 const BUILTIN_TOOLS = {
@@ -1013,6 +1023,77 @@ IMPORTANT:
             }
         }
     ],
+    "builtin_betterwork": [
+        {
+            name: "ask_user_choice",
+            description: "Proactively ask the user one or more multiple-choice questions to confirm a decision, resolve ambiguity, or let the user pick between approaches before you proceed. Use this whenever a plan branches or you need the user to make a call. Options are rendered as clickable buttons inside the chat bubble. IMPORTANT: Do NOT add your own 'type your own answer' or 'discuss this' options — the UI automatically appends a free-text input and a 'discuss this' option to every question. Keep each option 'label' short; put rationale in 'description'.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    questions: {
+                        type: "array",
+                        description: "One or more questions to present to the user.",
+                        items: {
+                            type: "object",
+                            properties: {
+                                question: { type: "string", description: "The full question text." },
+                                header: { type: "string", description: "Optional very short label (<= 12 chars) shown as a tag/chip." },
+                                multiSelect: { type: "boolean", description: "Allow selecting multiple options. Default false." },
+                                options: {
+                                    type: "array",
+                                    description: "The selectable options. Do NOT include a free-text or 'discuss' option here.",
+                                    items: {
+                                        type: "object",
+                                        properties: {
+                                            label: { type: "string", description: "Short option text the user sees." },
+                                            description: { type: "string", description: "Optional explanation or trade-off for this option." }
+                                        },
+                                        required: ["label"]
+                                    }
+                                }
+                            },
+                            required: ["question", "options"]
+                        }
+                    }
+                },
+                required: ["questions"]
+            }
+        },
+        {
+            name: "task_write",
+            description: "Create or update the temporary task list for the CURRENT conversation, shown in a floating panel so the user can watch your progress in real time (a live to-do checklist). This is NOT a scheduled/cron task. ALWAYS pass the FULL list every time (full snapshot / overwrite): include every task with its current status and update statuses as you progress. Break the work into a few tasks, each optionally with sub-steps.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    tasks: {
+                        type: "array",
+                        description: "The complete task list (full snapshot; overwrites the previous list).",
+                        items: {
+                            type: "object",
+                            properties: {
+                                content: { type: "string", description: "Task title / what needs to be done." },
+                                status: { type: "string", enum: ["pending", "in_progress", "completed"], description: "Current status of the task." },
+                                steps: {
+                                    type: "array",
+                                    description: "Optional sub-steps of this task.",
+                                    items: {
+                                        type: "object",
+                                        properties: {
+                                            content: { type: "string", description: "Step description." },
+                                            status: { type: "string", enum: ["pending", "in_progress", "completed"], description: "Step status." }
+                                        },
+                                        required: ["content", "status"]
+                                    }
+                                }
+                            },
+                            required: ["content", "status"]
+                        }
+                    }
+                },
+                required: ["tasks"]
+            }
+        }
+    ],
 };
 
 // --- Helpers ---
@@ -1539,6 +1620,15 @@ ${userContext || 'No additional context provided.'}
 
 // --- Execution Handlers ---
 const handlers = {
+    // Better Work (interactive: actually handled in the chat window UI; these are graceful fallbacks for non-UI contexts such as sub-agents)
+    ask_user_choice: async ({ questions } = {}) => {
+        const count = Array.isArray(questions) ? questions.length : 0;
+        return `[Better Work] ask_user_choice 需要在交互式对话窗口中由用户点选作答；当前执行环境（如子智能体/无 UI）无法采集用户选择。请改为在正文中直接向用户提问。(questions: ${count})`;
+    },
+    task_write: async ({ tasks } = {}) => {
+        const count = Array.isArray(tasks) ? tasks.length : 0;
+        return `[Better Work] 任务列表已接收（${count} 项）。任务进度面板仅在交互式对话窗口中展示。`;
+    },
     // Python
     list_python_interpreters: async () => {
         const paths = await findAllPythonPaths();

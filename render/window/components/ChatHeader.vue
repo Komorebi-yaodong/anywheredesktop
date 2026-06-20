@@ -1,19 +1,22 @@
 <script setup>
 import { computed } from 'vue';
 import { ElHeader, ElIcon, ElTooltip } from 'element-plus';
-import { Loading, Edit, Search } from '@element-plus/icons-vue'; // 引入 Search
+import { Loading, Edit, List } from '@element-plus/icons-vue'; // List 用于任务进度按钮
 
 const props = defineProps({
   modelMap: Object,
   model: String,
   isMcpLoading: Boolean,
   systemPrompt: String,
+  hasTaskTool: Boolean,
+  taskPanelVisible: Boolean,
+  taskCount: { type: Number, default: 0 },
 });
 
 const emit = defineEmits([
   'open-model-dialog',
   'show-system-prompt',
-  'open-search' // 新增事件
+  'toggle-task-panel'
 ]);
 
 // 1. 字符串转颜色函数 (HSL 模式)
@@ -87,10 +90,12 @@ const logoColor = computed(() => {
           <span v-else class="model-text prompt-text placeholder">系统提示词</span>
         </div>
 
-        <!-- 3. [新增] 搜索按钮 -->
-        <el-tooltip content="搜索内容 (Ctrl/Cmd+F)" placement="bottom" :show-after="500">
-          <div class="model-pill icon-pill" @click="emit('open-search')">
-            <el-icon :size="14" class="header-icon"><Search /></el-icon>
+        <!-- 3. 任务进度面板开关（仅启用 Better Work 任务工具时显示；搜索改用 Ctrl/Cmd+F） -->
+        <el-tooltip v-if="hasTaskTool" content="任务进度" placement="bottom" :show-after="500">
+          <div class="model-pill icon-pill task-pill" :class="{ 'is-active': taskPanelVisible }"
+            @click="emit('toggle-task-panel')">
+            <el-icon :size="14" class="header-icon"><List /></el-icon>
+            <span v-if="taskCount > 0" class="task-count-badge">{{ taskCount }}</span>
           </div>
         </el-tooltip>
 
@@ -278,5 +283,32 @@ html.dark .prompt-text {
 
 .header-icon {
   flex-shrink: 0;
+}
+
+/* 任务进度按钮 */
+.task-pill {
+  position: relative;
+}
+
+.task-pill.is-active {
+  background-color: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.task-count-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background-color: var(--el-color-primary);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
 }
 </style>

@@ -7,6 +7,7 @@ import TitleBar from './components/TitleBar.vue';
 import ChatHeader from './components/ChatHeader.vue';
 const ChatMessage = defineAsyncComponent(() => import('./components/ChatMessage.vue'));
 import ChatInput from './components/ChatInput.vue';
+import TaskPanel from './components/TaskPanel.vue';
 import ModelSelectionDialog from './components/ModelSelectionDialog.vue';
 import defaultAiAvatarUrl from '../../resources/icon.png?asset';
 import defaultUserAvatarUrl from '../../build/user.png?asset';
@@ -978,6 +979,9 @@ const tempSessionMcpServerIds = ref([]);
 
 const isAutoApproveTools = ref(true);
 const pendingToolApprovals = ref(new Map());
+const pendingChoices = ref(new Map());
+const taskList = ref([]);
+const taskPanelVisible = ref(false);
 
 const isAbortError = (error) => {
   if (!error) return false;
@@ -1067,6 +1071,108 @@ const handleToolApproval = (toolCallId, isApproved) => {
     pendingToolApprovals.value.delete(toolCallId);
   }
 };
+
+// --- Better Work：前端拦截的交互工具（不走审批 / invokeMcpTool） ---
+const BETTERWORK_FRONTEND_TOOLS = new Set(['ask_user_choice', 'task_write']);
+
+const resolvePendingChoices = (payload = null) => {
+  pendingChoices.value.forEach((resolve) => {
+    try { resolve(payload); } catch { /* ignore choice resolve race */ }
+  });
+  pendingChoices.value.clear();
+};
+
+const handleChoiceSubmit = (toolCallId, payload) => {
+  const resolver = pendingChoices.value.get(toolCallId);
+  if (resolver) {
+    resolver(payload);
+    pendingChoices.value.delete(toolCallId);
+  }
+};
+
+const buildChoiceResultText = (questions, answer) => {
+  if (!answer || !Array.isArray(answer.responses)) {
+    return '用户取消了本次选择（请求被中断）。';
+  }
+  const lines = answer.responses.map((r, i) => {
+    const q = questions[r.questionIndex] || questions[i] || {};
+    const qText = q.question || r.question || `问题 ${i + 1}`;
+    if (r.type === 'discuss') {
+      return `Q: ${qText}\nA: 用户希望就此问题继续讨论，请先主动追问/澄清，再继续推进。`;
+    }
+    if (r.type === 'custom') {
+      return `Q: ${qText}\nA（用户自定义输入）: ${r.customText || ''}`;
+    }
+    const selected = Array.isArray(r.selected) ? r.selected.join('；') : '';
+    return `Q: ${qText}\nA: ${selected}`;
+  });
+  return lines.join('\n\n');
+};
+
+const normalizeTaskStatus = (status) => {
+  const s = String(status || '').toLowerCase();
+  if (s === 'in_progress' || s === 'doing' || s === 'active' || s === 'running') return 'in_progress';
+  if (s === 'completed' || s === 'done' || s === 'finished') return 'completed';
+  return 'pending';
+};
+
+const normalizeTaskList = (tasks) => {
+  if (!Array.isArray(tasks)) return [];
+  return tasks
+    .filter(t => t && typeof t.content === 'string')
+    .map((t, i) => ({
+      id: i,
+      content: t.content,
+      status: normalizeTaskStatus(t.status),
+      steps: Array.isArray(t.steps)
+        ? t.steps
+            .filter(s => s && typeof s.content === 'string')
+            .map(s => ({ content: s.content, status: normalizeTaskStatus(s.status) }))
+        : []
+    }));
+};
+
+const applyTaskList = (tasks) => {
+  taskList.value = normalizeTaskList(tasks);
+  if (taskList.value.length > 0) {
+    taskPanelVisible.value = true;
+  }
+};
+
+const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
+  if (toolCall.function.name === 'ask_user_choice') {
+    const questions = Array.isArray(args?.questions) ? args.questions : [];
+    if (questions.length === 0) {
+      if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = '没有提供任何问题。'; }
+      return '没有提供任何问题。';
+    }
+    if (uiToolCall) {
+      uiToolCall.choiceData = { questions };
+      uiToolCall.approvalStatus = 'choosing';
+      uiToolCall.result = '等待用户选择...';
+    }
+    const answer = await new Promise((resolve) => {
+      pendingChoices.value.set(toolCall.id, resolve);
+    });
+    const resultText = buildChoiceResultText(questions, answer);
+    if (uiToolCall) {
+      uiToolCall.approvalStatus = answer ? 'finished' : 'rejected';
+      uiToolCall.result = resultText;
+    }
+    return resultText;
+  }
+  if (toolCall.function.name === 'task_write') {
+    const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
+    applyTaskList(tasks);
+    const total = taskList.value.length;
+    const done = taskList.value.filter(t => t.status === 'completed').length;
+    const ack = `任务列表已更新：共 ${total} 个任务，已完成 ${done} 个。`;
+    if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = ack; }
+    return ack;
+  }
+  return '';
+};
+
 const handleToggleAutoApprove = (val) => {
   isAutoApproveTools.value = val;
 
@@ -4994,6 +5100,8 @@ const loadSession = async (jsonData) => {
   collapsedMessages.value.clear();
   messageRefs.clear();
   focusedMessageIndex.value = null;
+  taskList.value = [];
+  taskPanelVisible.value = false;
 
   try {
     CODE.value = jsonData.CODE;
@@ -5590,6 +5698,11 @@ const hasBuiltinMemoryMcpTools = computed(() => {
   return openaiFormattedTools.value.some(tool => MEMORY_MCP_TOOL_NAMES.has(tool?.function?.name));
 });
 
+const TASK_MCP_TOOL_NAMES = new Set(['task_write']);
+const hasTaskMcpTool = computed(() => {
+  return openaiFormattedTools.value.some(tool => TASK_MCP_TOOL_NAMES.has(tool?.function?.name));
+});
+
 const generateMcpSystemPrompt = () => {
   const memoryPriorityRule = hasBuiltinMemoryMcpTools.value
     ? '8. **Memory First**: When memory tools are available and the user\'s request may depend on memory, you must first retrieve and verify the relevant memory before fulfilling the user\'s request.\n'
@@ -6149,6 +6262,18 @@ const askAI = async (forceSend = false) => {
             const uiToolCall = currentBubble.tool_calls.find(t => t.id === toolCall.id);
             let toolContent;
 
+            // Better Work 交互工具：前端拦截，不走审批 / invokeMcpTool
+            if (BETTERWORK_FRONTEND_TOOLS.has(toolCall.function.name)) {
+              try {
+                const bwArgs = JSON.parse(toolCall.function.arguments || '{}');
+                toolContent = await handleBetterWorkTool(toolCall, bwArgs, uiToolCall);
+              } catch (e) {
+                toolContent = `{'result':'Better Work tool error: ${e.message}'}`;
+                if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = toolContent; }
+              }
+              return { tool_call_id: toolCall.id, role: "tool", name: toolCall.function.name, content: toolContent };
+            }
+
             if (!isAutoApproveTools.value) {
               try {
                 const isApproved = await new Promise((resolve) => {
@@ -6430,6 +6555,7 @@ const cancelAskAI = () => {
   cancelAutoNamingRequest();
 
   resolvePendingToolApprovals(false);
+  resolvePendingChoices(null);
   toolCallControllers.value.forEach((controller) => {
     try {
       controller.abort();
@@ -6578,6 +6704,8 @@ const clearHistory = () => {
   collapsedMessages.value.clear();
   messageRefs.clear();
   focusedMessageIndex.value = null;
+  taskList.value = [];
+  taskPanelVisible.value = false;
   cancelAutoNamingRequest();
   defaultConversationName.value = "";
   chatInputRef.value?.focus({ cursor: 'end' });
@@ -6849,8 +6977,11 @@ const scrollToMessageByIndex = (index) => {
         @toggle-pin="handleTogglePin" @toggle-always-on-top="handleToggleAlwaysOnTop" @minimize="handleMinimize"
         @maximize="handleMaximize" @close="handleCloseWindow" />
       <ChatHeader :modelMap="modelMap" :model="model" :is-mcp-loading="isMcpLoading" :systemPrompt="currentSystemPrompt"
+        :has-task-tool="hasTaskMcpTool" :task-panel-visible="taskPanelVisible" :task-count="taskList.length"
         @open-model-dialog="handleOpenModelDialog" @show-system-prompt="handleShowSystemPrompt"
-        @open-search="handleOpenSearch" />
+        @toggle-task-panel="taskPanelVisible = !taskPanelVisible" />
+
+      <TaskPanel :tasks="taskList" :visible="taskPanelVisible" @close="taskPanelVisible = false" />
 
       <div class="main-area-wrapper">
         <el-main ref="chatContainerRef" class="chat-main custom-scrollbar" @click="handleMainClick"
@@ -6863,7 +6994,8 @@ const scrollToMessageByIndex = (index) => {
             :is-dark-mode="currentConfig.isDarkMode" @delete-message="handleDeleteMessage" @copy-text="handleCopyText"
             @re-ask="handleReAsk" @toggle-collapse="handleToggleCollapse" @show-system-prompt="handleShowSystemPrompt"
             @avatar-click="onAvatarClick" @edit-message-requested="handleEditStart" @edit-finished="handleEditEnd"
-            @edit-message="handleEditMessage" @cancel-tool-call="handleCancelToolCall" />
+            @edit-message="handleEditMessage" @cancel-tool-call="handleCancelToolCall"
+            @submit-choice="handleChoiceSubmit" />
         </el-main>
 
         <div class="unified-nav-sidebar" v-if="chat_show.length > 0">

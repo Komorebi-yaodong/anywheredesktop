@@ -6,6 +6,7 @@ import { DocumentCopy, Refresh, Delete, Document, CaretTop, CaretBottom, Edit, C
 import 'katex/dist/katex.min.css';
 import DOMPurify from 'dompurify';
 import html2canvas from 'html2canvas';
+import ChoiceCard from './ChoiceCard.vue';
 
 import { formatTimestamp, formatMessageText, sanitizeToolArgs, formatToolResult } from '../utils/formatters.js';
 
@@ -22,7 +23,7 @@ const props = defineProps({
   isAutoApprove: Boolean,
 });
 
-const emit = defineEmits(['copy-text', 're-ask', 'delete-message', 'toggle-collapse', 'avatar-click', 'edit-message', 'edit-message-requested', 'edit-finished', 'cancel-tool-call', 'confirm-tool', 'reject-tool', 'update-auto-approve']);
+const emit = defineEmits(['copy-text', 're-ask', 'delete-message', 'toggle-collapse', 'avatar-click', 'edit-message', 'edit-message-requested', 'edit-finished', 'cancel-tool-call', 'confirm-tool', 'reject-tool', 'update-auto-approve', 'submit-choice']);
 const editInputRef = ref(null);
 const isEditing = ref(false);
 const editedContent = ref('');
@@ -843,6 +844,8 @@ const truncateFilename = (filename, maxLength = 30) => {
                       <div class="tool-header-right">
                         <el-tag v-if="toolCall.approvalStatus === 'waiting'" type="warning" size="small" effect="light"
                           round>等待批准</el-tag>
+                        <el-tag v-else-if="toolCall.approvalStatus === 'choosing'" type="warning" size="small"
+                          effect="light" round>待选择</el-tag>
                         <el-tag v-else-if="toolCall.approvalStatus === 'executing'" type="primary" size="small"
                           effect="light" round>执行中</el-tag>
                         <el-tag v-else-if="toolCall.approvalStatus === 'rejected'" type="danger" size="small"
@@ -874,6 +877,10 @@ const truncateFilename = (filename, maxLength = 30) => {
                   </div>
                 </el-collapse-item>
               </el-collapse>
+              <div v-if="toolCall.approvalStatus === 'choosing' && toolCall.choiceData" class="tool-choice-wrapper">
+                <ChoiceCard :questions="toolCall.choiceData.questions || []"
+                  @submit="(payload) => $emit('submit-choice', toolCall.id, payload)" />
+              </div>
               <div v-if="toolCall.approvalStatus === 'waiting'" class="tool-approval-actions">
                 <div class="actions-left">
                   <el-button type="primary" size="small" :icon="Check"

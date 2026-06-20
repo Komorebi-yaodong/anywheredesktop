@@ -220,7 +220,9 @@ html.dark .task-panel {
 
 .task-status-dot :deep(.el-icon),
 .step-status-dot :deep(.el-icon) {
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .task-status-dot.in_progress {

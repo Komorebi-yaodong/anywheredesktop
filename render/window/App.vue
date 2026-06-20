@@ -1158,7 +1158,7 @@ const handleToolApproval = (toolCallId, isApproved) => {
 };
 
 // --- Better Work：前端拦截的交互工具（不走审批 / invokeMcpTool） ---
-const BETTERWORK_FRONTEND_TOOLS = new Set(['ask_user_choice', 'task_write']);
+const BETTERWORK_FRONTEND_TOOLS = new Set(['ask_user_choice', 'task_write', 'task_read']);
 
 const resolvePendingChoices = (payload = null) => {
   pendingChoices.value.forEach((resolve) => {
@@ -1224,6 +1224,20 @@ const applyTaskList = (tasks) => {
   }
 };
 
+const serializeTaskListForModel = (tasks) => {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return 'The task list is currently empty.';
+  }
+  const lines = tasks.map((t, i) => {
+    let block = `${i + 1}. [${t.status}] ${t.content}`;
+    if (Array.isArray(t.steps) && t.steps.length > 0) {
+      block += '\n' + t.steps.map(s => `   - [${s.status}] ${s.content}`).join('\n');
+    }
+    return block;
+  });
+  return 'Current task list:\n' + lines.join('\n');
+};
+
 const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
   if (toolCall.function.name === 'ask_user_choice') {
     const questions = Array.isArray(args?.questions) ? args.questions : [];
@@ -1254,6 +1268,11 @@ const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
     const ack = `Task list updated: ${total} task(s) total, ${done} completed.`;
     if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = ack; }
     return ack;
+  }
+  if (toolCall.function.name === 'task_read') {
+    const text = serializeTaskListForModel(taskList.value);
+    if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = text; }
+    return text;
   }
   return '';
 };
@@ -5790,7 +5809,7 @@ const hasBuiltinMemoryMcpTools = computed(() => {
   return openaiFormattedTools.value.some(tool => MEMORY_MCP_TOOL_NAMES.has(tool?.function?.name));
 });
 
-const TASK_MCP_TOOL_NAMES = new Set(['task_write']);
+const TASK_MCP_TOOL_NAMES = new Set(['task_write', 'task_read']);
 const hasTaskMcpTool = computed(() => {
   return openaiFormattedTools.value.some(tool => TASK_MCP_TOOL_NAMES.has(tool?.function?.name));
 });

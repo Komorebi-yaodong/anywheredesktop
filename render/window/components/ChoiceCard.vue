@@ -24,24 +24,12 @@ const isOptionSelected = (qi, label) =>
   drafts[qi]?.mode === 'options' && drafts[qi].selected.includes(label);
 
 const selectOption = (qi, label) => {
-  const q = props.questions[qi] || {};
   const d = drafts[qi];
   if (!d) return;
-  if (q.multiSelect) {
-    if (d.mode !== 'options') {
-      d.mode = 'options';
-      d.selected = [];
-    }
-    const idx = d.selected.indexOf(label);
-    if (idx >= 0) d.selected.splice(idx, 1);
-    else d.selected.push(label);
-    if (d.selected.length === 0) d.mode = '';
-    d.customText = '';
-  } else {
-    d.mode = 'options';
-    d.selected = [label];
-    d.customText = '';
-  }
+  // 单选：每题只选一个；想表达多个想法请用"其他想法"输入
+  d.mode = 'options';
+  d.selected = [label];
+  d.customText = '';
 };
 
 const chooseCustom = (qi) => {
@@ -290,27 +278,23 @@ const onSubmit = () => {
   border-radius: 6px;
   font-size: 12px;
   font-weight: 700;
-  color: var(--el-text-color-regular);
+  color: var(--el-text-color-primary);
   background-color: var(--el-fill-color);
+  box-sizing: border-box;
 }
 
 .choice-letter :deep(.el-icon) {
-  display: block;
+  display: inline-flex;
 }
 
+/* 选中只加主色描边，徽标底色与文字不变，确保深/浅色下 A/B/C 始终可见 */
 .choice-option.is-selected .choice-letter {
-  color: #fff;
-  background-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+  box-shadow: inset 0 0 0 1.5px var(--el-color-primary);
 }
 
 .choice-special .choice-letter {
   color: var(--el-color-primary);
-  background-color: var(--el-fill-color);
-}
-
-.choice-special.is-selected .choice-letter {
-  color: #fff;
-  background-color: var(--el-color-primary);
 }
 
 .choice-option-body {

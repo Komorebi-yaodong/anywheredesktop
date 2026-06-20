@@ -1026,7 +1026,7 @@ IMPORTANT:
     "builtin_betterwork": [
         {
             name: "ask_user_choice",
-            description: "Proactively ask the user one or more multiple-choice questions to confirm a decision, resolve ambiguity, or let the user pick between approaches before you proceed. Use this whenever a plan branches or you need the user to make a call. Options are rendered as clickable buttons inside the chat bubble. IMPORTANT: Do NOT add your own 'type your own answer' or 'discuss this' options — the UI automatically appends a free-text input and a 'discuss this' option to every question. Keep each option 'label' short; put rationale in 'description'.",
+            description: "Proactively ask the user one or more single-choice questions to confirm a decision, resolve ambiguity, or let the user pick between approaches before you proceed. Use this whenever a plan branches or you need the user to make a call. Options render as clickable buttons inside the chat bubble and the user picks exactly ONE option per question. IMPORTANT: Do NOT add your own 'type your own answer' or 'discuss this' options, and do NOT ask the user to multi-select — the UI automatically appends a free-text input (for any other idea) and a 'discuss this' option to every question. Keep each option 'label' short; put rationale in 'description'.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -1038,7 +1038,6 @@ IMPORTANT:
                             properties: {
                                 question: { type: "string", description: "The full question text." },
                                 header: { type: "string", description: "Optional very short label (<= 12 chars) shown as a tag/chip." },
-                                multiSelect: { type: "boolean", description: "Allow selecting multiple options. Default false." },
                                 options: {
                                     type: "array",
                                     description: "The selectable options. Do NOT include a free-text or 'discuss' option here.",
@@ -1092,6 +1091,11 @@ IMPORTANT:
                 },
                 required: ["tasks"]
             }
+        },
+        {
+            name: "task_read",
+            description: "Read back the current task list for this conversation (the same list maintained via task_write and shown in the task panel). Use this to re-orient yourself on progress — for example after a long conversation or a context compaction — so you do not lose track of what is done and what remains. Returns every task with its status and steps.",
+            inputSchema: { type: "object", properties: {} }
         }
     ],
 };
@@ -1628,6 +1632,9 @@ const handlers = {
     task_write: async ({ tasks } = {}) => {
         const count = Array.isArray(tasks) ? tasks.length : 0;
         return `[Better Work] Received the task list (${count} item(s)). The task progress panel is only shown in the interactive chat window.`;
+    },
+    task_read: async () => {
+        return `[Better Work] task_read returns the current task list, which is only available in the interactive chat window.`;
     },
     // Python
     list_python_interpreters: async () => {

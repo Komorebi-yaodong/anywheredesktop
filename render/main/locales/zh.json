@@ -213,9 +213,14 @@
       "dragCount": "{count} 个对话",
       "deleteDialogMessage": "如何删除项目「{name}」？",
       "deleteWithChats": "删除项目及对话",
-      "deleteKeepChats": "仅删项目，对话移回未分组",
+      "deleteWithChatsDesc": "同时永久删除该项目内的对话文件，不可恢复",
+      "deleteKeepChats": "仅删除项目",
+      "deleteKeepChatsDesc": "保留对话文件，移回未分组",
       "deleteCancel": "取消",
-      "deleteWithChatsSuccess": "已删除项目及 {count} 个对话"
+      "deleteWithChatsSuccess": "已删除项目及 {count} 个对话",
+      "syncToCloud": "同步整个项目到云端",
+      "syncToLocal": "从云端同步整个项目到本地",
+      "syncProjectSuccess": "项目已同步"
     }
   },
   "tasks": {

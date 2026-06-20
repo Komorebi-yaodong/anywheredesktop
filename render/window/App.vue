@@ -3463,7 +3463,9 @@ const renderProjectSelectRow = ({ projects, selectedProjectId }) => h(
       placeholder: '未分组',
       clearable: true,
       class: 'filename-project-select',
-      teleported: false
+      popperClass: 'filename-project-popper',
+      teleported: true,
+      placement: 'bottom-start'
     }, () => [
       h(ElOption, { label: '未分组', value: '' }),
       ...projects.map((p) => h(ElOption, { key: p.id, label: p.name, value: p.id }))

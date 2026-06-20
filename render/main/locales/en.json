@@ -213,9 +213,14 @@
       "dragCount": "{count} chats",
       "deleteDialogMessage": "How do you want to delete project \"{name}\"?",
       "deleteWithChats": "Delete project & chats",
-      "deleteKeepChats": "Keep chats (move to Ungrouped)",
+      "deleteWithChatsDesc": "Permanently delete the chat files in this project. This cannot be undone.",
+      "deleteKeepChats": "Delete project only",
+      "deleteKeepChatsDesc": "Keep chat files and move them to Ungrouped",
       "deleteCancel": "Cancel",
-      "deleteWithChatsSuccess": "Deleted project and {count} chats"
+      "deleteWithChatsSuccess": "Deleted project and {count} chats",
+      "syncToCloud": "Sync whole project to cloud",
+      "syncToLocal": "Sync whole project from cloud",
+      "syncProjectSuccess": "Project synced"
     }
   },
   "tasks": {

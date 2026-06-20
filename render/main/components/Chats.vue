@@ -1143,6 +1143,123 @@ async function assignFilesToProject(basenames, projectId) {
     }
 }
 
+// --- 项目归属的云端同步（Step 7）---
+const findProjectOfBasename = (projectsData, basename) => {
+    for (const project of (projectsData?.projects || [])) {
+        if ((project.files || []).some((f) => isSameProjectFile(f, basename))) {
+            return { id: project.id, name: project.name };
+        }
+    }
+    return null;
+};
+
+// 渲染端镜像后端 mergeFileAssignment：单文件归属合并（projectId 为空=移出）
+const mergeFileAssignmentLocal = (data, { basename, projectId, projectName }) => {
+    const candidate = getJsonBasenameCandidate(basename);
+    let projects = (data?.projects || []).map((p) => ({
+        ...p,
+        files: (p.files || []).filter((f) => getJsonBasenameCandidate(f) !== candidate)
+    }));
+    if (projectId) {
+        if (!projects.some((p) => p.id === projectId)) {
+            projects.push({ id: projectId, name: projectName || projectId, files: [] });
+        }
+        projects = projects.map((p) => (p.id === projectId ? { ...p, files: [...p.files, basename] } : p));
+    }
+    return { version: data?.version || 1, projects };
+};
+
+// 渲染端镜像后端 mergeProjectAssignment：整项目 files 覆盖
+const mergeProjectAssignmentLocal = (data, project) => {
+    const incoming = (project.files || []).map((f) => String(f || '').trim()).filter(Boolean);
+    const incomingSet = new Set(incoming.map(getJsonBasenameCandidate));
+    let projects = (data?.projects || []).map((p) => ({
+        ...p,
+        files: (p.files || []).filter((f) => !incomingSet.has(getJsonBasenameCandidate(f)))
+    }));
+    if (!projects.some((p) => p.id === project.id)) {
+        projects.push({ id: project.id, name: project.name, files: [] });
+    }
+    projects = projects.map((p) => (p.id === project.id ? { ...p, name: project.name, files: incoming } : p));
+    return { version: data?.version || 1, projects };
+};
+
+// 单文件同步后，把它的项目归属同步到对端 yaml
+const syncFileAssignmentAcross = async (basename, direction) => {
+    try {
+        if (direction === 'upload') {
+            const proj = findProjectOfBasename(localProjects.value, basename);
+            await window.api.mergeFileCloudProjects(
+                buildWebdavInput(),
+                { basename, projectId: proj?.id || '', projectName: proj?.name || '' }
+            );
+        } else {
+            const proj = findProjectOfBasename(cloudProjects.value, basename);
+            const localData = normalizeProjectsResult(await window.api.readLocalProjects(localChatPath.value));
+            const merged = mergeFileAssignmentLocal(localData, {
+                basename,
+                projectId: proj?.id || '',
+                projectName: proj?.name || ''
+            });
+            await window.api.writeLocalProjects(localChatPath.value, merged);
+            localProjects.value = normalizeProjectsResult(merged);
+        }
+    } catch (error) {
+        console.warn('[projects] 同步单文件项目归属失败:', error);
+    }
+};
+
+const syncProject = (projectId) =>
+    activeView.value === 'local' ? syncProjectToCloud(projectId) : syncProjectToLocal(projectId);
+
+async function syncProjectToCloud(projectId) {
+    if (!isWebdavConfigValid.value) return ElMessage.warning(t('chats.alerts.webdavRequired'));
+    const group = projectGroups.value.find((g) => g.id === projectId);
+    if (!group) return;
+    const basenames = group.files.map((f) => f.basename);
+    try {
+        if (basenames.length > 0) {
+            const tasks = basenames.map((bn) => ({
+                name: bn,
+                action: (signal) => forceSyncFile(bn, 'upload', signal, { syncProject: false })
+            }));
+            await executeSync(tasks, t('chats.alerts.syncConfirmUploadTitle'));
+        }
+        await window.api.mergeProjectCloudProjects(
+            buildWebdavInput(),
+            { id: group.id, name: group.name, files: basenames }
+        );
+        ElMessage.success(t('chats.projects.syncProjectSuccess'));
+        await refreshData();
+    } catch (error) {
+        if (error?.message !== 'Cancelled') ElMessage.error(String(error?.message || error));
+    }
+}
+
+async function syncProjectToLocal(projectId) {
+    if (!localChatPath.value) return ElMessage.warning(t('chats.alerts.localPathRequired'));
+    const group = projectGroups.value.find((g) => g.id === projectId);
+    if (!group) return;
+    const basenames = group.files.map((f) => f.basename);
+    try {
+        if (basenames.length > 0) {
+            const tasks = basenames.map((bn) => ({
+                name: bn,
+                action: (signal) => forceSyncFile(bn, 'download', signal, { syncProject: false })
+            }));
+            await executeSync(tasks, t('chats.alerts.syncConfirmDownloadTitle'));
+        }
+        const localData = normalizeProjectsResult(await window.api.readLocalProjects(localChatPath.value));
+        const merged = mergeProjectAssignmentLocal(localData, { id: group.id, name: group.name, files: basenames });
+        await window.api.writeLocalProjects(localChatPath.value, merged);
+        localProjects.value = normalizeProjectsResult(merged);
+        ElMessage.success(t('chats.projects.syncProjectSuccess'));
+        await refreshData();
+    } catch (error) {
+        if (error?.message !== 'Cancelled') ElMessage.error(String(error?.message || error));
+    }
+}
+
 async function fetchLocalFiles(silent = false) {
     if (!localChatPath.value) return;
     if (!silent) isTableLoading.value = true;
@@ -1462,8 +1579,10 @@ async function intelligentUpload() {
             t('chats.alerts.syncConfirmUploadTitle'),
             { type: 'info' }
         );
-        const tasks = filesToUpload.map(file => ({ name: file.basename, action: (signal) => forceSyncFile(file.basename, 'upload', signal) }));
+        const tasks = filesToUpload.map(file => ({ name: file.basename, action: (signal) => forceSyncFile(file.basename, 'upload', signal, { syncProject: false }) }));
         await executeSync(tasks, t('chats.alerts.syncConfirmUploadTitle'));
+        // 批量结束后统一把这些文件的项目归属合并进云端 yaml（避免并发读写竞争）
+        await syncProjectsBulk(filesToUpload.map(f => f.basename), 'upload');
     } catch (error) {
         if (error === 'cancel' || error === 'close') return;
         ElMessage.error(`${error.message}`);
@@ -1481,11 +1600,38 @@ async function intelligentDownload() {
             t('chats.alerts.syncConfirmDownloadTitle'),
             { type: 'info' }
         );
-        const tasks = filesToDownload.map(file => ({ name: file.basename, action: (signal) => forceSyncFile(file.basename, 'download', signal) }));
+        const tasks = filesToDownload.map(file => ({ name: file.basename, action: (signal) => forceSyncFile(file.basename, 'download', signal, { syncProject: false }) }));
         await executeSync(tasks, t('chats.alerts.syncConfirmDownloadTitle'));
+        await syncProjectsBulk(filesToDownload.map(f => f.basename), 'download');
     } catch (error) {
         if (error === 'cancel' || error === 'close') return;
         ElMessage.error(`${error.message}`);
+    }
+}
+
+// 批量同步结束后，一次性把多文件的项目归属合并进对端 yaml（读一次、改、写一次，避免并发竞争）
+async function syncProjectsBulk(basenames, direction) {
+    if (!Array.isArray(basenames) || basenames.length === 0) return;
+    try {
+        if (direction === 'upload') {
+            let cloudData = normalizeProjectsResult(await window.api.readCloudProjects(buildWebdavInput()));
+            for (const bn of basenames) {
+                const proj = findProjectOfBasename(localProjects.value, bn);
+                cloudData = mergeFileAssignmentLocal(cloudData, { basename: bn, projectId: proj?.id || '', projectName: proj?.name || '' });
+            }
+            await window.api.writeCloudProjects(buildWebdavInput(), cloudData);
+        } else {
+            let localData = normalizeProjectsResult(await window.api.readLocalProjects(localChatPath.value));
+            for (const bn of basenames) {
+                const proj = findProjectOfBasename(cloudProjects.value, bn);
+                localData = mergeFileAssignmentLocal(localData, { basename: bn, projectId: proj?.id || '', projectName: proj?.name || '' });
+            }
+            await window.api.writeLocalProjects(localChatPath.value, localData);
+            localProjects.value = normalizeProjectsResult(localData);
+        }
+        await refreshData();
+    } catch (error) {
+        console.warn('[projects] 批量同步项目归属失败:', error);
     }
 }
 
@@ -1513,7 +1659,8 @@ async function executeSync(tasks, title) {
     }
 }
 
-async function forceSyncFile(basename, direction, signal) {
+async function forceSyncFile(basename, direction, signal, options = {}) {
+    const { syncProject = true } = options;
     singleFileSyncing.value[basename] = true;
     try {
         const normalizedBasename = getSafeString(basename);
@@ -1546,6 +1693,11 @@ async function forceSyncFile(basename, direction, signal) {
             );
             await window.api.writeLocalFile(localPath, getSafeString(result.content), signal);
             await window.api.setFileMtime(localPath, getCompareTimestamp(cloudFile));
+        }
+
+        // 单文件同步时，连带把该文件的项目归属同步到对端 projects.yaml（批量同步走末尾统一合并）
+        if (syncProject) {
+            await syncFileAssignmentAcross(normalizedBasename, direction);
         }
     } catch (error) {
         if (error.name === 'AbortError') throw new Error("Cancelled");
@@ -1790,6 +1942,12 @@ const toggleSelectAll = () => {
                                 <span class="project-name" :title="row.name">{{ row.name }}</span>
                                 <span class="project-count">{{ row.count }}</span>
                                 <div class="project-actions" @click.stop>
+                                    <el-tooltip v-if="isWebdavConfigValid"
+                                        :content="activeView === 'local' ? t('chats.projects.syncToCloud') : t('chats.projects.syncToLocal')"
+                                        placement="top" :show-after="500">
+                                        <el-button link type="primary" :icon="Switch" class="action-icon-btn"
+                                            @click.stop="syncProject(row.id)" />
+                                    </el-tooltip>
                                     <el-tooltip :content="t('chats.projects.rename')" placement="top" :show-after="500">
                                         <el-button link type="warning" :icon="Edit" class="action-icon-btn"
                                             @click.stop="renameProject(row.id)" />
@@ -1948,20 +2106,25 @@ const toggleSelectAll = () => {
     </el-dialog>
 
     <!-- 删除项目：三选项 -->
-    <el-dialog v-model="projectDeleteDialog.visible" :title="t('chats.projects.delete')" width="460px" append-to-body>
+    <el-dialog v-model="projectDeleteDialog.visible" :title="t('chats.projects.delete')" width="420px" append-to-body
+        class="project-delete-dialog">
         <p class="project-delete-message">{{ t('chats.projects.deleteDialogMessage', { name: projectDeleteDialog.name }) }}</p>
+        <div class="project-delete-options">
+            <button type="button" class="project-delete-option" :disabled="projectDeleteDialog.busy"
+                @click="confirmDeleteProjectKeepChats">
+                <span class="opt-title">{{ t('chats.projects.deleteKeepChats') }}</span>
+                <span class="opt-desc">{{ t('chats.projects.deleteKeepChatsDesc') }}</span>
+            </button>
+            <button type="button" class="project-delete-option danger" :disabled="projectDeleteDialog.busy"
+                @click="confirmDeleteProjectWithChats">
+                <span class="opt-title">{{ t('chats.projects.deleteWithChats') }}</span>
+                <span class="opt-desc">{{ t('chats.projects.deleteWithChatsDesc') }}</span>
+            </button>
+        </div>
         <template #footer>
-            <div class="project-delete-actions">
-                <el-button :disabled="projectDeleteDialog.busy" @click="projectDeleteDialog.visible = false">
-                    {{ t('chats.projects.deleteCancel') }}
-                </el-button>
-                <el-button :loading="projectDeleteDialog.busy" @click="confirmDeleteProjectKeepChats">
-                    {{ t('chats.projects.deleteKeepChats') }}
-                </el-button>
-                <el-button type="danger" :loading="projectDeleteDialog.busy" @click="confirmDeleteProjectWithChats">
-                    {{ t('chats.projects.deleteWithChats') }}
-                </el-button>
-            </div>
+            <el-button :disabled="projectDeleteDialog.busy" @click="projectDeleteDialog.visible = false">
+                {{ t('chats.projects.deleteCancel') }}
+            </el-button>
         </template>
     </el-dialog>
 
@@ -2241,17 +2404,65 @@ const toggleSelectAll = () => {
 }
 
 .project-delete-message {
-    margin: 0;
+    margin: 0 0 16px;
     font-size: 14px;
     line-height: 1.6;
     color: var(--text-primary);
 }
 
-.project-delete-actions {
+.project-delete-options {
     display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 8px;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.project-delete-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-md, 10px);
+    background-color: var(--bg-primary);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+}
+
+.project-delete-option:hover {
+    border-color: var(--el-color-primary);
+    background-color: var(--el-color-primary-light-9);
+}
+
+.project-delete-option:active {
+    transform: scale(0.995);
+}
+
+.project-delete-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.project-delete-option.danger:hover {
+    border-color: var(--el-color-danger);
+    background-color: var(--el-color-danger-light-9);
+}
+
+.project-delete-option .opt-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.project-delete-option.danger .opt-title {
+    color: var(--el-color-danger);
+}
+
+.project-delete-option .opt-desc {
+    font-size: 12px;
+    color: var(--text-tertiary);
 }
 
 .chat-table-shell :deep(.el-scrollbar) {

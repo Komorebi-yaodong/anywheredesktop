@@ -1,6 +1,6 @@
 # ✨ AI Anywhere Desktop - 你的定制化全能 AI Agent 🚀
 
-> **随时随地，便捷召唤 AI！支持 MCP、Skill 技能库、定时任务与全局追问，将 AI 从简单的“聊天机器人”升级为能够在桌面端长期协作与自动执行任务的“本地 AI 工作站”。**
+> **随时随地，便捷召唤 AI！支持 MCP、Skill 技能库、Better Work 交互工具、项目化聊天历史、定时任务与全局追问，将 AI 从简单的“聊天机器人”升级为能够在桌面端长期协作与自动执行任务的“本地 AI 工作站”。**
 
 <p align="center">
   <a href="https://github.com/Komorebi-yaodong/anywheredesktop">
@@ -19,6 +19,20 @@
 
 AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。它不仅聚合了多种大模型接口，更提供了完整的本地 AI 自动化能力：主控台、独立对话窗口、快捷输入、快捷召唤、全局追问、MCP 工具系统、Skill 技能库、定时任务与 WebDAV 多端同步，均以桌面端原生体验重新实现。
 
+
+## 🆕 v1.2.0 更新亮点
+
+> 版本标签：`v1.2.0`（2026-06-23）
+
+* **Better Work 交互工具**：新增对话内单选确认卡片、自由输入 / 讨论选项，以及可恢复的会话临时任务面板；任务面板支持半透明显示、状态标识与 `Ctrl + T` 快速显隐。
+* **消息缓冲机制**：AI 回复或工具调用仍在进行时，后续输入会进入缓冲队列，并在当前任务完成后自动续接，避免打断正在执行的请求。
+* **聊天项目管理**：历史对话支持项目分组，可创建、重命名、删除项目，拖拽 / 批量拖拽对话归档，并同步本地与云端项目归属。
+* **截图标注工具**：截图后可直接进行画笔、矩形等标注编辑，再作为图片输入发送给助手。
+* **模型协议扩展**：新增 Codex API 协议与 Claude / Anthropic API 协议支持。
+* **Provider 自定义 Header**：可为不同服务商配置自定义请求头，例如 `User-Agent` 等。
+* **Token 用量展示**：助手回复可展示输入 / 输出 Token 与推理 Token 用量，便于评估成本和模型行为。
+* **体验与稳定性优化**：增强内置文件编辑工具诊断与变更回显，优化网页抓取 Markdown 转换、grep 搜索输出限流、聊天自动命名与请求取消即时性。
+
 ---
 
 ## 📸 功能预览
@@ -29,11 +43,13 @@ AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。�
 
 ![快捷输入模式](https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/image/%E5%BF%AB%E6%8D%B7%E8%BE%93%E5%85%A5%E6%A8%A1%E5%BC%8F-%E6%B7%B1%E8%89%B2.gif)
 
-### 💬 独立对话窗口与全局追问
+### 💬 独立对话窗口、Better Work 与全局追问
 
-**独立对话窗口**：提供完整的多轮对话体验，支持文件拖拽、图片粘贴、Markdown / 代码高亮、历史恢复与自定义背景。
+**独立对话窗口**：提供完整的多轮对话体验，支持文件拖拽、图片粘贴、Markdown / 代码高亮、Token 用量展示、历史恢复与自定义背景。
 
-**全局追问**：可将任意软件中的文本、图片或文件继续发送到已打开的目标窗口中，快速续接上下文。
+**Better Work**：在对话内提供选择卡片与会话临时任务面板，适合让 AI 在长任务中边确认、边执行、边展示进度。
+
+**全局追问与消息缓冲**：可将任意软件中的文本、图片或文件继续发送到已打开的目标窗口；当 AI 正在回复或调用工具时，后续消息会先进入缓冲队列，当前任务结束后自动续接。
 
 ![独立对话窗口](https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/image/%E7%8B%AC%E7%AB%8B%E5%AF%B9%E8%AF%9D%E7%AA%97%E5%8F%A3%E7%95%8C%E9%9D%A2.gif)
 ![全局追问展示](https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/image/%E8%BF%BD%E9%97%AE%E5%B1%95%E7%A4%BA.gif)
@@ -86,16 +102,22 @@ AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。�
 1. **主控制台 (Main)**
    * 全局设置、服务商配置、MCP 管理、Skill 管理、定时任务与历史对话入口都集中在这里。
 2. **独立对话窗口 (Window)**
-   * 支持多轮对话、文件拖拽、图片粘贴、Markdown / 代码高亮、历史恢复、导出与自定义背景。
+   * 支持多轮对话、文件拖拽、图片粘贴、Markdown / 代码高亮、Token 用量展示、历史恢复、导出与自定义背景。
+   * 支持 Better Work 选择卡片与任务面板，让 AI 可在长任务中请求确认、展示待办、实时更新执行状态。
 3. **快捷输入与快捷召唤 (Fast / Quick)**
    * 适合高频轻任务与快速投递内容。
-4. **全局追问 (Append / Follow-up)**
+   * 图片类助手可接入截图捕获与截图后标注工作流。
+4. **全局追问与消息缓冲 (Append / Follow-up)**
    * 可将任意软件中的文本、图片或文件直接继续发送到已打开的目标窗口中。
+   * 请求进行中继续发送的消息会进入缓冲区，等待当前 AI 回复或工具调用完成后自动续接。
 
 ### 🧠 真正的智能 Agent（MCP 支持）
 
 * 原生支持 **Model Context Protocol (MCP)**；
-* 内置文件操作、Python、Shell、联网搜索、时间与任务管理等工具；
+* 内置文件操作、Python、Shell、联网搜索、网页抓取、时间、任务管理与 Better Work 交互工具；
+* 内置文件编辑工具支持变更片段回显、失败诊断与误带行号容错；
+* `grep_search` 支持输出限流，减少长结果占用上下文；
+* `web_fetch` 支持通过 `markitdown-js` 增强网页内容到 Markdown 的转换效果；
 * 支持 Super-Agent / Sub-Agent 多智能体协作。
 
 ### 📚 Skill 技能库（SOP 编排）
@@ -108,18 +130,30 @@ AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。�
 * 基于本地桌面端调度器运行；
 * 可让 AI 在后台持续进行日报生成、信息抓取、文件整理与自动化执行。
 
-### ☁️ 数据同步与隐私
+### 🔌 模型协议与请求配置
+
+* 支持 OpenAI 兼容协议，并新增 **Codex API** 协议类型；
+* 支持 **Claude / Anthropic API** 协议，可直接配置 Anthropic 风格服务；
+* Provider 支持自定义请求 Header，可为不同服务商配置 `User-Agent`、网关鉴权等附加请求头；
+* 助手回复可展示输入 / 输出 Token 与推理 Token 用量，便于观察消耗与调优模型选择。
+
+
+### ☁️ 数据同步、聊天项目与隐私
 
 * 本地优先的数据存储方案；
 * 支持 WebDAV 配置同步与历史对话同步；
-* 适合多台电脑间迁移与续接工作流。
+* 历史对话支持按项目分组、折叠、拖拽归档、批量拖拽与未分组管理；
+* 保存、云端保存、重命名会话时可选择所属项目；
+* 本地与云端可同步聊天项目归属，适合多台电脑间迁移与续接工作流。
 
 ### 🖥️ 桌面端专属优化
 
 * 全局快捷键；
 * 托盘常驻；
 * 多窗口 IPC 协作；
-* 更贴近真实桌面工作流的召唤、追问与后台执行体验。
+* 截图捕获与截图后标注；
+* 请求取消立即生效，减少生成态滞留；
+* 更贴近真实桌面工作流的召唤、追问、缓冲续接与后台执行体验。
 
 ---
 
@@ -135,11 +169,11 @@ Anywhere Desktop 的用户指南已从主程序仓中拆分出来，统一维护
 | 模块                   | 说明                                           | 文档链接                                                                                 |
 | :--------------------- | :--------------------------------------------- | :--------------------------------------------------------------------------------------- |
 | **定时任务**     | 创建自动化任务，让 AI 定时执行并生成结果。     | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/task_doc.md)     |
-| **历史对话**     | 管理本地与云端会话记录，支持恢复、清理与导出。 | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/chat_doc.md)     |
-| **快捷助手**     | 创建不同类型的助手，掌握快捷召唤与全局追问。   | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/ai_doc.md)       |
-| **MCP 服务**     | 启用内置工具，接入第三方 MCP 服务。            | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/mcp_doc.md)      |
+| **历史对话**     | 管理本地与云端会话记录，支持项目分组、恢复、清理与导出。 | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/chat_doc.md)     |
+| **快捷助手**     | 创建不同类型的助手，掌握快捷召唤、全局追问、消息缓冲与截图标注。 | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/ai_doc.md)       |
+| **MCP 服务**     | 启用内置工具、Better Work 交互工具，并接入第三方 MCP 服务。 | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/mcp_doc.md)      |
 | **Skill 技能库** | 编写 SOP、封装技能、使用子智能体模式。         | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/skill_doc.md)    |
-| **服务商管理**   | 配置 API 服务商、模型与多 Key 轮询。           | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/provider_doc.md) |
+| **服务商管理**   | 配置 API 服务商、模型协议、多 Key 轮询与自定义 Header。 | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/provider_doc.md) |
 | **设置与同步**   | 配置桌面行为、快捷键、语音与 WebDAV 同步。     | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/setting_doc.md)  |
 
 > 主控台顶部左侧的“使用指南”会直接从独立文档仓拉取这些文档内容。

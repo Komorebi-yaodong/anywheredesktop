@@ -2,7 +2,7 @@ import { BrowserWindow, shell, screen, nativeTheme } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import icon from '../resources/icon.png?asset'
 import { getConfig, defaultConfig, saveSetting } from './core/data.js'
 import { startFastInputSession, getFastInputRecommendedBounds, cancelFastInputSession } from './core/fastInput.js'
@@ -14,6 +14,13 @@ const __dirname = path.dirname(__filename)
 
 const MAIN_WINDOW_DARK_BACKGROUND = '#17171c'
 const MAIN_WINDOW_LIGHT_BACKGROUND = '#fffdf7'
+const BLOCKED_EXTERNAL_PROTOCOLS = new Set(['javascript:', 'data:', 'blob:', 'about:'])
+
+function isBlockedExternalProtocol(protocol = '') {
+  return BLOCKED_EXTERNAL_PROTOCOLS.has(String(protocol || '').toLowerCase())
+}
+
+
 function resolveEffectiveDarkMode(config = {}) {
   const themeMode = typeof config?.themeMode === 'string' ? config.themeMode : ''
   if (themeMode === 'dark') return true
@@ -21,6 +28,60 @@ function resolveEffectiveDarkMode(config = {}) {
   if (typeof config?.isDarkMode === 'boolean') return config.isDarkMode
   return nativeTheme.shouldUseDarkColors
 }
+
+function normalizeUrlForCompare(value = '') {
+  return String(value || '').split('#')[0]
+}
+
+function getAllowedRendererUrlPrefixes(config = {}) {
+  const prefixes = []
+  if (is.dev && process.env.ELECTRON_RENDERER_URL && typeof config.devPath === 'string') {
+    prefixes.push(`${process.env.ELECTRON_RENDERER_URL}${config.devPath}`)
+  }
+
+  if (typeof config.html === 'string' && config.html) {
+    try {
+      const rendererFilePath = path.join(__dirname, `../renderer/${config.html}`)
+      prefixes.push(pathToFileURL(rendererFilePath).toString())
+    } catch {
+      // ignore renderer file url resolution failure
+    }
+  }
+
+  return prefixes.map(normalizeUrlForCompare).filter(Boolean)
+}
+
+function isAllowedAppNavigation(url = '', config = {}) {
+  const normalizedUrl = normalizeUrlForCompare(url)
+  if (!normalizedUrl) return false
+  return getAllowedRendererUrlPrefixes(config).some((prefix) => normalizedUrl.startsWith(prefix))
+}
+
+async function openUrlWithSystemDefault(url = '') {
+  const normalizedUrl = String(url || '').trim()
+  if (!normalizedUrl) return
+
+  try {
+    const parsedUrl = new URL(normalizedUrl)
+    if (isBlockedExternalProtocol(parsedUrl.protocol)) {
+      console.warn('[windowManager] Blocked external url with unsafe protocol:', parsedUrl.protocol)
+      return
+    }
+    if (parsedUrl.protocol === 'file:') {
+      const localPath = fileURLToPath(parsedUrl)
+      const message = await shell.openPath(localPath)
+      if (message) {
+        console.warn('[windowManager] Failed to open local file:', message, localPath)
+      }
+      return
+    }
+  } catch {
+    // Non-standard urls are still passed to openExternal below.
+  }
+
+  await shell.openExternal(normalizedUrl)
+}
+
 
 
 
@@ -835,19 +896,21 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   }
 
   win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openUrlWithSystemDefault(details.url).catch((error) => {
+      console.error('[windowManager] Failed to open external window url:', error)
+    })
     return { action: 'deny' }
   })
 
   win.webContents.on('will-navigate', (event, url) => {
-    const isLocal = url.startsWith('file://') || 
-                   (process.env.ELECTRON_RENDERER_URL && url.startsWith(process.env.ELECTRON_RENDERER_URL)) ||
-                   url.startsWith('http://localhost')
-    
-    if (!isLocal) {
-      event.preventDefault()
-      shell.openExternal(url)
+    if (isAllowedAppNavigation(url, config)) {
+      return
     }
+
+    event.preventDefault()
+    openUrlWithSystemDefault(url).catch((error) => {
+      console.error('[windowManager] Failed to open navigation url:', error)
+    })
   })
 
 

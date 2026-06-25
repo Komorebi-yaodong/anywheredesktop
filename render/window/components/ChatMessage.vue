@@ -705,6 +705,46 @@ const onReAsk = () => emit('re-ask');
 const onDelete = () => emit('delete-message', props.index);
 const onToggleCollapse = (event) => emit('toggle-collapse', props.index, event);
 const onAvatarClick = (role, event) => emit('avatar-click', role, event);
+
+const BLOCKED_MARKDOWN_LINK_PROTOCOLS = new Set(['javascript:', 'data:', 'blob:', 'about:']);
+
+const isBlockedMarkdownLinkProtocol = (url) => {
+  try {
+    return BLOCKED_MARKDOWN_LINK_PROTOCOLS.has(new URL(url).protocol.toLowerCase());
+  } catch {
+    return false;
+  }
+};
+
+const handleMarkdownLinkClick = async (event) => {
+  const link = event.target?.closest?.('a[href]');
+  if (!link || !link.closest?.('.markdown-wrapper')) return;
+
+  const href = (link.getAttribute('href') || '').trim();
+  if (!href || href.startsWith('#')) return;
+
+  const resolvedHref = link.href || href;
+  if (isBlockedMarkdownLinkProtocol(resolvedHref)) {
+    event.preventDefault();
+    event.stopPropagation();
+    ElMessage.warning('已阻止不安全的链接协议');
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  try {
+    const result = await window.api?.shellOpenExternal?.(resolvedHref);
+    if (result && result.ok === false) {
+      ElMessage.error(result.message || result.reason || '链接打开失败');
+    }
+  } catch (error) {
+    console.error('[ChatMessage] Failed to open markdown link:', error);
+    ElMessage.error('链接打开失败');
+  }
+};
+
 const truncateFilename = (filename, maxLength = 30) => {
   if (typeof filename !== 'string' || filename.length <= maxLength) return filename;
   const ellipsis = '...';
@@ -736,7 +776,7 @@ const truncateFilename = (filename, maxLength = 30) => {
 
       <Bubble class="user-bubble" placement="end" shape="corner" maxWidth="100%">
         <template #content>
-          <div v-if="!isEditing" class="markdown-wrapper" :class="{ 'collapsed': isCollapsed }">
+          <div v-if="!isEditing" class="markdown-wrapper" :class="{ 'collapsed': isCollapsed }" @click.capture="handleMarkdownLinkClick">
             <XMarkdown :markdown="renderedMarkdownContent" :is-dark="isDarkMode" :enable-latex="true"
               :mermaid-config="mermaidConfig" :default-theme-mode="isDarkMode ? 'dark' : 'light'"
               :themes="{ light: 'github-light', dark: 'github-dark-default' }" :allow-html="true" />
@@ -814,7 +854,7 @@ const truncateFilename = (filename, maxLength = 30) => {
           </Thinking>
         </template>
         <template #content v-if="hasContentToShow">
-          <div v-if="!isEditing" class="markdown-wrapper" :class="{ 'collapsed': isCollapsed }">
+          <div v-if="!isEditing" class="markdown-wrapper" :class="{ 'collapsed': isCollapsed }" @click.capture="handleMarkdownLinkClick">
             <XMarkdown :markdown="renderedMarkdownContent" :is-dark="isDarkMode" :enable-latex="true"
               :mermaid-config="mermaidConfig" :default-theme-mode="isDarkMode ? 'dark' : 'light'"
               :themes="{ light: 'one-light', dark: 'vesper' }" :allow-html="true" />

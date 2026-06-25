@@ -852,12 +852,20 @@ const rootDefaults = {
 
   for (const promptConfig of Object.values(config.prompts)) {
     if (!promptConfig || typeof promptConfig !== 'object' || Array.isArray(promptConfig)) continue
-    const resolvedPromptModel = isValidProviderModelKey(config, promptConfig.model)
-      ? promptConfig.model
-      : resolveDefaultAssistantModel(config)
-    if (promptConfig.model !== resolvedPromptModel) {
-      promptConfig.model = resolvedPromptModel
+
+    if (typeof promptConfig.model !== 'string') {
+      promptConfig.model = ''
       changed = true
+    }
+
+    // 空模型表示快捷助手不绑定专属模型，运行时再回退到默认模型/首个可用模型；
+    // 这里只修复“非空但已失效”的旧模型配置。
+    if (promptConfig.model && !isValidProviderModelKey(config, promptConfig.model)) {
+      const resolvedPromptModel = resolveDefaultAssistantModel(config)
+      if (promptConfig.model !== resolvedPromptModel) {
+        promptConfig.model = resolvedPromptModel
+        changed = true
+      }
     }
   }
 

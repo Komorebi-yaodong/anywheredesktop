@@ -620,8 +620,7 @@ export function exportSkillToPackage(skillRootPath, skillId, outputDir) {
       const zip = new AdmZip()
       zip.addLocalFolder(skillDir)
 
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-      const outputFilename = `${skillId}_${timestamp}.skill`
+      const outputFilename = `${skillId}.skill`
       const outputPath = path.join(outputDir, outputFilename)
 
       zip.writeZip(outputPath)

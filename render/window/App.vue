@@ -3279,7 +3279,7 @@ onMounted(async () => {
 const AUTO_NAMING_TIMEOUT_MS = 30000;
 const AUTO_NAMING_MAX_TEXT_CHARS = 1000;
 const AUTO_NAMING_MAX_IMAGES = 3;
-const AUTO_NAMING_MAX_TITLE_TOKENS = 40;
+const AUTO_NAMING_MAX_TITLE_TOKENS = 16;
 const buildAutoNamingSystemPrompt = () => {
   const locale = currentConfig.value?.language === 'en'
     ? 'English'
@@ -3294,7 +3294,7 @@ Rules:
 2. Do not use punctuation, separators, quotes, emoji, or other special symbols.
 3. Reply directly with the title only.
 4. If the user's primary language is unclear, summarize using ${locale}.
-5. Keep the title natural and concise. Titles within about ${AUTO_NAMING_MAX_TITLE_TOKENS} tokenizer tokens are acceptable; do not intentionally shorten a clear normal-length mixed-language title.`;
+5. Keep the title natural and concise. Titles within about ${AUTO_NAMING_MAX_TITLE_TOKENS} tokens are acceptable; do not intentionally shorten a clear normal-length mixed-language title.`;
 };
 
 const sanitizeConversationTitlePart = (value, maxLength = 30) => {
@@ -3519,6 +3519,13 @@ const getFirstUserMessageTextTail = (firstUserMsg) => {
   return takeLastTextChars(textContent, AUTO_NAMING_MAX_TEXT_CHARS);
 };
 
+const wrapAutoNamingPromptBlock = (tag, content) => {
+  const normalizedTag = String(tag || '').trim();
+  const normalizedContent = typeof content === 'string' ? content.trim() : String(content ?? '').trim();
+  if (!normalizedTag || !normalizedContent) return '';
+  return `<${normalizedTag}>\n${normalizedContent}\n</${normalizedTag}>`;
+};
+
 const buildAutoNamingUserMessageText = (firstUserMsg) => {
   const sections = [];
   const conversationSystemPrompt = getCurrentConversationSystemPromptTail();
@@ -3526,11 +3533,11 @@ const buildAutoNamingUserMessageText = (firstUserMsg) => {
   const fileNames = [];
 
   if (conversationSystemPrompt) {
-    sections.push(`Conversation system prompt:\n${conversationSystemPrompt}`);
+    sections.push(`Conversation system prompt:\n${wrapAutoNamingPromptBlock('system_prompt', conversationSystemPrompt)}`);
   }
 
   if (firstUserMessage) {
-    sections.push(`First user message:\n${firstUserMessage}`);
+    sections.push(`First user message:\n${wrapAutoNamingPromptBlock('user_prompt', firstUserMessage)}`);
   }
 
   if (Array.isArray(firstUserMsg?.content)) {

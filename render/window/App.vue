@@ -3575,7 +3575,7 @@ const buildAutoNamingImageParts = (firstUserMsg) => {
     .filter(Boolean);
 };
 
-const buildAutoNamingPromptText = (content) => `<content>\n${content}\n</content>`;
+const buildAutoNamingPromptText = (content) => String(content ?? '').trim();
 
 const buildAutoNamingUserContent = (firstUserMsg) => {
   const userMessageText = buildAutoNamingUserMessageText(firstUserMsg);

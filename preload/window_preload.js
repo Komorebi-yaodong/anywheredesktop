@@ -374,7 +374,7 @@ const api = {
   getSkillDetails: (skillRootPath = '', skillId = '') => invokeOrThrow('skill:getDetails', skillRootPath, skillId),
   saveSkill: (skillRootPath = '', skillId = '', content = '') => invokeOrThrow('skill:save', skillRootPath, skillId, content),
   deleteSkill: (skillRootPath = '', skillId = '') => invokeOrThrow('skill:delete', skillRootPath, skillId),
-  exportSkillToPackage: (skillRootPath = '', skillId = '', outputDir = '') => invokeOrThrow('skill:exportPackage', skillRootPath, skillId, outputDir),
+  exportSkillToPackage: (skillRootPath = '', skillId = '', outputDir = '', options = {}) => invokeOrThrow('skill:exportPackage', skillRootPath, skillId, outputDir, toPlainPayload(options) || {}),
   extractSkillPackage: (filePath = '') => invokeOrThrow('skill:extractPackage', filePath),
   getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) => invokeOrThrow('skill:getToolDefinition', skillRootPath, toPlainPayload(enabledSkillNames) || []),
   resolveSkillInvocation: async (skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null, signal = null) => {

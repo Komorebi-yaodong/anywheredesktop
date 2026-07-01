@@ -145,8 +145,8 @@ getDroppedFilePath: (file) => {
     invokeOrThrow('skill:save', skillRootPath, skillId, content),
   deleteSkill: (skillRootPath = '', skillId = '') =>
     invokeOrThrow('skill:delete', skillRootPath, skillId),
-  exportSkillToPackage: (skillRootPath = '', skillId = '', outputDir = '') =>
-    invokeOrThrow('skill:exportPackage', skillRootPath, skillId, outputDir),
+  exportSkillToPackage: (skillRootPath = '', skillId = '', outputDir = '', options = {}) =>
+    invokeOrThrow('skill:exportPackage', skillRootPath, skillId, outputDir, toPlainPayload(options) || {}),
   extractSkillPackage: (filePath = '') =>
     invokeOrThrow('skill:extractPackage', filePath),
   getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) =>

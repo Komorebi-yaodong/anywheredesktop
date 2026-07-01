@@ -790,8 +790,8 @@ handleInvoke('mcp:closeClient', async (event, meta = {}) => {
     return result
   })
 
-  handleInvoke('skill:exportPackage', async (_event, skillRootPath = '', skillId = '', outputDir = '') => {
-    return skillApi.exportSkillToPackage(skillRootPath, skillId, outputDir)
+  handleInvoke('skill:exportPackage', async (_event, skillRootPath = '', skillId = '', outputDir = '', options = {}) => {
+    return skillApi.exportSkillToPackage(skillRootPath, skillId, outputDir, options)
   })
 
   handleInvoke('skill:extractPackage', async (_event, filePath = '') => {

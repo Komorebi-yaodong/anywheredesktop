@@ -1004,6 +1004,11 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
     return webdavApi.writeBackup(input)
   })
 
+
+  handleInvoke('webdav:writeBackupsBatch', async (_event, input = {}) => {
+    return webdavApi.writeBackupsBatch(input)
+  })
+
   handleInvoke('webdav:readBackup', async (_event, input = {}) => {
     return webdavApi.readBackup(input)
   })

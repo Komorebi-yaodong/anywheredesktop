@@ -1,7 +1,6 @@
 <script setup>
 import { ref, onMounted, computed, watch, onUnmounted, nextTick, onActivated, onDeactivated, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { createClient } from "webdav/web";
 import { Refresh, Delete as DeleteIcon, ChatDotRound, Edit, Upload, Download, Switch, QuestionFilled, Brush, FolderOpened, Share, ArrowRight, Folder, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -327,6 +326,131 @@ const resolveWebdavDataPath = () => {
     return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
 };
 
+const CHAT_METADATA_BATCH_SIZE = 10;
+
+const buildChatWebdavInput = (extra = {}) => buildWebdavInput({
+    useChatMetadata: true,
+    ...extra
+});
+
+const extractSessionTitleFromContent = (jsonString, fallbackBasename = '') => {
+    const normalizedFallback = typeof fallbackBasename === 'string' ? fallbackBasename.trim() : '';
+    try {
+        const sessionData = JSON.parse(typeof jsonString === 'string' ? jsonString : '{}');
+        if (!sessionData || sessionData.anywhere_history !== true) return '';
+
+        const rawMetadata = sessionData.sessionMetadata && typeof sessionData.sessionMetadata === 'object'
+            ? sessionData.sessionMetadata
+            : {};
+        const rawTitle = typeof rawMetadata.title === 'string' ? rawMetadata.title.trim() : '';
+        return rawTitle || (normalizedFallback.endsWith('.json') ? normalizedFallback.slice(0, -5) : normalizedFallback);
+    } catch {
+        return '';
+    }
+};
+
+const buildChatMetadataPayload = (basename, jsonString, fallbackFile = null) => {
+    const titleFromContent = extractSessionTitleFromContent(jsonString, basename);
+    const fallbackTitle = normalizeTitleValue(fallbackFile || { basename });
+    const fallbackCreatedAt = normalizeDateValue(fallbackFile?.createdAt || fallbackFile?.birthtime || fallbackFile?.ctime || fallbackFile?.lastmod || '');
+    const fallbackUpdatedAt = normalizeDateValue(fallbackFile?.updatedAt || fallbackFile?.lastmod || fallbackCreatedAt || '');
+
+    return {
+        title: titleFromContent || fallbackTitle,
+        createdAt: fallbackCreatedAt || fallbackUpdatedAt,
+        updatedAt: fallbackUpdatedAt || fallbackCreatedAt
+    };
+};
+
+const buildCloudUploadFilePayload = async (basename, options = {}) => {
+    const normalizedBasename = getSafeString(basename);
+    const localPath = options.localPath || `${localChatPath.value}/${normalizedBasename}`;
+    const localFile = options.localFile || localChatFiles.value.find((file) => file.basename === normalizedBasename);
+    if (!localFile) {
+        throw new Error(t('chats.alerts.localFileMissing', { filename: normalizedBasename }));
+    }
+
+    const content = typeof options.content === 'string'
+        ? options.content
+        : await window.api.readLocalFile(localPath, options.signal);
+
+    return {
+        filename: normalizedBasename,
+        content,
+        lastModified: toUtcString(getCompareTimestamp(localFile)),
+        chatMetadata: buildChatMetadataPayload(normalizedBasename, content, localFile)
+    };
+};
+
+const splitIntoBatches = (items, batchSize = CHAT_METADATA_BATCH_SIZE) => {
+    const normalizedSize = Math.max(1, Number(batchSize) || CHAT_METADATA_BATCH_SIZE);
+    const batches = [];
+    for (let index = 0; index < items.length; index += normalizedSize) {
+        batches.push(items.slice(index, index + normalizedSize));
+    }
+    return batches;
+};
+
+const uploadFilesToCloudInBatches = async (basenames, signal, options = {}) => {
+    const normalizedNames = Array.isArray(basenames)
+        ? basenames.map((name) => getSafeString(name)).filter(Boolean)
+        : [];
+    if (normalizedNames.length === 0) {
+        return { completed: [], failed: [] };
+    }
+
+    const localMap = new Map(localChatFiles.value.map((file) => [file.basename, file]));
+    const completed = [];
+    const failed = [];
+    const batches = splitIntoBatches(normalizedNames, options.batchSize || CHAT_METADATA_BATCH_SIZE);
+
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+        if (signal?.aborted) {
+            throw new Error('Cancelled');
+        }
+
+        const currentBatch = batches[batchIndex];
+        const files = [];
+        for (const basename of currentBatch) {
+            const payload = await buildCloudUploadFilePayload(basename, {
+                signal,
+                localFile: localMap.get(basename)
+            });
+            files.push(payload);
+        }
+
+        const result = ensureWebdavResult(
+            await window.api.writeWebdavBackupsBatch(
+                buildChatWebdavInput({
+                    files,
+                    overwrite: true,
+                    ensureDirectory: true,
+                    batchSize: CHAT_METADATA_BATCH_SIZE,
+                    concurrency: CHAT_METADATA_BATCH_SIZE
+                })
+            ),
+            'webdav_write_failed'
+        );
+
+        const batchCompleted = Array.isArray(result.completed) ? result.completed : [];
+        const batchFailed = Array.isArray(result.failed) ? result.failed : [];
+        completed.push(...batchCompleted);
+        failed.push(...batchFailed);
+
+        if (!signal?.aborted) {
+            const processedCount = completed.length + failed.length;
+            syncProgress.value = Math.round((processedCount / normalizedNames.length) * 100);
+            syncStatusText.value = t('chats.alerts.syncProcessing', {
+                completed: processedCount,
+                total: normalizedNames.length
+            });
+        }
+    }
+
+    return { completed, failed, completedFiles: completed.map((name) => getSafeString(name)).filter(Boolean) };
+};
+
+
 const normalizeChatFile = (file, source = 'local') => {
     const basename = resolveFileBasename(file);
     const size = Number(file?.size);
@@ -366,11 +490,9 @@ const normalizeTitleValue = (file) => {
 };
 
 const isCloudView = computed(() => activeView.value === 'cloud');
-const showCreatedAtColumn = computed(() => !isCloudView.value);
+const showCreatedAtColumn = computed(() => true);
 const chatTableColumns = computed(() => (
-    showCreatedAtColumn.value
-        ? '24px minmax(0, 1.8fr) minmax(168px, 1fr) minmax(168px, 1fr) minmax(120px, 0.7fr) 168px'
-        : '24px minmax(0, 2.2fr) minmax(180px, 1fr) minmax(120px, 0.7fr) 168px'
+    '24px minmax(0, 1.8fr) minmax(168px, 1fr) minmax(168px, 1fr) minmax(120px, 0.7fr) 168px'
 ));
 
 const getSortDirectionLabel = () => sortDirection.value === 'asc' ? '↑' : '↓';
@@ -378,10 +500,6 @@ const getSortDirectionLabel = () => sortDirection.value === 'asc' ? '↑' : '↓
 const getColumnSortLabel = (mode) => `${t(`chats.sort.${mode}`)} ${getSortDirectionLabel()}`;
 
 const toggleSort = (mode) => {
-    if (mode === 'createdAt' && isCloudView.value) {
-        return;
-    }
-
     if (sortMode.value === mode) {
         sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
     } else {
@@ -393,7 +511,7 @@ const toggleSort = (mode) => {
 };
 
 const ensureValidSortModeForView = () => {
-    if (isCloudView.value && sortMode.value === 'createdAt') {
+    if (!['name', 'createdAt', 'updatedAt', 'size'].includes(sortMode.value)) {
         sortMode.value = 'updatedAt';
         sortDirection.value = 'desc';
     }
@@ -963,7 +1081,7 @@ async function confirmDeleteProjectWithChats() {
                 }
             } else {
                 ensureWebdavResult(
-                    await window.api.deleteWebdavBackup(buildWebdavInput({ filename: file.basename })),
+                    await window.api.deleteWebdavBackup(buildChatWebdavInput({ filename: file.basename })),
                     'webdav_delete_failed'
                 );
             }
@@ -1219,11 +1337,12 @@ async function syncProjectToCloud(projectId) {
     const basenames = group.files.map((f) => f.basename);
     try {
         if (basenames.length > 0) {
-            const tasks = basenames.map((bn) => ({
-                name: bn,
-                action: (signal) => forceSyncFile(bn, 'upload', signal, { syncProject: false })
-            }));
-            await executeSync(tasks, t('chats.alerts.syncConfirmUploadTitle'));
+            await executeSync([
+                {
+                    name: group.name || projectId,
+                    action: (signal) => uploadFilesToCloudInBatches(basenames, signal)
+                }
+            ], t('chats.alerts.syncConfirmUploadTitle'));
         }
         await window.api.mergeProjectCloudProjects(
             buildWebdavInput(),
@@ -1282,7 +1401,7 @@ async function fetchCloudFiles(silent = false) {
     if (!silent) isTableLoading.value = true;
     try {
         const result = ensureWebdavResult(
-            await window.api.listWebdavBackups(buildWebdavInput()),
+            await window.api.listWebdavBackups(buildChatWebdavInput()),
             'webdav_list_failed'
         );
 
@@ -1349,7 +1468,7 @@ async function startChat(file) {
             jsonString = await window.api.readLocalFile(filePath);
         } else {
             const result = ensureWebdavResult(
-                await window.api.readWebdavBackup(buildWebdavInput({ filename: basename })),
+                await window.api.readWebdavBackup(buildChatWebdavInput({ filename: basename })),
                 'webdav_read_failed'
             );
             jsonString = getSafeString(result.content);
@@ -1423,14 +1542,14 @@ async function renameFile(file) {
                 ).catch(() => false);
                 if (confirm) {
                     ensureWebdavResult(
-                        await window.api.moveWebdavFile(buildWebdavInput({ fromFilename: basename, toFilename: finalFilename })),
+                        await window.api.moveWebdavFile(buildChatWebdavInput({ fromFilename: basename, toFilename: finalFilename, useChatMetadata: true })),
                         'webdav_move_failed'
                     );
                 }
             }
         } else { // cloud
             ensureWebdavResult(
-                await window.api.moveWebdavFile(buildWebdavInput({ fromFilename: basename, toFilename: finalFilename })),
+                await window.api.moveWebdavFile(buildChatWebdavInput({ fromFilename: basename, toFilename: finalFilename, useChatMetadata: true })),
                 'webdav_move_failed'
             );
             if (localChatFiles.value.some(f => f.basename === basename)) {
@@ -1500,13 +1619,13 @@ async function deleteFiles(filesToDelete) {
                 await window.api.deleteLocalFile(localPath);
                 if (syncDeletions && isWebdavConfigValid.value && cloudChatFiles.value.some(f => f.basename === basename)) {
                     ensureWebdavResult(
-                        await window.api.deleteWebdavBackup(buildWebdavInput({ filename: basename })),
+                        await window.api.deleteWebdavBackup(buildChatWebdavInput({ filename: basename })),
                         'webdav_delete_failed'
                     );
                 }
             } else { // cloud view
                 ensureWebdavResult(
-                    await window.api.deleteWebdavBackup(buildWebdavInput({ filename: basename })),
+                    await window.api.deleteWebdavBackup(buildChatWebdavInput({ filename: basename })),
                     'webdav_delete_failed'
                 );
                 if (syncDeletions && localChatFiles.value.some(f => f.basename === basename)) {
@@ -1537,7 +1656,7 @@ const cancelSync = () => {
 };
 
 async function runConcurrentTasks(tasks, signal, concurrencyLimit = 3) {
-    const results = { completed: 0, failed: 0, failedFiles: [] };
+    const results = { completed: 0, failed: 0, failedFiles: [], completedFiles: [] };
     const queue = [...tasks];
 
     const worker = async () => {
@@ -1545,8 +1664,16 @@ async function runConcurrentTasks(tasks, signal, concurrencyLimit = 3) {
             if (signal.aborted) throw new Error("Cancelled");
             const task = queue.shift();
             try {
-                await task.action(signal);
-                results.completed++;
+                const taskResult = await task.action(signal);
+                if (Array.isArray(taskResult?.completedFiles)) {
+                    results.completed += taskResult.completedFiles.length;
+                    results.completedFiles.push(...taskResult.completedFiles);
+                } else {
+                    results.completed++;
+                    if (typeof task.name === 'string' && task.name.trim()) {
+                        results.completedFiles.push(task.name);
+                    }
+                }
             } catch (error) {
                 if (error.name === 'AbortError') {
                     throw new Error("Cancelled");
@@ -1579,10 +1706,17 @@ async function intelligentUpload() {
             t('chats.alerts.syncConfirmUploadTitle'),
             { type: 'info' }
         );
-        const tasks = filesToUpload.map(file => ({ name: file.basename, action: (signal) => forceSyncFile(file.basename, 'upload', signal, { syncProject: false }) }));
-        await executeSync(tasks, t('chats.alerts.syncConfirmUploadTitle'));
-        // 批量结束后统一把这些文件的项目归属合并进云端 yaml（避免并发读写竞争）
-        await syncProjectsBulk(filesToUpload.map(f => f.basename), 'upload');
+        const syncResult = await executeSync([
+            {
+                name: t('chats.alerts.syncConfirmUploadTitle'),
+                action: (signal) => uploadFilesToCloudInBatches(filesToUpload.map(file => file.basename), signal)
+            }
+        ], t('chats.alerts.syncConfirmUploadTitle'));
+        // 批量结束后统一把成功文件的项目归属合并进云端 yaml（避免并发读写竞争）
+        const uploadedBasenames = Array.isArray(syncResult?.completedFiles) && syncResult.completedFiles.length > 0
+            ? syncResult.completedFiles
+            : filesToUpload.map(f => f.basename);
+        await syncProjectsBulk(uploadedBasenames, 'upload');
     } catch (error) {
         if (error === 'cancel' || error === 'close') return;
         ElMessage.error(`${error.message}`);
@@ -1647,12 +1781,14 @@ async function executeSync(tasks, title) {
         if (results.failed > 0) message += ` ${t('chats.alerts.syncFailedPartially', { failedCount: results.failed })}`;
         ElMessage.success(message);
         await refreshData();
+        return results;
     } catch (error) {
         if (error.message === 'Cancelled') {
             ElMessage.warning(t('chats.alerts.syncCancelled'));
         } else {
             ElMessage.error(t('chats.alerts.syncFailed', { message: error.message }));
         }
+        throw error;
     } finally {
         isSyncing.value = false;
         syncAbortController.value = null;
@@ -1667,18 +1803,16 @@ async function forceSyncFile(basename, direction, signal, options = {}) {
         const localPath = `${localChatPath.value}/${normalizedBasename}`;
 
         if (direction === 'upload') {
-            const localFile = localChatFiles.value.find(f => f.basename === normalizedBasename);
-            if (!localFile) throw new Error(t('chats.alerts.localFileMissing', { filename: normalizedBasename }));
-
-            const content = await window.api.readLocalFile(localPath, signal);
+            const uploadPayload = await buildCloudUploadFilePayload(normalizedBasename, { signal, localPath });
             ensureWebdavResult(
                 await window.api.writeWebdavBackup(
-                    buildWebdavInput({
+                    buildChatWebdavInput({
                         filename: normalizedBasename,
-                        content,
+                        content: uploadPayload.content,
                         overwrite: true,
                         ensureDirectory: true,
-                        lastModified: toUtcString(getCompareTimestamp(localFile))
+                        lastModified: uploadPayload.lastModified,
+                        chatMetadata: uploadPayload.chatMetadata
                     })
                 ),
                 'webdav_write_failed'
@@ -1688,7 +1822,7 @@ async function forceSyncFile(basename, direction, signal, options = {}) {
             if (!cloudFile) throw new Error(t('chats.alerts.cloudFileMissing', { filename: normalizedBasename }));
 
             const result = ensureWebdavResult(
-                await window.api.readWebdavBackup(buildWebdavInput({ filename: normalizedBasename })),
+                await window.api.readWebdavBackup(buildChatWebdavInput({ filename: normalizedBasename })),
                 'webdav_read_failed'
             );
             await window.api.writeLocalFile(localPath, getSafeString(result.content), signal);
@@ -1746,7 +1880,7 @@ async function executeAutoClean() {
                 await window.api.deleteLocalFile(localPath);
             } else {
                 ensureWebdavResult(
-                    await window.api.deleteWebdavBackup(buildWebdavInput({ filename: basename })),
+                    await window.api.deleteWebdavBackup(buildChatWebdavInput({ filename: basename })),
                     'webdav_delete_failed'
                 );
             }

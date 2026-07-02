@@ -999,22 +999,8 @@ const getConversationDisplayName = () => {
 };
 
 const getSessionMetadata = () => {
-  const timestamps = [];
-
-  chat_show.value.forEach((message) => {
-    [message?.timestamp, message?.completedTimestamp, message?.updatedAt, message?.createdAt].forEach((candidate) => {
-      const normalized = normalizeSessionTimestamp(candidate);
-      if (normalized) timestamps.push(normalized);
-    });
-  });
-
-  timestamps.sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-
-  const nowIso = new Date().toISOString();
   return {
-    title: getConversationDisplayName(),
-    createdAt: timestamps[0] || nowIso,
-    updatedAt: timestamps[timestamps.length - 1] || nowIso
+    title: getConversationDisplayName()
   };
 };
 
@@ -3984,6 +3970,54 @@ const buildWindowWebdavConfig = () => {
   };
 };
 
+
+const buildWindowChatMetadataPayload = (basename, options = {}) => {
+  const {
+    sessionData = null,
+    createdAt = '',
+    updatedAt = ''
+  } = options;
+
+  const metadata = sessionData?.sessionMetadata && typeof sessionData.sessionMetadata === 'object'
+    ? sessionData.sessionMetadata
+    : getSessionMetadata();
+
+  const normalizedCreatedAt = normalizeSessionTimestamp(createdAt);
+  const normalizedUpdatedAt = normalizeSessionTimestamp(updatedAt);
+  const fallbackNow = new Date().toISOString();
+
+  return {
+    title: typeof metadata?.title === 'string' && metadata.title.trim()
+      ? metadata.title.trim()
+      : (basename.endsWith('.json') ? basename.slice(0, -5) : basename),
+    createdAt: normalizedCreatedAt || normalizedUpdatedAt || fallbackNow,
+    updatedAt: normalizedUpdatedAt || normalizedCreatedAt || fallbackNow
+  };
+};
+
+
+const resolveWindowCloudSaveFileSystemTimes = async (filename) => {
+  const localDir = currentConfig.value?.webdav?.localChatPath || '';
+  const nowIso = new Date().toISOString();
+  if (!localDir) {
+    return { createdAt: nowIso, updatedAt: nowIso, source: 'now' };
+  }
+
+  try {
+    const files = await window.api.listJsonFiles(localDir);
+    const matchedFile = (Array.isArray(files) ? files : []).find((item) => item?.basename === filename);
+    if (!matchedFile) {
+      return { createdAt: nowIso, updatedAt: nowIso, source: 'now' };
+    }
+
+    const createdAt = normalizeSessionTimestamp(matchedFile.createdAt) || normalizeSessionTimestamp(matchedFile.updatedAt) || nowIso;
+    const updatedAt = normalizeSessionTimestamp(matchedFile.updatedAt) || normalizeSessionTimestamp(matchedFile.createdAt) || nowIso;
+    return { createdAt, updatedAt, source: 'local-file' };
+  } catch {
+    return { createdAt: nowIso, updatedAt: nowIso, source: 'now' };
+  }
+};
+
 const loadProjectsForScope = async (scope) => {
   try {
     if (scope === 'cloud') {
@@ -4290,12 +4324,13 @@ const saveWindowSize = async () => {
   }
 }
 
-const getSessionDataAsObject = () => {
+const getSessionDataAsObject = (options = {}) => {
   const currentPromptConfig = currentConfig.value.prompts[CODE.value] || {};
+  const explicitTitle = typeof options?.title === 'string' ? options.title.trim() : '';
   return {
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
     autoCloseOnBlur: autoCloseOnBlur.value, model: model.value,
-    sessionMetadata: getSessionMetadata(),
+    sessionMetadata: { title: explicitTitle || getSessionMetadata().title },
     currentPromptConfig: currentPromptConfig, history: history.value, chat_show: chat_show.value, selectedVoice: selectedVoice.value,
     promptDraft: prompt.value,
     draftFileList: fileList.value,
@@ -4356,21 +4391,22 @@ const saveSessionToCloud = async () => {
           instance.confirmButtonLoading = true;
           showDismissibleMessage.info('正在保存到云端...');
           try {
-            const sessionData = getSessionDataAsObject();
+            const sessionData = getSessionDataAsObject({ title: finalBasename });
             const jsonString = JSON.stringify(sessionData, null, 2);
-            const { url, username, password, data_path } = currentConfig.value.webdav;
-            const remoteDir = data_path.endsWith('/') ? data_path.slice(0, -1) : data_path;
+            const webdavConfig = buildWindowWebdavConfig();
+            const fileSystemTimes = await resolveWindowCloudSaveFileSystemTimes(filename);
             const writeResult = await window.api.writeWebdavBackup({
-              webdavConfig: {
-                url,
-                username,
-                password,
-                path: remoteDir
-              },
+              webdavConfig,
               filename,
               content: jsonString,
               overwrite: true,
-              ensureDirectory: true
+              ensureDirectory: true,
+              useChatMetadata: true,
+              chatMetadata: buildWindowChatMetadataPayload(filename, {
+                sessionData,
+                createdAt: fileSystemTimes.createdAt,
+                updatedAt: fileSystemTimes.updatedAt
+              })
             });
             if (writeResult?.ok === false) {
               throw new Error(writeResult.message || '保存到云端失败');
@@ -4901,8 +4937,6 @@ const saveSessionAsHtml = async () => {
 };
 
 const saveSessionAsJson = async () => {
-  const sessionData = getSessionDataAsObject();
-  const jsonString = JSON.stringify(sessionData, null, 2);
   const defaultBasename = defaultConversationName.value || buildConversationTimestampedBasename(CODE.value || 'AI', { force: false, includeCode: false });
   const inputValue = ref(defaultBasename);
   const isAutoNaming = ref(false);
@@ -4952,6 +4986,8 @@ const saveSessionAsJson = async () => {
           const finalFilename = finalBasename + '.json';
           instance.confirmButtonLoading = true;
           try {
+            const sessionData = getSessionDataAsObject({ title: finalBasename });
+            const jsonString = JSON.stringify(sessionData, null, 2);
             const localChatPath = currentConfig.value.webdav?.localChatPath;
 
             // 优化逻辑：如果有本地路径，直接写入；否则弹出保存框

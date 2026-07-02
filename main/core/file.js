@@ -778,16 +778,8 @@ const readSessionMetadata = async (filePath, basename, cacheContext = null) => {
       return null
     }
 
-    const timestamps = collectSessionTimestamps(sessionData)
-    const metadata = sessionData.sessionMetadata && typeof sessionData.sessionMetadata === 'object'
-      ? sessionData.sessionMetadata
-      : {}
-
     const normalizedMetadata = {
-      title: resolveFallbackTitle(basename, sessionData),
-      createdAt: normalizeSessionTimestamp(metadata.createdAt) || timestamps[0] || '',
-      updatedAt:
-        normalizeSessionTimestamp(metadata.updatedAt) || timestamps[timestamps.length - 1] || ''
+      title: resolveFallbackTitle(basename, sessionData)
     }
 
     if (cacheContext?.stats && cacheKey) {
@@ -824,11 +816,21 @@ export async function listJsonFiles(dirPath) {
       const fullPath = path.join(resolvedDirPath, entry.name)
       try {
         const stats = await fs.stat(fullPath)
-        return createSessionFileSummary({
+        const summary = createSessionFileSummary({
           filePath: fullPath,
           basename: entry.name,
           stats
         })
+        const sessionMetadata = await readSessionMetadata(fullPath, entry.name, { stats })
+
+        if (sessionMetadata) {
+          return {
+            ...summary,
+            title: sessionMetadata.title || summary.title
+          }
+        }
+
+        return summary
       } catch (error) {
         console.error(`[file] 无法获取文件信息: ${fullPath}`, error)
         return null
@@ -842,6 +844,8 @@ export async function listJsonFiles(dirPath) {
       (a, b) =>
         new Date(b.createdAt || b.lastmod).getTime() - new Date(a.createdAt || a.lastmod).getTime()
     )
+
+  pruneLocalSessionMetadataCache(fileDetails.filter(Boolean).map((item) => item.path))
 
   return normalizedDetails
 }

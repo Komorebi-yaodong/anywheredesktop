@@ -429,6 +429,8 @@ const api = {
 
   listWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listBackups', input),
   writeWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackup', input),
+
+  writeWebdavBackupsBatch: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackupsBatch', input),
   readWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:readBackup', input),
   moveWebdavFile: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:moveFile', input),
   deleteWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteBackup', input),

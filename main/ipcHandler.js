@@ -597,6 +597,9 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
     return chatApi.listProviderModels(input)
   })
 
+  handleInvoke('chat:batchTestProviderKeys', async (_event, input = {}) => {
+    return chatApi.batchTestProviderKeys(input)
+  })
 
 
   handleInvoke('chat:createCompletion', async (_event, params = {}) => {
@@ -798,6 +801,79 @@ handleInvoke('mcp:closeClient', async (event, meta = {}) => {
     return skillApi.extractSkillPackage(filePath)
   })
 
+  handleInvoke('skill:uploadToWebdav', async (event, input = {}) => {
+    const meta = input?.meta && typeof input.meta === 'object' ? input.meta : {}
+    const signalToken = typeof meta?.signalToken === 'string' ? meta.signalToken : ''
+    const callbackToken = typeof meta?.callbackToken === 'string' ? meta.callbackToken : ''
+    const controller = new AbortController()
+    const signalKey = signalToken ? getLiveSignalKey(event.sender.id, signalToken) : ''
+
+    if (signalKey) {
+      liveSignalControllers.set(signalKey, controller)
+    }
+    if (meta?.aborted) {
+      controller.abort()
+    }
+
+    try {
+      return await skillApi.uploadSkillsToWebdav({
+        skillRootPath: input?.skillRootPath,
+        skillIds: input?.skillIds,
+        remotePath: input?.remotePath,
+        webdavConfig: input?.webdavConfig,
+        maxPackageSizeBytes: input?.maxPackageSizeBytes,
+        signal: controller.signal,
+        onProgress: callbackToken ? (payload) => {
+          try {
+            event.sender.send('window:callback', {
+              token: callbackToken,
+              payload: typeof payload === 'string' ? payload : JSON.parse(JSON.stringify(payload))
+            })
+          } catch {
+            // ignore callback notify failure
+          }
+        } : null,
+        writeWebdavBackup: webdavApi.writeBackup
+      })
+    } finally {
+      if (signalKey) {
+        liveSignalControllers.delete(signalKey)
+      }
+    }
+  })
+
+  handleInvoke('skill:listWebdav', async (_event, input = {}) => {
+    return skillApi.listSkillsFromWebdav({
+      remotePath: input?.remotePath,
+      webdavConfig: input?.webdavConfig,
+      includeMetadata: input?.includeMetadata === true,
+      listWebdavDirectory: webdavApi.listDirectory,
+      readWebdavBackup: webdavApi.readBackupBinary
+    })
+  })
+
+  handleInvoke('skill:deleteWebdav', async (_event, input = {}) => {
+    return skillApi.deleteSkillsFromWebdav({
+      skillIds: input?.skillIds,
+      remotePath: input?.remotePath,
+      webdavConfig: input?.webdavConfig,
+      listWebdavDirectory: webdavApi.listDirectory,
+      deleteWebdavDirectoryContents: webdavApi.deleteDirectoryContents
+    })
+  })
+
+  handleInvoke('skill:pullFromWebdav', async (_event, input = {}) => {
+    return skillApi.pullSkillFromWebdav({
+      skillId: input?.skillId,
+      skillRootPath: input?.skillRootPath,
+      remotePath: input?.remotePath,
+      webdavConfig: input?.webdavConfig,
+      listWebdavDirectory: webdavApi.listDirectory,
+      readWebdavBackup: webdavApi.readBackup,
+      readWebdavBackupBinary: webdavApi.readBackupBinary
+    })
+  })
+
   handleInvoke('skill:getToolDefinition', async (_event, skillRootPath = '', enabledSkillNames = []) => {
     const allSkills = skillApi.listSkills(skillRootPath)
     const normalizedEnabledSkillNames = Array.isArray(enabledSkillNames)
@@ -945,8 +1021,8 @@ handleInvoke('skill:pathJoin', async (_event, ...args) => {
     return fileApi.selectDirectory()
   })
 
-  handleInvoke('file:listJsonFiles', async (_event, dirPath = '') => {
-    return fileApi.listJsonFiles(dirPath)
+  handleInvoke('file:listJsonFiles', async (_event, dirPath = '', options = {}) => {
+    return fileApi.listJsonFiles(dirPath, options)
   })
 
   handleInvoke('file:readLocalFile', async (_event, filePath = '', options = {}) => {
@@ -1011,6 +1087,18 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
 
   handleInvoke('webdav:readBackup', async (_event, input = {}) => {
     return webdavApi.readBackup(input)
+  })
+
+  handleInvoke('webdav:readBackupBinary', async (_event, input = {}) => {
+    return webdavApi.readBackupBinary(input)
+  })
+
+  handleInvoke('webdav:listDirectory', async (_event, input = {}) => {
+    return webdavApi.listDirectory(input)
+  })
+
+  handleInvoke('webdav:deleteDirectoryContents', async (_event, input = {}) => {
+    return webdavApi.deleteDirectoryContents(input)
   })
 
 

@@ -78,6 +78,17 @@ const dragGhostX = ref(0);
 const dragGhostY = ref(0);
 const dragGhostLabel = ref('');
 
+const LOCAL_REFRESH_THROTTLE_MS = 2000;
+const LOCAL_TITLE_HYDRATE_DELAY_MS = 120;
+let localFilesInFlight = null;
+let localFilesInFlightPath = '';
+let localFilesRequestSeq = 0;
+let localTitleHydrationSeq = 0;
+let lastLocalFilesLoadedAt = 0;
+let refreshDataInFlight = null;
+let lastRefreshDataAt = 0;
+
+
 // --- 项目（目录）分组状态 ---
 const localProjects = ref({ version: 1, projects: [] });
 const cloudProjects = ref({ version: 1, projects: [] });
@@ -589,7 +600,7 @@ const toUtcString = (value) => {
 
 
 const handleWindowFocus = () => {
-    refreshData(true);
+    refreshData(true, { throttle: true });
 };
 
 async function saveLocalChatPath(pathValue = '') {
@@ -637,7 +648,7 @@ onMounted(async () => {
             localChatPath.value = result.config.webdav.localChatPath;
             webdavConfig.value = result.config.webdav;
             isWebdavConfigValid.value = !!(webdavConfig.value.url && webdavConfig.value.data_path);
-            if (localChatPath.value) await fetchLocalFiles();
+            if (localChatPath.value) fetchLocalFiles(true);
         }
     } catch (error) { 
         ElMessage.error(t('chats.alerts.configError')); 
@@ -650,7 +661,7 @@ onActivated(() => {
     window.addEventListener('mouseup', onGlobalMouseUp);
     window.addEventListener('mousemove', onGlobalMouseMove);
     window.addEventListener('wheel', onProjectDragWheel, { passive: false });
-    refreshData(true);
+    refreshData(true, { throttle: true });
 });
 
 onDeactivated(() => {
@@ -1379,21 +1390,65 @@ async function syncProjectToLocal(projectId) {
     }
 }
 
-async function fetchLocalFiles(silent = false) {
+function scheduleLocalTitleHydration(expectedPath) {
+    const hydrateSeq = ++localTitleHydrationSeq;
+    window.setTimeout(async () => {
+        if (hydrateSeq !== localTitleHydrationSeq || expectedPath !== localChatPath.value) return;
+        try {
+            const result = await window.api.listJsonFiles(expectedPath, { includeSessionMetadataTitle: true });
+            if (hydrateSeq !== localTitleHydrationSeq || expectedPath !== localChatPath.value) return;
+            const titleMap = new Map(
+                (Array.isArray(result) ? result : [])
+                    .map((item) => [resolveFileBasename(item), normalizeChatFile(item, 'local').title])
+                    .filter(([basename, title]) => basename && title)
+            );
+            if (!titleMap.size) return;
+            localChatFiles.value = localChatFiles.value.map((file) => {
+                const hydratedTitle = titleMap.get(resolveFileBasename(file));
+                return hydratedTitle && hydratedTitle !== file.title ? { ...file, title: hydratedTitle } : file;
+            });
+        } catch (error) {
+            console.warn('[Chats] 后台补读本地对话标题失败:', error);
+        }
+    }, LOCAL_TITLE_HYDRATE_DELAY_MS);
+}
+
+async function fetchLocalFiles(silent = false, options = {}) {
     if (!localChatPath.value) return;
-    if (!silent) isTableLoading.value = true;
-    try {
-        const result = await window.api.listJsonFiles(localChatPath.value);
-        const files = Array.isArray(result) ? result : [];
-        const normalizedFiles = files.map((item) => normalizeChatFile(item, 'local'));
-        localChatFiles.value = normalizedFiles;
-        await fetchLocalProjects();
-    } catch (error) {
-        ElMessage.error(`${t('chats.alerts.localListFailed')}: ${error.message}`);
-        localChatFiles.value = [];
-    } finally {
-        isTableLoading.value = false;
-    }
+    const requestPath = localChatPath.value;
+    if (localFilesInFlight && localFilesInFlightPath === requestPath && options.dedupe !== false) return localFilesInFlight;
+
+    const requestSeq = ++localFilesRequestSeq;
+    const includeSessionMetadataTitle = options.includeSessionMetadataTitle === true;
+
+    localFilesInFlightPath = requestPath;
+    localFilesInFlight = (async () => {
+        if (!silent) isTableLoading.value = true;
+        try {
+            const result = await window.api.listJsonFiles(requestPath, { includeSessionMetadataTitle });
+            if (requestSeq !== localFilesRequestSeq || requestPath !== localChatPath.value) return;
+            const files = Array.isArray(result) ? result : [];
+            const normalizedFiles = files.map((item) => normalizeChatFile(item, 'local'));
+            localChatFiles.value = normalizedFiles;
+            lastLocalFilesLoadedAt = Date.now();
+            await fetchLocalProjects();
+            if (!includeSessionMetadataTitle) {
+                scheduleLocalTitleHydration(requestPath);
+            }
+        } catch (error) {
+            if (requestSeq !== localFilesRequestSeq) return;
+            ElMessage.error(`${t('chats.alerts.localListFailed')}: ${error.message}`);
+            localChatFiles.value = [];
+        } finally {
+            if (requestSeq === localFilesRequestSeq) isTableLoading.value = false;
+            if (localFilesInFlightPath === requestPath) {
+                localFilesInFlight = null;
+                localFilesInFlightPath = '';
+            }
+        }
+    })();
+
+    return localFilesInFlight;
 }
 
 async function fetchCloudFiles(silent = false) {
@@ -1429,15 +1484,29 @@ async function fetchCloudFiles(silent = false) {
 
 
 
-async function refreshData(silent = false) {
-    if (activeView.value === 'local') {
-        if (localChatPath.value) {
-            await fetchLocalFiles(silent);
+async function refreshData(silent = false, options = {}) {
+    const now = Date.now();
+    if (options.throttle && refreshDataInFlight) return refreshDataInFlight;
+    if (options.throttle && now - lastRefreshDataAt < LOCAL_REFRESH_THROTTLE_MS) return;
+
+    refreshDataInFlight = (async () => {
+        lastRefreshDataAt = Date.now();
+        if (activeView.value === 'local') {
+            if (localChatPath.value) {
+                const justLoaded = options.throttle && now - lastLocalFilesLoadedAt < LOCAL_REFRESH_THROTTLE_MS;
+                if (!justLoaded) await fetchLocalFiles(silent);
+            }
+        } else if (activeView.value === 'cloud') {
+            if (isWebdavConfigValid.value) {
+                isCloudDataLoaded.value = await fetchCloudFiles(silent);
+            }
         }
-    } else if (activeView.value === 'cloud') {
-        if (isWebdavConfigValid.value) {
-            isCloudDataLoaded.value = await fetchCloudFiles(silent);
-        }
+    })();
+
+    try {
+        return await refreshDataInFlight;
+    } finally {
+        refreshDataInFlight = null;
     }
 }
 

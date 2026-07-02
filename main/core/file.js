@@ -799,11 +799,12 @@ const readSessionMetadata = async (filePath, basename, cacheContext = null) => {
   }
 }
 
-export async function listJsonFiles(dirPath) {
+export async function listJsonFiles(dirPath, options = {}) {
   if (typeof dirPath !== 'string' || !dirPath.trim()) {
     return []
   }
 
+  const includeSessionMetadataTitle = options?.includeSessionMetadataTitle !== false
   const resolvedDirPath = path.resolve(dirPath.trim())
   const entries = await fs.readdir(resolvedDirPath, { withFileTypes: true })
 
@@ -821,6 +822,10 @@ export async function listJsonFiles(dirPath) {
           basename: entry.name,
           stats
         })
+        if (!includeSessionMetadataTitle) {
+          return summary
+        }
+
         const sessionMetadata = await readSessionMetadata(fullPath, entry.name, { stats })
 
         if (sessionMetadata) {

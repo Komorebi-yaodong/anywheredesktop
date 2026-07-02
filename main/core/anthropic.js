@@ -5,6 +5,16 @@ const CHAT_REQUEST_TIMEOUT_MS = 120_000
 const DEFAULT_MAX_TOKENS = 8192
 
 // 独立实现，避免与 chat.js 循环依赖
+
+function normalizeProviderRetryCount(value) {
+  const numericValue = typeof value === 'number'
+    ? value
+    : (typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN)
+  return Number.isInteger(numericValue)
+    ? Math.min(Math.max(numericValue, 0), 10)
+    : 3
+}
+
 function pickApiKey(list) {
   if (!list) return ''
   if (Array.isArray(list)) {
@@ -275,11 +285,13 @@ function convertAnthropicMessageToOpenAI(message) {
  * 流式返回 async generator（chat_completions chunk）；非流式返回 chat_completions response。
  */
 export async function createAnthropicCompletion(params = {}) {
-  const { baseUrl, apiKey, signal, stream = true, headers: providerHeaders, ...openAiParams } = params
+  const { baseUrl, apiKey, signal, stream = true, headers: providerHeaders, retryCount: providerRetryCount, ...openAiParams } = params
+
+  const normalizedRetryCount = normalizeProviderRetryCount(providerRetryCount)
 
   const clientOptions = {
     apiKey: pickApiKey(apiKey),
-    maxRetries: 3,
+    maxRetries: normalizedRetryCount,
     dangerouslyAllowBrowser: true,
     fetch: (input, init = {}) =>
       fetchWithProxy(input, { ...init, timeoutMs: init?.timeoutMs ?? CHAT_REQUEST_TIMEOUT_MS })

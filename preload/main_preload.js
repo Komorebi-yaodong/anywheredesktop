@@ -47,6 +47,13 @@ const api = {
     if (typeof callback !== 'function') return
     electronAPI.ipcRenderer.on('window:event-bus', (_event, data) => callback(data))
   },
+  onWindowCallback: (callback) => {
+    if (typeof callback !== 'function') return
+    const listener = (_event, data) => callback(data)
+    electronAPI.ipcRenderer.on('window:callback', listener)
+    return () => electronAPI.ipcRenderer.removeListener('window:callback', listener)
+  },
+  abortSignal: (token = '') => electronAPI.ipcRenderer.send('window:signal-abort', token),
   onWindowInit: (callback) => {
     if (typeof callback !== 'function') return
     electronAPI.ipcRenderer.on('window:init', (_event, data) => callback(data))
@@ -114,6 +121,7 @@ getDroppedFilePath: (file) => {
   getRandomItem: (list = '') => electronAPI.ipcRenderer.invoke('chat:getRandomItem', list),
 
   listProviderModels: (input = {}) => electronAPI.ipcRenderer.invoke('chat:listProviderModels', input),
+  batchTestProviderKeys: (input = {}) => electronAPI.ipcRenderer.invoke('chat:batchTestProviderKeys', input),
 
   getMcpToolCache: () => electronAPI.ipcRenderer.invoke('mcp:getToolCache'),
   saveMcpToolCache: (serverId, tools = []) =>
@@ -149,6 +157,10 @@ getDroppedFilePath: (file) => {
     invokeOrThrow('skill:exportPackage', skillRootPath, skillId, outputDir, toPlainPayload(options) || {}),
   extractSkillPackage: (filePath = '') =>
     invokeOrThrow('skill:extractPackage', filePath),
+  uploadSkillsToWebdav: (input = {}) => invokeOrThrow('skill:uploadToWebdav', toPlainPayload(input) || {}),
+  listSkillsFromWebdav: (input = {}) => invokeOrThrow('skill:listWebdav', toPlainPayload(input) || {}),
+  deleteSkillsFromWebdav: (input = {}) => invokeOrThrow('skill:deleteWebdav', toPlainPayload(input) || {}),
+  pullSkillFromWebdav: (input = {}) => invokeOrThrow('skill:pullFromWebdav', toPlainPayload(input) || {}),
   getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) =>
     invokeOrThrow('skill:getToolDefinition', skillRootPath, toPlainPayload(enabledSkillNames) || []),
   resolveSkillInvocation: (skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null) =>
@@ -167,7 +179,7 @@ getDroppedFilePath: (file) => {
     invokeOrThrow('file:exportLocalChatFile', filePath, options),
 
   selectDirectory: () => invokeOrThrow('file:selectDirectory'),
-  listJsonFiles: (dirPath) => invokeOrThrow('file:listJsonFiles', dirPath),
+  listJsonFiles: (dirPath, options = {}) => invokeOrThrow('file:listJsonFiles', dirPath, toPlainPayload(options) || {}),
   readLocalFile: (filePath, options = {}) =>
     invokeOrThrow('file:readLocalFile', filePath, options),
   renameLocalFile: (oldPath, newPath) =>
@@ -195,6 +207,9 @@ getDroppedFilePath: (file) => {
 
   writeWebdavBackupsBatch: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackupsBatch', input),
   readWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:readBackup', input),
+  readWebdavBackupBinary: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:readBackupBinary', input),
+  listWebdavDirectory: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listDirectory', input),
+  deleteWebdavDirectoryContents: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteDirectoryContents', input),
 
   moveWebdavFile: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:moveFile', input),
   deleteWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteBackup', input),

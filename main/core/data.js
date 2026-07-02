@@ -230,6 +230,7 @@ export const defaultConfig = {
         api_key: '',
         apiType: 'chat_completions',
         headers: {},
+        retryCount: 3,
         modelList: [],
         enable: true
       }
@@ -666,6 +667,13 @@ const rootDefaults = {
     if (provider && typeof provider === 'object' && !Array.isArray(provider)) {
       if (!provider.headers || typeof provider.headers !== 'object' || Array.isArray(provider.headers)) {
         provider.headers = {}
+        changed = true
+      }
+      const normalizedRetryCount = Number.isInteger(provider.retryCount)
+        ? Math.min(Math.max(provider.retryCount, 0), 10)
+        : 3
+      if (provider.retryCount !== normalizedRetryCount) {
+        provider.retryCount = normalizedRetryCount
         changed = true
       }
     }

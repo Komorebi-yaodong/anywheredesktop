@@ -39,6 +39,14 @@ function normalizeRemoteDir(inputPath = '/anywhere') {
   return remoteDir
 }
 
+function resolveTargetRemoteDir(webdavConfig = {}, overridePath = '') {
+  const customPath = normalizeText(overridePath).trim()
+  if (customPath) {
+    return normalizeRemoteDir(customPath)
+  }
+  return normalizeRemoteDir(webdavConfig?.path)
+}
+
 function normalizeFileName(filename = '') {
   const normalized = normalizeText(filename).trim().replace(/[\\/]/g, '')
   if (!normalized) {
@@ -58,7 +66,7 @@ function toErrorMessage(error, fallback = 'webdav_operation_failed') {
   return fallback
 }
 
-function createWebdavClient(webdavConfig = {}) {
+function createWebdavClient(webdavConfig = {}, overridePath = '') {
   const url = normalizeText(webdavConfig?.url).trim()
   if (!url) {
     throw new Error('webdav_url_required')
@@ -66,7 +74,7 @@ function createWebdavClient(webdavConfig = {}) {
 
   const username = normalizeText(webdavConfig?.username).trim()
   const password = normalizeText(webdavConfig?.password)
-  const path = normalizeRemoteDir(webdavConfig?.path)
+  const path = resolveTargetRemoteDir(webdavConfig, overridePath)
 
   const client = createClient(url, {
     username,
@@ -482,6 +490,9 @@ async function ensureRemoteDirectory(client, remoteDir) {
 }
 
 function stringifyRemoteContent(content) {
+  if (Buffer.isBuffer(content)) return content
+  if (content instanceof Uint8Array) return Buffer.from(content)
+  if (content instanceof ArrayBuffer) return Buffer.from(content)
   return typeof content === 'string' ? content : JSON.stringify(content ?? {}, null, 2)
 }
 
@@ -515,7 +526,8 @@ async function writeRemoteFileContents(client, remoteFilePath, content, options 
   return normalizedContent
 }
 
-async function listRemoteJsonFiles(client, remoteDir) {
+
+async function listRemoteEntries(client, remoteDir, options = {}) {
   let contents
   try {
     contents = await client.getDirectoryContents(remoteDir, { details: true })
@@ -529,16 +541,31 @@ async function listRemoteJsonFiles(client, remoteDir) {
     throw new Error(toErrorMessage(error, 'webdav_list_failed'))
   }
 
-  const normalizedContents = normalizeDirectoryContents(contents)
-  const files = normalizedContents
-    .filter((item) => item?.type === 'file')
+  const includeDirectories = options?.includeDirectories === true
+  const includeFiles = options?.includeFiles !== false
+  const filter = typeof options?.filter === 'function' ? options.filter : null
+
+  const files = normalizeDirectoryContents(contents)
     .map((item) => toSerializableFileInfo(item))
-    .filter((item) => isChatJsonFilename(item.basename))
+    .filter((item) => {
+      if (item.type === 'directory') return includeDirectories
+      if (item.type === 'file') return includeFiles
+      return false
+    })
+    .filter((item) => (filter ? filter(item) : true))
 
   return {
     exists: true,
     files
   }
+}
+
+async function listRemoteJsonFiles(client, remoteDir) {
+  return listRemoteEntries(client, remoteDir, {
+    includeDirectories: false,
+    includeFiles: true,
+    filter: (item) => isChatJsonFilename(item.basename)
+  })
 }
 
 async function readChatMetadataYaml(client, remoteDir) {
@@ -664,7 +691,7 @@ function resolveChatMetadataForUpload({ filename, content, chatMetadata, previou
 }
 
 export async function listBackups(input = {}) {
-  const { client, config } = createWebdavClient(input?.webdavConfig)
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const remoteDir = config.path
   const includeSessionMetadata = input?.includeSessionMetadata === true
   const useChatMetadata = input?.useChatMetadata === true
@@ -728,7 +755,7 @@ export async function listBackups(input = {}) {
 }
 
 export async function writeBackup(input = {}) {
-  const { client, config } = createWebdavClient(input?.webdavConfig)
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const filename = normalizeFileName(input?.filename)
   const remoteDir = config.path
   const remoteFilePath = `${remoteDir}/${filename}`
@@ -788,7 +815,7 @@ export async function writeBackup(input = {}) {
 }
 
 export async function writeBackupsBatch(input = {}) {
-  const { client, config } = createWebdavClient(input?.webdavConfig)
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const remoteDir = config.path
   const ensureDirectory = input?.ensureDirectory !== false
   const useChatMetadata = input?.useChatMetadata === true
@@ -950,7 +977,7 @@ export async function writeBackupsBatch(input = {}) {
 }
 
 export async function readBackup(input = {}) {
-  const { client, config } = createWebdavClient(input?.webdavConfig)
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const filename = normalizeFileName(input?.filename)
   const remoteFilePath = `${config.path}/${filename}`
   const useChatMetadata = shouldUseChatMetadata(input, filename)
@@ -984,6 +1011,73 @@ export async function readBackup(input = {}) {
       }
     }
     throw new Error(toErrorMessage(error, 'webdav_read_failed'))
+  }
+}
+
+
+export async function readBackupBinary(input = {}) {
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
+  const filename = normalizeFileName(input?.filename)
+  const remoteFilePath = `${config.path}/${filename}`
+
+  try {
+    const content = await client.getFileContents(remoteFilePath, { format: 'binary' })
+    return {
+      ok: true,
+      filename,
+      content: Buffer.isBuffer(content) ? content : Buffer.from(content || [])
+    }
+  } catch (error) {
+    if (isWebdavNotFoundError(error)) {
+      return {
+        ok: false,
+        reason: 'webdav_file_not_found',
+        filename
+      }
+    }
+    throw new Error(toErrorMessage(error, 'webdav_read_failed'))
+  }
+}
+
+export async function listDirectory(input = {}) {
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
+  const includeDirectories = input?.includeDirectories !== false
+  const includeFiles = input?.includeFiles !== false
+  const result = await listRemoteEntries(client, config.path, { includeDirectories, includeFiles })
+  return {
+    ok: true,
+    exists: result.exists,
+    files: result.files
+  }
+}
+
+export async function deleteDirectoryContents(input = {}) {
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
+  const result = await listRemoteEntries(client, config.path, { includeDirectories: false, includeFiles: true })
+  const deleted = []
+  const failed = []
+  const requestedNames = Array.isArray(input?.filenames)
+    ? new Set(input.filenames.map((item) => normalizeText(item).trim()).filter(Boolean))
+    : null
+
+  if (!result.exists) {
+    return { ok: true, deleted, failed }
+  }
+
+  for (const file of result.files) {
+    if (requestedNames && !requestedNames.has(file.basename)) continue
+    try {
+      await client.deleteFile(`${config.path}/${file.basename}`)
+      deleted.push(file.basename)
+    } catch (error) {
+      failed.push({ filename: file.basename, message: toErrorMessage(error, 'webdav_delete_failed') })
+    }
+  }
+
+  return {
+    ok: true,
+    deleted,
+    failed
   }
 }
 
@@ -1027,7 +1121,7 @@ async function syncRemoteSessionMetadataTitleAfterMove(client, remoteFilePath, t
 }
 
 export async function moveFile(input = {}) {
-  const { client, config } = createWebdavClient(input?.webdavConfig)
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const fromFilename = normalizeFileName(input?.fromFilename || input?.filename)
   const toFilename = normalizeFileName(input?.toFilename)
   const fromPath = `${config.path}/${fromFilename}`
@@ -1100,7 +1194,7 @@ export async function moveFile(input = {}) {
 }
 
 export async function deleteBackup(input = {}) {
-  const { client, config } = createWebdavClient(input?.webdavConfig)
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const filename = normalizeFileName(input?.filename)
   const remoteFilePath = `${config.path}/${filename}`
   const useChatMetadata = shouldUseChatMetadata(input, filename)
@@ -1171,7 +1265,7 @@ export async function deleteBackups(input = {}) {
 
   if (useChatMetadata && handledForMetadata.length > 0) {
     try {
-      const { client, config } = createWebdavClient(input?.webdavConfig)
+      const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
       const state = await loadReconciledChatMetadataState(client, config.path)
       let changed = false
       handledForMetadata.forEach((name) => {

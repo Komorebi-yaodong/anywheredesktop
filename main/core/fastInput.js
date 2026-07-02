@@ -71,7 +71,8 @@ function resolveProviderConfig(fullConfig = {}, promptConfig = {}) {
     apiType: provider?.apiType || 'chat_completions',
     baseUrl: provider?.url || '',
     apiKey: provider?.api_key || '',
-    headers: provider?.headers || {}
+    headers: provider?.headers || {},
+    retryCount: Number.isInteger(provider?.retryCount) ? provider.retryCount : 3
   }
 }
 

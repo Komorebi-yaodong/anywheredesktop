@@ -33,6 +33,7 @@
     },
     "titles": {
       "quickStart": "快速开始",
+      "about": "关于 Anywhere",
       "ai": "快捷助手",
       "chat": "历史对话",
       "task": "定时任务",
@@ -41,7 +42,19 @@
       "provider": "服务商",
       "setting": "设置"
     },
-    "quickStart": {
+    "about": {
+      "title": "关于 Anywhere",
+      "author": "我是 Komo，希望 Anywhere 能为你在 Agent 时代带来便捷，如果有 bug 还有反馈，欢迎反馈",
+      "qq": "QQ群：1065512489",
+      "clientGithub": "客户端 GitHub",
+      "clientGitee": "客户端 Gitee",
+      "pluginGithub": "插件端 GitHub",
+      "pluginGitee": "插件端 Gitee",
+      "docGithub": "文档 GitHub",
+      "docGitee": "文档 Gitee"
+    },
+    
+"quickStart": {
       "badge": "新手入门",
       "title": "快速开始",
       "description": "第一次打开 Anywhere Desktop，可以先记住这 3 个最常用的全局快捷键，它们能帮你快速打开主界面、选择 Agent，以及把内容继续追问到对话窗口。",
@@ -434,6 +447,7 @@
     "tooltips": {
       "moveLeft": "左移",
       "moveRight": "右移",
+      "deleteTag": "删除当前标签（不会删除快捷助手本体）",
       "removeFromTag": "从此标签移除快捷助手",
       "sendDirect": "开启后，选中文字后将直接发送给AI",
       "sendImageDirect": "开启后，选中截图后将直接发送给AI",
@@ -721,6 +735,21 @@
     },
     "noModelsFoundError": "未找到模型或 API 错误",
     "noModelsMatchSearch": "未找到匹配的模型",
+    "searchPlaceholder": "搜索服务商 / URL / 模型",
+    "searchModeProvider": "服务商",
+    "searchModeModel": "模型",
+    "retryCountLabel": "重试次数",
+    "retryCountHint": "请求失败时的自动重试次数，默认 3",
+    "batchTestBtn": "批量测试",
+    "batchTestTitle": "批量测试",
+    "batchTestModelPlaceholder": "选择测试模型",
+    "batchTestRun": "开始测试",
+    "batchTestDeleteSelected": "删除选中 Key",
+    "batchTestStatusCode": "状态码",
+    "batchTestResult": "结果",
+    "batchTestMessage": "说明",
+    "batchTestSuccess": "成功",
+    "batchTestFailed": "失败",
     "addModelTooltip": "添加模型",
     "removeModelTooltip": "移除模型",
     "alerts": {

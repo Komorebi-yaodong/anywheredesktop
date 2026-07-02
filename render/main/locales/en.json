@@ -33,6 +33,7 @@
     },
     "titles": {
       "quickStart": "Quick Start",
+      "about": "About Anywhere",
       "ai": "Agent Prompts",
       "chat": "Chat History",
       "task": "Scheduled Task",
@@ -41,7 +42,19 @@
       "provider": "Providers",
       "setting": "Settings"
     },
-    "quickStart": {
+    "about": {
+      "title": "About Anywhere",
+      "author": "I'm Komo. I hope Anywhere can bring you more convenience in the Agent era. If you find bugs or have feedback, you are welcome to send feedback.",
+      "qq": "QQ Group: 1065512489",
+      "clientGithub": "Desktop GitHub",
+      "clientGitee": "Desktop Gitee",
+      "pluginGithub": "Plugin GitHub",
+      "pluginGitee": "Plugin Gitee",
+      "docGithub": "Docs GitHub",
+      "docGitee": "Docs Gitee"
+    },
+    
+"quickStart": {
       "badge": "Getting Started",
       "title": "Quick Start",
       "description": "When you open Anywhere Desktop for the first time, start by remembering these 3 global shortcuts. They help you quickly open the main console, choose an Agent, and continue follow-up in an existing chat window.",
@@ -434,6 +447,7 @@
     "tooltips": {
       "moveLeft": "Move Left",
       "moveRight": "Move Right",
+      "deleteTag": "Delete current tag (keeps prompts intact)",
       "removeFromTag": "Remove prompt from this tag",
       "sendDirect": "When enabled, selected text will be sent directly to the AI.",
       "sendImageDirect": "When enabled, selected screenshot/image will be sent directly to the AI.",
@@ -721,6 +735,21 @@
     },
     "noModelsFoundError": "No models found or API error.",
     "noModelsMatchSearch": "No models match search.",
+    "searchPlaceholder": "Search provider / URL / model",
+    "searchModeProvider": "Provider",
+    "searchModeModel": "Model",
+    "retryCountLabel": "Retry Count",
+    "retryCountHint": "Automatic retries when requests fail. Default is 3.",
+    "batchTestBtn": "Batch Test",
+    "batchTestTitle": "Batch Test",
+    "batchTestModelPlaceholder": "Select a model to test",
+    "batchTestRun": "Run Test",
+    "batchTestDeleteSelected": "Delete Selected Keys",
+    "batchTestStatusCode": "Code",
+    "batchTestResult": "Result",
+    "batchTestMessage": "Message",
+    "batchTestSuccess": "Success",
+    "batchTestFailed": "Failed",
     "addModelTooltip": "Add Model",
     "removeModelTooltip": "Remove Model",
     "alerts": {

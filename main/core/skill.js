@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import AdmZip from 'adm-zip'
@@ -704,4 +705,351 @@ export function extractSkillPackage(filePath) {
       reject(error)
     }
   })
+}
+
+
+function extractSkillPackageFromBuffer(buffer, skillId = 'skill') {
+  const zip = new AdmZip(Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []))
+  const tempRoot = path.join(os.tmpdir(), 'anywhere_skill_cloud_pull', `${Date.now()}_${skillId}`)
+  fs.mkdirSync(tempRoot, { recursive: true })
+  zip.extractAllTo(tempRoot, true)
+  const finalDir = findSkillEntryDir(tempRoot)
+  if (!finalDir) {
+    throw new Error('Invalid skill package: SKILL.md not found')
+  }
+  return finalDir
+}
+
+
+async function copyDirectoryContentsSafe(sourceDir, targetDir) {
+  await fsp.mkdir(targetDir, { recursive: true })
+  const entries = await fsp.readdir(sourceDir, { withFileTypes: true })
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name)
+    const targetPath = path.join(targetDir, entry.name)
+    if (entry.isDirectory()) {
+      await copyDirectoryContentsSafe(sourcePath, targetPath)
+      continue
+    }
+    if (!entry.isFile()) continue
+    await fsp.mkdir(path.dirname(targetPath), { recursive: true })
+    await fsp.copyFile(sourcePath, targetPath)
+  }
+}
+
+
+
+function normalizeSkillId(value = '') {
+  return String(value || '').trim().replace(/[\\/:*?"<>|]/g, '-')
+}
+
+function normalizeSkillRemoteRoot(remoteBasePath = '') {
+  const normalized = String(remoteBasePath || '').trim().replace(/\\/g, '/')
+  if (!normalized) {
+    return '/anywhere/skill'
+  }
+  return normalized.startsWith('/') ? normalized.replace(/\/+$/, '') : `/${normalized.replace(/\/+$/, '')}`
+}
+
+function serializeSkillTreeToEntries(sourceDir, relativeDir = '') {
+  const entries = []
+  const dirents = fs.readdirSync(sourceDir, { withFileTypes: true })
+
+  dirents.forEach((entry) => {
+    if (entry.name === 'node_modules') return
+    const absolutePath = path.join(sourceDir, entry.name)
+    const relativePath = relativeDir ? path.posix.join(relativeDir, entry.name) : entry.name
+
+    if (entry.isDirectory()) {
+      entries.push({ type: 'directory', relativePath })
+      entries.push(...serializeSkillTreeToEntries(absolutePath, relativePath))
+      return
+    }
+
+    if (entry.isFile()) {
+      entries.push({
+        type: 'file',
+        relativePath,
+        content: fs.readFileSync(absolutePath)
+      })
+    }
+  })
+
+  return entries
+}
+
+async function ensureWebdavDirectoryChain(writeWebdavBackup, webdavConfig, remotePath = '') {
+  const normalizedRemotePath = normalizeSkillRemoteRoot(remotePath)
+  const segments = normalizedRemotePath.split('/').filter(Boolean)
+  let currentPath = ''
+
+  for (const segment of segments) {
+    currentPath += `/${segment}`
+    await writeWebdavBackup({
+      webdavConfig,
+      remotePath: currentPath,
+      filename: '.keep',
+      content: '',
+      overwrite: true,
+      ensureDirectory: true
+    })
+  }
+}
+
+export async function uploadSkillsToWebdav(options = {}) {
+  const skillRootPath = path.resolve(String(options?.skillRootPath || ''))
+  const writeWebdavBackup = options?.writeWebdavBackup
+  const webdavConfig = options?.webdavConfig || {}
+  const remoteRoot = normalizeSkillRemoteRoot(options?.remotePath)
+  const signal = options?.signal
+  const onProgress = typeof options?.onProgress === 'function' ? options.onProgress : null
+  const maxPackageSizeBytes = Number.isFinite(options?.maxPackageSizeBytes)
+    ? Math.max(1, Number(options.maxPackageSizeBytes))
+    : 50 * 1024 * 1024
+  const skillIds = Array.isArray(options?.skillIds)
+    ? options.skillIds.map((item) => normalizeSkillId(item)).filter(Boolean)
+    : []
+
+  const throwIfAborted = () => {
+    if (signal?.aborted) {
+      const reason = signal.reason instanceof Error ? signal.reason.message : (signal.reason || 'cancelled')
+      throw new Error(String(reason || 'cancelled'))
+    }
+  }
+
+  const emitProgress = (payload = {}) => {
+    if (!onProgress) return
+    try {
+      onProgress({
+        total: skillIds.length,
+        ...payload
+      })
+    } catch {
+      // ignore progress listener errors
+    }
+  }
+
+  if (!skillRootPath || !fs.existsSync(skillRootPath)) {
+    throw new Error('skill_root_path_required')
+  }
+  if (typeof writeWebdavBackup !== 'function') {
+    throw new Error('write_webdav_backup_required')
+  }
+
+  throwIfAborted()
+  await ensureWebdavDirectoryChain(writeWebdavBackup, webdavConfig, remoteRoot)
+
+  const tempDir = path.join(os.tmpdir(), 'anywhere_skill_sync', Date.now().toString())
+  fs.mkdirSync(tempDir, { recursive: true })
+
+  const results = []
+  try {
+    for (let index = 0; index < skillIds.length; index += 1) {
+      const skillId = skillIds[index]
+      throwIfAborted()
+      emitProgress({ phase: 'packing', current: index, completed: results.length, skillId })
+
+      try {
+        const skillDir = path.join(skillRootPath, skillId)
+        const skillMdPath = path.join(skillDir, 'SKILL.md')
+        if (!fs.existsSync(skillMdPath)) {
+          const item = { skillId, ok: false, message: 'skill_not_found' }
+          results.push(item)
+          emitProgress({ phase: 'failed', current: index + 1, completed: results.length, skillId, result: item })
+          continue
+        }
+
+        const outputPath = await exportSkillToPackage(skillRootPath, skillId, tempDir, { hideEnv: false })
+        throwIfAborted()
+        const stat = fs.statSync(outputPath)
+        if (stat.size > maxPackageSizeBytes) {
+          const item = {
+            skillId,
+            ok: false,
+            message: '文件过大超过限制“50MB”',
+            code: 'FILE_TOO_LARGE',
+            size: stat.size,
+            limit: maxPackageSizeBytes
+          }
+          results.push(item)
+          emitProgress({ phase: 'failed', current: index + 1, completed: results.length, skillId, result: item })
+          continue
+        }
+
+        emitProgress({ phase: 'uploading', current: index, completed: results.length, skillId })
+        const content = fs.readFileSync(outputPath)
+        throwIfAborted()
+        await writeWebdavBackup({
+          webdavConfig,
+          remotePath: remoteRoot,
+          filename: `${skillId}.skill`,
+          content,
+          overwrite: true,
+          ensureDirectory: true
+        })
+        const item = { skillId, ok: true, size: stat.size }
+        results.push(item)
+        emitProgress({ phase: 'completed', current: index + 1, completed: results.length, skillId, result: item })
+      } catch (error) {
+        if (signal?.aborted) throw error
+        const item = { skillId, ok: false, message: error?.message || String(error || 'upload_failed') }
+        results.push(item)
+        emitProgress({ phase: 'failed', current: index + 1, completed: results.length, skillId, result: item })
+      }
+    }
+
+    return {
+      ok: true,
+      remotePath: remoteRoot,
+      results
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+export async function listSkillsFromWebdav(options = {}) {
+  const listWebdavDirectory = options?.listWebdavDirectory
+  const readWebdavBackup = options?.readWebdavBackup
+  const includeMetadata = options?.includeMetadata === true
+  const webdavConfig = options?.webdavConfig || {}
+  const remoteRoot = normalizeSkillRemoteRoot(options?.remotePath)
+
+  if (typeof listWebdavDirectory !== 'function') {
+    throw new Error('list_webdav_directory_required')
+  }
+
+  const rootResult = await listWebdavDirectory({ webdavConfig, remotePath: remoteRoot, includeDirectories: false, includeFiles: true })
+  if (!rootResult || rootResult.ok === false) {
+    throw new Error(rootResult?.message || rootResult?.error || 'webdav_list_failed')
+  }
+  if (!rootResult.exists) {
+    return { ok: true, skills: [], remotePath: remoteRoot }
+  }
+
+  const files = Array.isArray(rootResult.files) ? rootResult.files.filter(item => String(item?.basename || '').toLowerCase().endsWith('.skill')) : []
+  const skills = []
+  for (const item of files) {
+    const skillId = normalizeSkillId(String(item?.basename || '').replace(/\.skill$/i, ''))
+    let metadata = {}
+    if (includeMetadata && typeof readWebdavBackup === 'function') {
+      let tempDir = ''
+      try {
+        const readResult = await readWebdavBackup({ webdavConfig, remotePath: remoteRoot, filename: `${skillId}.skill` })
+        tempDir = await extractSkillPackageFromBuffer(readResult?.content, skillId)
+        const skillMdPath = path.join(tempDir, 'SKILL.md')
+        if (fs.existsSync(skillMdPath)) {
+          metadata = parseFrontmatter(fs.readFileSync(skillMdPath, 'utf8')).metadata || {}
+        }
+      } catch {
+        metadata = {}
+      } finally {
+        if (tempDir) fs.rmSync(path.dirname(tempDir), { recursive: true, force: true })
+      }
+    }
+
+    skills.push({
+      id: skillId,
+      name: metadata.name || skillId,
+      description: metadata.description || '',
+      updatedAt: item?.updatedAt || item?.lastmod || '',
+      createdAt: item?.createdAt || '',
+      size: item?.size || 0,
+      remotePath: remoteRoot,
+      metadataLoaded: includeMetadata
+    })
+  }
+
+  return {
+    ok: true,
+    remotePath: remoteRoot,
+    skills
+  }
+}
+
+async function collectSkillRemoteFiles(listWebdavDirectory, webdavConfig, remotePath, relativePrefix = '') {
+  const result = await listWebdavDirectory({ webdavConfig, remotePath, includeDirectories: true, includeFiles: true })
+  if (!result?.exists) return []
+
+  const files = []
+  for (const item of Array.isArray(result.files) ? result.files : []) {
+    const basename = String(item?.basename || item?.filename || '').trim()
+    if (!basename || basename === '.keep') continue
+    if (item.type === 'directory') {
+      const nested = await collectSkillRemoteFiles(listWebdavDirectory, webdavConfig, `${remotePath}/${basename}`, relativePrefix ? `${relativePrefix}/${basename}` : basename)
+      files.push(...nested)
+      continue
+    }
+
+    files.push({
+      remotePath,
+      filename: basename,
+      relativePath: relativePrefix ? `${relativePrefix}/${basename}` : basename
+    })
+  }
+
+  return files
+}
+
+
+export async function deleteSkillsFromWebdav(options = {}) {
+  const deleteWebdavDirectoryContents = options?.deleteWebdavDirectoryContents
+  const webdavConfig = options?.webdavConfig || {}
+  const remoteRoot = normalizeSkillRemoteRoot(options?.remotePath)
+  const skillIds = Array.isArray(options?.skillIds)
+    ? options.skillIds.map((item) => normalizeSkillId(item)).filter(Boolean)
+    : []
+
+  if (typeof deleteWebdavDirectoryContents !== 'function') {
+    throw new Error('webdav_delete_helpers_required')
+  }
+
+  const filenames = skillIds.map(skillId => `${skillId}.skill`)
+  await deleteWebdavDirectoryContents({ webdavConfig, remotePath: remoteRoot, filenames })
+  return { ok: true, remotePath: remoteRoot, results: skillIds.map(skillId => ({ skillId, ok: true })) }
+}
+
+export async function pullSkillFromWebdav(options = {}) {
+  const readWebdavBackupBinary = options?.readWebdavBackupBinary
+  const skillRootPath = path.resolve(String(options?.skillRootPath || ''))
+  const webdavConfig = options?.webdavConfig || {}
+  const remoteRoot = normalizeSkillRemoteRoot(options?.remotePath)
+  const skillId = normalizeSkillId(options?.skillId)
+
+  if (!skillRootPath) throw new Error('skill_root_path_required')
+  if (!skillId) throw new Error('skill_id_required')
+  if (typeof readWebdavBackupBinary !== 'function') {
+    throw new Error('webdav_read_helpers_required')
+  }
+
+  const readResult = await readWebdavBackupBinary({ webdavConfig, remotePath: remoteRoot, filename: `${skillId}.skill` })
+  if (!readResult || readResult.ok === false) {
+    throw new Error(readResult?.message || readResult?.reason || readResult?.error || 'webdav_read_failed')
+  }
+
+  let extractedDir = ''
+  let extractedRoot = ''
+  const targetDir = path.join(skillRootPath, skillId)
+  try {
+    extractedDir = extractSkillPackageFromBuffer(readResult?.content, skillId)
+    extractedRoot = path.dirname(extractedDir)
+
+    await fsp.mkdir(skillRootPath, { recursive: true })
+    await copyDirectoryContentsSafe(extractedDir, targetDir)
+
+    return {
+      ok: true,
+      skillId,
+      targetDir,
+      mode: 'overwrite-files'
+    }
+  } finally {
+    if (extractedRoot && fs.existsSync(extractedRoot)) {
+      try {
+        await fsp.rm(extractedRoot, { recursive: true, force: true })
+      } catch {
+        // ignore cleanup failure
+      }
+    }
+  }
 }

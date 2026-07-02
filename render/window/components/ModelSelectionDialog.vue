@@ -29,33 +29,44 @@ const groupedModels = computed(() => {
     const query = searchQuery.value.toLowerCase();
     const groups = {};
     const groupOrder = []; // 保持插入顺序
+    const duplicateProviderNameSet = new Set();
 
     props.modelList.forEach(item => {
-        // 搜索过滤
-        if (query && !item.label.toLowerCase().includes(query)) {
-            return;
-        }
-
-        const parts = item.label.split('|');
-        const providerName = parts[0] || 'Unknown';
-        const modelName = parts[1] || item.label;
-
+        const providerName = item.providerName || String(item?.label || '').split('|')[0] || 'Unknown';
         if (!groups[providerName]) {
             groups[providerName] = [];
             groupOrder.push(providerName);
         }
-
-        groups[providerName].push({
-            ...item,
-            displayName: modelName,
-            providerName: providerName
-        });
+        if (groups[providerName].some(existing => existing.providerId !== item.providerId)) {
+            duplicateProviderNameSet.add(providerName);
+        }
+        groups[providerName].push(item);
     });
 
     return groupOrder.map(name => ({
-        name: name,
-        models: groups[name]
-    }));
+        name,
+        hasMultipleProviders: duplicateProviderNameSet.has(name),
+        models: groups[name].filter(item => {
+            if (!query) return true;
+            const searchable = `${item.providerName || ''} ${item.modelName || ''} ${item.providerUrl || ''} ${item.providerId || ''}`.toLowerCase();
+            return searchable.includes(query);
+        }).map(item => {
+            const parts = String(item.label || '').split('|');
+            const providerName = item.providerName || parts[0] || 'Unknown';
+            const modelName = item.modelName || parts[1] || item.label;
+            const rawKey = String(item.providerApiKey || '').trim();
+            const keyHint = rawKey.length > 12 ? `${rawKey.slice(0, 6)}...${rawKey.slice(-3)}` : rawKey;
+            return {
+                ...item,
+                displayName: modelName,
+                providerName,
+                providerUrl: item.providerUrl || '',
+                providerId: item.providerId || '',
+                keyHint,
+                showSourceHint: duplicateProviderNameSet.has(providerName)
+            };
+        })
+    })).filter(group => group.models.length > 0);
 });
 
 
@@ -188,6 +199,7 @@ const getProviderStyle = (providerName) => {
                             >
                                 <div class="model-info">
                                     <span class="model-name">{{ model.displayName }}</span>
+                                    <span v-if="model.showSourceHint && model.keyHint" class="model-meta">{{ model.keyHint }}</span>
                                 </div>
 
                                 <div class="model-status" v-if="model.value === currentModel">
@@ -332,6 +344,17 @@ html.dark .model-item.is-active {
     flex-grow: 1;
     overflow: hidden;
 }
+
+.model-meta {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--el-text-color-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 
 .model-name {
     font-size: 14px;

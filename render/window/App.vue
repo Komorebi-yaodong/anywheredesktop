@@ -558,10 +558,20 @@ const updateModelListAndMap = (config) => {
   orderedProviderIds.forEach(id => {
     const provider = config.providers[id];
     if (provider?.enable) {
+      const providerName = String(provider.name || id);
       provider.modelList.forEach(m => {
         const key = `${id}|${m}`;
-        newModelList.push({ key, value: key, label: `${provider.name}|${m}` });
-        newModelMap[key] = `${provider.name}|${m}`;
+        newModelList.push({
+          key,
+          value: key,
+          label: `${providerName}|${m}`,
+          providerName,
+          modelName: String(m || ''),
+          providerId: String(id),
+          providerUrl: String(provider.url || ''),
+          providerApiKey: String(provider.api_key || '')
+        });
+        newModelMap[key] = `${providerName}|${m}`;
       });
     }
   });
@@ -6432,6 +6442,7 @@ const askAI = async (forceSend = false) => {
         apiKey: api_key.value,
         model: model.value.split("|")[1],
         apiType: apiType,
+        retryCount: Number.isInteger(currentProviderConfig?.retryCount) ? currentProviderConfig.retryCount : 3,
         headers: JSON.parse(JSON.stringify(currentConfig.value.providers?.[currentProviderID.value]?.headers || {})),
         messages: messagesForThisRequest,
         stream: useStream,

@@ -9,6 +9,82 @@ import draggable from 'vuedraggable'
 const { t, locale } = useI18n()
 
 const currentConfig = inject('config');
+
+const SKILL_WEBDAV_MAX_PACKAGE_SIZE = 50 * 1024 * 1024
+const skillSyncProgressVisible = ref(false)
+const skillSyncProgress = reactive({
+  token: '',
+  callbackToken: '',
+  current: 0,
+  total: 0,
+  completed: 0,
+  success: 0,
+  failed: 0,
+  phase: '',
+  skillId: '',
+  cancelled: false,
+  results: []
+})
+let stopSkillSyncProgressListener = null
+
+function createSkillSyncToken(prefix = 'skill-sync') {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function resetSkillSyncProgress(total = 0) {
+  skillSyncProgress.token = createSkillSyncToken('skill-sync-signal')
+  skillSyncProgress.callbackToken = createSkillSyncToken('skill-sync-callback')
+  skillSyncProgress.current = 0
+  skillSyncProgress.total = total
+  skillSyncProgress.completed = 0
+  skillSyncProgress.success = 0
+  skillSyncProgress.failed = 0
+  skillSyncProgress.phase = ''
+  skillSyncProgress.skillId = ''
+  skillSyncProgress.cancelled = false
+  skillSyncProgress.results = []
+}
+
+function applySkillSyncProgress(payload = {}) {
+  if (!payload || typeof payload !== 'object') return
+  if (Number.isFinite(payload.total)) skillSyncProgress.total = payload.total
+  if (Number.isFinite(payload.current)) skillSyncProgress.current = payload.current
+  if (Number.isFinite(payload.completed)) skillSyncProgress.completed = payload.completed
+  if (typeof payload.phase === 'string') skillSyncProgress.phase = payload.phase
+  if (typeof payload.skillId === 'string') skillSyncProgress.skillId = payload.skillId
+  if (payload.result && typeof payload.result === 'object') {
+    skillSyncProgress.results = [...skillSyncProgress.results, payload.result]
+    skillSyncProgress.success = skillSyncProgress.results.filter(item => item.ok).length
+    skillSyncProgress.failed = skillSyncProgress.results.filter(item => !item.ok).length
+  }
+}
+
+const skillSyncProgressPercent = computed(() => {
+  if (!skillSyncProgress.total) return 0
+  return Math.min(100, Math.round((skillSyncProgress.completed / skillSyncProgress.total) * 100))
+})
+
+function cancelSkillWebdavSync() {
+  if (!skillSyncProgress.token || skillSyncProgress.cancelled) return
+  skillSyncProgress.cancelled = true
+  window.api.abortSignal?.(skillSyncProgress.token)
+}
+
+function bindSkillSyncProgressListener() {
+  if (stopSkillSyncProgressListener) stopSkillSyncProgressListener()
+  stopSkillSyncProgressListener = window.api.onWindowCallback?.((event = {}) => {
+    if (event?.token !== skillSyncProgress.callbackToken) return
+    applySkillSyncProgress(event.payload || {})
+  }) || null
+}
+
+function unbindSkillSyncProgressListener() {
+  if (stopSkillSyncProgressListener) {
+    stopSkillSyncProgressListener()
+    stopSkillSyncProgressListener = null
+  }
+}
+
 const selectedLanguage = ref(locale.value);
 
 const collapsedCards = ref({
@@ -338,7 +414,9 @@ watch(() => currentConfig.value, (newVal) => {
 
 onBeforeUnmount(() => {
   stopShortcutRecording()
+  unbindSkillSyncProgressListener()
   window.removeEventListener('keydown', handleShortcutRecorderKeydown, true)
+  window.removeEventListener('mouseup', stopSelectableDrag)
 })
 
 
@@ -1297,6 +1375,359 @@ async function selectLocalChatPath() {
     saveSingleSetting('webdav.localChatPath', path);
   }
 }
+
+
+const skillWebdavDialogVisible = ref(false)
+const skillWebdavManagerVisible = ref(false)
+const skillWebdavLoading = ref(false)
+const skillWebdavSyncSelection = ref([])
+const skillWebdavCloudSelection = ref([])
+const cloudSkillFiles = ref([])
+
+
+const selectableDragState = reactive({
+  active: false,
+  mode: '',
+  targetSelected: true,
+  lastIndex: {
+    sync: -1,
+    cloud: -1
+  }
+})
+
+function getSelectableItems(mode) {
+  return mode === 'cloud' ? cloudSkillFiles.value : (currentConfig.value.__localSkillCandidates || [])
+}
+
+function getSelectableSelectionRef(mode) {
+  return mode === 'cloud' ? skillWebdavCloudSelection : skillWebdavSyncSelection
+}
+
+function getSelectableId(item = {}) {
+  return String(item?.id || '').trim()
+}
+
+function isSelectableSelected(mode, id) {
+  return getSelectableSelectionRef(mode).value.includes(id)
+}
+
+function setSelectableSelection(mode, ids = []) {
+  const next = Array.from(new Set(ids.map(id => String(id || '').trim()).filter(Boolean)))
+  getSelectableSelectionRef(mode).value = next
+}
+
+function setSelectableItemSelected(mode, item, selected) {
+  if (skillWebdavLoading.value) return
+  const id = getSelectableId(item)
+  if (!id) return
+  const current = new Set(getSelectableSelectionRef(mode).value)
+  if (selected) current.add(id)
+  else current.delete(id)
+  setSelectableSelection(mode, Array.from(current))
+}
+
+function toggleSelectableItem(mode, item, selected = undefined) {
+  const id = getSelectableId(item)
+  if (!id) return
+  const nextSelected = typeof selected === 'boolean' ? selected : !isSelectableSelected(mode, id)
+  setSelectableItemSelected(mode, item, nextSelected)
+}
+
+function selectSelectableRange(mode, fromIndex, toIndex, selected = true) {
+  const items = getSelectableItems(mode)
+  const start = Math.max(0, Math.min(fromIndex, toIndex))
+  const end = Math.min(items.length - 1, Math.max(fromIndex, toIndex))
+  const current = new Set(getSelectableSelectionRef(mode).value)
+  for (let index = start; index <= end; index += 1) {
+    const id = getSelectableId(items[index])
+    if (!id) continue
+    if (selected) current.add(id)
+    else current.delete(id)
+  }
+  setSelectableSelection(mode, Array.from(current))
+}
+
+function handleSelectableMouseDown(mode, item, index, event) {
+  if (skillWebdavLoading.value || event?.button !== 0) return
+  event?.preventDefault?.()
+  if (event?.shiftKey && selectableDragState.lastIndex[mode] >= 0) {
+    selectSelectableRange(mode, selectableDragState.lastIndex[mode], index, true)
+    selectableDragState.lastIndex[mode] = index
+    return
+  }
+  const targetSelected = !isSelectableSelected(mode, getSelectableId(item))
+  selectableDragState.active = true
+  selectableDragState.mode = mode
+  selectableDragState.targetSelected = targetSelected
+  selectableDragState.lastIndex[mode] = index
+  toggleSelectableItem(mode, item, targetSelected)
+  window.addEventListener('mouseup', stopSelectableDrag, { once: true })
+}
+
+function handleSelectableMouseEnter(mode, item) {
+  if (!selectableDragState.active || selectableDragState.mode !== mode || skillWebdavLoading.value) return
+  toggleSelectableItem(mode, item, selectableDragState.targetSelected)
+}
+
+function stopSelectableDrag() {
+  selectableDragState.active = false
+  selectableDragState.mode = ''
+}
+
+function selectAllSelectable(mode) {
+  if (skillWebdavLoading.value) return
+  setSelectableSelection(mode, getSelectableItems(mode).map(getSelectableId))
+}
+
+function clearSelectableSelection(mode) {
+  if (skillWebdavLoading.value) return
+  setSelectableSelection(mode, [])
+}
+
+function invertSelectableSelection(mode) {
+  if (skillWebdavLoading.value) return
+  const current = new Set(getSelectableSelectionRef(mode).value)
+  const next = getSelectableItems(mode)
+    .map(getSelectableId)
+    .filter(id => id && !current.has(id))
+  setSelectableSelection(mode, next)
+}
+
+function getSelectedCloudSkillRows() {
+  const selectedIds = new Set(skillWebdavCloudSelection.value)
+  return cloudSkillFiles.value.filter(item => selectedIds.has(getSelectableId(item)))
+}
+
+function sleep(ms = 0) {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
+}
+
+async function runSkillTasksWithConcurrency(items, worker, concurrency = 1, options = {}) {
+  const queue = [...items]
+  const results = []
+  const workerCount = Math.min(Math.max(1, concurrency), queue.length || 1)
+  const retries = Number.isFinite(options.retries) ? Math.max(0, options.retries) : 2
+  const retryDelay = Number.isFinite(options.retryDelay) ? Math.max(0, options.retryDelay) : 350
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (queue.length) {
+      const item = queue.shift()
+      let lastError = null
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+          const result = await worker(item, attempt)
+          results.push({ ...result, attempts: attempt + 1 })
+          lastError = null
+          break
+        } catch (error) {
+          lastError = error
+          if (attempt < retries) await sleep(retryDelay * (attempt + 1))
+        }
+      }
+      if (lastError) results.push({ ok: false, item, error: lastError, attempts: retries + 1 })
+      await sleep(80)
+    }
+  }))
+  return results
+}
+
+const localSkillOptions = computed(() => {
+  if (!currentConfig.value?.skillPath) return []
+  return []
+})
+
+function resolveSkillWebdavRemotePath(skillId = '') {
+  const basePath = String(currentConfig.value?.webdav?.path || '/anywhere').trim() || '/anywhere'
+  const normalizedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath
+  return `${normalizedBase}/skill${skillId ? `/${skillId}` : ''}`
+}
+
+async function loadLocalSkillCandidates() {
+  const root = String(currentConfig.value?.skillPath || '').trim()
+  if (!root) {
+    skillWebdavSyncSelection.value = []
+    return []
+  }
+  try {
+    const list = await window.api.listSkills(root)
+    return Array.isArray(list) ? list : []
+  } catch (error) {
+    ElMessage.error(`${t('skills.alerts.listFailed')}: ${error.message}`)
+    return []
+  }
+}
+
+async function openSkillWebdavSyncDialog() {
+  if (!currentConfig.value?.skillPath) {
+    ElMessage.warning(t('skills.pathNotSet'))
+    return
+  }
+  const skills = await loadLocalSkillCandidates()
+  skillWebdavSyncSelection.value = skills.map(item => item.id)
+  currentConfig.value.__localSkillCandidates = skills
+  skillWebdavDialogVisible.value = true
+}
+
+async function uploadSelectedSkillsToWebdav() {
+  const skillRootPath = String(currentConfig.value?.skillPath || '').trim()
+  if (!skillRootPath) {
+    ElMessage.warning(t('skills.pathNotSet'))
+    return
+  }
+  if (!skillWebdavSyncSelection.value.length) {
+    ElMessage.warning(t('common.noFileSelected'))
+    return
+  }
+
+  const selectedIds = [...skillWebdavSyncSelection.value]
+  resetSkillSyncProgress(selectedIds.length)
+  bindSkillSyncProgressListener()
+  skillWebdavLoading.value = true
+  skillSyncProgressVisible.value = true
+  try {
+    const result = await window.api.uploadSkillsToWebdav({
+      skillRootPath,
+      skillIds: selectedIds,
+      remotePath: resolveSkillWebdavRemotePath(),
+      maxPackageSizeBytes: SKILL_WEBDAV_MAX_PACKAGE_SIZE,
+      meta: {
+        signalToken: skillSyncProgress.token,
+        callbackToken: skillSyncProgress.callbackToken
+      },
+      webdavConfig: resolveWebdavBackupConfig()
+    })
+    const results = Array.isArray(result?.results) ? result.results : []
+    skillSyncProgress.results = results
+    skillSyncProgress.completed = results.length
+    skillSyncProgress.success = results.filter(item => item.ok).length
+    skillSyncProgress.failed = results.filter(item => !item.ok).length
+    if (skillSyncProgress.failed > 0) {
+      ElMessage.warning(`Skill 同步完成：成功 ${skillSyncProgress.success} 个，失败 ${skillSyncProgress.failed} 个`)
+    } else {
+      ElMessage.success(`已同步 ${skillSyncProgress.success} 个 Skill 到云端`)
+      skillWebdavDialogVisible.value = false
+    }
+  } catch (error) {
+    if (skillSyncProgress.cancelled) {
+      ElMessage.warning(`已取消同步，已完成 ${skillSyncProgress.completed}/${skillSyncProgress.total}`)
+    } else {
+      ElMessage.error(`Skill 同步失败：${error.message}`)
+    }
+  } finally {
+    skillWebdavLoading.value = false
+    unbindSkillSyncProgressListener()
+  }
+}
+
+async function fetchCloudSkills() {
+  skillWebdavLoading.value = true
+  try {
+    const result = await window.api.listSkillsFromWebdav({
+      remotePath: resolveSkillWebdavRemotePath(),
+      webdavConfig: resolveWebdavBackupConfig()
+    })
+    cloudSkillFiles.value = Array.isArray(result?.skills) ? result.skills : []
+    const availableIds = new Set(cloudSkillFiles.value.map(item => item.id))
+    skillWebdavCloudSelection.value = skillWebdavCloudSelection.value.filter(id => availableIds.has(id))
+  } catch (error) {
+    cloudSkillFiles.value = []
+    ElMessage.error(`获取云端 Skill 失败：${error.message}`)
+  } finally {
+    skillWebdavLoading.value = false
+  }
+}
+
+async function openSkillWebdavManager() {
+  skillWebdavManagerVisible.value = true
+  await fetchCloudSkills()
+}
+
+async function deleteSelectedCloudSkills() {
+  if (!skillWebdavCloudSelection.value.length) {
+    ElMessage.warning(t('common.noFileSelected'))
+    return
+  }
+  await ElMessageBox.confirm(`确定删除选中的 ${skillWebdavCloudSelection.value.length} 个云端 Skill 吗？`, t('common.warningTitle'), { type: 'warning' })
+  skillWebdavLoading.value = true
+  try {
+    await window.api.deleteSkillsFromWebdav({
+      skillIds: [...skillWebdavCloudSelection.value],
+      remotePath: resolveSkillWebdavRemotePath(),
+      webdavConfig: resolveWebdavBackupConfig()
+    })
+    skillWebdavCloudSelection.value = []
+    await fetchCloudSkills()
+    ElMessage.success(t('common.deleteSuccess'))
+  } finally {
+    skillWebdavLoading.value = false
+  }
+}
+
+async function pullCloudSkillWorker(skill, skillRootPath) {
+  await window.api.pullSkillFromWebdav({
+    skillId: skill.id,
+    skillRootPath,
+    remotePath: resolveSkillWebdavRemotePath(),
+    webdavConfig: resolveWebdavBackupConfig()
+  })
+  return { ok: true, skillId: skill.id }
+}
+
+async function pullCloudSkillToLocal(skill) {
+  const skillRootPath = String(currentConfig.value?.skillPath || '').trim()
+  if (!skillRootPath) {
+    ElMessage.warning(t('skills.pathNotSet'))
+    return
+  }
+  skillWebdavLoading.value = true
+  try {
+    await pullCloudSkillWorker(skill, skillRootPath)
+    ElMessage.success('已拉取到本地')
+  } catch (error) {
+    ElMessage.error(`拉取 Skill 失败：${error.message}`)
+  } finally {
+    skillWebdavLoading.value = false
+  }
+}
+
+async function pullSelectedCloudSkillsToLocal() {
+  const skillRootPath = String(currentConfig.value?.skillPath || '').trim()
+  if (!skillRootPath) {
+    ElMessage.warning(t('skills.pathNotSet'))
+    return
+  }
+  const selectedRows = getSelectedCloudSkillRows()
+  if (!selectedRows.length) {
+    ElMessage.warning(t('common.noFileSelected'))
+    return
+  }
+  skillWebdavLoading.value = true
+  try {
+    const results = await runSkillTasksWithConcurrency(
+      selectedRows,
+      async (skill) => pullCloudSkillWorker(skill, skillRootPath),
+      1,
+      { retries: 2, retryDelay: 500 }
+    )
+    const success = results.filter(item => item.ok).length
+    const failed = results.length - success
+    if (failed > 0) {
+      const failedNames = results
+        .filter(item => !item.ok)
+        .map(item => item?.item?.id || item?.skillId || 'unknown')
+        .slice(0, 5)
+        .join('、')
+      ElMessage.warning(`拉取完成：成功 ${success} 个，失败 ${failed} 个${failedNames ? `（${failedNames}）` : ''}`)
+    } else {
+      ElMessage.success(`拉取完成：成功 ${success} 个`)
+    }
+  } catch (error) {
+    ElMessage.error(`批量拉取 Skill 失败：${error.message}`)
+  } finally {
+    skillWebdavLoading.value = false
+  }
+}
+
 </script>
 
 <template>
@@ -1625,6 +2056,17 @@ async function selectLocalChatPath() {
                         :placeholder="t('setting.webdav.dataPathPlaceholder')" style="width: 320px;" />
                     </div>
 
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">Skill WebDAV</span>
+                        <span class="setting-option-description">将本地 Skill 同步到 `WebDAV 配置路径/skill/`，或管理云端 Skill 备份</span>
+                      </div>
+                      <div class="webdav-actions" style="display: flex; gap: 12px;">
+                        <el-button @click="openSkillWebdavSyncDialog" :icon="Upload" plain>同步到 WebDAV</el-button>
+                        <el-button @click="openSkillWebdavManager" :icon="FolderOpened" plain>管理备份</el-button>
+                      </div>
+                    </div>
+
                     <div class="setting-option-item no-border">
                       <div class="setting-text-content">
                         <span class="setting-option-label">{{ t('setting.webdav.backupRestoreTitle') }}</span>
@@ -1668,6 +2110,121 @@ async function selectLocalChatPath() {
       <template #footer>
         <el-button @click="showAvatarEditDialog = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" @click="saveEditedProfileAvatar">{{ t('common.confirm') }}</el-button>
+      </template>
+    </el-dialog>
+
+<el-dialog v-model="skillWebdavDialogVisible" title="同步 Skill 到 WebDAV" width="600px" top="4vh" :close-on-click-modal="false" class="skill-webdav-sync-dialog">
+      <div class="selectable-toolbar">
+        <span class="selectable-count">已选 {{ skillWebdavSyncSelection.length }} / {{ (currentConfig.__localSkillCandidates || []).length }}</span>
+        <div class="selectable-actions">
+          <el-button size="small" text @click="selectAllSelectable('sync')" :disabled="skillWebdavLoading">全选</el-button>
+          <el-button size="small" text @click="clearSelectableSelection('sync')" :disabled="skillWebdavLoading">清空</el-button>
+          <el-button size="small" text @click="invertSelectableSelection('sync')" :disabled="skillWebdavLoading">反选</el-button>
+        </div>
+      </div>
+      <el-scrollbar max-height="260px" class="selectable-list-scroll skill-sync-list-scroll">
+        <div class="selectable-list" :class="{ 'is-disabled': skillWebdavLoading }">
+          <div
+            v-for="(skill, index) in (currentConfig.__localSkillCandidates || [])"
+            :key="skill.id"
+            class="selectable-row"
+            :class="{ 'is-selected': isSelectableSelected('sync', skill.id) }"
+            @mousedown="handleSelectableMouseDown('sync', skill, index, $event)"
+            @mouseenter="handleSelectableMouseEnter('sync', skill)"
+          >
+            <el-checkbox :model-value="isSelectableSelected('sync', skill.id)" @click.prevent />
+            <div class="selectable-main">
+              <div class="selectable-title">{{ skill.name || skill.id }}</div>
+              <div class="selectable-subtitle">{{ skill.id }}</div>
+            </div>
+          </div>
+        </div>
+      </el-scrollbar>
+      <div class="selectable-hint">提示：点击行可切换选择，按住鼠标拖过多行可批量选择/取消，Shift + 点击可范围选择。</div>
+      <template #footer>
+        <el-button @click="skillWebdavDialogVisible = false" :disabled="skillWebdavLoading">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="skillWebdavLoading" @click="uploadSelectedSkillsToWebdav">同步</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="skillSyncProgressVisible" title="Skill 云端同步进度" width="520px" top="8vh" :close-on-click-modal="false" :show-close="!skillWebdavLoading">
+      <div class="skill-sync-progress-panel">
+        <el-progress :percentage="skillSyncProgressPercent" :status="skillSyncProgress.failed > 0 ? 'warning' : undefined" />
+        <div class="skill-sync-progress-meta">
+          <span>已处理 {{ skillSyncProgress.completed }} / {{ skillSyncProgress.total }}</span>
+          <span>成功 {{ skillSyncProgress.success }}，失败 {{ skillSyncProgress.failed }}</span>
+        </div>
+        <div class="skill-sync-current" v-if="skillWebdavLoading">
+          当前：{{ skillSyncProgress.skillId || '-' }}
+          <span v-if="skillSyncProgress.phase">（{{ skillSyncProgress.phase }}）</span>
+        </div>
+        <el-alert v-if="skillSyncProgress.cancelled" title="正在取消同步，已开始的当前任务会尽快停止" type="warning" :closable="false" show-icon />
+        <el-scrollbar v-if="skillSyncProgress.results.some(item => !item.ok)" max-height="140px" class="skill-sync-failures">
+          <div v-for="item in skillSyncProgress.results.filter(row => !row.ok)" :key="item.skillId" class="skill-sync-failure-row">
+            <strong>{{ item.skillId }}</strong>
+            <span>{{ item.message || '同步失败' }}</span>
+          </div>
+        </el-scrollbar>
+      </div>
+      <template #footer>
+        <el-button v-if="skillWebdavLoading" type="warning" plain @click="cancelSkillWebdavSync" :disabled="skillSyncProgress.cancelled">取消同步</el-button>
+        <el-button v-else @click="skillSyncProgressVisible = false">{{ t('common.close') }}</el-button>
+      </template>
+    </el-dialog>
+
+<el-dialog v-model="skillWebdavManagerVisible" title="云端 Skill 管理" width="820px" top="6vh" :close-on-click-modal="false" class="skill-cloud-manager-dialog">
+      <div v-loading="skillWebdavLoading" class="cloud-skill-manager-panel">
+        <div class="selectable-toolbar">
+          <span class="selectable-count">已选 {{ skillWebdavCloudSelection.length }} / {{ cloudSkillFiles.length }}</span>
+          <div class="selectable-actions">
+            <el-button size="small" text @click="selectAllSelectable('cloud')" :disabled="skillWebdavLoading">全选</el-button>
+            <el-button size="small" text @click="clearSelectableSelection('cloud')" :disabled="skillWebdavLoading">清空</el-button>
+            <el-button size="small" text @click="invertSelectableSelection('cloud')" :disabled="skillWebdavLoading">反选</el-button>
+          </div>
+        </div>
+        <div class="cloud-skill-header">
+          <span></span>
+          <span>名称</span>
+          <span>ID</span>
+          <span>更新时间</span>
+          <span>操作</span>
+        </div>
+        <el-scrollbar max-height="360px" class="selectable-list-scroll cloud-skill-scroll">
+          <div class="selectable-list" :class="{ 'is-disabled': skillWebdavLoading }">
+            <div
+              v-for="(skill, index) in cloudSkillFiles"
+              :key="skill.id"
+              class="selectable-row cloud-skill-row"
+              :class="{ 'is-selected': isSelectableSelected('cloud', skill.id) }"
+              @mousedown="handleSelectableMouseDown('cloud', skill, index, $event)"
+              @mouseenter="handleSelectableMouseEnter('cloud', skill)"
+            >
+              <el-checkbox :model-value="isSelectableSelected('cloud', skill.id)" @click.prevent />
+              <div class="cloud-skill-name">
+                <div class="selectable-title">{{ skill.name || skill.id }}</div>
+                <div v-if="skill.description" class="selectable-subtitle">{{ skill.description }}</div>
+              </div>
+              <div class="cloud-skill-id">{{ skill.id }}</div>
+              <div class="cloud-skill-time">{{ formatDate(skill.updatedAt) }}</div>
+              <div class="cloud-skill-actions">
+                <el-button link type="primary" @mousedown.stop @click="pullCloudSkillToLocal(skill)">拉取</el-button>
+              </div>
+            </div>
+          </div>
+        </el-scrollbar>
+        <div class="selectable-hint">提示：点击行/拖过多行可多选，Shift + 点击可范围选择；“拉取选中”会并发拉取所选 Skill。</div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <div class="footer-left">
+            <el-button :icon="Refresh" @click="fetchCloudSkills" :disabled="skillWebdavLoading"></el-button>
+          </div>
+          <div class="footer-right">
+            <el-button type="primary" plain @click="pullSelectedCloudSkillsToLocal" :disabled="skillWebdavCloudSelection.length === 0" :loading="skillWebdavLoading">拉取选中</el-button>
+            <el-button type="danger" plain :icon="DeleteIcon" @click="deleteSelectedCloudSkills" :disabled="skillWebdavCloudSelection.length === 0 || skillWebdavLoading">{{ t('common.deleteSelected') }}</el-button>
+            <el-button @click="skillWebdavManagerVisible = false" :disabled="skillWebdavLoading">{{ t('common.close') }}</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
@@ -1722,6 +2279,49 @@ async function selectLocalChatPath() {
 </template>
 
 <style scoped>
+
+.skill-sync-progress-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skill-sync-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--panda-text-sub);
+  font-size: 13px;
+}
+
+.skill-sync-current {
+  color: var(--panda-text-main);
+  font-size: 13px;
+  background: var(--panda-bg);
+  border: 1px solid var(--panda-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.skill-sync-failures {
+  border: 1px solid var(--panda-border);
+  border-radius: 8px;
+  background: var(--panda-bg);
+}
+
+.skill-sync-failure-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--panda-text-sub);
+  border-bottom: 1px solid var(--panda-border);
+}
+
+.skill-sync-failure-row:last-child {
+  border-bottom: none;
+}
+
 .settings-page-container {
   --panda-bg: #F4F4F5; 
   --panda-card-bg: #FFFFFF;
@@ -2377,5 +2977,168 @@ html.dark .icon-action-button {
     align-items: stretch;
   }
 }
+
+.selectable-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.selectable-count {
+  font-size: 13px;
+  color: var(--panda-text-sub, var(--el-text-color-secondary));
+}
+
+.selectable-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.selectable-list-scroll {
+  border: 1px solid var(--panda-border, var(--el-border-color));
+  border-radius: 8px;
+  background-color: var(--panda-bg, var(--el-fill-color-light));
+}
+
+.selectable-list {
+  padding: 6px;
+  user-select: none;
+}
+
+.selectable-list.is-disabled {
+  opacity: 0.64;
+  pointer-events: none;
+}
+
+.selectable-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.selectable-row:hover {
+  background-color: var(--panda-card-bg, var(--el-fill-color));
+}
+
+.selectable-row.is-selected {
+  background-color: rgba(64, 158, 255, 0.12);
+  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.32) inset;
+}
+
+.selectable-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.selectable-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--panda-text-main, var(--el-text-color-primary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selectable-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--panda-text-sub, var(--el-text-color-secondary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selectable-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--panda-text-sub, var(--el-text-color-secondary));
+}
+
+:deep(.skill-webdav-sync-dialog .el-dialog__header) {
+  padding: 14px 18px 8px;
+}
+
+:deep(.skill-webdav-sync-dialog .el-dialog__body) {
+  padding: 8px 18px 10px;
+}
+
+:deep(.skill-webdav-sync-dialog .el-dialog__footer) {
+  padding: 8px 18px 14px;
+}
+
+.skill-webdav-sync-dialog .selectable-toolbar {
+  margin-bottom: 6px;
+}
+
+.skill-webdav-sync-dialog .selectable-hint {
+  margin-top: 6px;
+  line-height: 1.35;
+}
+
+.skill-webdav-sync-dialog .selectable-row {
+  min-height: 34px;
+  padding: 5px 8px;
+}
+
+.skill-webdav-sync-dialog .selectable-list {
+  padding: 4px;
+}
+
+
+.cloud-skill-manager-panel {
+  min-height: 180px;
+}
+
+.cloud-skill-header,
+.cloud-skill-row {
+  display: grid;
+  grid-template-columns: 36px minmax(180px, 1.4fr) minmax(140px, 1fr) 150px 70px;
+  align-items: center;
+  column-gap: 10px;
+}
+
+.cloud-skill-header {
+  padding: 0 16px 6px 16px;
+  font-size: 12px;
+  color: var(--panda-text-sub, var(--el-text-color-secondary));
+}
+
+.cloud-skill-row {
+  min-height: 50px;
+}
+
+.cloud-skill-name,
+.cloud-skill-id,
+.cloud-skill-time {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloud-skill-id {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--panda-text-sub, var(--el-text-color-secondary));
+}
+
+.cloud-skill-time {
+  font-size: 12px;
+  color: var(--panda-text-sub, var(--el-text-color-secondary));
+}
+
+.cloud-skill-actions {
+  display: flex;
+  justify-content: center;
+}
+
 
 </style>

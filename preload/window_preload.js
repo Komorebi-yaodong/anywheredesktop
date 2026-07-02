@@ -323,6 +323,7 @@ const api = {
   },
   getRandomItem,
   listProviderModels,
+  batchTestProviderKeys: (input = {}) => electronAPI.ipcRenderer.invoke('chat:batchTestProviderKeys', input),
 
   getMcpToolCache: async () => {
     const result = await electronAPI.ipcRenderer.invoke('mcp:getToolCache')
@@ -376,6 +377,11 @@ const api = {
   deleteSkill: (skillRootPath = '', skillId = '') => invokeOrThrow('skill:delete', skillRootPath, skillId),
   exportSkillToPackage: (skillRootPath = '', skillId = '', outputDir = '', options = {}) => invokeOrThrow('skill:exportPackage', skillRootPath, skillId, outputDir, toPlainPayload(options) || {}),
   extractSkillPackage: (filePath = '') => invokeOrThrow('skill:extractPackage', filePath),
+
+  uploadSkillsToWebdav: (input = {}) => invokeOrThrow('skill:uploadToWebdav', toPlainPayload(input) || {}),
+  listSkillsFromWebdav: (input = {}) => invokeOrThrow('skill:listWebdav', toPlainPayload(input) || {}),
+  deleteSkillsFromWebdav: (input = {}) => invokeOrThrow('skill:deleteWebdav', toPlainPayload(input) || {}),
+  pullSkillFromWebdav: (input = {}) => invokeOrThrow('skill:pullFromWebdav', toPlainPayload(input) || {}),
   getSkillToolDefinition: (skillRootPath = '', enabledSkillNames = []) => invokeOrThrow('skill:getToolDefinition', skillRootPath, toPlainPayload(enabledSkillNames) || []),
   resolveSkillInvocation: async (skillRootPath = '', skillName = '', toolArgsObj = {}, globalContext = null, signal = null) => {
     const signalToken = registerSignal(signal)
@@ -407,7 +413,7 @@ const api = {
   exportLocalChatFile: (filePath, options = {}) => invokeOrThrow('file:exportLocalChatFile', filePath, options),
 
   selectDirectory: () => invokeOrThrow('file:selectDirectory'),
-  listJsonFiles: (dirPath) => invokeOrThrow('file:listJsonFiles', dirPath),
+  listJsonFiles: (dirPath, options = {}) => invokeOrThrow('file:listJsonFiles', dirPath, toPlainPayload(options) || {}),
   readLocalFile: (filePath, options = {}) => invokeOrThrow('file:readLocalFile', filePath, options),
   renameLocalFile: (oldPath, newPath) => invokeOrThrow('file:renameLocalFile', oldPath, newPath),
   deleteLocalFile: (filePath) => invokeOrThrow('file:deleteLocalFile', filePath),
@@ -435,6 +441,10 @@ const api = {
   moveWebdavFile: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:moveFile', input),
   deleteWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteBackup', input),
   deleteWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteBackups', input),
+
+  listWebdavDirectory: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listDirectory', input),
+  readWebdavBackupBinary: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:readBackupBinary', input),
+  deleteWebdavDirectoryContents: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteDirectoryContents', input),
   readLocalProjects: (dirPath = '') => invokeOrThrow('projects:readLocal', dirPath),
   writeLocalProjects: (dirPath = '', data = {}) =>
     invokeOrThrow('projects:writeLocal', dirPath, toPlainPayload(data)),

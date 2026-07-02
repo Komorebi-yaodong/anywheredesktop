@@ -229,6 +229,7 @@ const currentDocContent = ref('');
 const activeDocIndex = ref('0');
 const docScrollbarRef = ref(null);
 const QUICK_START_DOC_FILE = '__quick_start__';
+const ABOUT_DOC_FILE = '__about__';
 
 const versionInfo = ref({
   currentVersion: '',
@@ -409,6 +410,36 @@ const getQuickStartDocHtml = () => {
   `;
 };
 
+const getAboutDocHtml = () => {
+  const links = [
+    { left: t('doc.about.clientGithub'), leftUrl: 'https://github.com/Komorebi-yaodong/anywheredesktop', right: 'Gitee', rightUrl: 'https://gitee.com/Komorebi-yaodong/anywheredesktop' },
+    { left: t('doc.about.pluginGithub'), leftUrl: 'https://github.com/Komorebi-yaodong/Anywhere', right: 'Gitee', rightUrl: 'https://gitee.com/Komorebi-yaodong/Anywhere' },
+    { left: t('doc.about.docGithub'), leftUrl: 'https://github.com/Komorebi-yaodong/anywhere_doc', right: 'Gitee', rightUrl: 'https://gitee.com/Komorebi-yaodong/anywhere_' }
+  ];
+
+  const linkHtml = links
+    .map(item => `<li><span>${escapeHtml(item.left)}</span> <a href="${item.leftUrl}" target="_blank" rel="noreferrer">GitHub</a> <a href="${item.rightUrl}" target="_blank" rel="noreferrer">${escapeHtml(item.right)}</a></li>`)
+    .join('');
+
+  return `
+    <section class="quick-start-doc about-doc">
+      <div class="quick-start-hero">
+        <div class="quick-start-hero__title-row">
+          <h1>${escapeHtml(t('doc.about.title'))}</h1>
+        </div>
+        <p>${escapeHtml(t('doc.about.author'))}</p>
+      </div>
+      <div class="quick-start-panel">
+        <div class="quick-start-panel__header">
+          <h2>Links</h2>
+        </div>
+        <ul class="about-link-list">${linkHtml}</ul>
+        <p class="quick-start-feedback">${escapeHtml(t('doc.about.qq'))}</p>
+      </div>
+    </section>
+  `;
+};
+
 // 文档列表配置，增加 i18nKey 用于动态标题，lastUpdated 动态获取
 const docList = ref([
   { i18nKey: 'doc.titles.quickStart', file: QUICK_START_DOC_FILE, lastUpdated: null, isBuiltin: true },
@@ -418,7 +449,8 @@ const docList = ref([
   { i18nKey: 'doc.titles.mcp', file: 'mcp_doc.md', lastUpdated: null },
   { i18nKey: 'doc.titles.skill', file: 'skill_doc.md', lastUpdated: null },
   { i18nKey: 'doc.titles.provider', file: 'provider_doc.md', lastUpdated: null },
-  { i18nKey: 'doc.titles.setting', file: 'setting_doc.md', lastUpdated: null }
+  { i18nKey: 'doc.titles.setting', file: 'setting_doc.md', lastUpdated: null },
+  { i18nKey: 'doc.titles.about', file: ABOUT_DOC_FILE, lastUpdated: null, isBuiltin: true }
 ]);
 
 // 阅读状态管理
@@ -502,6 +534,17 @@ const fetchAndParseDoc = async (filename) => {
   if (filename === QUICK_START_DOC_FILE) {
     docLoading.value = false;
     currentDocContent.value = getQuickStartDocHtml();
+    nextTick(() => {
+      if (docScrollbarRef.value) {
+        docScrollbarRef.value.setScrollTop(0);
+      }
+    });
+    return;
+  }
+
+  if (filename === ABOUT_DOC_FILE) {
+    docLoading.value = false;
+    currentDocContent.value = getAboutDocHtml();
     nextTick(() => {
       if (docScrollbarRef.value) {
         docScrollbarRef.value.setScrollTop(0);

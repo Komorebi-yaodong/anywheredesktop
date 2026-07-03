@@ -1396,7 +1396,7 @@ async function pullSelectedCloudSkills() {
         </div>
       </template>
     </el-dialog>
-    <el-dialog v-model="showWebdavSyncDialog" title="同步 Skill 到 WebDAV" width="600px" top="4vh" :close-on-click-modal="false" class="skill-webdav-sync-dialog">
+    <el-dialog v-model="showWebdavSyncDialog" title="同步 Skill 到 WebDAV" width="620px" top="4vh" :close-on-click-modal="false" class="skill-webdav-sync-dialog">
       <div class="selectable-toolbar">
         <span class="selectable-count">已选 {{ skillsToSync.length }} / {{ localSkillsForSync.length }}</span>
         <div class="selectable-actions">
@@ -1405,7 +1405,7 @@ async function pullSelectedCloudSkills() {
           <el-button size="small" text @click="invertSelectableSelection('sync')" :disabled="skillWebdavLoading">反选</el-button>
         </div>
       </div>
-      <el-scrollbar max-height="260px" class="selectable-list-scroll skill-sync-list-scroll">
+      <el-scrollbar max-height="300px" class="selectable-list-scroll skill-sync-list-scroll">
         <div class="selectable-list" :class="{ 'is-disabled': skillWebdavLoading }">
           <div
             v-for="(skill, index) in localSkillsForSync"
@@ -1456,7 +1456,7 @@ async function pullSelectedCloudSkills() {
 
 
 
-    <el-dialog v-model="showWebdavManagerDialog" title="云端 Skill 管理" width="820px" top="6vh" :close-on-click-modal="false" class="skill-cloud-manager-dialog">
+    <el-dialog v-model="showWebdavManagerDialog" title="云端 Skill 管理" width="860px" top="6vh" :close-on-click-modal="false" class="skill-cloud-manager-dialog">
       <div v-loading="skillWebdavLoading" class="cloud-skill-manager-panel">
         <div class="selectable-toolbar">
           <span class="selectable-count">已选 {{ cloudSkillSelection.length }} / {{ cloudSkills.length }}</span>
@@ -1473,7 +1473,7 @@ async function pullSelectedCloudSkills() {
           <span>更新时间</span>
           <span>操作</span>
         </div>
-        <el-scrollbar max-height="360px" class="selectable-list-scroll cloud-skill-scroll">
+        <el-scrollbar max-height="315px" class="selectable-list-scroll cloud-skill-scroll">
           <div class="selectable-list" :class="{ 'is-disabled': skillWebdavLoading }">
             <div
               v-for="(skill, index) in cloudSkills"
@@ -2179,29 +2179,36 @@ html.dark :deep(.textarea-scrollbar-wrapper .el-scrollbar__thumb:hover) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-secondary) 84%, transparent);
 }
 
 .selectable-count {
   font-size: 13px;
+  font-weight: 600;
   color: var(--text-secondary);
 }
 
 .selectable-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .selectable-list-scroll {
   border: 1px solid var(--border-primary);
-  border-radius: 8px;
+  border-radius: 12px;
   background-color: var(--bg-tertiary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .selectable-list {
-  padding: 6px;
+  padding: 10px;
   user-select: none;
 }
 
@@ -2213,21 +2220,28 @@ html.dark :deep(.textarea-scrollbar-wrapper .el-scrollbar__thumb:hover) {
 .selectable-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 42px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
   cursor: pointer;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.selectable-row + .selectable-row {
+  margin-top: 6px;
 }
 
 .selectable-row:hover {
-  background-color: var(--bg-secondary);
+  background-color: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  border-color: color-mix(in srgb, var(--border-primary) 78%, transparent);
 }
 
 .selectable-row.is-selected {
-  background-color: rgba(64, 158, 255, 0.12);
-  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.32) inset;
+  background: linear-gradient(180deg, rgba(64, 158, 255, 0.12) 0%, rgba(64, 158, 255, 0.08) 100%);
+  border-color: rgba(64, 158, 255, 0.42);
+  box-shadow: 0 10px 24px -22px rgba(64, 158, 255, 0.9), 0 0 0 1px rgba(64, 158, 255, 0.18) inset;
 }
 
 .selectable-main {
@@ -2238,6 +2252,7 @@ html.dark :deep(.textarea-scrollbar-wrapper .el-scrollbar__thumb:hover) {
 .selectable-title {
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.35;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2245,8 +2260,9 @@ html.dark :deep(.textarea-scrollbar-wrapper .el-scrollbar__thumb:hover) {
 }
 
 .selectable-subtitle {
-  margin-top: 2px;
+  margin-top: 4px;
   font-size: 12px;
+  line-height: 1.4;
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2254,41 +2270,41 @@ html.dark :deep(.textarea-scrollbar-wrapper .el-scrollbar__thumb:hover) {
 }
 
 .selectable-hint {
-  margin-top: 8px;
+  margin-top: 10px;
   font-size: 12px;
+  line-height: 1.5;
   color: var(--text-tertiary);
 }
 
 :deep(.skill-webdav-sync-dialog .el-dialog__header) {
-  padding: 14px 18px 8px;
+  padding: 16px 20px 10px;
 }
 
 :deep(.skill-webdav-sync-dialog .el-dialog__body) {
-  padding: 8px 18px 10px;
+  padding: 10px 20px 12px;
 }
 
 :deep(.skill-webdav-sync-dialog .el-dialog__footer) {
-  padding: 8px 18px 14px;
+  padding: 10px 20px 16px;
+  border-top: 1px solid var(--border-primary);
 }
 
 .skill-webdav-sync-dialog .selectable-toolbar {
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 
 .skill-webdav-sync-dialog .selectable-hint {
-  margin-top: 6px;
-  line-height: 1.35;
+  margin-top: 10px;
 }
 
 .skill-webdav-sync-dialog .selectable-row {
-  min-height: 34px;
-  padding: 5px 8px;
+  min-height: 46px;
+  padding: 10px 12px;
 }
 
 .skill-webdav-sync-dialog .selectable-list {
-  padding: 4px;
+  padding: 8px;
 }
-
 
 .cloud-skill-manager-panel {
   min-height: 180px;
@@ -2297,19 +2313,21 @@ html.dark :deep(.textarea-scrollbar-wrapper .el-scrollbar__thumb:hover) {
 .cloud-skill-header,
 .cloud-skill-row {
   display: grid;
-  grid-template-columns: 36px minmax(180px, 1.4fr) minmax(140px, 1fr) 150px 70px;
+  grid-template-columns: 40px minmax(220px, 1.6fr) minmax(160px, 1.05fr) 158px 72px;
   align-items: center;
-  column-gap: 10px;
+  column-gap: 14px;
 }
 
 .cloud-skill-header {
-  padding: 0 16px 6px 16px;
+  padding: 2px 16px 10px 16px;
   font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
   color: var(--text-tertiary);
 }
 
 .cloud-skill-row {
-  min-height: 50px;
+  min-height: 62px;
 }
 
 .cloud-skill-name,

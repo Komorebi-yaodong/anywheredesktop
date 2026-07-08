@@ -957,6 +957,11 @@
         "description": "Triggers automatic follow-up; if only one window is open it appends directly, otherwise it opens the target selection panel.",
         "placeholder": "Click to record shortcut"
       },
+      "toggleFocusedWindowAutoClose": {
+        "label": "Standalone window auto-close shortcut",
+        "description": "When a standalone chat window is focused, toggles auto-close-on-blur for that window.",
+        "placeholder": "Click to record shortcut"
+      },
       "profile": {
         "nickname": {
           "label": "User name",

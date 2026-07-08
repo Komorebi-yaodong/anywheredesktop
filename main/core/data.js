@@ -307,6 +307,7 @@ export const defaultConfig = {
         mainToggle: 'Ctrl+Space',
         quickSummon: 'Alt+A',
         appendFollowUp: 'Alt+S',
+        toggleFocusedWindowAutoClose: 'Alt+F',
         promptBindings: []
       },
       profile: {
@@ -467,6 +468,38 @@ function ensureObject(value, fallback = {}) {
   return fallback
 }
 
+function resolveToggleFocusedWindowAutoCloseFallbackShortcut(shortcuts = {}, currentValue = '') {
+  const occupied = new Set()
+
+  const pushShortcut = (value = '') => {
+    const normalized = typeof value === 'string' ? value.trim() : ''
+    if (normalized) occupied.add(normalized)
+  }
+
+  pushShortcut(shortcuts?.mainToggle)
+  pushShortcut(shortcuts?.quickSummon)
+  pushShortcut(shortcuts?.appendFollowUp)
+
+  const promptBindings = Array.isArray(shortcuts?.promptBindings) ? shortcuts.promptBindings : []
+  promptBindings.forEach((item) => {
+    if (item?.enabled === false) return
+    pushShortcut(item?.accelerator)
+  })
+
+  const normalizedCurrent = typeof currentValue === 'string' ? currentValue.trim() : ''
+  if (normalizedCurrent && !['Alt+F', 'Alt+Shift+F'].includes(normalizedCurrent)) {
+    return normalizedCurrent
+  }
+  if (normalizedCurrent && !occupied.has(normalizedCurrent)) {
+    return normalizedCurrent
+  }
+
+  if (!occupied.has('Alt+F')) return 'Alt+F'
+  if (!occupied.has('Alt+Shift+F')) return 'Alt+Shift+F'
+  return ''
+}
+
+
 function sanitizePromptBindings(bindings = []) {
   if (!Array.isArray(bindings)) {
     return {
@@ -619,6 +652,7 @@ const rootDefaults = {
         mainToggle: 'Ctrl+Space',
         quickSummon: 'Alt+A',
         appendFollowUp: 'Alt+S',
+        toggleFocusedWindowAutoClose: 'Alt+F',
         promptBindings: []
       },
       profile: {
@@ -817,6 +851,21 @@ if (!Array.isArray(config.providerOrder) || config.providerOrder.length === 0) {
       if (typeof config.desktop.shortcuts.appendFollowUp !== 'string' || !config.desktop.shortcuts.appendFollowUp.trim()) {
         config.desktop.shortcuts.appendFollowUp = 'Alt+S'
         changed = true
+      }
+
+      if (typeof config.desktop.shortcuts.toggleFocusedWindowAutoClose !== 'string') {
+        config.desktop.shortcuts.toggleFocusedWindowAutoClose = resolveToggleFocusedWindowAutoCloseFallbackShortcut(config.desktop.shortcuts)
+        changed = true
+      } else {
+        const normalizedToggleShortcut = config.desktop.shortcuts.toggleFocusedWindowAutoClose.trim()
+        const resolvedToggleShortcut = resolveToggleFocusedWindowAutoCloseFallbackShortcut(
+          config.desktop.shortcuts,
+          normalizedToggleShortcut
+        )
+        if (config.desktop.shortcuts.toggleFocusedWindowAutoClose !== resolvedToggleShortcut) {
+          config.desktop.shortcuts.toggleFocusedWindowAutoClose = resolvedToggleShortcut
+          changed = true
+        }
       }
       const sanitizedPromptBindings = sanitizePromptBindings(config.desktop.shortcuts.promptBindings)
       config.desktop.shortcuts.promptBindings = sanitizedPromptBindings.value

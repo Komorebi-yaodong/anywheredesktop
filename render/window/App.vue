@@ -3371,6 +3371,14 @@ onMounted(async () => {
     });
   }
 
+
+  if (window.api && typeof window.api.onToggleAutoCloseOnBlurShortcut === 'function') {
+    window.api.onToggleAutoCloseOnBlurShortcut(() => {
+      if (isClosingWindow.value || currentTaskConfig.value) return;
+      handleTogglePin();
+    });
+  }
+
   if (window.api && window.api.onConfigUpdated) {
     window.api.onConfigUpdated(async (newConfig) => {
       if (!newConfig || isClosingWindow.value) return;

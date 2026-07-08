@@ -490,6 +490,12 @@ const api = {
     electronAPI.ipcRenderer.on('window:alwaysOnTopChanged', (_event, payload) => callback(payload?.alwaysOnTop ?? payload))
     electronAPI.ipcRenderer.on('always-on-top-changed', (_event, payload) => callback(payload))
   },
+  onToggleAutoCloseOnBlurShortcut: (callback) => {
+    if (typeof callback !== 'function') return
+    const listener = (_event, payload = {}) => callback(payload)
+    electronAPI.ipcRenderer.on('window:toggleAutoCloseOnBlurShortcut', listener)
+    return () => electronAPI.ipcRenderer.removeListener('window:toggleAutoCloseOnBlurShortcut', listener)
+  },
   onConfigUpdated: (callback) => {
     if (typeof callback !== 'function') return
     electronAPI.ipcRenderer.on('window:configUpdated', (_event, newConfig) => callback(newConfig))

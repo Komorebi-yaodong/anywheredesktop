@@ -193,6 +193,38 @@ function toDisplayShortcut(value = '') {
   }).filter(Boolean).join('+')
 }
 
+
+function resolveToggleFocusedWindowAutoCloseFallbackShortcut(shortcuts = {}, currentValue = '') {
+  const occupied = new Set()
+
+  const pushShortcut = (value = '') => {
+    const normalized = toDisplayShortcut(value)
+    if (normalized) occupied.add(normalized)
+  }
+
+  pushShortcut(shortcuts?.mainToggle)
+  pushShortcut(shortcuts?.quickSummon)
+  pushShortcut(shortcuts?.appendFollowUp)
+
+  const promptBindings = Array.isArray(shortcuts?.promptBindings) ? shortcuts.promptBindings : []
+  promptBindings.forEach((item) => {
+    if (item?.enabled === false) return
+    pushShortcut(item?.accelerator)
+  })
+
+  const normalizedCurrent = toDisplayShortcut(currentValue)
+  if (normalizedCurrent && !['Alt+F', 'Alt+Shift+F'].includes(normalizedCurrent)) {
+    return normalizedCurrent
+  }
+  if (normalizedCurrent && !occupied.has(normalizedCurrent)) {
+    return normalizedCurrent
+  }
+
+  if (!occupied.has('Alt+F')) return 'Alt+F'
+  if (!occupied.has('Alt+Shift+F')) return 'Alt+Shift+F'
+  return ''
+}
+
 function normalizeRecordedAccelerator(event) {
   const modifiers = []
   if (event.ctrlKey || event.metaKey) modifiers.push('Ctrl')
@@ -249,6 +281,8 @@ function handleShortcutRecorderKeydown(event) {
     currentConfig.value.desktop.shortcuts.quickSummon = accelerator
   } else if (shortcutRecorder.value.target === 'appendFollowUp') {
     currentConfig.value.desktop.shortcuts.appendFollowUp = accelerator
+  } else if (shortcutRecorder.value.target === 'toggleFocusedWindowAutoClose') {
+    currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose = accelerator
   } else if (shortcutRecorder.value.target === 'promptBinding' && shortcutRecorder.value.index > -1) {
     currentConfig.value.desktop.shortcuts.promptBindings[shortcutRecorder.value.index].accelerator = accelerator
   }
@@ -633,10 +667,19 @@ function ensureDesktopConfig() {
   if (!currentConfig.value.desktop.shortcuts.appendFollowUp) {
     currentConfig.value.desktop.shortcuts.appendFollowUp = 'Alt+S'
   }
+  if (typeof currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose !== 'string') {
+    currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose = resolveToggleFocusedWindowAutoCloseFallbackShortcut(currentConfig.value.desktop.shortcuts)
+  } else {
+    currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose = resolveToggleFocusedWindowAutoCloseFallbackShortcut(
+      currentConfig.value.desktop.shortcuts,
+      currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose
+    )
+  }
 
   currentConfig.value.desktop.shortcuts.mainToggle = toDisplayShortcut(currentConfig.value.desktop.shortcuts.mainToggle) || 'Ctrl+Space'
   currentConfig.value.desktop.shortcuts.quickSummon = toDisplayShortcut(currentConfig.value.desktop.shortcuts.quickSummon) || 'Alt+A'
   currentConfig.value.desktop.shortcuts.appendFollowUp = toDisplayShortcut(currentConfig.value.desktop.shortcuts.appendFollowUp) || 'Alt+S'
+  currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose = toDisplayShortcut(currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose)
   currentConfig.value.desktop.shortcuts.promptBindings = currentConfig.value.desktop.shortcuts.promptBindings.map((item, index) => ({
     id: item?.id || `binding_${index}`,
     promptKey: item?.promptKey || '',
@@ -776,6 +819,14 @@ function validateDesktopShortcutDraft() {
     }
   ]
 
+  const toggleFocusedWindowAutoCloseShortcut = toDisplayShortcut(currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose)
+  if (toggleFocusedWindowAutoCloseShortcut) {
+    bindings.push({
+      label: t('setting.desktop.toggleFocusedWindowAutoClose.label'),
+      accelerator: toggleFocusedWindowAutoCloseShortcut
+    })
+  }
+
   currentConfig.value.desktop.shortcuts.promptBindings.forEach((item, index) => {
     if (item?.enabled === false) return
     if (!item?.promptKey) {
@@ -809,6 +860,7 @@ function validateDesktopShortcutDraft() {
   currentConfig.value.desktop.shortcuts.mainToggle = normalizeShortcutValue(currentConfig.value.desktop.shortcuts.mainToggle).accelerator
   currentConfig.value.desktop.shortcuts.quickSummon = normalizeShortcutValue(currentConfig.value.desktop.shortcuts.quickSummon).accelerator
   currentConfig.value.desktop.shortcuts.appendFollowUp = normalizeShortcutValue(currentConfig.value.desktop.shortcuts.appendFollowUp).accelerator
+  currentConfig.value.desktop.shortcuts.toggleFocusedWindowAutoClose = toggleFocusedWindowAutoCloseShortcut
   currentConfig.value.desktop.shortcuts.promptBindings = currentConfig.value.desktop.shortcuts.promptBindings.map((item) => ({
     id: item.id,
     promptKey: item.promptKey,
@@ -1927,6 +1979,17 @@ async function pullSelectedCloudSkillsToLocal() {
                       </div>
                       <el-button class="shortcut-record-btn" @click="startShortcutRecording('appendFollowUp')">
                         {{ shortcutRecorder.active && shortcutRecorder.target === 'appendFollowUp' ? t('setting.desktop.appendFollowUp.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.appendFollowUp) || t('setting.desktop.appendFollowUp.placeholder') }}
+                      </el-button>
+                    </div>
+
+
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.desktop.toggleFocusedWindowAutoClose.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.desktop.toggleFocusedWindowAutoClose.description') }}</span>
+                      </div>
+                      <el-button class="shortcut-record-btn" @click="startShortcutRecording('toggleFocusedWindowAutoClose')">
+                        {{ shortcutRecorder.active && shortcutRecorder.target === 'toggleFocusedWindowAutoClose' ? t('setting.desktop.toggleFocusedWindowAutoClose.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.toggleFocusedWindowAutoClose) || t('setting.desktop.toggleFocusedWindowAutoClose.placeholder') }}
                       </el-button>
                     </div>
 

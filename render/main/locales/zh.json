@@ -957,6 +957,11 @@
         "description": "按下后自动追问；仅一个窗口时直接追问，多个窗口时打开追问选择界面。",
         "placeholder": "点击开始录制快捷键"
       },
+      "toggleFocusedWindowAutoClose": {
+        "label": "独立窗口失焦自动关闭快捷键",
+        "description": "独立对话窗口获得焦点时，按下后切换当前窗口的失焦自动关闭开关。",
+        "placeholder": "点击开始录制快捷键"
+      },
       "profile": {
         "nickname": {
           "label": "用户名",

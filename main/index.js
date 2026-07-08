@@ -16,7 +16,7 @@
  */
 
 
-import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor } from 'electron'
+import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
 import {
@@ -585,6 +585,24 @@ function ensureTray() {
   return appTray
 }
 
+function triggerFocusedWindowAutoCloseToggle() {
+  const focusedWindow = BrowserWindow.getFocusedWindow()
+  if (!focusedWindow || focusedWindow.isDestroyed()) return false
+
+  const windowRef = getWindowRefByWebContentsId(focusedWindow.webContents?.id)
+  if (!windowRef) return false
+
+  const targetWindow = listWindows('window').find((item) => item.id === windowRef)
+  if (!targetWindow) return false
+
+  focusedWindow.webContents.send('window:toggleAutoCloseOnBlurShortcut', {
+    windowRef,
+    source: 'desktop-shortcut'
+  })
+  return true
+}
+
+
 async function syncDesktopRuntimeFromConfig() {
   const result = await dataApi.getConfig()
   const config = result?.config && typeof result.config === 'object' ? result.config : {}
@@ -608,10 +626,17 @@ async function syncDesktopRuntimeFromConfig() {
       onAppendFollowUp: () => {
         triggerAppendFollowUpShortcut()
       },
+      onToggleFocusedWindowAutoClose: () => {
+        triggerFocusedWindowAutoCloseToggle()
+      },
       onPromptTrigger: (promptKey) => {
         triggerPromptShortcut(promptKey)
       }
     })
+
+    if (syncResult.warnings?.length) {
+      console.warn('desktop-shortcuts:sync-warnings', syncResult.warnings)
+    }
 
     return {
       config,

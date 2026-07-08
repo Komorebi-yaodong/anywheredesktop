@@ -366,15 +366,35 @@ function collectBindings(desktopConfig = {}) {
     })
   })
 
+  bindings.push({
+    id: 'toggleFocusedWindowAutoClose',
+    kind: 'toggleFocusedWindowAutoClose',
+    label: '独立窗口失焦自动关闭快捷键',
+    accelerator: typeof shortcuts.toggleFocusedWindowAutoClose === 'string'
+      ? shortcuts.toggleFocusedWindowAutoClose
+      : 'Alt+F',
+    enabled: true
+  })
+
   return bindings
 }
 
-export function validateDesktopShortcuts(desktopConfig = {}) {
+export function validateDesktopShortcuts(desktopConfig = {}, options = {}) {
+  const allowConflicts = options?.allowConflicts === true
+  const warnings = []
   const bindings = collectBindings(desktopConfig)
   const usedAccelerators = new Map()
   const normalizedBindings = []
 
   for (const binding of bindings) {
+    if (binding.kind === 'toggleFocusedWindowAutoClose' && !String(binding.accelerator || '').trim()) {
+      normalizedBindings.push({
+        ...binding,
+        accelerator: ''
+      })
+      continue
+    }
+
     const normalized = normalizeAccelerator(binding.accelerator)
     if (!normalized.ok) {
       return {
@@ -392,13 +412,17 @@ export function validateDesktopShortcuts(desktopConfig = {}) {
 
     const conflict = usedAccelerators.get(normalized.accelerator)
     if (conflict) {
-      return {
-        ok: false,
-        error: `快捷键冲突：${binding.label} 与 ${conflict} 都使用了 ${normalized.accelerator}`
+      const conflictMessage = `快捷键冲突：${binding.label} 与 ${conflict} 都使用了 ${normalized.accelerator}`
+      if (!allowConflicts) {
+        return {
+          ok: false,
+          error: conflictMessage
+        }
       }
+      warnings.push(conflictMessage)
     }
 
-    usedAccelerators.set(normalized.accelerator, binding.label)
+    if (!conflict) usedAccelerators.set(normalized.accelerator, binding.label)
     normalizedBindings.push({
       ...binding,
       accelerator: normalized.accelerator
@@ -426,25 +450,31 @@ export function validateDesktopShortcuts(desktopConfig = {}) {
         mainToggle: normalizedBindings.find((item) => item.kind === 'mainToggle')?.accelerator || 'Ctrl+Space',
         quickSummon: normalizedBindings.find((item) => item.kind === 'quickSummon')?.accelerator || 'Alt+A',
         appendFollowUp: normalizedBindings.find((item) => item.kind === 'appendFollowUp')?.accelerator || 'Alt+S',
+        toggleFocusedWindowAutoClose: normalizedBindings.find((item) => item.kind === 'toggleFocusedWindowAutoClose')?.accelerator ?? 'Alt+F',
         promptBindings: nextPromptBindings
       }
     },
-    bindings: normalizedBindings
+    bindings: normalizedBindings,
+    warnings
   }
 }
 
 export function syncDesktopShortcuts(desktopConfig = {}, handlers = {}) {
-  const validated = validateDesktopShortcuts(desktopConfig)
+  const validated = validateDesktopShortcuts(desktopConfig, { allowConflicts: true })
   if (!validated.ok) {
     throw new Error(validated.error)
   }
 
   unregisterManagedShortcuts()
 
-  const warnings = []
+  const warnings = [...(Array.isArray(validated.warnings) ? validated.warnings : [])]
   const registeredBindings = []
 
   validated.bindings.forEach((binding) => {
+    if (binding.kind === 'toggleFocusedWindowAutoClose' && !String(binding.accelerator || '').trim()) {
+      return
+    }
+
     const electronAccelerators = toElectronAcceleratorCandidates(binding.accelerator)
     if (!electronAccelerators.ok) {
       warnings.push(`${binding.label}：${electronAccelerators.error}`)
@@ -469,6 +499,10 @@ export function syncDesktopShortcuts(desktopConfig = {}, handlers = {}) {
           } else if (binding.kind === 'appendFollowUp') {
             registerManagedShortcut(candidate, () => {
               handlers?.onAppendFollowUp?.()
+            })
+          } else if (binding.kind === 'toggleFocusedWindowAutoClose') {
+            registerManagedShortcut(candidate, () => {
+              handlers?.onToggleFocusedWindowAutoClose?.()
             })
           } else if (binding.kind === 'promptBinding') {
             registerManagedShortcut(candidate, () => {

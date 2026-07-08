@@ -2757,10 +2757,8 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
 
                 const html = await response.text();
                 results = parseDuckDuckGoResults(html);
-                console.log('[web_search] DDG');
             } catch (e) {
                 searchRequestFailed = e;
-                console.warn("DDG fetch error:", e);
             }
 
             if (results.length === 0 && searchRequestFailed) {
@@ -2785,9 +2783,7 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
 
                     const html = await response.text();
                     results = parseBingResults(html);
-                    console.log('[web_search] Edge');
                 } catch (fallbackError) {
-                    console.warn("Bing fallback fetch error:", fallbackError);
                     return JSON.stringify({
                         message: "Web search request failed. Please check your network or proxy settings.",
                         query: query,

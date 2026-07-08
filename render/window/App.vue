@@ -531,12 +531,12 @@ const handleProviderCollapseStatesChange = async (nextStates) => {
 const updateModelListAndMap = (config) => {
   const newModelList = [];
   const newModelMap = {};
-  
+
   const folders = config.providerFolders || {};
   const order = config.providerOrder || [];
-  
+
   // 1. 文件夹按字母序排序
-  const sortedFolderIds = Object.keys(folders).sort((a, b) => 
+  const sortedFolderIds = Object.keys(folders).sort((a, b) =>
     (folders[a].name || '').localeCompare(folders[b].name || '')
   );
 
@@ -4176,6 +4176,9 @@ const autoSaveSession = async (force = false) => {
     return false;
   }
 
+  const promptConfig = currentConfig.value?.prompts?.[CODE.value] || {};
+  const autoSaveProjectId = typeof promptConfig.autoSaveProjectId === 'string' ? promptConfig.autoSaveProjectId : '';
+
   // 2. 获取当前快捷助手的配置
   const shouldAutoSave = shouldPersistCurrentSessionAutomatically();
 
@@ -4194,8 +4197,23 @@ const autoSaveSession = async (force = false) => {
   try {
     const sessionData = getSessionDataAsObject();
     const jsonString = JSON.stringify(sessionData, null, 2);
-    const filePath = `${currentConfig.value.webdav.localChatPath}/${defaultConversationName.value}.json`;
+    const filename = `${defaultConversationName.value}.json`;
+    const filePath = `${currentConfig.value.webdav.localChatPath}/${filename}`;
     await window.api.writeLocalFile(filePath, jsonString);
+
+    try {
+      const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(currentConfig.value.webdav.localChatPath));
+      const projectName = localProjects.projects.find((p) => p.id === autoSaveProjectId)?.name || '';
+      await reassignLocalProject({
+        projectId: autoSaveProjectId,
+        projectName,
+        addFilename: filename,
+        removeFilenames: []
+      });
+    } catch (projectError) {
+      console.warn('[projects] auto-save local project assignment failed:', projectError);
+    }
+
     lastAutoSaveAt = Date.now();
     return true;
   } catch (error) {
@@ -4292,7 +4310,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('blur', handleWindowBlur);
   if (textSearchInstance) textSearchInstance.destroy();
   window.removeEventListener('blur', handleAutoCloseOnBlur);
-  
+
   window.removeEventListener('error', handleGlobalImageError, true);
   window.removeEventListener('keydown', handleGlobalKeyDown);
 
@@ -4741,27 +4759,27 @@ const saveSessionAsHtml = async () => {
 
     const cssStyles = `
       <style>
-        :root { 
-            --bg-color: #f7f7f7; 
-            --text-color: #333; 
-            --card-bg: #fff; 
-            --user-bg: #e1f5fe; 
-            --ai-bg: #fff; 
-            --border-color: #eee; 
-            --accent-color: #1F2937; 
+        :root {
+            --bg-color: #f7f7f7;
+            --text-color: #333;
+            --card-bg: #fff;
+            --user-bg: #e1f5fe;
+            --ai-bg: #fff;
+            --border-color: #eee;
+            --accent-color: #1F2937;
             --timeline-line: #e0e0e0;
             --timeline-dot-default: #bdbdbd;
             --timeline-dot-active: #1F2937;
         }
         @media (prefers-color-scheme: dark) {
-          :root { 
-              --bg-color: #1a1a1a; 
-              --text-color: #e0e0e0; 
-              --card-bg: #2a2a2a; 
-              --user-bg: #0d47a1; 
-              --ai-bg: #3a3a3a; 
-              --border-color: #444; 
-              --accent-color: #64b5f6; 
+          :root {
+              --bg-color: #1a1a1a;
+              --text-color: #e0e0e0;
+              --card-bg: #2a2a2a;
+              --user-bg: #0d47a1;
+              --ai-bg: #3a3a3a;
+              --border-color: #444;
+              --accent-color: #64b5f6;
               --timeline-line: #444;
               --timeline-dot-default: #666;
               --timeline-dot-active: #64b5f6;
@@ -4783,7 +4801,7 @@ const saveSessionAsHtml = async () => {
             z-index: 100;
             max-height: 80vh;
             overflow-y: auto;
-            scrollbar-width: none; 
+            scrollbar-width: none;
             padding: 10px;
         }
         .timeline-toc::-webkit-scrollbar { display: none; }
@@ -4795,7 +4813,7 @@ const saveSessionAsHtml = async () => {
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 12px; 
+            gap: 12px;
         }
         .timeline-list::before {
             content: '';
@@ -4823,7 +4841,7 @@ const saveSessionAsHtml = async () => {
         .timeline-dot.user-dot {
             background-color: var(--timeline-dot-active);
             border-color: var(--timeline-dot-active);
-            width: 12px; 
+            width: 12px;
             height: 12px;
         }
         .timeline-dot.ai-dot {
@@ -6948,7 +6966,7 @@ const askAI = async (forceSend = false) => {
                   };
                 }
 
-                
+
 const result = await window.api.invokeMcpTool(
                   toolCall.function.name,
                   toolArgs,
@@ -7105,6 +7123,20 @@ const result = await window.api.invokeMcpTool(
 
           await window.api.writeLocalFile(filePath, jsonString);
           savedFileName = `${defaultConversationName.value}.json`;
+
+          try {
+            const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(currentConfig.value.webdav.localChatPath));
+            const taskProjectId = typeof currentTaskConfig.value.autoSaveProjectId === 'string' ? currentTaskConfig.value.autoSaveProjectId : '';
+            const projectName = localProjects.projects.find((p) => p.id === taskProjectId)?.name || '';
+            await reassignLocalProject({
+              projectId: taskProjectId,
+              projectName,
+              addFilename: savedFileName,
+              removeFilenames: []
+            });
+          } catch (projectError) {
+            console.warn('[projects] task auto-save local project assignment failed:', projectError);
+          }
         }
         // 将历史记录写入主配置
         await window.api.addTaskHistory(currentTaskConfig.value.id, {

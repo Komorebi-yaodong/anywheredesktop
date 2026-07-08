@@ -263,6 +263,7 @@ export const defaultConfig = {
         autoCloseOnBlur: true,
         isAlwaysOnTop: true,
         autoSaveChat: false,
+        autoSaveProjectId: '',
         contextWindow: 256000,
         autoCompact: true,
         compactTriggerRatio: 0.8,
@@ -577,7 +578,7 @@ function checkConfig(inputConfig) {
     }
   }
 
-  
+
   if (config.mcpServers && typeof config.mcpServers === 'object') {
     for (const server of Object.values(config.mcpServers)) {
       if (!server || typeof server !== 'object') continue
@@ -733,10 +734,30 @@ const rootDefaults = {
       promptConfig.autoSaveChat = false
       changed = true
     }
+
+    if (typeof promptConfig.autoSaveProjectId !== 'string') {
+      promptConfig.autoSaveProjectId = ''
+      changed = true
+    }
   }
 
 
-  if (!Array.isArray(config.providerOrder) || config.providerOrder.length === 0) {
+
+  for (const [taskId, taskConfig] of Object.entries(config.tasks)) {
+    if (!taskConfig || typeof taskConfig !== 'object' || Array.isArray(taskConfig)) {
+      delete config.tasks[taskId]
+      changed = true
+      continue
+    }
+
+    if (typeof taskConfig.autoSaveProjectId !== 'string') {
+      taskConfig.autoSaveProjectId = ''
+      changed = true
+    }
+  }
+
+
+if (!Array.isArray(config.providerOrder) || config.providerOrder.length === 0) {
     config.providerOrder = Object.keys(config.providers)
     changed = true
   }

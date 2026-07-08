@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
+import { runTaskById } from './core/task_runner.js'
 
 const GITHUB_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/Komorebi-yaodong/anywheredesktop/main/package.json'
 const GITEE_PACKAGE_JSON_URL = 'https://gitee.com/Komorebi-yaodong/anywheredesktop/raw/main/package.json'
@@ -526,66 +527,7 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
   })
 
   handleInvoke('data:runTaskNow', async (_event, taskId = '') => {
-    const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : ''
-    if (!normalizedTaskId) {
-      return {
-        success: false,
-        reason: 'task_id_required'
-      }
-    }
-
-    const configResult = await dataApi.getConfig()
-    const fullConfig =
-      configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
-    const tasks = fullConfig?.tasks && typeof fullConfig.tasks === 'object' ? fullConfig.tasks : {}
-    const task = tasks[normalizedTaskId]
-
-    if (!task || typeof task !== 'object') {
-      return {
-        success: false,
-        reason: 'task_not_found',
-        taskId: normalizedTaskId
-      }
-    }
-
-    const promptKey = typeof task.promptKey === 'string' && task.promptKey ? task.promptKey : '__DEFAULT__'
-    const modelRoute = ['superior', 'general', 'fast'].includes(task?.modelRoute) ? task.modelRoute : 'general'
-    const tempPromptConfig =
-      promptKey === '__DEFAULT__'
-        ? {
-            type: 'general',
-            prompt: '',
-            showMode: 'window',
-            model: dataApi.resolveDefaultAssistantModel(fullConfig, modelRoute),
-            stream: true,
-            isAlwaysOnTop: fullConfig.isAlwaysOnTop_global ?? true,
-            autoCloseOnBlur: fullConfig.autoCloseOnBlur_global ?? true,
-            window_width: 580,
-            window_height: 740,
-            icon: ''
-          }
-        : null
-
-    const openPayload = {
-      code: promptKey,
-      type: 'task',
-      payload: typeof task.description === 'string' ? task.description : '',
-      taskConfig: {
-        id: normalizedTaskId,
-        ...task
-      },
-      tempPromptConfig
-    }
-
-    const openResult = await openWindow('window', openPayload)
-
-    return {
-      success: Boolean(openResult?.ok),
-      taskId: normalizedTaskId,
-      target: openResult?.id || null,
-      event: 'window:open',
-      result: openResult
-    }
+    return runTaskById({ taskId, dataApi, openWindow })
   })
 
   handleInvoke('chat:getRandomItem', async (_event, list = '') => {

@@ -53,7 +53,7 @@ import * as mcpApi from './core/mcp.js'
 import * as skillApi from './core/skill.js'
 import * as screenshotApi from './core/screenshot.js'
 import { installRequestHeaderBridge } from './core/net.js'
-
+import { startTaskScheduler } from './core/task_scheduler.js'
 
 let appTray = null
 let appQuitStarted = false
@@ -687,6 +687,8 @@ app.whenReady().then(async () => {
   })
 
   systemApi.startClipboardWatcher()
+  startTaskScheduler({ dataApi, openWindow })
+
   await syncDesktopRuntimeFromConfig()
   ensureTray()
   await openWindow('main')

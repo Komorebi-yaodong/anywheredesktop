@@ -370,6 +370,7 @@ const api = {
     }
   },
   closeMcpClient: (meta = {}) => electronAPI.ipcRenderer.invoke('mcp:closeClient', toPlainPayload(meta) || {}),
+  mcpOAuth_getStatus: (input = {}) => electronAPI.ipcRenderer.invoke('mcp:oauth:getStatus', toPlainPayload(input) || {}),
 
   listSkills: (skillRootPath = '') => invokeOrThrow('skill:list', skillRootPath),
   getSkillDetails: (skillRootPath = '', skillId = '') => invokeOrThrow('skill:getDetails', skillRootPath, skillId),

@@ -644,6 +644,7 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
       url: serverConfig.baseUrl,
       env: serverConfig.env,
       headers: serverConfig.headers,
+      auth: serverConfig.auth,
       type: serverConfig.type,
       isPersistent: Boolean(serverConfig.isPersistent),
       timeoutSeconds: serverConfig.timeoutSeconds
@@ -701,6 +702,7 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
       url: serverConfig.baseUrl,
       env: serverConfig.env,
       headers: serverConfig.headers,
+      auth: serverConfig.auth,
       type: serverConfig.type,
       timeoutSeconds: serverConfig.timeoutSeconds
     }
@@ -761,6 +763,43 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
         liveSignalControllers.delete(signalKey)
       }
     }
+  })
+
+
+  handleInvoke('mcp:oauth:getStatus', async (_event, input = {}) => {
+    const serverId = input?.serverId || input?.serverConfig?.id || ''
+    const serverConfig = input?.serverConfig || {}
+    const status = await mcpApi.getMcpAuthStatus(serverId, serverConfig)
+    return { success: true, status }
+  })
+
+  handleInvoke('mcp:oauth:startAuthFlow', async (_event, input = {}) => {
+    const serverConfig = input?.serverConfig || {}
+    const serverId = serverConfig.id || input?.serverId || ''
+    const authenticated = await mcpApi.ensureMcpAuthenticated(serverId, serverConfig)
+    const status = await mcpApi.getMcpAuthStatus(serverId, serverConfig)
+    return { success: true, authenticated, status }
+  })
+
+  handleInvoke('mcp:oauth:refresh', async (_event, input = {}) => {
+    const serverId = input?.serverId || input?.serverConfig?.id || ''
+    const serverConfig = input?.serverConfig || {}
+    const status = await mcpApi.refreshMcpOAuth(serverId, serverConfig)
+    return { success: true, refreshed: true, status }
+  })
+
+  handleInvoke('mcp:oauth:logout', async (_event, input = {}) => {
+    const serverId = input?.serverId || ''
+    await mcpApi.logoutMcpOAuth(serverId)
+    return { success: true }
+  })
+
+  handleInvoke('mcp:oauth:saveManualClient', async (_event, input = {}) => {
+    const serverId = input?.serverId || ''
+    const clientId = input?.clientId || ''
+    const clientSecret = input?.clientSecret || ''
+    await mcpApi.saveMcpOAuthManualClient(serverId, clientId, clientSecret)
+    return { success: true }
   })
 
 

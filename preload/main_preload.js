@@ -145,6 +145,16 @@ getDroppedFilePath: (file) => {
       toPlainPayload(context)
     ),
   closeMcpClient: () => electronAPI.ipcRenderer.invoke('mcp:closeClient'),
+  mcpOAuth_getStatus: (input = {}) =>
+    electronAPI.ipcRenderer.invoke('mcp:oauth:getStatus', toPlainPayload(input) || {}),
+  mcpOAuth_startAuthFlow: (input = {}) =>
+    electronAPI.ipcRenderer.invoke('mcp:oauth:startAuthFlow', toPlainPayload(input) || {}),
+  mcpOAuth_refresh: (input = {}) =>
+    electronAPI.ipcRenderer.invoke('mcp:oauth:refresh', toPlainPayload(input) || {}),
+  mcpOAuth_logout: (input = {}) =>
+    electronAPI.ipcRenderer.invoke('mcp:oauth:logout', toPlainPayload(input) || {}),
+  mcpOAuth_saveManualClient: (input = {}) =>
+    electronAPI.ipcRenderer.invoke('mcp:oauth:saveManualClient', toPlainPayload(input) || {}),
 
   listSkills: (skillRootPath = '') => invokeOrThrow('skill:list', skillRootPath),
   getSkillDetails: (skillRootPath = '', skillId = '') =>

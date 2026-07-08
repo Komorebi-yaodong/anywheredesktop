@@ -32,7 +32,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@langchain/core": "^1.1.39",
     "@langchain/langgraph": "^1.2.7",
-    "@langchain/mcp-adapters": "1.0.0",
+    "@langchain/mcp-adapters": "1.1.3",
     "adm-zip": "0.5.16",
     "data-uri-to-buffer": "^4.0.1",
     "dompurify": "^3.3.3",

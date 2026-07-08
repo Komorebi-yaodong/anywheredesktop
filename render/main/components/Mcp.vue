@@ -46,6 +46,24 @@ const testRunning = ref(false);
 const testOutput = ref('');
 
 // 计算当前选中工具的 Schema
+const oauthStatus = ref(null);
+const oauthBusy = ref(false);
+const DEFAULT_OAUTH_ENV_MAPPING = ['OAUTH_TOKEN', 'MCP_OAUTH_TOKEN'];
+
+function createDefaultOAuthConfig() {
+    return {
+        clientId: '',
+        clientSecret: '',
+        scopes: [],
+        scopesInput: '',
+        envMapping: [...DEFAULT_OAUTH_ENV_MAPPING],
+        envMappingInput: DEFAULT_OAUTH_ENV_MAPPING.join(', '),
+        useDcr: true,
+        manualEndpoints: {}
+    };
+}
+
+
 const currentTestToolSchema = computed(() => {
     if (!currentTestToolName.value) return [];
     const tool = testResult.tools.find(t => t.name === currentTestToolName.value);
@@ -94,11 +112,81 @@ const defaultServer = {
     args: [],
     env: {},
     headers: {},
+    auth: {
+        type: 'none',
+        bearerToken: '',
+        oauth: createDefaultOAuthConfig()
+    },
     provider: '',
     providerUrl: '',
     logoUrl: '',
     tags: []
 };
+
+function normalizeAuth(auth) {
+    const source = auth && typeof auth === 'object' ? auth : {};
+    const scopes = Array.isArray(source.oauth?.scopes) ? source.oauth.scopes : [];
+    const envMapping = Array.isArray(source.oauth?.envMapping) && source.oauth.envMapping.length
+        ? source.oauth.envMapping
+        : DEFAULT_OAUTH_ENV_MAPPING;
+    return {
+        type: source.type || 'none',
+        bearerToken: source.bearerToken || '',
+        oauth: {
+            ...createDefaultOAuthConfig(),
+            clientId: source.oauth?.clientId || '',
+            clientSecret: source.oauth?.clientSecret || '',
+            scopes,
+            scopesInput: scopes.join(', '),
+            envMapping,
+            envMappingInput: envMapping.join(', '),
+            useDcr: source.oauth?.useDcr !== false,
+            redirectPath: source.oauth?.redirectPath,
+            manualEndpoints: source.oauth?.manualEndpoints || {}
+        }
+    };
+}
+
+function prepareAuthForPersistence(auth) {
+    const out = normalizeAuth(auth);
+    if (out.type === 'bearer') {
+        delete out.oauth;
+        if (!out.bearerToken) return { type: 'none' };
+        return out;
+    }
+    if (out.type === 'oauth') {
+        out.bearerToken = '';
+        delete out.oauth.scopesInput;
+        delete out.oauth.envMappingInput;
+        delete out.oauth.clientSecret;
+        if (out.oauth.useDcr !== false || !out.oauth.clientId) delete out.oauth.clientId;
+        if (!out.oauth.scopes || out.oauth.scopes.length === 0) delete out.oauth.scopes;
+        if (!out.oauth.envMapping || out.oauth.envMapping.length === 0) delete out.oauth.envMapping;
+        if (!out.oauth.manualEndpoints || Object.keys(out.oauth.manualEndpoints).length === 0) delete out.oauth.manualEndpoints;
+        if (!out.oauth.redirectPath) delete out.oauth.redirectPath;
+        return out;
+    }
+    return { type: 'none' };
+}
+
+function migrateLegacyBearer(headers, auth) {
+    if (!headers || typeof headers !== 'object') return { headers, auth };
+    const raw = headers.Authorization || headers.authorization;
+    if (typeof raw !== 'string') return { headers, auth };
+    const matched = raw.match(/^\s*Bearer\s+(.+?)\s*$/i);
+    if (!matched) return { headers, auth };
+    const existing = auth && (auth.type === 'bearer' || auth.type === 'oauth');
+    if (existing) return { headers, auth };
+
+    const nextHeaders = { ...headers };
+    delete nextHeaders.Authorization;
+    delete nextHeaders.authorization;
+    const nextAuth = normalizeAuth(auth);
+    nextAuth.type = 'bearer';
+    nextAuth.bearerToken = matched[1];
+    return { headers: nextHeaders, auth: nextAuth, migrated: true };
+}
+
 
 const createEditingServerState = () => ({
     ...defaultServer,
@@ -106,6 +194,7 @@ const createEditingServerState = () => ({
     args: '',
     env: '',
     headers: '',
+    auth: JSON.parse(JSON.stringify(defaultServer.auth)),
     tags: ''
 });
 
@@ -218,10 +307,141 @@ const normalizeTimeoutSecondsInput = (value, fallback = 120) => {
 };
 
 
+function buildServerConfigForAuth() {
+    return {
+        id: editingServer.id,
+        type: editingServer.type,
+        baseUrl: editingServer.baseUrl,
+        command: editingServer.command,
+        args: editingServer.args ? convertTextToLines(editingServer.args) : [],
+        env: convertTextToObject(editingServer.env),
+        headers: convertTextToObject(editingServer.headers),
+        auth: normalizeAuth(editingServer.auth)
+    };
+}
+
+async function refreshOAuthStatus() {
+    if (!editingServer.auth || editingServer.auth.type !== 'oauth') {
+        oauthStatus.value = null;
+        return;
+    }
+    if (!editingServer.id) {
+        oauthStatus.value = null;
+        return;
+    }
+    try {
+        const result = await window.api.mcpOAuth_getStatus({
+            serverId: editingServer.id,
+            serverConfig: buildServerConfigForAuth()
+        });
+        oauthStatus.value = result?.success ? result.status : null;
+    } catch {
+        oauthStatus.value = null;
+    }
+}
+
+async function startOAuthLogin() {
+    if (normalizedEditingServerType.value === 'stdio') {
+        ElMessage.warning(t('mcp.auth.stdioInteractiveUnsupported'));
+        return;
+    }
+    if (!editingServer.baseUrl) {
+        ElMessage.warning(t('mcp.auth.needUrl'));
+        return;
+    }
+    oauthBusy.value = true;
+    try {
+        const result = await window.api.mcpOAuth_startAuthFlow({ serverConfig: buildServerConfigForAuth() });
+        if (result?.success) {
+            oauthStatus.value = result.status;
+            ElMessage.success(t('mcp.auth.loginSuccess'));
+        } else {
+            ElMessage.error(`${t('mcp.auth.loginFailed')}${result?.error ? `: ${result.error}` : ''}`);
+        }
+    } catch (error) {
+        ElMessage.error(`${t('mcp.auth.loginFailed')}: ${error.message || error}`);
+    } finally {
+        oauthBusy.value = false;
+    }
+}
+
+async function refreshOAuth() {
+    if (!editingServer.id) return;
+    oauthBusy.value = true;
+    try {
+        const result = await window.api.mcpOAuth_refresh({
+            serverId: editingServer.id,
+            serverConfig: buildServerConfigForAuth()
+        });
+        if (result?.success) {
+            oauthStatus.value = result.status || null;
+            if (!oauthStatus.value) await refreshOAuthStatus();
+            ElMessage.success(t('mcp.auth.refreshed'));
+        } else {
+            ElMessage.error(result?.error || t('mcp.auth.refreshFailed'));
+        }
+    } catch (error) {
+        ElMessage.error(String(error.message || error));
+    } finally {
+        oauthBusy.value = false;
+    }
+}
+
+async function logoutOAuth() {
+    if (!editingServer.id) return;
+    try {
+        await ElMessageBox.confirm(t('mcp.auth.logoutConfirm'), t('common.confirm'), { type: 'warning' });
+    } catch {
+        return;
+    }
+    oauthBusy.value = true;
+    try {
+        await window.api.mcpOAuth_logout({ serverId: editingServer.id });
+        oauthStatus.value = null;
+        ElMessage.success(t('mcp.auth.loggedOut'));
+    } catch (error) {
+        ElMessage.error(String(error.message || error));
+    } finally {
+        oauthBusy.value = false;
+    }
+}
+
+async function saveManualClient() {
+    if (!editingServer.id) return;
+    const oauth = editingServer.auth.oauth;
+    if (!oauth || !oauth.clientId) {
+        ElMessage.warning(t('mcp.auth.needClientId'));
+        return;
+    }
+    try {
+        await window.api.mcpOAuth_saveManualClient({
+            serverId: editingServer.id,
+            clientId: oauth.clientId,
+            clientSecret: oauth.clientSecret
+        });
+        oauth.clientSecret = '';
+        ElMessage.success(t('mcp.auth.clientSaved'));
+        await refreshOAuthStatus();
+    } catch (error) {
+        ElMessage.error(String(error.message || error));
+    }
+}
+
+function oauthStatusText() {
+    const status = oauthStatus.value;
+    if (!status) return '';
+    if (!status.configured) return t('mcp.auth.statusNotConfigured');
+    if (!status.authenticated) return t('mcp.auth.statusNotLoggedIn');
+    if (status.expired) return t('mcp.auth.statusExpired');
+    return t('mcp.auth.statusLoggedIn');
+}
+
+
 function prepareAddServer() {
     isNewServer.value = true;
     Object.assign(editingServer, createEditingServerState());
     advancedCollapse.value = [];
+    oauthStatus.value = null;
     showEditDialog.value = true;
 }
 
@@ -234,10 +454,12 @@ function prepareEditServer(server) {
         args: convertLinesToText(server.args),
         env: convertObjectToText(server.env),
         headers: convertObjectToText(server.headers),
+        auth: normalizeAuth(server.auth),
         tags: Array.isArray(server.tags) ? server.tags.join(', ') : ''
     });
     advancedCollapse.value = [];
     showEditDialog.value = true;
+    if (editingServer.auth.type === 'oauth') refreshOAuthStatus();
 }
 
 async function saveServer() {
@@ -257,8 +479,24 @@ async function saveServer() {
     addIfPresent(serverData, 'baseUrl', editingServer.baseUrl);
     addIfPresent(serverData, 'command', editingServer.command);
     addIfArrayPresent(serverData, 'args', convertTextToLines(editingServer.args));
+    if (editingServer.auth.type === 'oauth' && editingServer.auth.oauth) {
+        editingServer.auth.oauth.scopes = (editingServer.auth.oauth.scopesInput || '')
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
+        editingServer.auth.oauth.envMapping = (editingServer.auth.oauth.envMappingInput || '')
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
+    }
+
+
+    const headersForSave = convertTextToObject(editingServer.headers);
+    const migratedAuth = migrateLegacyBearer(headersForSave, editingServer.auth);
+
     addIfObjectPresent(serverData, 'env', convertTextToObject(editingServer.env));
-    addIfObjectPresent(serverData, 'headers', convertTextToObject(editingServer.headers));
+    addIfObjectPresent(serverData, 'headers', migratedAuth.headers);
+    serverData.auth = prepareAuthForPersistence(migratedAuth.auth);
     addIfPresent(serverData, 'provider', editingServer.provider);
     addIfPresent(serverData, 'providerUrl', editingServer.providerUrl);
     addIfPresent(serverData, 'logoUrl', editingServer.logoUrl);
@@ -338,6 +576,12 @@ async function saveJson() {
             throw new Error(t('mcp.alerts.jsonError'));
         }
         const newMcpServers = parsedJson.mcpServers;
+        Object.values(newMcpServers || {}).forEach((server) => {
+            if (!server || typeof server !== 'object') return;
+            const migrated = migrateLegacyBearer(server.headers, server.auth);
+            server.headers = migrated.headers;
+            server.auth = prepareAuthForPersistence(migrated.auth);
+        });
 
         await atomicSave(config => {
             config.mcpServers = newMcpServers;
@@ -431,6 +675,7 @@ async function runToolTest() {
             baseUrl: server.baseUrl,
             env: typeof server.env === 'string' ? convertTextToObject(server.env) : server.env,
             headers: typeof server.headers === 'string' ? convertTextToObject(server.headers) : server.headers,
+            auth: normalizeAuth(server.auth),
             args: Array.isArray(server.args) ? server.args : convertTextToLines(server.args),
             timeoutSeconds: normalizeTimeoutSecondsInput(server.timeoutSeconds)
         }));
@@ -554,6 +799,7 @@ async function triggerConnectionTest(server) {
         baseUrl: server.baseUrl,
         env: typeof server.env === 'string' ? convertTextToObject(server.env) : server.env,
         headers: typeof server.headers === 'string' ? convertTextToObject(server.headers) : server.headers,
+        auth: normalizeAuth(server.auth),
         args: Array.isArray(server.args) ? server.args : convertTextToLines(server.args),
         timeoutSeconds: normalizeTimeoutSecondsInput(server.timeoutSeconds)
     }));
@@ -774,6 +1020,54 @@ async function triggerConnectionTest(server) {
                             </el-scrollbar>
                         </el-form-item>
                     </template>
+                    <el-divider content-position="left">{{ t('mcp.auth.sectionTitle') }}</el-divider>
+                    <el-form-item>
+                        <template #label>
+                            <span class="auth-label-with-tip">
+                                <span>{{ t('mcp.auth.type') }}</span>
+                                <el-tooltip :content="t('mcp.auth.dcrHint')" placement="top" popper-class="mcp-tooltip-width">
+                                    <el-icon class="auth-tip-icon">
+                                        <QuestionFilled />
+                                    </el-icon>
+                                </el-tooltip>
+                            </span>
+                        </template>
+                        <el-radio-group v-model="editingServer.auth.type" @change="refreshOAuthStatus">
+                            <el-radio value="none">{{ t('mcp.auth.typeNone') }}</el-radio>
+                            <el-radio value="bearer">{{ t('mcp.auth.typeBearer') }}</el-radio>
+                            <el-radio value="oauth">{{ t('mcp.auth.typeOAuth') }}</el-radio>
+                        </el-radio-group>
+                    </el-form-item>
+                    <el-form-item v-if="editingServer.auth.type === 'bearer'" :label="t('mcp.auth.bearerToken')">
+                        <el-input v-model="editingServer.auth.bearerToken" show-password
+                            :placeholder="t('mcp.auth.bearerTokenPlaceholder')" />
+                    </el-form-item>
+                    <template v-if="editingServer.auth.type === 'oauth'">
+                        <el-form-item :label="t('mcp.auth.envMapping')" v-if="editingServer.type === 'stdio'">
+                            <el-input v-model="editingServer.auth.oauth.envMappingInput"
+                                :placeholder="t('mcp.auth.envMappingPlaceholder')" />
+                        </el-form-item>
+                        <el-form-item :label="t('mcp.auth.actions')">
+                            <div class="oauth-actions">
+                                <el-button size="small" type="primary" @click="startOAuthLogin" :loading="oauthBusy">
+                                    {{ t('mcp.auth.login') }}
+                                </el-button>
+                                <el-button size="small" @click="refreshOAuth" :disabled="oauthBusy">
+                                    {{ t('mcp.auth.refresh') }}
+                                </el-button>
+                                <el-button size="small" type="danger" @click="logoutOAuth" :disabled="oauthBusy">
+                                    {{ t('mcp.auth.logout') }}
+                                </el-button>
+                            </div>
+                        </el-form-item>
+                        <el-form-item :label="t('mcp.auth.tokenStatus')" v-if="oauthStatus">
+                            <el-tag :type="oauthStatus.authenticated ? (oauthStatus.expired ? 'warning' : 'success') : 'info'">
+                                {{ oauthStatusText() }}
+                            </el-tag>
+                        </el-form-item>
+                    </template>
+
+
 
                     <el-collapse v-model="advancedCollapse" class="advanced-collapse">
                         <el-collapse-item :title="t('mcp.advanced')" name="1">
@@ -793,6 +1087,35 @@ async function triggerConnectionTest(server) {
                                     v-model="editingServer.providerUrl" /></el-form-item>
                             <el-form-item :label="t('mcp.tags')"><el-input v-model="editingServer.tags"
                                     :placeholder="t('mcp.tagsPlaceholder')" /></el-form-item>
+
+                            <template v-if="editingServer.auth.type === 'oauth'">
+                                <div class="oauth-advanced-panel">
+                                    <div class="oauth-panel-title">{{ t('mcp.auth.oauthAdvancedSection') }}</div>
+                                    <el-form-item :label="t('mcp.auth.scopes')">
+                                        <el-input v-model="editingServer.auth.oauth.scopesInput"
+                                            :placeholder="t('mcp.auth.scopesPlaceholder')" />
+                                    </el-form-item>
+                                    <el-form-item :label="t('mcp.auth.useDcr')">
+                                        <el-switch v-model="editingServer.auth.oauth.useDcr" />
+                                    </el-form-item>
+                                </div>
+                                <div class="oauth-advanced-panel" v-if="!editingServer.auth.oauth.useDcr">
+                                    <div class="oauth-panel-title">{{ t('mcp.auth.manualClientSection') }}</div>
+                                    <el-form-item :label="t('mcp.auth.clientId')">
+                                        <el-input v-model="editingServer.auth.oauth.clientId"
+                                            :placeholder="t('mcp.auth.clientIdPlaceholder')" />
+                                    </el-form-item>
+                                    <el-form-item :label="t('mcp.auth.clientSecret')">
+                                        <el-input v-model="editingServer.auth.oauth.clientSecret" show-password
+                                            :placeholder="t('mcp.auth.clientSecretPlaceholder')" />
+                                    </el-form-item>
+                                    <div class="oauth-panel-actions">
+                                        <el-button size="small" @click="saveManualClient" :disabled="oauthBusy">
+                                            {{ t('mcp.auth.saveManualClient') }}
+                                        </el-button>
+                                    </div>
+                                </div>
+                            </template>
                         </el-collapse-item>
                     </el-collapse>
                 </el-form>
@@ -1336,6 +1659,56 @@ html.dark .bottom-actions-container {
     font-weight: 500;
 }
 
+.auth-label-with-tip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.auth-tip-icon {
+    color: var(--text-tertiary);
+    cursor: help;
+    font-size: 14px;
+}
+
+.auth-tip-icon:hover {
+    color: var(--el-color-primary);
+}
+
+.oauth-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.oauth-advanced-panel {
+    margin: 12px 0;
+    padding: 14px 16px 10px;
+    border: 1px solid rgba(228, 228, 231, 0.85);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.58);
+}
+
+html.dark .oauth-advanced-panel {
+    background: rgba(39, 39, 42, 0.42);
+    border-color: rgba(63, 63, 70, 0.78);
+}
+
+.oauth-panel-title {
+    margin-bottom: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.oauth-panel-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: -2px;
+}
+
+
 .advanced-collapse {
     border: 1px solid rgba(228, 228, 231, 0.85);
     border-radius: 18px;
@@ -1411,7 +1784,8 @@ html.dark .advanced-collapse {
 .item-scrollbar :deep(.el-input__wrapper.is-focus) {
     box-shadow: none !important;
 }
-
+
+
 
 .item-scrollbar {
     width: 100%;

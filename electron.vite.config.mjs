@@ -10,7 +10,29 @@ export default defineConfig({
       // 因此将其从 electron-vite 默认 external 化中排除，交给主进程 bundle 处理，
       // 避免 app.asar/node_modules 在启动阶段逐层 require 缺包。
       externalizeDeps: {
-        exclude: ['markitdown-js', '@aws-sdk/client-s3', 'js-yaml']
+        exclude: [
+          'markitdown-js',
+          '@aws-sdk/client-s3',
+          'js-yaml',
+          '@langchain/mcp-adapters',
+          '@modelcontextprotocol/sdk',
+          '@hono/node-server',
+          'ajv',
+          'ajv-formats',
+          'content-type',
+          'cors',
+          'cross-spawn',
+          'eventsource',
+          'eventsource-parser',
+          'express',
+          'express-rate-limit',
+          'hono',
+          'jose',
+          'json-schema-typed',
+          'pkce-challenge',
+          'raw-body',
+          'zod-to-json-schema'
+        ]
       },
       rollupOptions: {
         input: {

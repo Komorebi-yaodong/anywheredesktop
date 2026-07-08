@@ -1,5 +1,8 @@
 import { MultiServerMCPClient } from '@langchain/mcp-adapters'
 import { getBuiltinTools, invokeBuiltinTool } from './mcp_builtin.js'
+import * as oauthStore from './mcp_oauth_store.js'
+import * as oauthProvider from './mcp_oauth_provider.js'
+import * as oauthCb from './mcp_oauth_cb.js'
 
 const sessionRuntimes = new Map()
 const inFlightToolFetchMap = new Map()
@@ -146,6 +149,41 @@ function preprocessStdioConfig(config = {}) {
   return result
 }
 
+async function prepareStdioAuthEnv(serverConfig = {}) {
+  const auth = serverConfig?.auth && typeof serverConfig.auth === 'object' ? serverConfig.auth : null
+  if (!auth || auth.type !== 'oauth' || !auth.oauth) return undefined
+
+  const serverId = serverConfig.id
+  if (!serverId) return undefined
+
+  const tokens = await oauthStore.loadTokens(serverId)
+  if (!tokens || !tokens.access_token) return undefined
+  if (oauthStore.isExpired(tokens.expires_at)) {
+    const error = new Error(`OAuth token expired for ${serverId}`)
+    error.needsReauth = true
+    error.authExpired = true
+    throw error
+  }
+
+  const mapping = Array.isArray(auth.oauth.envMapping) && auth.oauth.envMapping.length > 0
+    ? auth.oauth.envMapping
+    : ['OAUTH_TOKEN', 'MCP_OAUTH_TOKEN']
+
+  const env = {}
+  for (const key of mapping) env[key] = tokens.access_token
+  if (tokens.expires_at) env.OAUTH_EXPIRES_AT = String(tokens.expires_at)
+  return env
+}
+
+async function applyStdioAuthEnv(runtimeConfig, id, sourceConfig = {}) {
+  const transportType = normalizeTransportType(runtimeConfig.transport || runtimeConfig.type || sourceConfig?.transport || sourceConfig?.type || '')
+  if (transportType !== 'stdio') return runtimeConfig
+
+  const stdioEnv = await prepareStdioAuthEnv({ id, ...(sourceConfig || {}) })
+  if (stdioEnv) runtimeConfig.env = { ...(runtimeConfig.env || {}), ...stdioEnv }
+  return runtimeConfig
+}
+
 function normalizeMcpTimeoutSeconds(timeoutSeconds, fallbackSeconds = 120) {
   const numericValue = Number(timeoutSeconds)
   if (!Number.isFinite(numericValue) || numericValue <= 0) {
@@ -154,16 +192,33 @@ function normalizeMcpTimeoutSeconds(timeoutSeconds, fallbackSeconds = 120) {
   return numericValue
 }
 
-function buildServerConfig(id, config = {}, options = {}) {
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue)
+  if (value && typeof value === 'object') {
+    return Object.keys(value).sort().reduce((acc, key) => {
+      const item = stableValue(value[key])
+      if (item !== undefined) acc[key] = item
+      return acc
+    }, {})
+  }
+  return value
+}
+
+function buildOAuthRuntimeConfig(id, config = {}, options = {}) {
   const { toolCacheOverride, ...rawConfig } = config || {}
-  const preprocessed = preprocessStdioConfig(rawConfig)
-  const resolvedTransport = preprocessed.transport || preprocessed.type || ''
+  const sourceConfig = rawConfig && typeof rawConfig === 'object' ? rawConfig : {}
+  const resolvedTransport = normalizeTransportType(sourceConfig.transport || sourceConfig.type || '')
+  const preprocessed = preprocessStdioConfig({
+    ...sourceConfig,
+    transport: resolvedTransport
+  })
+  const auth = sourceConfig.auth && typeof sourceConfig.auth === 'object' ? sourceConfig.auth : null
   const useConfiguredTimeout = options.useConfiguredTimeout !== false
   const normalizedTimeoutSeconds = normalizeMcpTimeoutSeconds(preprocessed.timeoutSeconds)
   const runtimeConfig = {
     id,
     ...preprocessed,
-    transport: normalizeTransportType(resolvedTransport)
+    transport: resolvedTransport
   }
 
   delete runtimeConfig.timeoutSeconds
@@ -175,7 +230,116 @@ function buildServerConfig(id, config = {}, options = {}) {
     delete runtimeConfig.defaultToolTimeout
   }
 
+  if (auth && auth.type === 'oauth' && (resolvedTransport === 'http' || resolvedTransport === 'sse')) {
+    runtimeConfig.authProvider = oauthProvider.buildOAuthClientProvider(id, sourceConfig)
+  }
+
+  if (auth && auth.type === 'bearer' && auth.bearerToken) {
+    runtimeConfig.headers = { ...(runtimeConfig.headers || {}), Authorization: `Bearer ${auth.bearerToken}` }
+  }
+
+  delete runtimeConfig.auth
   return runtimeConfig
+}
+
+async function buildServerConfig(id, config = {}, options = {}) {
+  const runtimeConfig = buildOAuthRuntimeConfig(id, config, options)
+  return await applyStdioAuthEnv(runtimeConfig, id, config)
+}
+
+export async function ensureMcpAuthenticated(id, serverConfig = {}) {
+  const auth = serverConfig?.auth && typeof serverConfig.auth === 'object' ? serverConfig.auth : null
+  if (!auth || auth.type !== 'oauth') return false
+
+  const transportType = normalizeTransportType(serverConfig.transport || serverConfig.type || '')
+  if (transportType === 'stdio') {
+    throw new Error(`Interactive OAuth login is not supported for stdio servers (${id}) in this release.`)
+  }
+
+  const serverUrl = serverConfig.url || serverConfig.baseUrl
+  if (!serverUrl) throw new Error(`OAuth login requires a server url for ${id}`)
+
+  const seedProvider = oauthProvider.buildOAuthClientProvider(id, serverConfig)
+  const state = typeof seedProvider.state === 'function' ? await seedProvider.state() : undefined
+  const loopback = await oauthCb.startLoopbackCallback({ expectedState: state, port: 0 })
+  const liveProvider = oauthProvider.buildOAuthClientProvider(id, serverConfig, {
+    redirectUri: loopback.redirectUri,
+    state
+  })
+
+  let authorizeUrl = null
+  liveProvider.redirectToAuthorization = async (url) => {
+    authorizeUrl = String(url)
+    try {
+      const parsed = new URL(String(url))
+      const nextState = parsed.searchParams.get('state')
+      if (nextState && typeof liveProvider._getPendingState === 'function' && liveProvider._getPendingState() !== nextState) {
+        liveProvider._getPendingState = () => nextState
+      }
+    } catch {
+      // ignore malformed urls here; a clearer error is thrown below if needed
+    }
+  }
+
+  try {
+    const { auth: sdkAuth } = oauthProvider.loadSdkAuth()
+    try {
+      await sdkAuth(liveProvider, { serverUrl })
+    } catch (error) {
+      if (!oauthProvider.isUnauthorizedError(error)) throw error
+    }
+
+    const expectedState = typeof liveProvider._getPendingState === 'function'
+      ? liveProvider._getPendingState()
+      : state
+    if (!authorizeUrl) {
+      throw new Error(`OAuth authorization URL was not generated for ${id}`)
+    }
+
+    const params = await oauthCb.runAuthFlowWithFallback({
+      authorizeUrl,
+      expectedState,
+      preferredPort: 0,
+      loopback
+    })
+
+    await oauthProvider.finishAuthFlow({
+      serverId: id,
+      provider: liveProvider,
+      serverConfig,
+      transport: null,
+      callbackParams: params,
+      serverUrl
+    })
+    return true
+  } finally {
+    if (loopback?.cleanup) loopback.cleanup()
+  }
+}
+
+export async function getMcpAuthStatus(serverId, serverConfig = {}) {
+  const auth = serverConfig?.auth && typeof serverConfig.auth === 'object' ? serverConfig.auth : null
+  if (!auth || auth.type === 'none') return { configured: false, authenticated: false, type: 'none' }
+  if (auth.type === 'bearer') return { configured: Boolean(auth.bearerToken), authenticated: Boolean(auth.bearerToken), type: 'bearer' }
+
+  if (auth.type === 'oauth') {
+    const tokens = await oauthStore.loadTokens(serverId)
+    const clientInfo = await oauthStore.loadClientInfo(serverId)
+    const dcrSupported = !auth.oauth || auth.oauth.useDcr !== false
+    const expired = tokens ? oauthStore.isExpired(tokens.expires_at) : false
+    return {
+      type: 'oauth',
+      configured: Boolean(auth.oauth),
+      authenticated: Boolean(tokens && tokens.access_token),
+      expired,
+      expiresAt: tokens ? tokens.expires_at : undefined,
+      scope: tokens ? tokens.scope : undefined,
+      dcrSupported,
+      hasClient: Boolean(clientInfo || auth.oauth?.clientId)
+    }
+  }
+
+  return { configured: false, authenticated: false, type: 'none' }
 }
 
 function sanitizeToolsForCache(tools = [], oldToolsCache = [], serverId = '') {
@@ -230,6 +394,7 @@ function getToolFetchKey(id, config = {}) {
     url: config.url || config.baseUrl || '',
     env: config.env && typeof config.env === 'object' ? Object.entries(config.env).sort(([a], [b]) => a.localeCompare(b)) : [],
     headers: config.headers && typeof config.headers === 'object' ? Object.entries(config.headers).sort(([a], [b]) => a.localeCompare(b)) : [],
+    auth: stableValue(config.auth || null),
     isPersistent: Boolean(config.isPersistent),
     currentAgentName: config.currentAgentName || '',
     prompts: config.prompts && typeof config.prompts === 'object' ? config.prompts : null
@@ -291,10 +456,17 @@ export async function connectAndFetchTools(id, config = {}) {
     const timeoutId = setTimeout(() => controller.abort(), 15_000)
 
     try {
-      const serverConfig = buildServerConfig(id, config, { useConfiguredTimeout: false })
+      const serverConfig = await buildServerConfig(id, config, { useConfiguredTimeout: false })
       tempClient = new MultiServerMCPClient({ [id]: serverConfig }, { signal: controller.signal })
       return await tempClient.getTools()
     } catch (error) {
+      if (error?.needsReauth) throw error
+      if (config.auth && config.auth.type === 'oauth' && oauthProvider.isUnauthorizedError(error)) {
+        const needsReauth = new Error(`OAuth authorization required for ${id}`)
+        needsReauth.needsReauth = true
+        needsReauth.cause = error
+        throw needsReauth
+      }
       console.error(`[MCP] Error fetching tools from ${id}:`, error)
       throw error
     } finally {
@@ -418,9 +590,28 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
       }
 
       try {
-        const serverConfig = buildServerConfig(id, config)
+        const serverConfig = await buildServerConfig(id, config)
         const client = new MultiServerMCPClient({ [id]: serverConfig })
-        const tools = await client.getTools()
+        let tools
+        let activeClient = client
+
+        try {
+          tools = await client.getTools()
+        } catch (error) {
+          if (config.auth && config.auth.type === 'oauth' && oauthProvider.isUnauthorizedError(error)) {
+            await ensureMcpAuthenticated(id, config)
+            try {
+              await client.close()
+            } catch {
+              // ignore close errors before OAuth retry
+            }
+            const retryConfig = await buildServerConfig(id, config)
+            activeClient = new MultiServerMCPClient({ [id]: retryConfig })
+            tools = await activeClient.getTools()
+          } else {
+            throw error
+          }
+        }
 
         saveToolCache(saveCacheCallback, id, tools, cachedToolsMap, { emitEvent: false, reason: 'auto-bootstrap' })
 
@@ -434,7 +625,7 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
           includeInstance: true
         })
 
-        runtime.persistentClients.set(id, client)
+        runtime.persistentClients.set(id, activeClient)
       } catch (error) {
         console.error(`[MCP Debug] Failed to connect to persistent server ${id}:`, error)
         failedServerIds.push(id)
@@ -540,7 +731,7 @@ export async function invokeMcpTool(toolName, toolArgs, signal, context = null) 
     }
 
     try {
-      const cfg = buildServerConfig(serverConfig.id, serverConfig)
+      const cfg = await buildServerConfig(serverConfig.id, serverConfig)
       tempClient = new MultiServerMCPClient({ [serverConfig.id]: cfg }, { signal: controller.signal })
 
       if (controller.signal.aborted) {
@@ -586,7 +777,7 @@ export async function connectAndInvokeTool(id, config, toolName, toolArgs, conte
   let tempClient = null
   const controller = new AbortController()
   try {
-    const serverConfig = buildServerConfig(id, config)
+    const serverConfig = await buildServerConfig(id, config)
     tempClient = new MultiServerMCPClient({ [id]: serverConfig }, { signal: controller.signal })
 
     const tools = await tempClient.getTools()
@@ -605,6 +796,13 @@ export async function connectAndInvokeTool(id, config, toolName, toolArgs, conte
     const toolTimeoutMs = normalizeMcpTimeoutSeconds(config?.timeoutSeconds) * 1000
     return await targetTool.call(toolArgs, { signal: controller.signal, timeout: toolTimeoutMs })
   } catch (error) {
+    if (error?.needsReauth) throw error
+    if (config.auth && config.auth.type === 'oauth' && oauthProvider.isUnauthorizedError(error)) {
+      const needsReauth = new Error(`OAuth authorization required for ${id}`)
+      needsReauth.needsReauth = true
+      needsReauth.cause = error
+      throw needsReauth
+    }
     console.error(`[MCP] Error invoking tool ${toolName} on ${id}:`, error)
     throw error
   } finally {
@@ -621,6 +819,28 @@ export async function connectAndInvokeTool(id, config, toolName, toolArgs, conte
     }
   }
 }
+
+export async function refreshMcpOAuth(serverId, serverConfig = {}) {
+  await oauthProvider.refreshOAuthTokens(serverId, serverConfig || {})
+  return await getMcpAuthStatus(serverId, serverConfig || {})
+}
+
+export async function logoutMcpOAuth(serverId) {
+  await oauthStore.clearTokens(serverId)
+  await oauthStore.clearCodeVerifier(serverId)
+  return { success: true }
+}
+
+export async function saveMcpOAuthManualClient(serverId, clientId, clientSecret = '') {
+  if (!serverId) throw new Error('serverId is required')
+  if (!clientId) throw new Error('clientId is required')
+  await oauthStore.saveClientInfo(serverId, {
+    client_id: clientId,
+    client_secret: clientSecret || undefined
+  })
+  return { success: true }
+}
+
 
 export async function closeMcpClient(options = {}) {
   const sessionKey = getSessionKey(typeof options === 'string' ? options : options?.sessionKey)

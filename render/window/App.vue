@@ -1464,6 +1464,19 @@ const expandedMcpServers = ref(new Set());
 
 const lastAppliedMcpConfigFingerprint = ref('');
 
+const stableComparableValue = (value) => {
+  if (Array.isArray(value)) return value.map(stableComparableValue);
+  if (value && typeof value === 'object') {
+    return Object.keys(value).sort().reduce((acc, key) => {
+      const item = stableComparableValue(value[key]);
+      if (item !== undefined) acc[key] = item;
+      return acc;
+    }, {});
+  }
+  return value;
+};
+
+
 const buildComparableMcpServerConfig = (server = {}) => ({
   type: server?.type || '',
   command: server?.command || '',
@@ -1475,6 +1488,7 @@ const buildComparableMcpServerConfig = (server = {}) => ({
   headers: server?.headers && typeof server.headers === 'object'
     ? Object.entries(server.headers).sort(([a], [b]) => String(a).localeCompare(String(b)))
     : [],
+  auth: stableComparableValue(server?.auth || null),
   isPersistent: Boolean(server?.isPersistent),
   timeoutSeconds: Number(server?.timeoutSeconds) || 120
 });
@@ -1567,6 +1581,7 @@ const refreshSelectedMcpServers = async () => {
       baseUrl: serverConf.baseUrl,
       env: serverConf.env,
       headers: serverConf.headers,
+      auth: serverConf.auth,
       args: serverConf.args,
       timeoutSeconds: serverConf.timeoutSeconds
     };
@@ -6065,6 +6080,7 @@ async function applyMcpTools(show_none = true, reason = 'unknown') {
         url: serverConf.baseUrl,
         env: serverConf.env,
         headers: serverConf.headers,
+        auth: serverConf.auth,
         isPersistent: serverConf.isPersistent,
         currentAgentName: CODE.value || '',
         toolCacheOverride: effectiveToolCache[id] || undefined,

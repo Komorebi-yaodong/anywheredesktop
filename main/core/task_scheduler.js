@@ -1,9 +1,10 @@
 import { runTaskById } from './task_runner.js'
 
 const CHECK_INTERVAL_MS = 1000
+const PROCESSED_SLOT_TTL_MS = 48 * 60 * 60 * 1000
 let schedulerTimer = null
-let lastCheckMinute = Math.floor(Date.now() / 60000)
 let isChecking = false
+const processedRunSlots = new Map()
 
 function parseTimeToParts(value) {
   if (typeof value !== 'string') return null
@@ -40,20 +41,41 @@ function isWithinIntervalRanges(task, nowDate) {
   })
 }
 
-function shouldTriggerTask(task, now, nowDate) {
-  if (!task || typeof task !== 'object' || !task.enabled) return false
+function buildRunSlotKey(taskId, task, nowDate) {
+  return `${taskId}:${task.triggerType}:${formatYmd(nowDate)}:${formatHhMm(nowDate)}`
+}
 
-  const lastRun = Number(task.lastRunTime || 0)
-  const safeCooldown = now - lastRun > 60000
+function isTimestampInCurrentSlot(timestamp, nowDate) {
+  const numericTimestamp = Number(timestamp || 0)
+  if (!Number.isFinite(numericTimestamp) || numericTimestamp <= 0) return false
+  const date = new Date(numericTimestamp)
+  return formatYmd(date) === formatYmd(nowDate) && formatHhMm(date) === formatHhMm(nowDate)
+}
+
+function pruneProcessedRunSlots(now = Date.now()) {
+  for (const [slotKey, timestamp] of processedRunSlots.entries()) {
+    if (now - timestamp > PROCESSED_SLOT_TTL_MS) {
+      processedRunSlots.delete(slotKey)
+    }
+  }
+}
+
+function getDueRunSlotKey(taskId, task, now, nowDate) {
+  if (!task || typeof task !== 'object' || !task.enabled) return null
+
   const currentH = nowDate.getHours()
   const currentM = nowDate.getMinutes()
+  const slotKey = buildRunSlotKey(taskId, task, nowDate)
+
+  if (processedRunSlots.has(slotKey) || task.lastRunSlotKey === slotKey) return null
+  if (isTimestampInCurrentSlot(task.lastRunTime, nowDate)) return null
 
   if (task.triggerType === 'interval') {
     let shouldTrigger = false
 
     if (task.intervalStartTime) {
       const parsedStart = parseTimeToParts(task.intervalStartTime)
-      if (!parsedStart) return false
+      if (!parsedStart) return null
 
       const currentTotalMins = currentH * 60 + currentM
       const startTotalMins = parsedStart.hours * 60 + parsedStart.minutes
@@ -61,63 +83,48 @@ function shouldTriggerTask(task, now, nowDate) {
 
       if (currentTotalMins >= startTotalMins) {
         const diffMins = currentTotalMins - startTotalMins
-        if (diffMins % intervalMins === 0 && safeCooldown) {
-          shouldTrigger = true
-        }
+        shouldTrigger = diffMins % intervalMins === 0
       }
     } else {
+      const lastRun = Number(task.lastRunTime || 0)
       const intervalMs = Math.max(Number(task.intervalMinutes || 1), 1) * 60000
-      if (now - lastRun >= intervalMs) {
-        shouldTrigger = true
-      }
+      shouldTrigger = now - lastRun >= intervalMs
     }
 
-    return shouldTrigger && isWithinIntervalRanges(task, nowDate)
+    return shouldTrigger && isWithinIntervalRanges(task, nowDate) ? slotKey : null
   }
 
   if (task.triggerType === 'daily' && task.dailyTime) {
     const parsed = parseTimeToParts(task.dailyTime)
-    return Boolean(parsed && currentH === parsed.hours && currentM === parsed.minutes && safeCooldown)
+    return parsed && currentH === parsed.hours && currentM === parsed.minutes ? slotKey : null
   }
 
   if (task.triggerType === 'weekly' && task.weeklyTime && Array.isArray(task.weeklyDays)) {
     const parsed = parseTimeToParts(task.weeklyTime)
     const currentDay = nowDate.getDay()
-    return Boolean(
-      parsed &&
-        task.weeklyDays.includes(currentDay) &&
-        currentH === parsed.hours &&
-        currentM === parsed.minutes &&
-        safeCooldown
-    )
+    return parsed && task.weeklyDays.includes(currentDay) && currentH === parsed.hours && currentM === parsed.minutes
+      ? slotKey
+      : null
   }
 
   if (task.triggerType === 'monthly' && task.monthlyTime) {
     const parsed = parseTimeToParts(task.monthlyTime)
     const currentMonthDay = nowDate.getDate()
     const validDays = Array.isArray(task.monthlyDays) ? task.monthlyDays : []
-    return Boolean(
-      parsed &&
-        validDays.includes(currentMonthDay) &&
-        currentH === parsed.hours &&
-        currentM === parsed.minutes &&
-        safeCooldown
-    )
+    return parsed && validDays.includes(currentMonthDay) && currentH === parsed.hours && currentM === parsed.minutes
+      ? slotKey
+      : null
   }
 
   if (task.triggerType === 'single' && task.singleDate && task.singleTime) {
     const parsed = parseTimeToParts(task.singleTime)
     const currentYmd = formatYmd(nowDate)
-    return Boolean(
-      parsed &&
-        currentYmd === task.singleDate &&
-        currentH === parsed.hours &&
-        currentM === parsed.minutes &&
-        safeCooldown
-    )
+    return parsed && currentYmd === task.singleDate && currentH === parsed.hours && currentM === parsed.minutes
+      ? slotKey
+      : null
   }
 
-  return false
+  return null
 }
 
 async function checkTasks({ dataApi, openWindow } = {}) {
@@ -125,29 +132,33 @@ async function checkTasks({ dataApi, openWindow } = {}) {
   isChecking = true
 
   try {
-    const currentMinute = Math.floor(Date.now() / 60000)
-    if (currentMinute <= lastCheckMinute) return
-    lastCheckMinute = currentMinute
-
     const configResult = await dataApi.getConfig()
     const config = configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
     const tasks = config?.tasks && typeof config.tasks === 'object' ? config.tasks : {}
-    const now = Date.now()
-    const nowDate = new Date(now)
     let needsUpdate = false
 
     for (const taskId of Object.keys(tasks)) {
+      const now = Date.now()
+      const nowDate = new Date(now)
       const task = tasks[taskId]
-      if (!shouldTriggerTask(task, now, nowDate)) continue
-
-      task.lastRunTime = now
-      if (task.triggerType === 'single') {
-        task.enabled = false
-      }
-      needsUpdate = true
+      const slotKey = getDueRunSlotKey(taskId, task, now, nowDate)
+      if (!slotKey) continue
 
       try {
-        await runTaskById({ taskId, dataApi, openWindow })
+        const runResult = await runTaskById({ taskId, dataApi, openWindow })
+        if (!runResult?.success) {
+          console.warn(`[Task Scheduler] task ${taskId} due but window did not open:`, runResult)
+          continue
+        }
+
+        const completedAt = Date.now()
+        task.lastRunTime = completedAt
+        task.lastRunSlotKey = slotKey
+        if (task.triggerType === 'single') {
+          task.enabled = false
+        }
+        processedRunSlots.set(slotKey, completedAt)
+        needsUpdate = true
       } catch (error) {
         console.error(`[Task Scheduler] failed to run task ${taskId}:`, error)
       }
@@ -159,6 +170,7 @@ async function checkTasks({ dataApi, openWindow } = {}) {
   } catch (error) {
     console.error('[Task Scheduler] check failed:', error)
   } finally {
+    pruneProcessedRunSlots()
     isChecking = false
   }
 }
@@ -188,11 +200,12 @@ export function startTaskScheduler({ dataApi, openWindow } = {}) {
     }
   }
 
-  lastCheckMinute = Math.floor(Date.now() / 60000)
   schedulerTimer = setInterval(() => {
     void checkTasks({ dataApi, openWindow })
   }, CHECK_INTERVAL_MS)
   schedulerTimer.unref?.()
+
+  void checkTasks({ dataApi, openWindow })
 
   console.info('[Task Scheduler] started')
   return {
@@ -207,10 +220,11 @@ export function stopTaskScheduler() {
     schedulerTimer = null
   }
   isChecking = false
+  processedRunSlots.clear()
 }
 
 export const __taskSchedulerInternals = {
-  shouldTriggerTask,
+  getDueRunSlotKey,
   parseTimeToParts,
   formatYmd,
   formatHhMm

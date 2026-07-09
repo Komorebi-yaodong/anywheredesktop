@@ -473,8 +473,7 @@ const formatToolArgs = (argsString) => {
   }
 };
 
-const preprocessKatex = (text) => {
-  if (!text) return '';
+const preprocessKatexPlainText = (text) => {
   let processedText = text;
 
   // 1. 替换非标准连字符
@@ -504,6 +503,35 @@ const preprocessKatex = (text) => {
       return `$${p2}$`;
     }
     return match;
+  });
+
+  return processedText;
+};
+
+const preprocessKatex = (text) => {
+  if (!text) return '';
+
+  const protectedMap = new Map();
+  let placeholderIndex = 0;
+  const addPlaceholder = (segment) => {
+    const placeholder = `\uE000KATEX_PROTECTED_${placeholderIndex++}\uE001`;
+    protectedMap.set(placeholder, segment);
+    return placeholder;
+  };
+
+  // KaTeX 兼容预处理只能作用于普通 Markdown 文本。
+  // 代码围栏与行内代码中的反斜杠/方括号是代码语义，例如 Bash 正则 ^\[bot\]，不能被转换成 $$bot$$。
+  let protectedText = text.replace(/(^|\n)([ \t]*)(`{3,}|~{3,})([^\n]*)\n[\s\S]*?(?:\n[ \t]*\3[ \t]*(?=\n|$)|$)/g, (match) => {
+    return addPlaceholder(match);
+  });
+
+  protectedText = protectedText.replace(/(`+)([^`\n]*?)\1/g, (match) => {
+    return addPlaceholder(match);
+  });
+
+  let processedText = preprocessKatexPlainText(protectedText);
+  protectedMap.forEach((segment, placeholder) => {
+    processedText = processedText.replaceAll(placeholder, segment);
   });
 
   return processedText;

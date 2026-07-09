@@ -37,6 +37,9 @@ electronAPI.ipcRenderer.on('window:init', (_event, data = {}) => {
 })
 
 const api = {
+  platform: process.platform,
+  arch: process.arch,
+
   appWindowType: defaultWindowType,
   openWindow: (type, payload = null) => electronAPI.ipcRenderer.invoke('window:open', type, payload),
   showMainWindow: () => electronAPI.ipcRenderer.invoke('window:showMain'),
@@ -65,6 +68,10 @@ const api = {
   
   getAppVersion: () => invokeOrThrow('app:getVersion'),
   checkLatestVersion: () => electronAPI.ipcRenderer.invoke('app:checkLatestVersion'),
+  getAppUpdateStatus: () => electronAPI.ipcRenderer.invoke('app:update:getStatus'),
+  startAppUpdate: () => electronAPI.ipcRenderer.invoke('app:update:start'),
+  installAppUpdate: () => electronAPI.ipcRenderer.invoke('app:update:install'),
+
 
 getDroppedFilePath: (file) => {
     try {

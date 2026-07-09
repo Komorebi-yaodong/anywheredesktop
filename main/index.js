@@ -52,6 +52,8 @@ import * as chatApi from './core/chat.js'
 import * as mcpApi from './core/mcp.js'
 import * as skillApi from './core/skill.js'
 import * as screenshotApi from './core/screenshot.js'
+import * as updaterApi from './core/updater.js'
+
 import { installRequestHeaderBridge } from './core/net.js'
 import { startTaskScheduler } from './core/task_scheduler.js'
 
@@ -700,6 +702,8 @@ app.whenReady().then(async () => {
     chatApi,
     mcpApi,
     skillApi,
+    updaterApi,
+
     minimizeWindow,
     maximizeOrRestoreWindow,
     closeWindow,

@@ -119,6 +119,8 @@ export function registerIpcHandlers({
   chatApi,
   mcpApi,
   skillApi,
+  updaterApi,
+
   minimizeWindow,
   maximizeOrRestoreWindow,
   closeWindow,
@@ -448,6 +450,28 @@ export function registerIpcHandlers({
       }
     }
   })
+
+  handleInvoke('app:update:getStatus', async () => {
+    if (!updaterApi || typeof updaterApi.getUpdateStatus !== 'function') {
+      return { ok: false, message: 'updater_unavailable' }
+    }
+    return updaterApi.getUpdateStatus()
+  })
+
+  handleInvoke('app:update:start', async () => {
+    if (!updaterApi || typeof updaterApi.startAppUpdate !== 'function') {
+      return { ok: false, message: 'updater_unavailable' }
+    }
+    return updaterApi.startAppUpdate()
+  })
+
+  handleInvoke('app:update:install', async () => {
+    if (!updaterApi || typeof updaterApi.installDownloadedUpdate !== 'function') {
+      return { ok: false, message: 'updater_unavailable' }
+    }
+    return updaterApi.installDownloadedUpdate()
+  })
+
 
 
 handleInvoke('data:getUser', async () => {

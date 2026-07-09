@@ -44,14 +44,14 @@
     },
     "about": {
       "title": "About Anywhere",
-      "author": "I'm Komo. I hope Anywhere can bring you more convenience in the Agent era. If you find bugs or have feedback, you are welcome to send feedback.",
+      "author": "I'm Komo. I hope Anywhere can bring you more convenience in the Agent era. If you find bugs, you are welcome to send feedback.",
       "qq": "QQ Group: 1065512489",
-      "clientGithub": "Desktop GitHub",
-      "clientGitee": "Desktop Gitee",
-      "pluginGithub": "Plugin GitHub",
-      "pluginGitee": "Plugin Gitee",
-      "docGithub": "Docs GitHub",
-      "docGitee": "Docs Gitee"
+      "clientGithub": "Desktop",
+      "clientGitee": "Desktop",
+      "pluginGithub": "Plugin",
+      "pluginGitee": "Plugin",
+      "docGithub": "Docs",
+      "docGitee": "Docs"
     },
 
 "quickStart": {

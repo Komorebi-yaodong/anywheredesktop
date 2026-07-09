@@ -11,7 +11,7 @@ import Skills from './components/Skills.vue'
 import { useI18n } from 'vue-i18n'
 import { Collection, Bell, Document } from '@element-plus/icons-vue'
 import { marked } from 'marked';
-import { ElBadge } from 'element-plus'; // 确保引入 ElBadge
+import { ElBadge, ElMessage, ElMessageBox } from 'element-plus'; // 确保引入 ElBadge
 
 const { t, locale } = useI18n()
 const tab = ref(0);
@@ -240,6 +240,18 @@ const versionInfo = ref({
   checkFailed: false
 });
 
+const isAppUpdating = ref(false);
+const appUpdateProgressText = ref('');
+
+const getCurrentPlatformLabel = () => {
+  const platform = String(window.api?.platform || '').toLowerCase();
+  if (platform === 'win32') return 'Windows';
+  if (platform === 'darwin') return 'macOS';
+  if (platform === 'linux') return 'Linux';
+  return '当前系统';
+};
+
+
 const docVersionText = computed(() => {
   const current = versionInfo.value?.currentVersion ? `v${versionInfo.value.currentVersion}` : '';
   if (!current) return '';
@@ -266,19 +278,91 @@ const docVersionTooltip = computed(() => {
 
 
 const getReleasePageUrl = () => {
-  if (versionInfo.value?.source === 'gitee') {
-    return 'https://gitee.com/Komorebi-yaodong/anywheredesktop/releases';
-  }
   return 'https://github.com/Komorebi-yaodong/anywheredesktop/releases';
 };
 
-const openReleasePage = () => {
-  const targetUrl = getReleasePageUrl();
-  if (window.api && window.api.shellOpenExternal) {
-    window.api.shellOpenExternal(targetUrl);
+const openReleasePage = async () => {
+  if (isAppUpdating.value) {
+    ElMessage.info(appUpdateProgressText.value || '正在检查或下载更新，请稍候...');
     return;
   }
-  window.open(targetUrl, '_blank');
+
+  const platformLabel = getCurrentPlatformLabel();
+  try {
+    await ElMessageBox.confirm(
+      `将通过 GitHub Releases 为 ${platformLabel} 检查并下载对应安装包。安装过程中软件可能会自动退出并重启，是否继续？`,
+      '自动更新提示',
+      {
+        confirmButtonText: '继续更新',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    );
+  } catch {
+    return;
+  }
+
+  isAppUpdating.value = true;
+  appUpdateProgressText.value = '正在连接 GitHub 检查更新...';
+  const loadingMessage = ElMessage({
+    type: 'info',
+    message: appUpdateProgressText.value,
+    duration: 0,
+    showClose: true
+  });
+
+  try {
+    const result = await window.api?.startAppUpdate?.();
+    loadingMessage.close();
+
+    if (!result?.ok) {
+      const fallbackMessage = result?.reason === 'not_packaged' || result?.reason === 'linux_not_appimage'
+        ? `${result.message || '当前运行环境不支持自动更新'}，将打开 GitHub Releases 页面。`
+        : '连接失败，无法访问 GitHub 或下载更新。请确认网络可访问 GitHub Releases。';
+      ElMessage.error(fallbackMessage);
+      if (result?.reason === 'not_packaged' || result?.reason === 'linux_not_appimage') {
+        const targetUrl = getReleasePageUrl();
+        if (window.api && window.api.shellOpenExternal) {
+          await window.api.shellOpenExternal(targetUrl);
+        } else {
+          window.open(targetUrl, '_blank');
+        }
+      }
+      return;
+    }
+
+    if (result.state === 'not-available') {
+      ElMessage.success(result.message || '当前已是最新版本。');
+      return;
+    }
+
+    if (result.state === 'downloaded') {
+      try {
+        await ElMessageBox.confirm(
+          '更新已下载完成。点击“立即安装”后软件会退出并安装新版本。',
+          '准备安装更新',
+          {
+            confirmButtonText: '立即安装',
+            cancelButtonText: '稍后',
+            type: 'success'
+          }
+        );
+        await window.api?.installAppUpdate?.();
+      } catch {
+        ElMessage.info('已下载更新，将在你稍后重新触发安装时继续。');
+      }
+      return;
+    }
+
+    ElMessage.success(result.message || '更新流程已启动。');
+  } catch (error) {
+    loadingMessage.close();
+    console.warn('Failed to start app update:', error);
+    ElMessage.error('连接失败，无法访问 GitHub 或启动自动更新。');
+  } finally {
+    isAppUpdating.value = false;
+    appUpdateProgressText.value = '';
+  }
 };
 
 const fetchVersionInfo = async () => {

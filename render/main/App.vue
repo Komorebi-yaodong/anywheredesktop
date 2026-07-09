@@ -11,6 +11,7 @@ import Skills from './components/Skills.vue'
 import { useI18n } from 'vue-i18n'
 import { Collection, Bell, Document } from '@element-plus/icons-vue'
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { ElBadge, ElMessage, ElMessageBox } from 'element-plus'; // 确保引入 ElBadge
 
 const { t, locale } = useI18n()
@@ -151,7 +152,7 @@ watch(
   () => [config.value?.themeMode, config.value?.isDarkMode],
   () => {
     if (!config.value) return;
-    applyDocumentTheme(resolveDocumentDarkMode(config.value));
+    applyDocumentTheme(resolveDocumentDarkMode(config.value));
   },
   { deep: true }
 );
@@ -237,11 +238,14 @@ const versionInfo = ref({
   hasUpdate: false,
   source: '',
   checkedUrl: '',
+  releaseNotes: '',
   checkFailed: false
 });
 
 const isAppUpdating = ref(false);
 const appUpdateProgressText = ref('');
+const VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+let versionCheckTimer = null;
 
 const getCurrentPlatformLabel = () => {
   const platform = String(window.api?.platform || '').toLowerCase();
@@ -281,91 +285,77 @@ const getReleasePageUrl = () => {
   return 'https://github.com/Komorebi-yaodong/anywheredesktop/releases';
 };
 
-const openReleasePage = async () => {
-  if (isAppUpdating.value) {
-    ElMessage.info(appUpdateProgressText.value || '正在检查或下载更新，请稍候...');
-    return;
-  }
-
-  const platformLabel = getCurrentPlatformLabel();
-  try {
-    await ElMessageBox.confirm(
-      `将通过 GitHub Releases 为 ${platformLabel} 检查并下载对应安装包。安装过程中软件可能会自动退出并重启，是否继续？`,
-      '自动更新提示',
-      {
-        confirmButtonText: '继续更新',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    );
-  } catch {
-    return;
-  }
-
-  isAppUpdating.value = true;
-  appUpdateProgressText.value = '正在连接 GitHub 检查更新...';
-  const loadingMessage = ElMessage({
-    type: 'info',
-    message: appUpdateProgressText.value,
-    duration: 0,
-    showClose: true
-  });
-
-  try {
-    const result = await window.api?.startAppUpdate?.();
-    loadingMessage.close();
-
-    if (!result?.ok) {
-      const fallbackMessage = result?.reason === 'not_packaged' || result?.reason === 'linux_not_appimage'
-        ? `${result.message || '当前运行环境不支持自动更新'}，将打开 GitHub Releases 页面。`
-        : '连接失败，无法访问 GitHub 或下载更新。请确认网络可访问 GitHub Releases。';
-      ElMessage.error(fallbackMessage);
-      if (result?.reason === 'not_packaged' || result?.reason === 'linux_not_appimage') {
-        const targetUrl = getReleasePageUrl();
-        if (window.api && window.api.shellOpenExternal) {
-          await window.api.shellOpenExternal(targetUrl);
-        } else {
-          window.open(targetUrl, '_blank');
-        }
-      }
-      return;
-    }
-
-    if (result.state === 'not-available') {
-      ElMessage.success(result.message || '当前已是最新版本。');
-      return;
-    }
-
-    if (result.state === 'downloaded') {
-      try {
-        await ElMessageBox.confirm(
-          '更新已下载完成。点击“立即安装”后软件会退出并安装新版本。',
-          '准备安装更新',
-          {
-            confirmButtonText: '立即安装',
-            cancelButtonText: '稍后',
-            type: 'success'
-          }
-        );
-        await window.api?.installAppUpdate?.();
-      } catch {
-        ElMessage.info('已下载更新，将在你稍后重新触发安装时继续。');
-      }
-      return;
-    }
-
-    ElMessage.success(result.message || '更新流程已启动。');
-  } catch (error) {
-    loadingMessage.close();
-    console.warn('Failed to start app update:', error);
-    ElMessage.error('连接失败，无法访问 GitHub 或启动自动更新。');
-  } finally {
-    isAppUpdating.value = false;
-    appUpdateProgressText.value = '';
-  }
+const normalizeReleaseNotes = (notes = '') => {
+  const normalized = String(notes || '').trim();
+  return normalized || '该版本未提供更新说明。';
 };
 
-const fetchVersionInfo = async () => {
+const sanitizeReleaseNotesHtml = (html = '') => DOMPurify.sanitize(html, {
+  USE_PROFILES: { html: true },
+  ALLOWED_TAGS: [
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'p', 'br', 'hr', 'ul', 'ol', 'li',
+    'strong', 'b', 'em', 'i', 'u', 's',
+    'code', 'pre', 'blockquote', 'a', 'span'
+  ],
+  ALLOWED_ATTR: ['href', 'title', 'target', 'rel'],
+  FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form', 'input', 'button'],
+  FORBID_ATTR: ['style', 'class', 'id', 'onerror', 'onload', 'onclick', 'onmouseover'],
+  ALLOW_DATA_ATTR: false
+});
+
+const buildReleaseNotesHtml = (notes = '') => {
+  const normalized = normalizeReleaseNotes(notes);
+  const rawHtml = marked.parse(normalized, { breaks: true, gfm: true });
+  const safeHtml = sanitizeReleaseNotesHtml(rawHtml);
+
+  return `
+    <div class="app-update-release-notes">
+      ${safeHtml || '<p>该版本未提供更新说明。</p>'}
+    </div>
+  `;
+};
+
+const applyVersionInfoFromUpdateResult = (result = {}, fallbackCurrentVersion = '') => {
+  const currentVersion = typeof result?.currentVersion === 'string' && result.currentVersion.trim()
+    ? result.currentVersion.trim()
+    : fallbackCurrentVersion;
+  const latestVersion = typeof result?.latestVersion === 'string'
+    ? result.latestVersion.trim()
+    : (typeof result?.info?.version === 'string' ? result.info.version.trim() : '');
+  const hasUpdate = Boolean(result?.hasUpdate) || result?.state === 'available' || result?.state === 'downloaded' || result?.state === 'downloading';
+
+  versionInfo.value = {
+    ...versionInfo.value,
+    currentVersion,
+    latestVersion: hasUpdate ? latestVersion : '',
+    hasUpdate,
+    source: 'github',
+    checkedUrl: getReleasePageUrl(),
+    releaseNotes: typeof result?.info?.releaseNotes === 'string' ? result.info.releaseNotes : '',
+    checkFailed: false
+  };
+};
+
+const fetchLegacyPackageVersionInfo = async (currentVersion = '') => {
+  const latestResult = await window.api.checkLatestVersion();
+  if (latestResult?.ok) {
+    versionInfo.value = {
+      ...versionInfo.value,
+      currentVersion,
+      latestVersion: typeof latestResult?.latestVersion === 'string' ? latestResult.latestVersion.trim() : '',
+      hasUpdate: Boolean(latestResult?.hasUpdate),
+      source: typeof latestResult?.source === 'string' ? latestResult.source : '',
+      checkedUrl: typeof latestResult?.checkedUrl === 'string' ? latestResult.checkedUrl : '',
+      releaseNotes: '',
+      checkFailed: false
+    };
+    return { ok: true, ...versionInfo.value };
+  }
+  return latestResult;
+};
+
+const fetchVersionInfo = async ({ notify = false } = {}) => {
   try {
     const currentResult = await window.api.getAppVersion();
     const currentVersion = typeof currentResult?.version === 'string' ? currentResult.version.trim() : '';
@@ -375,28 +365,27 @@ const fetchVersionInfo = async () => {
       checkFailed: false
     };
 
-    const latestResult = await window.api.checkLatestVersion();
-    if (latestResult?.ok) {
-      versionInfo.value = {
-        currentVersion,
-        latestVersion: typeof latestResult?.latestVersion === 'string' ? latestResult.latestVersion.trim() : '',
-        hasUpdate: Boolean(latestResult?.hasUpdate),
-        source: typeof latestResult?.source === 'string' ? latestResult.source : '',
-        checkedUrl: typeof latestResult?.checkedUrl === 'string' ? latestResult.checkedUrl : '',
-        checkFailed: false
-      };
-      return;
+    if (window.api?.checkAppUpdate) {
+      const updateResult = await window.api.checkAppUpdate();
+      if (updateResult?.ok) {
+        applyVersionInfoFromUpdateResult(updateResult, currentVersion);
+        if (notify && !updateResult.hasUpdate) ElMessage.success(updateResult.message || '当前已是最新版本。');
+        return updateResult;
+      }
+
+      if (updateResult?.reason !== 'not_packaged' && updateResult?.reason !== 'linux_not_appimage') {
+        versionInfo.value = {
+          ...versionInfo.value,
+          checkFailed: true
+        };
+        if (notify) ElMessage.error(updateResult?.message || '无法访问 GitHub 或检查更新失败。');
+        return updateResult;
+      }
     }
 
-    versionInfo.value = {
-      ...versionInfo.value,
-      currentVersion,
-      latestVersion: '',
-      hasUpdate: false,
-      source: '',
-      checkedUrl: '',
-      checkFailed: true
-    };
+    const legacyResult = await fetchLegacyPackageVersionInfo(currentVersion);
+    if (notify && legacyResult?.ok && !legacyResult?.hasUpdate) ElMessage.success('当前已是最新版本。');
+    return legacyResult;
   } catch (error) {
     console.warn('Failed to fetch version info:', error);
     versionInfo.value = {
@@ -405,11 +394,95 @@ const fetchVersionInfo = async () => {
       hasUpdate: false,
       source: '',
       checkedUrl: '',
+      releaseNotes: '',
       checkFailed: true
     };
+    if (notify) ElMessage.error('无法访问 GitHub 或检查更新失败。');
+    return { ok: false, message: error?.message || String(error) };
   }
 };
 
+const openReleasePage = async () => {
+  if (isAppUpdating.value) {
+    ElMessage.info(appUpdateProgressText.value || '正在检查或下载更新，请稍候...');
+    return;
+  }
+
+  isAppUpdating.value = true;
+  appUpdateProgressText.value = '正在连接 GitHub 检查更新...';
+  const checkingMessage = ElMessage({
+    type: 'info',
+    message: appUpdateProgressText.value,
+    duration: 0,
+    showClose: true
+  });
+
+  try {
+    const checkResult = await fetchVersionInfo({ notify: false });
+    checkingMessage.close();
+
+    if (!checkResult?.ok) {
+      ElMessage.error(checkResult?.message || '连接失败，无法访问 GitHub 或检查更新。');
+      return;
+    }
+
+    if (!checkResult?.hasUpdate) {
+      ElMessage.success(checkResult?.message || '当前已是最新版本。');
+      return;
+    }
+
+    const latestVersion = checkResult.latestVersion || checkResult.info?.version || versionInfo.value.latestVersion;
+    const platformLabel = getCurrentPlatformLabel();
+    try {
+      await ElMessageBox.confirm(
+        buildReleaseNotesHtml(checkResult.info?.releaseNotes || versionInfo.value.releaseNotes),
+        `发现新版本 v${latestVersion}`,
+        {
+          confirmButtonText: '确认更新',
+          cancelButtonText: '稍后',
+          type: 'warning',
+          dangerouslyUseHTMLString: true,
+          customClass: 'app-update-message-box',
+          beforeClose: (action, instance, done) => {
+            if (action === 'confirm') {
+              instance.confirmButtonLoading = true;
+              instance.confirmButtonText = `将下载 ${platformLabel} 安装包...`;
+            }
+            done();
+          }
+        }
+      );
+    } catch {
+      return;
+    }
+
+    appUpdateProgressText.value = '正在从 GitHub 下载更新...';
+    const loadingMessage = ElMessage({
+      type: 'info',
+      message: appUpdateProgressText.value,
+      duration: 0,
+      showClose: true
+    });
+
+    const downloadResult = await window.api?.downloadAppUpdate?.();
+    loadingMessage.close();
+
+    if (!downloadResult?.ok) {
+      ElMessage.error(downloadResult?.message || '连接失败，无法访问 GitHub 或下载更新。');
+      return;
+    }
+
+    ElMessage.success('更新下载完成，正在退出并安装。');
+    await window.api?.installAppUpdate?.();
+  } catch (error) {
+    checkingMessage.close();
+    console.warn('Failed to start app update:', error);
+    ElMessage.error('连接失败，无法访问 GitHub 或启动自动更新。');
+  } finally {
+    isAppUpdating.value = false;
+    appUpdateProgressText.value = '';
+  }
+};
 
 const escapeHtml = (value = '') => String(value)
   .replace(/&/g, '&amp;')
@@ -594,7 +667,7 @@ const fetchAllDocsMetadata = async () => {
 
     try {
       const { text } = await fetchWithFallback(`docs/${doc.file}`);
-      
+
       const match = text.match(dateRegex);
       if (match) {
         // 转换为兼容格式 YYYY/MM/DD 00:00:00
@@ -644,8 +717,8 @@ const fetchAndParseDoc = async (filename) => {
     let text = rawText;
 
     // 根据数据源决定图片的 Base URL
-    const imgBaseUrl = source === 'gitee' 
-      ? `${GITEE_BASE}image/` 
+    const imgBaseUrl = source === 'gitee'
+      ? `${GITEE_BASE}image/`
       : `${GITHUB_BASE}image/`;
 
     // 图片路径修正逻辑
@@ -689,9 +762,9 @@ const checkDocHasUpdate = (index) => {
   return updateTime > readTime;
 };
 
-// 检查是否有任意文档更新（用于铃铛图标）
+// 检查是否有任意文档或应用版本更新（用于铃铛图标）
 const hasAnyUpdate = computed(() => {
-  return docList.value.some((_, index) => checkDocHasUpdate(index));
+  return Boolean(versionInfo.value?.hasUpdate) || docList.value.some((_, index) => checkDocHasUpdate(index));
 });
 
 // 标记文档为已读
@@ -789,6 +862,10 @@ onMounted(async () => {
   // 异步获取文档更新时间，获取后会自动更新UI红点
   fetchAllDocsMetadata();
   fetchVersionInfo();
+  window.api?.clearAppUpdateCache?.().catch?.(() => {});
+  versionCheckTimer = window.setInterval(() => {
+    fetchVersionInfo();
+  }, VERSION_CHECK_INTERVAL_MS);
 
   window.addEventListener('local-config-updated', (event) => {
     const newConfig = event.detail;
@@ -801,7 +878,7 @@ onMounted(async () => {
   mediaQuery.addEventListener('change', handleSystemThemeChange);
   try {
     const result = await window.api.getConfig();
-    config.value = normalizeConfigPayload(result);
+    config.value = normalizeConfigPayload(result);
 
 
     if (config.value.themeMode === 'system') {
@@ -828,6 +905,10 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  if (versionCheckTimer) {
+    window.clearInterval(versionCheckTimer);
+    versionCheckTimer = null;
+  }
   window.removeEventListener('keydown', handleGlobalEsc, true);
   mediaQuery.removeEventListener('change', handleSystemThemeChange);
 });
@@ -1743,4 +1824,100 @@ html.dark .markdown-body :deep(.quick-start-custom-card) {
   margin-right: 0;
   border-bottom: 1px solid var(--border-primary);
 }
+
+:global(.app-update-message-box) {
+  width: min(560px, calc(100vw - 48px));
+}
+
+:global(.app-update-message-box .el-message-box__content) {
+  align-items: flex-start;
+}
+
+:global(.app-update-message-box .el-message-box__message) {
+  width: 100%;
+}
+
+:global(.app-update-release-notes) {
+  max-height: 360px;
+  overflow: auto;
+  padding: 2px 8px 2px 0;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  line-height: 1.7;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+:global(.app-update-release-notes h1),
+:global(.app-update-release-notes h2),
+:global(.app-update-release-notes h3),
+:global(.app-update-release-notes h4),
+:global(.app-update-release-notes h5),
+:global(.app-update-release-notes h6) {
+  margin: 0 0 10px;
+  color: var(--el-text-color-primary);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+:global(.app-update-release-notes h1) {
+  font-size: 18px;
+}
+
+:global(.app-update-release-notes h2) {
+  font-size: 16px;
+}
+
+:global(.app-update-release-notes h3),
+:global(.app-update-release-notes h4),
+:global(.app-update-release-notes h5),
+:global(.app-update-release-notes h6) {
+  font-size: 15px;
+}
+
+:global(.app-update-release-notes p) {
+  margin: 0 0 10px;
+}
+
+:global(.app-update-release-notes ul),
+:global(.app-update-release-notes ol) {
+  margin: 6px 0 12px;
+  padding-left: 22px;
+}
+
+:global(.app-update-release-notes li) {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+
+:global(.app-update-release-notes code) {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--el-fill-color-light);
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.92em;
+}
+
+:global(.app-update-release-notes pre) {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+  overflow: auto;
+}
+
+:global(.app-update-release-notes pre code) {
+  padding: 0;
+  background: transparent;
+}
+
+:global(.app-update-release-notes a) {
+  color: var(--el-color-primary);
+  text-decoration: none;
+}
+
+:global(.app-update-release-notes a:hover) {
+  text-decoration: underline;
+}
+
 </style>

@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 
@@ -8,8 +10,11 @@ const GITHUB_UPDATE_FEED = {
   releaseType: 'release'
 }
 
+const UPDATE_CLEANUP_MARKER = 'updater-cleanup.json'
+
 let configured = false
-let activeUpdatePromise = null
+let activeCheckPromise = null
+let activeDownloadPromise = null
 let lastStatus = {
   state: 'idle',
   percent: 0,
@@ -55,7 +60,6 @@ function compareVersions(a = '', b = '') {
   return 0
 }
 
-
 function normalizeError(error) {
   const message = error?.message || String(error || 'unknown_error')
   return {
@@ -65,12 +69,29 @@ function normalizeError(error) {
   }
 }
 
+function normalizeReleaseNotes(releaseNotes = '') {
+  if (Array.isArray(releaseNotes)) {
+    return releaseNotes
+      .map((item) => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object') {
+          return [item.version ? `## ${item.version}` : '', item.note || item.notes || ''].filter(Boolean).join('\n\n')
+        }
+        return ''
+      })
+      .filter(Boolean)
+      .join('\n\n')
+  }
+  return typeof releaseNotes === 'string' ? releaseNotes : ''
+}
+
 function normalizeUpdateInfo(info = null) {
   if (!info || typeof info !== 'object') return null
   return {
     version: typeof info.version === 'string' ? info.version : '',
     releaseName: typeof info.releaseName === 'string' ? info.releaseName : '',
     releaseDate: typeof info.releaseDate === 'string' ? info.releaseDate : '',
+    releaseNotes: normalizeReleaseNotes(info.releaseNotes),
     files: Array.isArray(info.files)
       ? info.files.map((file) => ({
           url: typeof file?.url === 'string' ? file.url : '',
@@ -124,7 +145,7 @@ function configureAutoUpdater() {
   })
 
   autoUpdater.on('update-available', (info) => {
-    setStatus({ state: 'available', percent: 0, message: '发现新版本，准备下载...', info: normalizeUpdateInfo(info), error: null })
+    setStatus({ state: 'available', percent: 0, message: '发现新版本。', info: normalizeUpdateInfo(info), error: null })
   })
 
   autoUpdater.on('update-not-available', (info) => {
@@ -156,23 +177,59 @@ function configureAutoUpdater() {
   configured = true
 }
 
+function buildNotAvailableResult(updateInfo = null) {
+  const normalizedInfo = normalizeUpdateInfo(updateInfo) || updateInfo
+  setStatus({ state: 'not-available', percent: 0, message: '当前已是最新版本。', info: normalizedInfo, error: null })
+  return {
+    ok: true,
+    state: 'not-available',
+    hasUpdate: false,
+    currentVersion: app.getVersion(),
+    latestVersion: normalizedInfo?.version || app.getVersion(),
+    message: '当前已是最新版本。',
+    info: normalizedInfo,
+    platform: process.platform,
+    arch: process.arch
+  }
+}
+
+function buildAvailableResult(updateInfo = null) {
+  const normalizedInfo = normalizeUpdateInfo(updateInfo)
+  setStatus({ state: 'available', percent: 0, message: '发现新版本。', info: normalizedInfo, error: null })
+  return {
+    ok: true,
+    state: 'available',
+    hasUpdate: true,
+    currentVersion: app.getVersion(),
+    latestVersion: normalizedInfo?.version || '',
+    message: '发现新版本。',
+    info: normalizedInfo,
+    platform: process.platform,
+    arch: process.arch
+  }
+}
+
 export function getUpdateStatus() {
   return {
     ok: true,
     ...lastStatus,
+    currentVersion: app.getVersion(),
+    latestVersion: lastStatus.info?.version || '',
+    hasUpdate: lastStatus.state === 'available' || lastStatus.state === 'downloading' || lastStatus.state === 'downloaded',
     platform: process.platform,
     arch: process.arch,
     feed: { ...GITHUB_UPDATE_FEED }
   }
 }
 
-export async function startAppUpdate() {
+export async function checkForAppUpdate() {
   const supported = isSupportedRuntime()
   if (!supported.ok) {
     return {
       ok: false,
       reason: supported.reason,
       message: supported.message,
+      currentVersion: app.getVersion(),
       platform: process.platform,
       arch: process.arch
     }
@@ -180,36 +237,83 @@ export async function startAppUpdate() {
 
   configureAutoUpdater()
 
-  if (activeUpdatePromise) {
-    return activeUpdatePromise
+  if (activeCheckPromise) {
+    return activeCheckPromise
   }
 
-  activeUpdatePromise = (async () => {
+  activeCheckPromise = (async () => {
     try {
       setStatus({ state: 'checking', percent: 0, message: '正在连接 GitHub 检查更新...', error: null })
       const checkResult = await autoUpdater.checkForUpdates()
       const updateInfo = normalizeUpdateInfo(checkResult?.updateInfo)
 
       if (!checkResult?.updateInfo || compareVersions(updateInfo?.version || '', app.getVersion()) <= 0) {
-        setStatus({ state: 'not-available', percent: 0, message: '当前已是最新版本。', info: updateInfo, error: null })
-        return {
-          ok: true,
-          state: 'not-available',
-          message: '当前已是最新版本。',
-          info: updateInfo,
-          platform: process.platform,
-          arch: process.arch
-        }
+        return buildNotAvailableResult(updateInfo)
       }
 
-      setStatus({ state: 'downloading', percent: 0, message: '正在从 GitHub 下载更新...', info: updateInfo, error: null })
+      return buildAvailableResult(checkResult.updateInfo)
+    } catch (error) {
+      const normalizedError = normalizeError(error)
+      setStatus({
+        state: 'error',
+        message: '无法访问 GitHub 或检查更新失败。',
+        error: normalizedError
+      })
+      return {
+        ok: false,
+        state: 'error',
+        reason: 'github_update_check_failed',
+        message: '无法访问 GitHub 或检查更新失败，请确认当前网络可以访问 GitHub Releases。',
+        error: normalizedError,
+        currentVersion: app.getVersion(),
+        platform: process.platform,
+        arch: process.arch
+      }
+    } finally {
+      activeCheckPromise = null
+    }
+  })()
+
+  return activeCheckPromise
+}
+
+export async function downloadAppUpdate() {
+  const supported = isSupportedRuntime()
+  if (!supported.ok) {
+    return {
+      ok: false,
+      reason: supported.reason,
+      message: supported.message,
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch
+    }
+  }
+
+  configureAutoUpdater()
+
+  if (activeDownloadPromise) {
+    return activeDownloadPromise
+  }
+
+  activeDownloadPromise = (async () => {
+    try {
+      if (!lastStatus.info?.version || compareVersions(lastStatus.info.version, app.getVersion()) <= 0) {
+        const checkResult = await checkForAppUpdate()
+        if (!checkResult?.ok || !checkResult?.hasUpdate) return checkResult
+      }
+
+      setStatus({ state: 'downloading', percent: 0, message: '正在从 GitHub 下载更新...', error: null })
       await autoUpdater.downloadUpdate()
 
       return {
         ok: true,
         state: 'downloaded',
+        hasUpdate: true,
+        currentVersion: app.getVersion(),
+        latestVersion: lastStatus.info?.version || '',
         message: '更新已下载，重启后将自动安装。',
-        info: lastStatus.info || updateInfo,
+        info: lastStatus.info,
         platform: process.platform,
         arch: process.arch
       }
@@ -223,18 +327,36 @@ export async function startAppUpdate() {
       return {
         ok: false,
         state: 'error',
-        reason: 'github_update_failed',
+        reason: 'github_update_download_failed',
         message: '无法访问 GitHub 或下载更新失败，请确认当前网络可以访问 GitHub Releases。',
         error: normalizedError,
+        currentVersion: app.getVersion(),
         platform: process.platform,
         arch: process.arch
       }
     } finally {
-      activeUpdatePromise = null
+      activeDownloadPromise = null
     }
   })()
 
-  return activeUpdatePromise
+  return activeDownloadPromise
+}
+
+export async function clearDownloadedUpdateCache() {
+  try {
+    const cacheDir = autoUpdater.downloadedUpdateHelper?.cacheDir
+    if (!cacheDir) return { ok: true, skipped: true, reason: 'cache_dir_unavailable' }
+    const resolvedCacheDir = path.resolve(cacheDir)
+    const userDataDir = path.resolve(app.getPath('userData'))
+    if (!resolvedCacheDir.startsWith(userDataDir)) {
+      return { ok: false, skipped: true, reason: 'cache_dir_outside_user_data' }
+    }
+    await fs.rm(resolvedCacheDir, { recursive: true, force: true })
+    setStatus({ state: 'idle', percent: 0, message: '', info: null, error: null })
+    return { ok: true, cleared: true, cacheDir: resolvedCacheDir }
+  } catch (error) {
+    return { ok: false, reason: 'clear_cache_failed', error: normalizeError(error) }
+  }
 }
 
 export function installDownloadedUpdate() {
@@ -258,3 +380,5 @@ export function installDownloadedUpdate() {
     }
   }
 }
+
+export const startAppUpdate = downloadAppUpdate

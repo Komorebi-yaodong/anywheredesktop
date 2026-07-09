@@ -69,8 +69,11 @@ const api = {
   getAppVersion: () => invokeOrThrow('app:getVersion'),
   checkLatestVersion: () => electronAPI.ipcRenderer.invoke('app:checkLatestVersion'),
   getAppUpdateStatus: () => electronAPI.ipcRenderer.invoke('app:update:getStatus'),
-  startAppUpdate: () => electronAPI.ipcRenderer.invoke('app:update:start'),
+  checkAppUpdate: () => electronAPI.ipcRenderer.invoke('app:update:check'),
+  downloadAppUpdate: () => electronAPI.ipcRenderer.invoke('app:update:download'),
+  startAppUpdate: () => electronAPI.ipcRenderer.invoke('app:update:download'),
   installAppUpdate: () => electronAPI.ipcRenderer.invoke('app:update:install'),
+  clearAppUpdateCache: () => electronAPI.ipcRenderer.invoke('app:update:clearCache'),
 
 
 getDroppedFilePath: (file) => {

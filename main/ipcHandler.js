@@ -458,11 +458,18 @@ export function registerIpcHandlers({
     return updaterApi.getUpdateStatus()
   })
 
-  handleInvoke('app:update:start', async () => {
-    if (!updaterApi || typeof updaterApi.startAppUpdate !== 'function') {
+  handleInvoke('app:update:check', async () => {
+    if (!updaterApi || typeof updaterApi.checkForAppUpdate !== 'function') {
       return { ok: false, message: 'updater_unavailable' }
     }
-    return updaterApi.startAppUpdate()
+    return updaterApi.checkForAppUpdate()
+  })
+
+  handleInvoke('app:update:download', async () => {
+    if (!updaterApi || typeof updaterApi.downloadAppUpdate !== 'function') {
+      return { ok: false, message: 'updater_unavailable' }
+    }
+    return updaterApi.downloadAppUpdate()
   })
 
   handleInvoke('app:update:install', async () => {
@@ -470,6 +477,13 @@ export function registerIpcHandlers({
       return { ok: false, message: 'updater_unavailable' }
     }
     return updaterApi.installDownloadedUpdate()
+  })
+
+  handleInvoke('app:update:clearCache', async () => {
+    if (!updaterApi || typeof updaterApi.clearDownloadedUpdateCache !== 'function') {
+      return { ok: false, message: 'updater_unavailable' }
+    }
+    return updaterApi.clearDownloadedUpdateCache()
   })
 
 

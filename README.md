@@ -117,7 +117,7 @@ AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。�
 * 内置文件操作、Python、Shell、联网搜索、网页抓取、时间、任务管理与 Better Work 交互工具；
 * 内置文件编辑工具支持变更片段回显、失败诊断与误带行号容错；
 * `grep_search` 支持输出限流，减少长结果占用上下文；
-* `web_fetch` 支持通过 `markitdown-js` 增强网页内容到 Markdown 的转换效果；
+* `builtin_web_fetch` 支持通过 `markitdown-js` 增强网页内容到 Markdown 的转换效果；
 * 支持 Super-Agent / Sub-Agent 多智能体协作。
 
 ### 📚 Skill 技能库（SOP 编排）

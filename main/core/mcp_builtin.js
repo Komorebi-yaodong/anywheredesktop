@@ -157,6 +157,8 @@ function createBackgroundSubAgent(args, globalContext) {
         latestLog: '',
         result: '',
         error: '',
+        launchArgs: JSON.parse(JSON.stringify(args || {})),
+        launchContext: { ...(globalContext || {}), onUpdate: undefined },
         controller
     };
     subAgentTasks.set(id, task);
@@ -248,6 +250,16 @@ function stopSubAgent(args = {}) {
     return formatSubAgentStatus(toSubAgentSnapshot(task));
 }
 
+
+
+
+function rerunSubAgent(args = {}) {
+    const id = typeof args?.subagent_id === 'string' ? args.subagent_id.trim() : '';
+    const task = subAgentTasks.get(id);
+    if (!task) return formatSubAgentStatus({ error: `Sub-Agent '${id}' was not found or has expired.` });
+    if (task.status === 'running') return formatSubAgentStatus({ error: `Sub-Agent '${id}' is still running and cannot be restarted yet.` });
+    return createBackgroundSubAgent(task.launchArgs, task.launchContext).subagent_id;
+}
 
 
 // 数据提取函数 (提取标题、作者、简介)
@@ -931,6 +943,18 @@ IMPORTANT:
                 required: ["subagent_id"]
             }
         },
+        {
+            name: "rerun_subagent",
+            description: "Retry a completed, stopped, or failed Sub-Agent using its original task configuration. Returns a new subagent_id immediately. The original run record remains available through get_subagent_status.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    subagent_id: { type: "string", description: "The completed, stopped, or failed Sub-Agent ID to retry." }
+                },
+                required: ["subagent_id"]
+            }
+        },
+
         {
             name: "list_agents",
             description: "List all pre-configured professional Agents (System Prompts). You can optionally provide an 'agent_name' to inspect its system prompt and capabilities before summoning it.",
@@ -3080,9 +3104,11 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
             return "Error: Sub-Agent requires global context(should be in a chat session).";
         }
         const task = createBackgroundSubAgent(args, globalContext);
-        return `Sub-Agent started in background.\nsubagent_id: ${task.subagent_id}\nstatus: ${task.status}\nUse get_subagent_status with this ID to read progress or the final result.`;
+        return task.subagent_id;
     },
     get_subagent_status: async (args = {}) => getSubAgentStatus(args),
+    rerun_subagent: async (args = {}) => rerunSubAgent(args),
+
     stop_subagent: async (args = {}) => stopSubAgent(args),
     // --- Agent Collaboration Handlers ---
     list_agents: async (args, context, signal) => {

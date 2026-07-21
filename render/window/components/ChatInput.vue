@@ -999,6 +999,9 @@ defineExpose({ focus, senderRef });
                 <div class="subagent-detail-meta">
                     <el-tag :type="subAgentStatusType(selectedSubAgent.status)" effect="dark">{{ subAgentStatusLabel(selectedSubAgent.status) }}</el-tag>
                     <span class="subagent-detail-id" :title="selectedSubAgent.subagent_id"><code>{{ shortSubAgentId(selectedSubAgent) }}</code></span>
+                    <span v-if="selectedSubAgent.model_name" class="subagent-detail-model" :title="selectedSubAgent.provider_name ? `${selectedSubAgent.provider_name} · ${selectedSubAgent.model_name}` : selectedSubAgent.model_name">
+                        {{ selectedSubAgent.model_name }}
+                    </span>
                 </div>
                 <section class="subagent-detail-section">
                     <div class="subagent-detail-section-title">任务</div>
@@ -1865,16 +1868,20 @@ html.dark .append-buffer-container {
 .subagent-tag-container {
     width: 100%;
     margin-bottom: 8px;
-    padding: 7px 9px;
-    border: 1px solid var(--el-border-color-lighter);
-    border-radius: 10px;
-    background: var(--el-fill-color-lighter);
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.025);
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.34);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.18);
+    box-shadow: 0 8px 20px rgba(101, 80, 50, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+    backdrop-filter: blur(8px) saturate(118%);
+    -webkit-backdrop-filter: blur(8px) saturate(118%);
     box-sizing: border-box;
 }
 
 html.dark .subagent-tag-container {
-    background: rgba(42, 42, 42, 0.58);
+    background: rgba(18, 20, 24, 0.34);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .subagent-tag-list {
@@ -1910,13 +1917,15 @@ html.dark .subagent-tag-container {
 
 .subagent-detail-layout {
     display: flex;
-    max-height: min(54vh, 430px);
+    max-height: min(58vh, 460px);
     flex-direction: column;
     gap: 12px;
+    min-height: 0;
 }
 
 .subagent-detail-meta {
     display: flex;
+    flex-shrink: 0;
     min-width: 0;
     align-items: center;
     gap: 10px;
@@ -1935,8 +1944,26 @@ html.dark .subagent-tag-container {
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
+.subagent-detail-model {
+    min-width: 0;
+    margin-left: auto;
+    overflow: hidden;
+    color: var(--el-text-color-regular);
+    font-size: 12px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 46%;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--el-fill-color);
+    border: 1px solid var(--el-border-color-lighter);
+}
+
 .subagent-detail-section {
+    display: flex;
     min-height: 0;
+    flex-direction: column;
     border: 1px solid var(--el-border-color-lighter);
     border-radius: 10px;
     background: var(--el-fill-color-lighter);
@@ -1944,11 +1971,12 @@ html.dark .subagent-tag-container {
 }
 
 .subagent-detail-result-section {
-    flex: 1;
-    min-height: 0;
+    flex: 1 1 auto;
+    min-height: 140px;
 }
 
 .subagent-detail-section-title {
+    flex-shrink: 0;
     padding: 8px 12px;
     border-bottom: 1px solid var(--el-border-color-lighter);
     color: var(--el-text-color-secondary);
@@ -1956,20 +1984,68 @@ html.dark .subagent-tag-container {
     font-weight: 600;
 }
 
-.subagent-detail-task-scroll {
-    height: 112px;
-    overflow: auto;
+.subagent-detail-task-scroll,
+.subagent-detail-output-scroll {
+    overflow-x: hidden;
+    overflow-y: auto;
     overscroll-behavior: contain;
+    box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: var(--el-text-color-disabled, #c0c4cc) transparent;
+}
+
+.subagent-detail-task-scroll {
+    flex: 0 0 auto;
+    height: 112px;
+    max-height: 112px;
 }
 
 .subagent-detail-output-scroll {
-    height: min(32vh, 280px);
-    overflow: auto;
-    overscroll-behavior: contain;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: min(34vh, 300px);
+}
+
+.subagent-detail-task-scroll::-webkit-scrollbar,
+.subagent-detail-output-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.subagent-detail-task-scroll::-webkit-scrollbar-track,
+.subagent-detail-output-scroll::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 4px;
+}
+
+.subagent-detail-task-scroll::-webkit-scrollbar-thumb,
+.subagent-detail-output-scroll::-webkit-scrollbar-thumb {
+    background: var(--el-text-color-disabled, #c0c4cc);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.subagent-detail-task-scroll::-webkit-scrollbar-thumb:hover,
+.subagent-detail-output-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--el-text-color-secondary, #909399);
+    background-clip: content-box;
+}
+
+html.dark .subagent-detail-task-scroll::-webkit-scrollbar-thumb,
+html.dark .subagent-detail-output-scroll::-webkit-scrollbar-thumb {
+    background: #6b6b6b;
+    background-clip: content-box;
+}
+
+html.dark .subagent-detail-task-scroll::-webkit-scrollbar-thumb:hover,
+html.dark .subagent-detail-output-scroll::-webkit-scrollbar-thumb:hover {
+    background: #999;
+    background-clip: content-box;
 }
 
 .subagent-detail-task {
-    padding: 10px 12px;
+    padding: 10px 12px 18px;
     color: var(--el-text-color-primary);
     font-size: 13px;
     font-weight: 500;
@@ -1980,13 +2056,117 @@ html.dark .subagent-tag-container {
 
 .subagent-detail-output {
     margin: 0;
-    padding: 12px;
+    padding: 12px 12px 24px;
     color: var(--el-text-color-regular);
     font-family: var(--el-font-family), ui-monospace, monospace;
     font-size: 12px;
-    line-height: 1.6;
+    line-height: 1.65;
     white-space: pre-wrap;
     word-break: break-word;
+    box-sizing: border-box;
 }
 
+</style>
+
+<style>
+.subagent-detail-dialog.el-dialog {
+    margin-top: 8vh !important;
+    max-height: 84vh;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    background: rgba(255, 255, 255, 0.42) !important;
+    backdrop-filter: blur(22px) saturate(150%);
+    -webkit-backdrop-filter: blur(22px) saturate(150%);
+    box-shadow: 0 16px 48px rgba(15, 23, 42, 0.16);
+}
+
+html.dark .subagent-detail-dialog.el-dialog {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(28, 28, 30, 0.52) !important;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+.subagent-detail-dialog .el-dialog__header {
+    background: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+html.dark .subagent-detail-dialog .el-dialog__header {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+.subagent-detail-dialog .el-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    padding-bottom: 8px;
+    background: transparent;
+}
+
+.subagent-detail-dialog .el-dialog__footer {
+    flex-shrink: 0;
+    background: transparent;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+html.dark .subagent-detail-dialog .el-dialog__footer {
+    border-top-color: rgba(255, 255, 255, 0.08);
+}
+
+.subagent-detail-dialog .subagent-detail-section {
+    background: rgba(255, 255, 255, 0.34);
+    border-color: rgba(255, 255, 255, 0.24);
+    backdrop-filter: blur(10px) saturate(130%);
+    -webkit-backdrop-filter: blur(10px) saturate(130%);
+}
+
+html.dark .subagent-detail-dialog .subagent-detail-section {
+    background: rgba(48, 48, 52, 0.42);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.subagent-detail-dialog .subagent-detail-task-scroll,
+.subagent-detail-dialog .subagent-detail-output-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--el-text-color-disabled, #c0c4cc) transparent;
+}
+
+.subagent-detail-dialog .subagent-detail-task-scroll::-webkit-scrollbar,
+.subagent-detail-dialog .subagent-detail-output-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.subagent-detail-dialog .subagent-detail-task-scroll::-webkit-scrollbar-track,
+.subagent-detail-dialog .subagent-detail-output-scroll::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 4px;
+}
+
+.subagent-detail-dialog .subagent-detail-task-scroll::-webkit-scrollbar-thumb,
+.subagent-detail-dialog .subagent-detail-output-scroll::-webkit-scrollbar-thumb {
+    background: var(--el-text-color-disabled, #c0c4cc);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.subagent-detail-dialog .subagent-detail-task-scroll::-webkit-scrollbar-thumb:hover,
+.subagent-detail-dialog .subagent-detail-output-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--el-text-color-secondary, #909399);
+    background-clip: content-box;
+}
+
+html.dark .subagent-detail-dialog .subagent-detail-task-scroll::-webkit-scrollbar-thumb,
+html.dark .subagent-detail-dialog .subagent-detail-output-scroll::-webkit-scrollbar-thumb {
+    background: #6b6b6b;
+    background-clip: content-box;
+}
+
+html.dark .subagent-detail-dialog .subagent-detail-task-scroll::-webkit-scrollbar-thumb:hover,
+html.dark .subagent-detail-dialog .subagent-detail-output-scroll::-webkit-scrollbar-thumb:hover {
+    background: #999;
+    background-clip: content-box;
+}
 </style>

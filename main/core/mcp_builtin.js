@@ -106,6 +106,8 @@ function toSubAgentSnapshot(task, { includeOutput = true } = {}) {
         status: task.status,
         task: task.task,
         model_route: task.modelRoute,
+        model_name: task.modelName || '',
+        provider_name: task.providerName || '',
         created_at: task.createdAt,
         started_at: task.startedAt,
         finished_at: task.finishedAt || null,
@@ -139,6 +141,28 @@ function truncateSubAgentStatusOutput(value, maxTokens = MAX_SUBAGENT_STATUS_TOK
 
 function formatSubAgentStatus(tasks) {
     return truncateSubAgentStatusOutput(JSON.stringify(tasks, null, 2));
+}
+
+
+async function resolveSubAgentModelMeta(args = {}) {
+    try {
+        const configData = await getConfig();
+        const resolvedConfig = configData?.config || {};
+        const modelRoute = ['superior', 'general', 'fast'].includes(args?.model_route) ? args.model_route : 'general';
+        const model = resolveDefaultAssistantModel(resolvedConfig, modelRoute);
+        const providerInfo = resolveProviderConfigByModel(resolvedConfig, model);
+        return {
+            modelRoute,
+            modelName: providerInfo.modelName || (typeof model === 'string' ? (model.split('|')[1] || model) : ''),
+            providerName: providerInfo.providerName || providerInfo.providerId || ''
+        };
+    } catch {
+        return {
+            modelRoute: typeof args?.model_route === 'string' ? args.model_route : 'general',
+            modelName: '',
+            providerName: ''
+        };
+    }
 }
 
 function executeBackgroundSubAgent(task, args, globalContext) {
@@ -197,13 +221,16 @@ function executeBackgroundSubAgent(task, args, globalContext) {
         });
 }
 
-function createBackgroundSubAgent(args, globalContext) {
+async function createBackgroundSubAgent(args, globalContext) {
     const id = `subagent_${crypto.randomUUID()}`;
+    const modelMeta = await resolveSubAgentModelMeta(args);
     const task = {
         id,
         status: 'running',
         task: typeof args?.task === 'string' ? args.task : '',
-        modelRoute: typeof args?.model_route === 'string' ? args.model_route : 'general',
+        modelRoute: modelMeta.modelRoute,
+        modelName: modelMeta.modelName,
+        providerName: modelMeta.providerName,
         createdAt: Date.now(),
         startedAt: Date.now(),
         updatedAt: Date.now(),
@@ -252,14 +279,18 @@ function stopSubAgent(args = {}) {
 
 
 
-function rerunSubAgent(args = {}) {
+async function rerunSubAgent(args = {}) {
     const id = typeof args?.subagent_id === 'string' ? args.subagent_id.trim() : '';
     const task = subAgentTasks.get(id);
     if (!task) return formatSubAgentStatus({ error: `Sub-Agent '${id}' was not found or has expired.` });
     if (task.status === 'running') return formatSubAgentStatus({ error: `Sub-Agent '${id}' is still running and cannot be restarted yet.` });
 
+    const modelMeta = await resolveSubAgentModelMeta(task.launchArgs || {});
     const now = Date.now();
     task.status = 'running';
+    task.modelRoute = modelMeta.modelRoute;
+    task.modelName = modelMeta.modelName;
+    task.providerName = modelMeta.providerName;
     task.startedAt = now;
     task.updatedAt = now;
     task.finishedAt = null;
@@ -3139,7 +3170,7 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
         if (!globalContext || !globalContext.apiKey) {
             return "Error: Sub-Agent requires global context(should be in a chat session).";
         }
-        const task = createBackgroundSubAgent(args, globalContext);
+        const task = await createBackgroundSubAgent(args, globalContext);
         return task.subagent_id;
     },
     get_subagent_status: async (args = {}) => getSubAgentStatus(args),

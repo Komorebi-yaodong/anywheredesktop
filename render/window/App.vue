@@ -1385,23 +1385,59 @@ const upsertSubAgentTask = (snapshot) => {
   else subAgentTasks.value.unshift(normalized);
 };
 
-const registerSubAgentFromToolContent = (toolContent) => {
+const registerSubAgentFromToolContent = (toolContent, taskText = '') => {
   const idMatch = String(toolContent || '').match(/(subagent_[\w-]+)/i);
   if (!idMatch) return;
-  upsertSubAgentTask({ subagent_id: idMatch[1], status: 'running', task: '后台 Sub-Agent' });
+  upsertSubAgentTask({
+    subagent_id: idMatch[1],
+    status: 'running',
+    task: typeof taskText === 'string' && taskText.trim() ? taskText.trim() : '后台 Sub-Agent'
+  });
   void refreshSubAgentStatuses();
+  scheduleAutoSave({ reason: 'subagent-registered', immediate: true });
 };
 
 
-const loadKnownSubAgentTasks = async () => {
-  if (!window.api?.invokeMcpTool) return;
-  try {
-    const response = await window.api.invokeMcpTool('get_subagent_status', {});
-    const payload = parseSubAgentStatus(response);
-    if (Array.isArray(payload?.subagents)) payload.subagents.forEach(upsertSubAgentTask);
-  } catch (error) {
-    console.warn('[Sub-Agent] Failed to load known tasks:', error);
-  }
+const normalizeSubAgentSummary = (task) => {
+  if (!task || typeof task !== 'object') return null;
+  const id = typeof task.subagent_id === 'string' ? task.subagent_id.trim() : '';
+  if (!id) return null;
+  return {
+    subagent_id: id,
+    status: task.status || 'running',
+    task: typeof task.task === 'string' ? task.task : '后台 Sub-Agent',
+    model_route: task.model_route || '',
+    model_name: task.model_name || '',
+    provider_name: task.provider_name || '',
+    created_at: task.created_at || null,
+    started_at: task.started_at || null,
+    finished_at: task.finished_at || null,
+    updated_at: task.updated_at || null
+  };
+};
+
+const restoreSubAgentTasksFromSession = (sessionData = {}) => {
+  const restoredTasks = Array.isArray(sessionData.subAgentTasks)
+    ? sessionData.subAgentTasks.map(normalizeSubAgentSummary).filter(Boolean)
+    : [];
+  subAgentTasks.value = restoredTasks;
+  const restoredDetails = sessionData.subAgentDetails && typeof sessionData.subAgentDetails === 'object' && !Array.isArray(sessionData.subAgentDetails)
+    ? sessionData.subAgentDetails
+    : {};
+  const allowedIds = new Set(restoredTasks.map((item) => item.subagent_id));
+  const nextDetails = {};
+  Object.entries(restoredDetails).forEach(([id, detail]) => {
+    if (allowedIds.has(id) && detail && typeof detail === 'object') nextDetails[id] = detail;
+  });
+  subAgentDetails.value = nextDetails;
+  closeSubAgentDetailFromInput();
+  void refreshSubAgentStatuses();
+};
+
+const clearSubAgentSessionState = () => {
+  subAgentTasks.value = [];
+  subAgentDetails.value = {};
+  closeSubAgentDetailFromInput();
 };
 
 const refreshSubAgentStatuses = async () => {
@@ -1410,7 +1446,16 @@ const refreshSubAgentStatuses = async () => {
     try {
       const response = await window.api.invokeMcpTool('get_subagent_status', { subagent_id: task.subagent_id });
       const snapshot = parseSubAgentStatus(response);
-      if (snapshot?.subagent_id) upsertSubAgentTask(snapshot);
+      if (snapshot?.subagent_id) {
+        upsertSubAgentTask(snapshot);
+        return;
+      }
+      if (snapshot?.error) {
+        // Backend no longer has this task (process restart / expired). Keep conversation-local snapshot.
+        if (task.status === 'running') {
+          upsertSubAgentTask({ ...task, status: 'stopped', finished_at: Date.now(), updated_at: Date.now() });
+        }
+      }
     } catch (error) {
       console.warn('[Sub-Agent] Failed to refresh status:', error);
     }
@@ -1434,6 +1479,8 @@ const loadSubAgentDetail = async (subagentId) => {
       status: snapshot.status,
       task: snapshot.task,
       model_route: snapshot.model_route,
+      model_name: snapshot.model_name,
+      provider_name: snapshot.provider_name,
       created_at: snapshot.created_at,
       started_at: snapshot.started_at,
       finished_at: snapshot.finished_at,
@@ -3086,8 +3133,6 @@ onMounted(async () => {
 
   startSubAgentStatusPolling();
 
-  void loadKnownSubAgentTasks();
-
 
 
   await updateStickyResizeObserver();
@@ -4614,7 +4659,9 @@ const getSessionDataAsObject = (options = {}) => {
     activeMcpServerIds: sessionMcpServerIds.value || [],
     activeSkillIds: sessionSkillIds.value || [],
     isAutoApproveTools: isAutoApproveTools.value,
-    taskList: taskList.value
+    taskList: taskList.value,
+    subAgentTasks: subAgentTasks.value.map(normalizeSubAgentSummary).filter(Boolean),
+    subAgentDetails: subAgentDetails.value
   };
 }
 const saveSessionToCloud = async () => {
@@ -5872,6 +5919,7 @@ const loadSession = async (jsonData) => {
   taskList.value = Array.isArray(jsonData.taskList) ? normalizeTaskList(jsonData.taskList) : [];
   taskPanelVisible.value = false;
   pendingAppendBuffer.value = [];
+  restoreSubAgentTasksFromSession(jsonData);
 
   try {
     CODE.value = jsonData.CODE;
@@ -7198,7 +7246,10 @@ const result = await window.api.invokeMcpTool(
 
 
               if (toolCall.function.name === 'sub_agent' || toolCall.function.name === 'Skill') {
-                registerSubAgentFromToolContent(toolContent);
+                const taskText = toolCall.function.name === 'sub_agent'
+                  ? (typeof toolArgs?.task === 'string' ? toolArgs.task : '')
+                  : (typeof toolArgs?.task === 'string' ? toolArgs.task : (typeof toolArgs?.skill === 'string' ? `Skill: ${toolArgs.skill}` : ''));
+                registerSubAgentFromToolContent(toolContent, taskText);
               }
 
               if (!isTurnAborted() && uiToolCall) uiToolCall.approvalStatus = 'finished';
@@ -7561,6 +7612,7 @@ const clearHistory = () => {
   taskList.value = [];
   taskPanelVisible.value = false;
   pendingAppendBuffer.value = [];
+  clearSubAgentSessionState();
   cancelAutoNamingRequest();
   defaultConversationName.value = "";
   chatInputRef.value?.focus({ cursor: 'end' });

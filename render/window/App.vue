@@ -1592,6 +1592,56 @@ const acknowledgeSubAgentFromInput = (subagentId) => {
   if (selectedSubAgentDetailId.value === subagentId) closeSubAgentDetailFromInput();
 };
 
+const acknowledgeAllFinishedSubAgentsFromInput = () => {
+  const keepRunning = [];
+  const removedIds = new Set();
+  subAgentTasks.value.forEach((task) => {
+    if (task?.status === 'running') keepRunning.push(task);
+    else if (task?.subagent_id) removedIds.add(task.subagent_id);
+  });
+  subAgentTasks.value = keepRunning;
+  if (removedIds.size > 0) {
+    const nextDetails = { ...subAgentDetails.value };
+    removedIds.forEach((id) => { delete nextDetails[id]; });
+    subAgentDetails.value = nextDetails;
+  }
+  if (selectedSubAgentDetailId.value && removedIds.has(selectedSubAgentDetailId.value)) {
+    closeSubAgentDetailFromInput();
+  }
+  scheduleAutoSave({ reason: 'subagent-ack-all', immediate: true });
+};
+
+const killAllRunningSubAgentsForCurrentConversation = async () => {
+  if (!window.api?.invokeMcpTool) return;
+  const runningTasks = subAgentTasks.value.filter((task) => task?.status === 'running' && task?.subagent_id);
+  if (runningTasks.length === 0) return;
+
+  await Promise.all(runningTasks.map(async (task) => {
+    try {
+      await window.api.invokeMcpTool(
+        'kill_subagent',
+        withConversationOwnerArgs({ subagent_id: task.subagent_id }),
+        null,
+        withConversationOwnerContext()
+      );
+      upsertSubAgentTask({
+        ...task,
+        status: 'stopped',
+        finished_at: Date.now(),
+        updated_at: Date.now()
+      });
+    } catch (error) {
+      console.warn('[Sub-Agent] Failed to kill on conversation close:', task.subagent_id, error);
+      upsertSubAgentTask({
+        ...task,
+        status: 'stopped',
+        finished_at: Date.now(),
+        updated_at: Date.now()
+      });
+    }
+  }));
+};
+
 const rerunSubAgentFromInput = async (subagentId) => {
   if (!subagentId || !window.api?.invokeMcpTool) return;
   try {
@@ -3123,6 +3173,13 @@ const closePage = async (force_save = false) => {
   isClosingWindow.value = true;
 
   try {
+    // 关闭对话前先结束本对话所有运行中 Subagent，避免后台孤儿任务继续占资源
+    try {
+      await killAllRunningSubAgentsForCurrentConversation();
+    } catch (e) {
+      console.warn('[Sub-Agent] Kill-on-close failed:', e);
+    }
+
     if (currentConfig.value?.webdav?.localChatPath && (defaultConversationName.value || shouldForceSave)) {
       try {
         await executeAutoSaveRequest({ reason: 'window-close', force: shouldForceSave });
@@ -7646,9 +7703,15 @@ const deleteMessage = (index) => {
   scheduleAutoSave({ reason: 'message-deleted', immediate: true });
 };
 
-const clearHistory = () => {
+const clearHistory = async () => {
   if (loading.value) {
     return;
+  }
+
+  try {
+    await killAllRunningSubAgentsForCurrentConversation();
+  } catch (e) {
+    console.warn('[Sub-Agent] Kill-on-clear failed:', e);
   }
 
   const systemPromptFromConfig = currentConfig.value.prompts[CODE.value]?.prompt;
@@ -8051,7 +8114,9 @@ const scrollToMessageByIndex = (index) => {
           @open-skill-dialog="toggleSkillDialog" :append-buffer="pendingAppendBuffer" :sub-agent-tasks="subAgentTasks"
           :sub-agent-details="subAgentDetails"
           @cancel-buffer="removeBufferedMessage" @stop-subagent="stopSubAgentFromInput"
-          @acknowledge-subagent="acknowledgeSubAgentFromInput" @rerun-subagent="rerunSubAgentFromInput"
+          @acknowledge-subagent="acknowledgeSubAgentFromInput"
+          @acknowledge-all-subagents="acknowledgeAllFinishedSubAgentsFromInput"
+          @rerun-subagent="rerunSubAgentFromInput"
           @open-subagent-detail="openSubAgentDetailFromInput" @close-subagent-detail="closeSubAgentDetailFromInput" />
       </div>
     </el-container>

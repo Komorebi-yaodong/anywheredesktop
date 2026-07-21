@@ -595,6 +595,32 @@ const userNickname = ref('User');
 const AIAvart = ref(defaultAiAvatarUrl);
 const favicon = ref(defaultAiAvatarUrl);
 const CODE = ref("");
+const conversationOwnerId = ref('');
+
+const ensureConversationOwnerId = () => {
+  if (typeof conversationOwnerId.value === 'string' && conversationOwnerId.value.trim()) {
+    return conversationOwnerId.value.trim();
+  }
+  const nextId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? `conv_${crypto.randomUUID()}`
+    : `conv_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  conversationOwnerId.value = nextId;
+  return nextId;
+};
+
+const withConversationOwnerContext = (context = null) => {
+  const ownerId = ensureConversationOwnerId();
+  const base = context && typeof context === 'object' ? { ...context } : {};
+  base.conversationOwnerId = ownerId;
+  return base;
+};
+
+const withConversationOwnerArgs = (args = {}) => {
+  const ownerId = ensureConversationOwnerId();
+  const nextArgs = args && typeof args === 'object' ? { ...args } : {};
+  nextArgs.conversation_owner_id = ownerId;
+  return nextArgs;
+};
 
 const isInit = ref(false);
 const isFilePickerOpen = ref(false); // 标记文件选择器是否打开
@@ -1444,7 +1470,12 @@ const refreshSubAgentStatuses = async () => {
   if (!window.api?.invokeMcpTool || subAgentTasks.value.length === 0) return;
   await Promise.all(subAgentTasks.value.map(async (task) => {
     try {
-      const response = await window.api.invokeMcpTool('get_subagent_status', { subagent_id: task.subagent_id });
+      const response = await window.api.invokeMcpTool(
+        'get_subagent_status',
+        withConversationOwnerArgs({ subagent_id: task.subagent_id }),
+        null,
+        withConversationOwnerContext()
+      );
       const snapshot = parseSubAgentStatus(response);
       if (snapshot?.subagent_id) {
         upsertSubAgentTask(snapshot);
@@ -1467,10 +1498,15 @@ const subAgentDetails = ref({});
 const loadSubAgentDetail = async (subagentId) => {
   if (!subagentId || !window.api?.invokeMcpTool) return;
   try {
-    const response = await window.api.invokeMcpTool('get_subagent_status', {
-      subagent_id: subagentId,
-      include_output: true
-    });
+    const response = await window.api.invokeMcpTool(
+      'get_subagent_status',
+      withConversationOwnerArgs({
+        subagent_id: subagentId,
+        include_output: true
+      }),
+      null,
+      withConversationOwnerContext()
+    );
     const snapshot = parseSubAgentStatus(response);
     if (!snapshot?.subagent_id) return;
     subAgentDetails.value = { ...subAgentDetails.value, [snapshot.subagent_id]: snapshot };
@@ -1530,7 +1566,12 @@ const openSubAgentDetailFromInput = async (subagentId) => {
 const stopSubAgentFromInput = async (subagentId) => {
   if (!subagentId || !window.api?.invokeMcpTool) return;
   try {
-    const response = await window.api.invokeMcpTool('kill_subagent', { subagent_id: subagentId });
+    const response = await window.api.invokeMcpTool(
+      'kill_subagent',
+      withConversationOwnerArgs({ subagent_id: subagentId }),
+      null,
+      withConversationOwnerContext()
+    );
     const snapshot = parseSubAgentStatus(response);
     if (snapshot?.subagent_id) upsertSubAgentTask(snapshot);
     await refreshSubAgentStatuses();
@@ -1554,7 +1595,12 @@ const acknowledgeSubAgentFromInput = (subagentId) => {
 const rerunSubAgentFromInput = async (subagentId) => {
   if (!subagentId || !window.api?.invokeMcpTool) return;
   try {
-    const response = await window.api.invokeMcpTool('rerun_subagent', { subagent_id: subagentId });
+    const response = await window.api.invokeMcpTool(
+      'rerun_subagent',
+      withConversationOwnerArgs({ subagent_id: subagentId }),
+      null,
+      withConversationOwnerContext()
+    );
     const returnedId = String(formatToolResult(response) || '').match(/(subagent_[\w-]+)/i)?.[1];
     if (returnedId !== subagentId) throw new Error('重新运行未保持当前 Sub-Agent ID');
     if (subAgentDetails.value[subagentId]) {
@@ -4660,6 +4706,7 @@ const getSessionDataAsObject = (options = {}) => {
     activeSkillIds: sessionSkillIds.value || [],
     isAutoApproveTools: isAutoApproveTools.value,
     taskList: taskList.value,
+    conversationOwnerId: ensureConversationOwnerId(),
     subAgentTasks: subAgentTasks.value.map(normalizeSubAgentSummary).filter(Boolean),
     subAgentDetails: subAgentDetails.value
   };
@@ -5919,6 +5966,10 @@ const loadSession = async (jsonData) => {
   taskList.value = Array.isArray(jsonData.taskList) ? normalizeTaskList(jsonData.taskList) : [];
   taskPanelVisible.value = false;
   pendingAppendBuffer.value = [];
+  conversationOwnerId.value = typeof jsonData.conversationOwnerId === 'string' && jsonData.conversationOwnerId.trim()
+    ? jsonData.conversationOwnerId.trim()
+    : '';
+  ensureConversationOwnerId();
   restoreSubAgentTasksFromSession(jsonData);
 
   try {
@@ -7188,14 +7239,14 @@ const askAI = async (forceSend = false) => {
                 const currentBaseUrl = base_url.value;
                 const currentModelName = model.value.split('|')[1] || model.value;
 
-                executionContext = {
+                executionContext = withConversationOwnerContext({
                   apiKey: currentApiKey,
                   baseUrl: currentBaseUrl,
                   model: currentModelName,
                   tools: activeTools.filter(t => t.function.name !== 'sub_agent'),
                   mcpSystemPrompt: mcpSystemPromptStr,
                   apiType: apiType
-                };
+                });
 
                 const runtimeSkillPath = await getRuntimeSkillPath();
                 toolContent = await window.api.resolveSkillInvocation(
@@ -7220,22 +7271,29 @@ const askAI = async (forceSend = false) => {
 
                   const toolsContext = activeTools.filter(t => t.function.name !== 'sub_agent');
 
-                  executionContext = {
+                  executionContext = withConversationOwnerContext({
                     apiKey: currentApiKey,
                     baseUrl: currentBaseUrl,
                     model: currentModelName,
                     tools: toolsContext,
                     mcpSystemPrompt: mcpSystemPromptStr,
-                  apiType: apiType
-                  };
+                    apiType: apiType
+                  });
                 }
 
+                const invokeArgs = (
+                  toolCall.function.name === 'sub_agent'
+                  || toolCall.function.name === 'get_subagent_status'
+                  || toolCall.function.name === 'stop_subagent'
+                  || toolCall.function.name === 'kill_subagent'
+                  || toolCall.function.name === 'rerun_subagent'
+                ) ? withConversationOwnerArgs(toolArgs) : toolArgs;
 
-const result = await window.api.invokeMcpTool(
+                const result = await window.api.invokeMcpTool(
                   toolCall.function.name,
-                  toolArgs,
+                  invokeArgs,
                   toolCallControllers.value.get(toolCall.id)?.signal || requestSignal,
-                  executionContext
+                  withConversationOwnerContext(executionContext)
                 );
 
                 toolContent = formatToolResult(result);
@@ -7613,6 +7671,8 @@ const clearHistory = () => {
   taskPanelVisible.value = false;
   pendingAppendBuffer.value = [];
   clearSubAgentSessionState();
+  conversationOwnerId.value = '';
+  ensureConversationOwnerId();
   cancelAutoNamingRequest();
   defaultConversationName.value = "";
   chatInputRef.value?.focus({ cursor: 'end' });

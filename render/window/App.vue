@@ -925,7 +925,7 @@ const normalizeCompactConfigState = (nextConfig = {}) => ({
   contextLengthSource: nextConfig.contextLengthSource || 'default',
   contextLengthManual: nextConfig.contextLengthManual === true || nextConfig.contextLengthSource === 'manual',
   userMessageTokenBudget: Number.isFinite(Number(nextConfig.userMessageTokenBudget)) ? Number(nextConfig.userMessageTokenBudget) : 20000,
-  keepRecentRounds: Number.isFinite(Number(nextConfig.keepRecentRounds)) ? Number(nextConfig.keepRecentRounds) : 0,
+  keepRecentRounds: Number.isFinite(Number(nextConfig.keepRecentRounds)) ? Number(nextConfig.keepRecentRounds) : 3,
   compactPrompt: typeof nextConfig.compactPrompt === 'string' ? nextConfig.compactPrompt : '',
   fallbackModel: typeof nextConfig.fallbackModel === 'string' ? nextConfig.fallbackModel : '',
   resolvedId: typeof nextConfig.resolvedId === 'string' ? nextConfig.resolvedId : ''
@@ -1050,17 +1050,19 @@ const handleRefreshCompactContext = async () => {
 
 const handleApplyCompactAdvancedGlobal = async (patch = {}) => {
   try {
-    if (!window.api?.applyAdvancedCompactConfigToAll) {
-      showDismissibleMessage.error('全局应用能力不可用');
-      return;
-    }
-    // 先保存当前模型，再同步到全部缓存
+    // 先保存当前模型参数
     await handleSaveCompactConfig({
       ...compactConfig.value,
       ...(patch || {}),
       contextLengthManual: true,
       contextLengthSource: 'manual'
     });
+
+    if (typeof window.api?.applyAdvancedCompactConfigToAll !== 'function') {
+      showDismissibleMessage.error('全局应用 IPC 未注册，请完全退出并重启应用后再试');
+      return;
+    }
+
     const result = await window.api.applyAdvancedCompactConfigToAll({
       autoCompactEnabled: patch?.autoCompactEnabled ?? compactConfig.value.autoCompactEnabled,
       triggerRatio: patch?.triggerRatio ?? compactConfig.value.triggerRatio,
@@ -1069,13 +1071,23 @@ const handleApplyCompactAdvancedGlobal = async (patch = {}) => {
       compactPrompt: patch?.compactPrompt ?? compactConfig.value.compactPrompt,
       fallbackModel: patch?.fallbackModel ?? compactConfig.value.fallbackModel
     });
+
+    if (result?.ok === false) {
+      throw new Error(result?.error?.message || result?.error || 'apply_advanced_failed');
+    }
+
     const updated = Number(result?.updated) || 0;
     showDismissibleMessage.success(updated > 0
       ? `高级参数已应用到 ${updated} 个模型缓存`
       : '当前没有可更新的模型缓存');
   } catch (error) {
     console.error('[compact] apply advanced global failed:', error);
-    showDismissibleMessage.error(`应用到全局失败: ${error?.message || error}`);
+    const msg = String(error?.message || error || '');
+    if (/No handler registered/i.test(msg)) {
+      showDismissibleMessage.error('主进程未加载新 IPC，请完全退出并重启应用后再试');
+      return;
+    }
+    showDismissibleMessage.error(`应用到全局失败: ${msg}`);
   }
 };
 
@@ -1583,7 +1595,7 @@ const compactConfig = ref({
   contextLengthSource: 'default',
   contextLengthManual: false,
   userMessageTokenBudget: 20000,
-  keepRecentRounds: 0,
+  keepRecentRounds: 3,
   compactPrompt: '',
   fallbackModel: '',
   resolvedId: ''

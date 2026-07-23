@@ -36,7 +36,7 @@ const props = defineProps({
             contextLengthSource: 'default',
             contextLengthManual: false,
             userMessageTokenBudget: 20000,
-            keepRecentRounds: 0,
+            keepRecentRounds: 3,
             compactPrompt: '',
             fallbackModel: '',
             resolvedId: ''
@@ -68,7 +68,7 @@ const localCompactConfig = ref({
     contextLengthSource: 'default',
     contextLengthManual: false,
     userMessageTokenBudget: 20000,
-    keepRecentRounds: 0,
+    keepRecentRounds: 3,
     compactPrompt: '',
     fallbackModel: '',
     resolvedId: ''
@@ -94,7 +94,7 @@ watch(() => props.compactConfig, (next) => {
         contextLengthSource: next.contextLengthSource || 'default',
         contextLengthManual: next.contextLengthManual === true || next.contextLengthSource === 'manual',
         userMessageTokenBudget: Number.isFinite(Number(next.userMessageTokenBudget)) ? Number(next.userMessageTokenBudget) : 20000,
-        keepRecentRounds: Number.isFinite(Number(next.keepRecentRounds)) ? Number(next.keepRecentRounds) : 0,
+        keepRecentRounds: Number.isFinite(Number(next.keepRecentRounds)) ? Number(next.keepRecentRounds) : 3,
         compactPrompt: typeof next.compactPrompt === 'string' ? next.compactPrompt : '',
         fallbackModel: typeof next.fallbackModel === 'string' ? next.fallbackModel : '',
         resolvedId: typeof next.resolvedId === 'string' ? next.resolvedId : ''
@@ -1220,9 +1220,11 @@ defineExpose({ focus, senderRef });
                             <el-switch v-model="localCompactConfig.autoCompactEnabled" active-text="回合结束后检测" />
                         </div>
                         <div class="compact-field">
-                            <div class="compact-label">触发阈值</div>
+                            <div class="compact-label-row">
+                                <div class="compact-label">触发阈值</div>
+                                <span class="compact-inline-hint">默认 0.90（上下文 90%）</span>
+                            </div>
                             <el-input-number v-model="localCompactConfig.triggerRatio" :min="0.1" :max="0.99" :step="0.05" :precision="2" />
-                            <div class="compact-form-hint">默认 0.90（上下文 90%）</div>
                         </div>
                     </div>
                     <div class="compact-field">
@@ -1249,17 +1251,37 @@ defineExpose({ focus, senderRef });
                     <div v-show="!advancedCollapsed" class="compact-advanced-body">
                         <div class="compact-grid-2">
                             <div class="compact-field">
-                                <div class="compact-label">用户消息 token 预算</div>
+                                <div class="compact-label-row">
+                                    <div class="compact-label">用户消息 token 预算</div>
+                                    <el-tooltip
+                                        placement="top"
+                                        :show-after="200"
+                                        content="压缩后保留到 AI 上下文中的最近用户消息总 token 上限。默认 20000。超出预算的更早用户消息不会进入压缩后的 AI history。"
+                                    >
+                                        <el-icon class="compact-info-icon"><InfoFilled /></el-icon>
+                                    </el-tooltip>
+                                </div>
                                 <el-input-number v-model="localCompactConfig.userMessageTokenBudget" :min="1000" :step="1000" />
-                                <div class="compact-form-hint">默认 20000</div>
                             </div>
                             <div class="compact-field">
-                                <div class="compact-label">额外保留最近 N 轮原文</div>
+                                <div class="compact-label-row">
+                                    <div class="compact-label">额外保留最近 N 轮原文</div>
+                                    <el-tooltip
+                                        placement="top"
+                                        :show-after="200"
+                                        content="压缩时在摘要后额外保留最近 N 轮原文（user+assistant）。默认 3。设为 0 时仍会至少保留 1 条，保证可续聊。"
+                                    >
+                                        <el-icon class="compact-info-icon"><InfoFilled /></el-icon>
+                                    </el-tooltip>
+                                </div>
                                 <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
                             </div>
                         </div>
                         <div class="compact-field">
-                            <div class="compact-label">备用压缩模型（可空）</div>
+                            <div class="compact-label-row">
+                                <div class="compact-label">备用压缩模型（可空）</div>
+                                <span class="compact-inline-hint">主模型最多重试 3 次，失败后回退备用模型</span>
+                            </div>
                             <el-select v-model="localCompactConfig.fallbackModel" clearable filterable placeholder="为空则仅使用当前模型" style="width: 100%;">
                                 <el-option
                                     v-for="item in compactModelOptions"
@@ -1268,7 +1290,6 @@ defineExpose({ focus, senderRef });
                                     :value="item.value"
                                 />
                             </el-select>
-                            <div class="compact-form-hint">主模型最多重试 3 次，失败后回退备用模型</div>
                         </div>
                         <div class="compact-field">
                             <div class="compact-label">摘要 Prompt</div>
@@ -1276,7 +1297,7 @@ defineExpose({ focus, senderRef });
                         </div>
                         <div class="compact-advanced-actions">
                             <el-button type="warning" plain round @click="applyAdvancedToGlobal">应用到全局</el-button>
-                            <div class="compact-form-hint">将高级参数同步到所有已缓存模型（不改各模型上下文长度）</div>
+                            <div class="compact-form-hint">将高级参数同步到所有已缓存模型（不改各模型上下文长度）。需完全重启应用后生效新 IPC。</div>
                         </div>
                     </div>
                 </div>
@@ -1453,6 +1474,26 @@ html.dark .compact-dialog-scroll::-webkit-scrollbar-thumb {
 .compact-label {
     font-size: 12px;
     color: var(--el-text-color-regular);
+}
+
+.compact-label-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-height: 18px;
+}
+
+.compact-inline-hint {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    line-height: 1.3;
+}
+
+.compact-label-row .compact-info-icon {
+    color: var(--el-text-color-secondary);
+    cursor: help;
+    font-size: 14px;
 }
 
 .compact-progress-title {

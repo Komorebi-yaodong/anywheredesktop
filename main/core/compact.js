@@ -11,7 +11,7 @@ const COMPACT_CACHE_DOC_ID = 'conversation_compact_cache'
 const DEFAULT_CONTEXT_LENGTH = 256 * 1024
 const DEFAULT_TRIGGER_RATIO = 0.9
 const DEFAULT_USER_MESSAGE_TOKEN_BUDGET = 20_000
-const DEFAULT_KEEP_RECENT_ROUNDS = 0
+const DEFAULT_KEEP_RECENT_ROUNDS = 3
 // Structured handoff prompt adapted from local compact skill + Codex-style continuation needs.
 const DEFAULT_COMPACT_PROMPT = [
   'You are performing CONTEXT CHECKPOINT COMPACTION for the same conversation thread.',

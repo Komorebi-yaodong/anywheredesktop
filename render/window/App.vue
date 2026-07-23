@@ -951,26 +951,35 @@ const loadCompactConfigForCurrentModel = async ({ forceRefresh = false } = {}) =
 };
 
 const handleOpenCompactDialog = async () => {
-  await loadCompactConfigForCurrentModel({ forceRefresh: false });
+  // Always resolve once when opening, so context length is correct without manual refresh.
+  await loadCompactConfigForCurrentModel({ forceRefresh: true });
 };
 
 const handleSaveCompactConfig = async (patch = {}) => {
   try {
-    compactConfig.value = {
+    // Only update compact cache; never touch active chat request/abort controllers.
+    const nextPatch = patch && typeof patch === 'object' ? { ...patch } : {};
+    const nextConfig = {
       ...compactConfig.value,
-      ...(patch || {})
+      ...nextPatch
     };
     if (window.api?.updateModelCompactConfig) {
-      const result = await window.api.updateModelCompactConfig(model.value, compactConfig.value);
+      const result = await window.api.updateModelCompactConfig(model.value, nextConfig);
       if (result?.config) {
         compactConfig.value = {
-          ...compactConfig.value,
+          ...nextConfig,
           ...result.config
         };
+      } else {
+        compactConfig.value = nextConfig;
       }
+    } else {
+      compactConfig.value = nextConfig;
     }
+    // Use lightweight toast; avoid any side effects that might abort chat streams.
     showDismissibleMessage.success('压缩参数已保存');
   } catch (error) {
+    console.error('[compact] save config failed:', error);
     showDismissibleMessage.error(`保存压缩参数失败: ${error?.message || error}`);
   }
 };
@@ -1000,20 +1009,51 @@ const handleCancelCompact = () => {
   };
 };
 
+const findCompactionIndexBySnapshot = (snapshotId = '') => {
+  if (!snapshotId) {
+    for (let i = chat_show.value.length - 1; i >= 0; i -= 1) {
+      if (chat_show.value[i]?.role === 'compaction') return i;
+    }
+    return -1;
+  }
+  return chat_show.value.findIndex((msg) => msg?.role === 'compaction' && msg?.snapshotId === snapshotId);
+};
+
 const applyCompactResult = (result) => {
   if (!result?.ok) return;
+
+  // Model-side history becomes compacted (Codex style).
   if (Array.isArray(result.history)) {
     history.value = result.history;
   }
-  if (Array.isArray(result.chatShow)) {
-    chat_show.value = result.chatShow.map((item, index) => ({
-      id: item.id ?? (messageIdCounter.value + index + 1),
-      ...item
-    }));
-    messageIdCounter.value += result.chatShow.length + 1;
-  }
+
+  // UI: insert a compaction marker in place of previous messages, keep them foldable under the marker.
+  // Newer messages after this compaction (if any) remain after the marker.
+  const markerBase = Array.isArray(result.chatShow) ? result.chatShow[0] : null;
+  const marker = {
+    id: messageIdCounter.value++,
+    role: 'compaction',
+    content: result.summary || markerBase?.content || '',
+    summary: result.summary || markerBase?.summary || '',
+    snapshotId: result.snapshotId || markerBase?.snapshotId || `compact_${Date.now()}`,
+    createdAt: Date.now(),
+    collapsed: true,
+    expanded: false,
+    archivedMessages: Array.isArray(result.archive?.chatShowBefore)
+      ? deepCloneSafe(result.archive.chatShowBefore)
+      : deepCloneSafe(chat_show.value),
+    timestamp: new Date().toLocaleString('sv-SE')
+  };
+
+  // Replace entire current visible history with: [compaction marker] (+ future messages can append later)
+  // Because this is a whole-session compact checkpoint.
+  chat_show.value = [marker];
+
   if (result.archive) {
-    compactArchives.value = [...compactArchives.value, result.archive].slice(-20);
+    compactArchives.value = [...compactArchives.value, {
+      ...result.archive,
+      historyAfter: deepCloneSafe(history.value)
+    }].slice(-20);
   }
   if (result.modelConfig) {
     compactConfig.value = {
@@ -1024,18 +1064,30 @@ const applyCompactResult = (result) => {
   scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
 };
 
-const handleRestoreCompact = async () => {
+const handleRestoreCompact = async (payload = null) => {
   if (compacting.value) {
     showDismissibleMessage.warning('压缩进行中，暂不可恢复');
     return;
   }
-  const archive = compactArchives.value[compactArchives.value.length - 1];
+
+  const snapshotId = typeof payload === 'string'
+    ? payload
+    : (payload?.snapshotId || '');
+  let archiveIndex = -1;
+  if (snapshotId) {
+    archiveIndex = compactArchives.value.findIndex((item) => item?.id === snapshotId);
+  }
+  if (archiveIndex < 0) {
+    archiveIndex = compactArchives.value.length - 1;
+  }
+  const archive = archiveIndex >= 0 ? compactArchives.value[archiveIndex] : null;
   if (!archive) {
     showDismissibleMessage.info('没有可恢复的压缩快照');
     return;
   }
+
   try {
-    await ElMessageBox.confirm('将恢复到最近一次压缩前的历史，是否继续？', '恢复压缩前', {
+    await ElMessageBox.confirm('将把该压缩摘要插装还原为压缩前消息，压缩后新增内容会保留。是否继续？', '恢复压缩前', {
       type: 'warning',
       confirmButtonText: '恢复',
       cancelButtonText: '取消'
@@ -1043,11 +1095,39 @@ const handleRestoreCompact = async () => {
   } catch {
     return;
   }
-  history.value = Array.isArray(archive.historyBefore) ? deepCloneSafe(archive.historyBefore) : [];
-  chat_show.value = Array.isArray(archive.chatShowBefore) ? deepCloneSafe(archive.chatShowBefore) : [];
-  compactArchives.value = compactArchives.value.slice(0, -1);
+
+  const markerIndex = findCompactionIndexBySnapshot(archive.id);
+  const restoredMessages = Array.isArray(archive.chatShowBefore)
+    ? deepCloneSafe(archive.chatShowBefore)
+    : [];
+  const restoredHistory = Array.isArray(archive.historyBefore)
+    ? deepCloneSafe(archive.historyBefore)
+    : [];
+
+  if (markerIndex >= 0) {
+    // UI splice: replace only the compaction marker with archived pre-compact messages.
+    // Keep messages after the marker (new conversation content after compact).
+    const afterMessages = chat_show.value.slice(markerIndex + 1);
+    chat_show.value = [
+      ...chat_show.value.slice(0, markerIndex),
+      ...restoredMessages,
+      ...afterMessages
+    ];
+
+    // Model history splice: replace compacted prefix with pre-compact history,
+    // keep any post-compact growth after the previous compacted length.
+    const compactedLen = Array.isArray(archive.historyAfter) ? archive.historyAfter.length : history.value.length;
+    const postCompactHistory = history.value.slice(Math.min(compactedLen, history.value.length));
+    history.value = [...restoredHistory, ...postCompactHistory];
+  } else {
+    // Fallback full restore
+    history.value = restoredHistory;
+    chat_show.value = restoredMessages;
+  }
+
+  compactArchives.value = compactArchives.value.filter((_, idx) => idx !== archiveIndex);
   scheduleAutoSave({ reason: 'compact-restored', immediate: true });
-  showDismissibleMessage.success('已恢复压缩前历史');
+  showDismissibleMessage.success('已插装恢复压缩前消息');
 };
 
 const deepCloneSafe = (value) => {
@@ -8262,15 +8342,51 @@ const handleOpenSearch = () => {
 };
 
 const navMessages = computed(() => {
-  return chat_show.value
-    .map((msg, index) => ({ ...msg, originalIndex: index })) // 保留原始索引用于跳转
-    .filter(msg => msg.role !== 'system');
+  const nodes = [];
+  chat_show.value.forEach((msg, index) => {
+    if (!msg || msg.role === 'system') return;
+    if (msg.role === 'compaction') {
+      nodes.push({
+        ...msg,
+        originalIndex: index,
+        navKind: 'compaction',
+        role: 'compaction'
+      });
+      // When expanded, surface archived original messages into the timeline for navigation.
+      if (msg.expanded && Array.isArray(msg.archivedMessages)) {
+        msg.archivedMessages.forEach((archived, archivedIndex) => {
+          if (!archived || archived.role === 'system') return;
+          nodes.push({
+            ...archived,
+            id: `${msg.id || index}-archived-${archived.id || archivedIndex}`,
+            originalIndex: index,
+            navKind: 'archived',
+            archivedIndex,
+            role: archived.role
+          });
+        });
+      }
+      return;
+    }
+    nodes.push({
+      ...msg,
+      originalIndex: index,
+      navKind: 'normal'
+    });
+  });
+  return nodes;
 });
 
 
 
 const getMessagePreviewText = (message) => {
   let text = '';
+
+  if (message?.role === 'compaction' || message?.navKind === 'compaction') {
+    text = message.summary || (typeof message.content === 'string' ? message.content : '上下文已压缩');
+    text = String(text || '').replace(/\s+/g, ' ').trim();
+    return text.length > 40 ? `${text.slice(0, 40)}…` : (text || '上下文已压缩');
+  }
 
   // 1. 尝试获取文本内容
   if (typeof message.content === 'string') {
@@ -8396,8 +8512,9 @@ const scrollToMessageByIndex = (index) => {
                   effect="dark">
                   <div class="timeline-node" :class="[
                     msg.role,
+                    msg.navKind === 'archived' ? 'archived' : '',
                     { 'active': focusedMessageIndex === msg.originalIndex }
-                  ]" :data-role-label="msg.role === 'user' ? '你' : 'AI'">
+                  ]" :data-role-label="msg.role === 'compaction' ? '压' : (msg.role === 'user' ? '你' : 'AI')">
                   </div>
                 </el-tooltip>
               </div>
@@ -9756,6 +9873,15 @@ html.dark .app-container {
     background: rgba(0, 0, 0, 0.96);
   }
 
+  &.compaction {
+    background: rgba(233, 30, 99, 0.95);
+    height: 3px;
+  }
+
+  &.archived {
+    opacity: 0.55;
+  }
+
   &.active {
     width: 15px;
     height: 3px;
@@ -9789,6 +9915,10 @@ html.dark {
 
   .timeline-node.assistant {
     background: rgba(255, 255, 255, 0.96);
+  }
+
+  .timeline-node.compaction {
+    background: rgba(255, 128, 171, 0.98);
   }
 }
 

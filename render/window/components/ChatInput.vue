@@ -103,13 +103,14 @@ watch(() => props.compacting, (isCompacting) => {
     }
 });
 
-const openCompactDialog = () => {
+const openCompactDialog = async () => {
     if (props.compacting) {
         compactDialogVisible.value = true;
         return;
     }
-    emit('open-compact-dialog');
     compactDialogVisible.value = true;
+    // Resolve context length immediately after opening so UI shows correct value ASAP.
+    emit('open-compact-dialog');
 };
 
 const saveCompactConfig = () => {
@@ -1156,41 +1157,69 @@ defineExpose({ focus, senderRef });
         </template>
     </el-dialog>
 
-    <el-dialog v-model="compactDialogVisible" title="会话压缩" width="min(560px, 94vw)"
-        class="compact-config-dialog" append-to-body destroy-on-close :close-on-click-modal="!compacting">
+    <el-dialog v-model="compactDialogVisible" width="min(620px, 94vw)"
+        class="compact-config-dialog glass-dialog" append-to-body destroy-on-close :close-on-click-modal="!compacting"
+        :show-close="!compacting">
+        <template #header>
+            <div class="compact-dialog-header">
+                <div class="compact-dialog-title">会话压缩</div>
+                <div class="compact-dialog-subtitle">Codex 风格上下文检查点 · 摘要交接</div>
+            </div>
+        </template>
+
         <div v-if="compacting" class="compact-progress-block">
             <div class="compact-progress-title">{{ compactStatusText }}</div>
-            <el-progress :percentage="compactPercent" :stroke-width="12" striped striped-flow />
+            <el-progress :percentage="compactPercent" :stroke-width="14" striped striped-flow status="success" />
             <div class="compact-progress-actions">
-                <el-button type="danger" plain @click="cancelCompact">取消压缩</el-button>
+                <el-button type="danger" plain round @click="cancelCompact">取消压缩</el-button>
             </div>
         </div>
         <div v-else class="compact-config-block">
-            <el-form label-position="top" class="compact-form">
-                <el-form-item label="启用自动压缩（回合结束后检测）">
-                    <el-switch v-model="localCompactConfig.autoCompactEnabled" />
-                </el-form-item>
-                <el-form-item label="触发阈值（上下文占用比例）">
-                    <el-input-number v-model="localCompactConfig.triggerRatio" :min="0.1" :max="0.99" :step="0.05" :precision="2" />
-                    <span class="compact-form-hint">Codex 默认约 0.90</span>
-                </el-form-item>
-                <el-form-item label="模型上下文长度（tokens）">
+            <div class="compact-section-card">
+                <div class="compact-section-title">触发策略</div>
+                <div class="compact-grid-2">
+                    <div class="compact-field">
+                        <div class="compact-label">自动压缩</div>
+                        <el-switch v-model="localCompactConfig.autoCompactEnabled" active-text="回合结束后检测" />
+                    </div>
+                    <div class="compact-field">
+                        <div class="compact-label">触发阈值</div>
+                        <el-input-number v-model="localCompactConfig.triggerRatio" :min="0.1" :max="0.99" :step="0.05" :precision="2" />
+                        <div class="compact-form-hint">Codex 默认 0.90（上下文 90%）</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="compact-section-card">
+                <div class="compact-section-title">上下文窗口</div>
+                <div class="compact-field">
+                    <div class="compact-label">模型上下文长度（tokens）</div>
                     <div class="compact-inline-row">
-                        <el-input-number v-model="localCompactConfig.contextLength" :min="1024" :step="1024" :controls="true" />
-                        <el-button :icon="RefreshRight" @click="refreshCompactContext">重新检索</el-button>
+                        <el-input-number v-model="localCompactConfig.contextLength" :min="1024" :step="1024" />
+                        <el-button :icon="RefreshRight" round @click="refreshCompactContext">重新检索</el-button>
                     </div>
                     <div class="compact-form-hint">
                         来源：{{ localCompactConfig.contextLengthSource || 'default' }}
                         <span v-if="localCompactConfig.resolvedId"> · 缓存键：{{ localCompactConfig.resolvedId }}</span>
                     </div>
-                </el-form-item>
-                <el-form-item label="保留最近用户消息 token 预算">
-                    <el-input-number v-model="localCompactConfig.userMessageTokenBudget" :min="1000" :step="1000" />
-                </el-form-item>
-                <el-form-item label="额外保留最近 N 轮原文">
-                    <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
-                </el-form-item>
-                <el-form-item label="备用压缩模型（可空）">
+                </div>
+                <div class="compact-grid-2">
+                    <div class="compact-field">
+                        <div class="compact-label">用户消息 token 预算</div>
+                        <el-input-number v-model="localCompactConfig.userMessageTokenBudget" :min="1000" :step="1000" />
+                        <div class="compact-form-hint">Codex 默认 20000</div>
+                    </div>
+                    <div class="compact-field">
+                        <div class="compact-label">额外保留最近 N 轮原文</div>
+                        <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="compact-section-card">
+                <div class="compact-section-title">摘要模型</div>
+                <div class="compact-field">
+                    <div class="compact-label">备用压缩模型（可空）</div>
                     <el-select v-model="localCompactConfig.fallbackModel" clearable filterable placeholder="为空则仅使用当前模型" style="width: 100%;">
                         <el-option
                             v-for="item in compactModelOptions"
@@ -1199,19 +1228,22 @@ defineExpose({ focus, senderRef });
                             :value="item.value"
                         />
                     </el-select>
-                </el-form-item>
-                <el-form-item label="自定义摘要 Prompt">
-                    <el-input v-model="localCompactConfig.compactPrompt" type="textarea" :autosize="{ minRows: 4, maxRows: 10 }" />
-                </el-form-item>
-            </el-form>
+                    <div class="compact-form-hint">主模型最多重试 3 次，失败后回退备用模型</div>
+                </div>
+                <div class="compact-field">
+                    <div class="compact-label">摘要 Prompt（Codex）</div>
+                    <el-input v-model="localCompactConfig.compactPrompt" type="textarea" :autosize="{ minRows: 5, maxRows: 12 }" />
+                </div>
+            </div>
         </div>
+
         <template #footer>
             <div class="compact-dialog-footer">
-                <el-button v-if="canRestoreCompact && !compacting" @click="restoreCompact">恢复压缩前</el-button>
+                <el-button v-if="canRestoreCompact && !compacting" round @click="restoreCompact">恢复压缩前</el-button>
                 <div class="compact-dialog-footer-right">
-                    <el-button @click="compactDialogVisible = false" :disabled="compacting">关闭</el-button>
-                    <el-button v-if="!compacting" @click="saveCompactConfig">保存参数</el-button>
-                    <el-button v-if="!compacting" type="primary" @click="runCompactNow">立即压缩</el-button>
+                    <el-button round @click="compactDialogVisible = false" :disabled="compacting">关闭</el-button>
+                    <el-button v-if="!compacting" round @click="saveCompactConfig">保存参数</el-button>
+                    <el-button v-if="!compacting" type="primary" round @click="runCompactNow">立即压缩</el-button>
                 </div>
             </div>
         </template>
@@ -1220,8 +1252,41 @@ defineExpose({ focus, senderRef });
 </template>
 
 <style scoped>
+.compact-config-dialog :deep(.el-dialog) {
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid var(--el-border-color-lighter);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16);
+}
+
+.compact-config-dialog :deep(.el-dialog__header) {
+    margin-right: 0;
+    padding: 16px 18px 8px;
+}
+
 .compact-config-dialog :deep(.el-dialog__body) {
-    padding-top: 8px;
+    padding: 8px 18px 4px;
+}
+
+.compact-config-dialog :deep(.el-dialog__footer) {
+    padding: 10px 18px 16px;
+}
+
+.compact-dialog-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.compact-dialog-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--el-text-color-primary);
+}
+
+.compact-dialog-subtitle {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
 }
 
 .compact-progress-block,
@@ -1229,6 +1294,39 @@ defineExpose({ focus, senderRef });
     display: flex;
     flex-direction: column;
     gap: 12px;
+}
+
+.compact-section-card {
+    border: 1px solid var(--el-border-color-lighter);
+    background: var(--el-fill-color-blank);
+    border-radius: 12px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.compact-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+}
+
+.compact-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.compact-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.compact-label {
+    font-size: 12px;
+    color: var(--el-text-color-regular);
 }
 
 .compact-progress-title {
@@ -1257,17 +1355,28 @@ defineExpose({ focus, senderRef });
 }
 
 .compact-form-hint {
-    margin-left: 8px;
     font-size: 12px;
     color: var(--el-text-color-secondary);
+    line-height: 1.4;
 }
 
 .compact-inline-row .el-input-number {
     flex: 1;
 }
 
-html.dark .compact-progress-title {
-    color: var(--el-text-color-primary);
+html.dark .compact-section-card {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+html.dark .compact-config-dialog :deep(.el-dialog) {
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+@media (max-width: 720px) {
+    .compact-grid-2 {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* Base Styles */

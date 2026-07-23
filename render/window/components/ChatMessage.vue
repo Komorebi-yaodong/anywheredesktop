@@ -39,6 +39,29 @@ const editedContent = ref('');
 const isCompactionExpanded = ref(false);
 const messageWrapperRef = ref(null);
 const markdownRootRef = ref(null);
+
+watch(() => props.message?.expanded, (expanded) => {
+  if (props.message?.role === 'compaction') {
+    isCompactionExpanded.value = Boolean(expanded);
+  }
+}, { immediate: true });
+
+const toggleCompactionExpanded = () => {
+  isCompactionExpanded.value = !isCompactionExpanded.value;
+  if (props.message && typeof props.message === 'object') {
+    props.message.expanded = isCompactionExpanded.value;
+  }
+};
+
+const formatArchivedPreview = (message = {}) => {
+  if (typeof message?.content === 'string') return message.content;
+  if (Array.isArray(message?.content)) {
+    const textPart = message.content.find((part) => part?.type === 'text' && part.text);
+    if (textPart?.text) return textPart.text;
+  }
+  if (typeof message?.summary === 'string') return message.summary;
+  return '[无文本内容]';
+};
 let copyButtonRafId = 0;
 let copyButtonTimerId = 0;
 
@@ -915,21 +938,61 @@ const truncateFilename = (filename, maxLength = 30) => {
 <template>
   <div class="chat-message" v-if="message.role !== 'system'">
 
-    <!-- 上下文压缩标记 -->
-    <div v-if="message.role === 'compaction'" class="message-wrapper compaction-wrapper" ref="messageWrapperRef">
-      <div class="compaction-card">
-        <div class="compaction-header">
-          <span class="compaction-title">上下文已压缩</span>
+    <!-- 上下文压缩标记：样式对齐 AI 消息气泡，并支持展开查看压缩前消息 -->
+    <div v-if="message.role === 'compaction'" class="message-wrapper ai-wrapper compaction-wrapper" ref="messageWrapperRef">
+      <div class="message-meta-header ai-meta-header">
+        <img :src="aiAvatar" alt="AI Avatar" class="chat-avatar-top ai-avatar">
+        <div class="meta-info-column">
+          <div class="meta-name-row">
+            <span class="ai-name">Context Compacted</span>
+          </div>
           <span class="timestamp-row" v-if="message.timestamp">{{ formatTimestamp(message.timestamp) }}</span>
         </div>
-        <div class="compaction-summary" :class="{ 'is-collapsed': message.collapsed !== false && !isCompactionExpanded }">
-          {{ message.summary || (typeof message.content === 'string' ? message.content : '会话上下文已压缩为摘要。') }}
-        </div>
-        <div class="compaction-actions">
-          <el-button size="small" text type="primary" @click="isCompactionExpanded = !isCompactionExpanded">
-            {{ isCompactionExpanded ? '收起摘要' : '展开摘要' }}
-          </el-button>
-          <el-button size="small" text @click="emit('restore-compact', message)">恢复压缩前</el-button>
+      </div>
+
+      <Bubble class="ai-bubble compaction-bubble" placement="start" shape="corner" maxWidth="100%">
+        <template #content>
+          <div class="compaction-summary-block">
+            <div class="compaction-badge">上下文已压缩</div>
+            <div class="markdown-wrapper" :class="{ 'collapsed': !isCompactionExpanded }">
+              <XMarkdown
+                :markdown="message.summary || (typeof message.content === 'string' ? message.content : '会话上下文已压缩为摘要。')"
+                :is-dark="isDarkMode"
+                :enable-latex="true"
+                :mermaid-config="mermaidConfig"
+                :default-theme-mode="isDarkMode ? 'dark' : 'light'"
+                :themes="{ light: 'github-light', dark: 'github-dark-default' }"
+                :allow-html="true"
+              />
+            </div>
+          </div>
+        </template>
+        <template #footer>
+          <div class="message-footer">
+            <div class="footer-wrapper">
+              <div class="footer-actions">
+                <el-button size="small" @click="toggleCompactionExpanded" circle>
+                  <el-icon>
+                    <component :is="isCompactionExpanded ? CaretTop : CaretBottom" />
+                  </el-icon>
+                </el-button>
+                <el-button size="small" type="primary" plain @click="emit('restore-compact', message)">恢复压缩前</el-button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </Bubble>
+
+      <div v-if="isCompactionExpanded && Array.isArray(message.archivedMessages) && message.archivedMessages.length" class="compaction-archived-list">
+        <div class="compaction-archived-title">压缩前消息（只读）</div>
+        <div
+          v-for="(archived, archivedIndex) in message.archivedMessages"
+          :key="archived.id || archivedIndex"
+          class="compaction-archived-item"
+          :class="archived.role"
+        >
+          <div class="compaction-archived-role">{{ archived.role === 'user' ? '你' : (archived.role === 'assistant' ? 'AI' : archived.role) }}</div>
+          <div class="compaction-archived-text">{{ formatArchivedPreview(archived) }}</div>
         </div>
       </div>
     </div>
@@ -1153,58 +1216,73 @@ const truncateFilename = (filename, maxLength = 30) => {
 
 .compaction-wrapper {
   width: 100%;
-  margin: 8px 0 12px;
 }
 
-.compaction-card {
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-light);
-  border-radius: 12px;
-  padding: 12px 14px;
-}
-
-.compaction-header {
+.compaction-summary-block {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 8px;
-  margin-bottom: 8px;
 }
 
-.compaction-title {
-  font-weight: 600;
-  color: var(--el-color-primary);
+.compaction-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #c2185b;
+  background: rgba(233, 30, 99, 0.12);
+  border: 1px solid rgba(233, 30, 99, 0.28);
 }
 
-.compaction-summary {
+.compaction-archived-list {
+  margin-top: 10px;
+  margin-left: 44px;
+  border-left: 2px solid rgba(233, 30, 99, 0.35);
+  padding-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compaction-archived-title {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.compaction-archived-item {
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-blank);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.compaction-archived-role {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 4px;
+}
+
+.compaction-archived-text {
+  font-size: 13px;
+  color: var(--el-text-color-primary);
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--el-text-color-regular);
-  font-size: 13px;
-  line-height: 1.55;
-  max-height: none;
-}
-
-.compaction-summary.is-collapsed {
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-.compaction-actions {
-  margin-top: 8px;
-  display: flex;
-  gap: 4px;
+html.dark .compaction-badge {
+  color: #ff80ab;
+  background: rgba(233, 30, 99, 0.18);
+  border-color: rgba(255, 128, 171, 0.35);
 }
 
-html.dark .compaction-card {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.12);
-}
-
-html.dark .compaction-title {
-  color: var(--el-color-primary-light-3);
+html.dark .compaction-archived-item {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .message-wrapper {

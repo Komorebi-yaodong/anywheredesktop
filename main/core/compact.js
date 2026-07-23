@@ -12,21 +12,22 @@ const DEFAULT_CONTEXT_LENGTH = 256 * 1024
 const DEFAULT_TRIGGER_RATIO = 0.9
 const DEFAULT_USER_MESSAGE_TOKEN_BUDGET = 20_000
 const DEFAULT_KEEP_RECENT_ROUNDS = 0
+// Align with Codex compact prompt (codex-rs/prompts/templates/compact/prompt.md)
 const DEFAULT_COMPACT_PROMPT = [
-  '你正在执行上下文压缩（CONTEXT CHECKPOINT COMPACTION）。',
-  '请为下一个将继续任务的模型创建交接摘要。',
+  'You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.',
   '',
-  '必须包含：',
-  '- 当前进度与关键决策',
-  '- 重要上下文、约束或用户偏好',
-  '- 剩余待办（清晰下一步）',
-  '- 继续任务所需的关键数据、示例或引用',
+  'Include:',
+  '- Current progress and key decisions made',
+  '- Important context, constraints, or user preferences',
+  '- What remains to be done (clear next steps)',
+  '- Any critical data, examples, or references needed to continue',
   '',
-  '要求：简洁、结构化、便于无缝续作。'
+  'Be concise, structured, and focused on helping the next LLM seamlessly continue the work.'
 ].join('\n')
 
+// Align with Codex summary prefix (codex-rs/prompts/templates/compact/summary_prefix.md)
 const DEFAULT_SUMMARY_PREFIX =
-  '另一模型已开始处理该问题并给出思考摘要。你也可利用其工具状态。请在此基础上继续，避免重复工作。摘要如下：'
+  'Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:'
 
 const MODEL_RESOLVE_URL = 'https://llm-model.141277.xyz/v1/resolve'
 const MODEL_RESOLVE_AUTH = 'Bearer komorebi'
@@ -639,17 +640,20 @@ export async function runConversationCompaction({
   })
 
   const snapshotId = `compact_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+  const sourceHistory = deepClone(messages)
+  const sourceChatShow = deepClone(chatShow)
   const archive = {
     id: snapshotId,
     createdAt: Date.now(),
     model: modelValue,
     usedModelLabel,
     summary: summaryText,
-    historyBefore: deepClone(messages),
-    chatShowBefore: deepClone(chatShow),
+    historyBefore: sourceHistory,
+    chatShowBefore: sourceChatShow,
     configSnapshot: deepClone(modelConfig)
   }
 
+  // UI keeps original messages (folded under compaction), while model history becomes compacted.
   const compactedChatShow = [
     {
       id: Date.now(),
@@ -659,6 +663,8 @@ export async function runConversationCompaction({
       snapshotId,
       createdAt: Date.now(),
       collapsed: true,
+      expanded: false,
+      archivedMessages: sourceChatShow,
       timestamp: new Date().toLocaleString('sv-SE')
     }
   ]

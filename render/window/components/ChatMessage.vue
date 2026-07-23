@@ -943,7 +943,13 @@ const truncateFilename = (filename, maxLength = 30) => {
     <!-- 压缩消息：样式对齐普通 AI 消息，默认折叠摘要，可展开；不可编辑 -->
     <div v-if="message.role === 'compaction'" class="message-wrapper ai-wrapper" ref="messageWrapperRef">
       <div class="message-meta-header ai-meta-header">
-        <img :src="aiAvatar" alt="AI Avatar" class="chat-avatar-top ai-avatar">
+        <img
+          :src="aiAvatar"
+          alt="AI Avatar"
+          class="chat-avatar-top ai-avatar"
+          title="点击折叠/展开摘要"
+          @click="toggleCompactionExpanded"
+        >
         <div class="meta-info-column">
           <div class="meta-name-row">
             <span class="ai-name">上下文压缩</span>
@@ -955,7 +961,7 @@ const truncateFilename = (filename, maxLength = 30) => {
       <Bubble class="ai-bubble" placement="start" shape="corner" maxWidth="100%">
         <template #content>
           <div ref="markdownRootRef" class="markdown-wrapper" :class="{ 'collapsed': !isCompactionExpanded }" @click.capture="handleMarkdownLinkClick">
-            <div class="compaction-inline-badge">上下文已压缩</div>
+            <div class="compaction-inline-badge" @click.stop="toggleCompactionExpanded">上下文已压缩</div>
             <XMarkdown
               :markdown="message.summary || (typeof message.content === 'string' ? message.content : '会话上下文已压缩为摘要。')"
               :is-dark="isDarkMode"
@@ -1217,6 +1223,8 @@ const truncateFilename = (filename, maxLength = 30) => {
   color: #c2185b;
   background: rgba(233, 30, 99, 0.12);
   border: 1px solid rgba(233, 30, 99, 0.28);
+  cursor: pointer;
+  user-select: none;
 }
 
 html.dark .compaction-inline-badge {

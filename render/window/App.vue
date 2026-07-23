@@ -8425,48 +8425,41 @@ const deleteMessage = (index) => {
     return;
   }
 
-  let history_idx = -1;
-  let show_counter = -1;
-  for (let i = 0; i < history.value.length; i++) {
-    if (history.value[i].role !== 'tool') {
-      show_counter++;
-    }
-    if (show_counter === index) {
-      history_idx = i;
-      break;
-    }
-  }
+  // 级联压缩后：chat_show 是完整 UI 真源，history 只是 AI 投影（更短）。
+  // 不能再按 1:1 索引映射；以 chat_show 删除为准，再重算 history。
+  let show_start_idx = index;
+  let show_delete_count = 1;
 
-  if (history_idx === -1) {
-    console.error("关键错误: 无法将 chat_show 索引映射到 history 索引。中止删除。");
-    showDismissibleMessage.error("删除失败：消息状态不一致。");
-    return;
-  }
-
-  const messageToDeleteInHistory = history.value[history_idx];
-  let history_start_idx = history_idx;
-  let history_end_idx = history_idx;
-
+  // 若删除的是带 tool_calls 的 assistant，尽量把紧随其后的 tool 气泡一并删掉（若 UI 有展示）
   if (
-    messageToDeleteInHistory.role === 'assistant' &&
-    messageToDeleteInHistory.tool_calls &&
-    messageToDeleteInHistory.tool_calls.length > 0
+    msgToDeleteInShow?.role === 'assistant' &&
+    Array.isArray(msgToDeleteInShow.tool_calls) &&
+    msgToDeleteInShow.tool_calls.length > 0
   ) {
-    while (history.value[history_end_idx + 1]?.role === 'tool') {
-      history_end_idx++;
+    let end = index;
+    while (chat_show.value[end + 1]?.role === 'tool') {
+      end += 1;
     }
+    show_delete_count = end - index + 1;
   }
 
-  const history_delete_count = history_end_idx - history_start_idx + 1;
-  const show_delete_count = 1;
-  const show_start_idx = index;
-
-  if (history_delete_count > 0) {
-    history.value.splice(history_start_idx, history_delete_count);
+  // 删除压缩检查点本身：仅移除 marker；被它“覆盖”的旧消息本来就在列表里
+  if (msgToDeleteInShow?.role === 'compaction') {
+    show_start_idx = index;
+    show_delete_count = 1;
   }
 
-  if (show_delete_count > 0) {
-    chat_show.value.splice(show_start_idx, show_delete_count);
+  chat_show.value.splice(show_start_idx, show_delete_count);
+
+  // 删除后重算最外层可还原标记 + AI 投影
+  if (typeof markOutermostCanRestore === 'function') {
+    markOutermostCanRestore();
+  }
+  if (typeof syncHistoryFromChatShow === 'function') {
+    syncHistoryFromChatShow();
+  } else {
+    // 兼容：无压缩时尽量按旧逻辑从 history 对齐（不应走到这里）
+    history.value = history.value;
   }
 
   const deletedIndexInShow = index;
@@ -8474,8 +8467,8 @@ const deleteMessage = (index) => {
   for (const collapsedIdx of collapsedMessages.value) {
     if (collapsedIdx < deletedIndexInShow) {
       newCollapsedMessages.add(collapsedIdx);
-    } else if (collapsedIdx > deletedIndexInShow) {
-      newCollapsedMessages.add(collapsedIdx - 1);
+    } else if (collapsedIdx >= deletedIndexInShow + show_delete_count) {
+      newCollapsedMessages.add(collapsedIdx - show_delete_count);
     }
   }
   collapsedMessages.value = newCollapsedMessages;

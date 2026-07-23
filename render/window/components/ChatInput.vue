@@ -106,18 +106,16 @@ const contextLengthSourceLabel = computed(() => {
     return source;
 });
 
-watch(() => props.compacting, (isCompacting) => {
-    if (isCompacting) {
-        compactDialogVisible.value = true;
+// 自动压缩时不要强行打开配置弹窗；仅当用户已打开弹窗时，在弹窗内展示进度
+watch(() => props.compacting, (isCompacting, wasCompacting) => {
+    if (!isCompacting && wasCompacting && compactDialogVisible.value) {
+        // 手动压缩结束：保留弹窗（用户可继续改参数/关闭）；不自动跳回
     }
 });
 
 const openCompactDialog = async () => {
-    if (props.compacting) {
-        compactDialogVisible.value = true;
-        return;
-    }
     compactDialogVisible.value = true;
+    if (props.compacting) return;
     // Resolve context length immediately after opening so UI shows correct value ASAP.
     emit('open-compact-dialog');
 };
@@ -158,6 +156,8 @@ const applyAdvancedToGlobal = () => {
 };
 
 const runCompactNow = () => {
+    // 用户主动压缩：保持弹窗打开以显示进度
+    compactDialogVisible.value = true;
     emit('save-compact-config', {
         ...localCompactConfig.value,
         contextLengthManual: true,
@@ -1217,6 +1217,7 @@ defineExpose({ focus, senderRef });
         </template>
 
         <div class="compact-dialog-scroll">
+            <!-- 压缩进行中：只显示进度 + 取消，不展示底部关闭等按钮 -->
             <div v-if="compacting" class="compact-progress-block">
                 <div class="compact-progress-title">{{ compactStatusText }}</div>
                 <el-progress :percentage="compactPercent" :stroke-width="14" striped striped-flow status="success" />
@@ -1302,14 +1303,15 @@ defineExpose({ focus, senderRef });
             </div>
         </div>
 
-        <template #footer>
+        <!-- 压缩中不渲染 footer，避免「取消压缩」旁边再出现无用的关闭 -->
+        <template v-if="!compacting" #footer>
             <div class="compact-dialog-footer">
-                <el-button v-if="canRestoreCompact && !compacting" round @click="restoreCompact">恢复最外层压缩</el-button>
+                <el-button v-if="canRestoreCompact" round @click="restoreCompact">恢复最外层压缩</el-button>
                 <div class="compact-dialog-footer-right">
-                    <el-button round @click="compactDialogVisible = false" :disabled="compacting">关闭</el-button>
-                    <el-button v-if="!compacting" round @click="resetCompactConfigToDefault">恢复默认</el-button>
-                    <el-button v-if="!compacting" round @click="saveCompactConfig">保存参数</el-button>
-                    <el-button v-if="!compacting" type="primary" round @click="runCompactNow">立即压缩</el-button>
+                    <el-button round @click="compactDialogVisible = false">关闭</el-button>
+                    <el-button round @click="resetCompactConfigToDefault">恢复默认</el-button>
+                    <el-button round @click="saveCompactConfig">保存参数</el-button>
+                    <el-button type="primary" round @click="runCompactNow">立即压缩</el-button>
                 </div>
             </div>
         </template>

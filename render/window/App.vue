@@ -2266,31 +2266,42 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   return assistantBubbleIndex;
 };
 
+// 单条 tool 结果进入 history 的硬顶，防止第三方 MCP / 意外大输出瞬间撑爆上下文
+const MAX_TOOL_RESULT_CHARS = 48 * 1000;
+
+const truncateToolResultForHistory = (text = '') => {
+  const value = String(text ?? '');
+  if (value.length <= MAX_TOOL_RESULT_CHARS) return value;
+  const head = Math.floor(MAX_TOOL_RESULT_CHARS * 0.2);
+  const tail = MAX_TOOL_RESULT_CHARS - head - 160;
+  return `${value.slice(0, head)}\n\n--- [SYSTEM NOTE: TOOL RESULT TRUNCATED] ---\nOriginal characters: ${value.length}. Kept head ${head} + tail ${Math.max(0, tail)} chars to protect conversation context.\n\n${value.slice(-Math.max(0, tail))}`;
+};
+
 const formatToolResult = (result) => {
-  if (result == null) return '';
-  if (typeof result === 'string') return result;
-  if (Array.isArray(result)) {
+  let text = '';
+  if (result == null) text = '';
+  else if (typeof result === 'string') text = result;
+  else if (Array.isArray(result)) {
     const textItems = result.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text);
-    if (textItems.length > 0) return textItems.join('\n\n');
-    try {
-      return JSON.stringify(result, null, 2);
-    } catch {
-      return String(result);
+    if (textItems.length > 0) text = textItems.join('\n\n');
+    else {
+      try { text = JSON.stringify(result, null, 2); } catch { text = String(result); }
     }
-  }
-  if (typeof result === 'object') {
-    if (typeof result.content === 'string') return result.content;
-    if (Array.isArray(result.content)) {
+  } else if (typeof result === 'object') {
+    if (typeof result.content === 'string') text = result.content;
+    else if (Array.isArray(result.content)) {
       const textItems = result.content.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text);
-      if (textItems.length > 0) return textItems.join('\n\n');
+      if (textItems.length > 0) text = textItems.join('\n\n');
+      else {
+        try { text = JSON.stringify(result, null, 2); } catch { text = String(result); }
+      }
+    } else {
+      try { text = JSON.stringify(result, null, 2); } catch { text = String(result); }
     }
-    try {
-      return JSON.stringify(result, null, 2);
-    } catch {
-      return String(result);
-    }
+  } else {
+    text = String(result);
   }
-  return String(result);
+  return truncateToolResultForHistory(text);
 };
 
 
@@ -8384,8 +8395,20 @@ const askAI = async (forceSend = false) => {
         );
 
         throwIfTurnAborted();
-        history.value.push(...toolMessages);
-        // 同步 tool 结果到当前 UI 气泡（已在 map 内写 uiToolCall.result）
+        // 统一硬截断 tool 结果（覆盖 Skill/BetterWork 等未走 formatToolResult 的路径）
+        const safeToolMessages = toolMessages.map((msg) => ({
+          ...msg,
+          content: truncateToolResultForHistory(msg?.content)
+        }));
+        // UI 气泡同步截断，避免显示与 history 不一致的超长结果
+        if (Array.isArray(currentBubble?.tool_calls)) {
+          currentBubble.tool_calls.forEach((tc) => {
+            if (tc && Object.prototype.hasOwnProperty.call(tc, 'result')) {
+              tc.result = truncateToolResultForHistory(tc.result);
+            }
+          });
+        }
+        history.value.push(...safeToolMessages);
         scheduleAutoSave({ reason: 'tool-calls-completed', immediate: true });
         // 工具调用完成后，把缓冲区消息插入历史，使下一轮请求即可纳入
         throwIfTurnAborted();

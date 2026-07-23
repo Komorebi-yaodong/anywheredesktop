@@ -66,7 +66,10 @@ async function callParentShell(action, payload, signal = null) {
     return handleBgShellRequest(action, payload);
 }
 
-const MAX_READ = 128 * 1000; // 128K characters
+// 单次读取默认上限：过大容易一次 tool 结果就撑爆对话上下文，触发频繁自动压缩
+// ~32K 字符约 8k–12k tokens，足够多数源码/文档片段，需要更多时用 offset/分页
+const MAX_READ = 32 * 1000;
+const MAX_READ_HARD = 48 * 1000; // 显式请求也不能超过硬顶
 
 const subAgentTasks = new Map();
 const MAX_SUBAGENT_TASKS = 100;
@@ -941,7 +944,7 @@ IMPORTANT:
                 properties: {
                     shell_id: { type: "string", description: "The ID returned when starting the background task." },
                     offset: { type: "integer", description: "Character offset to start reading from (for scrolling logs).", default: 0 },
-                    length: { type: "integer", description: "Number of characters to read.", default: MAX_READ }
+                    length: { type: "integer", description: `Number of characters to read. Defaults to ${MAX_READ}, hard cap ${MAX_READ_HARD}.`, default: MAX_READ }
                 },
                 required: ["shell_id"]
             }
@@ -983,7 +986,7 @@ IMPORTANT:
                 properties: {
                     url: { type: "string", description: "The URL of the webpage to read." },
                     offset: { type: "integer", description: "Optional. The character position to start reading from. Defaults to 0.", default: 0 },
-                    length: { type: "integer", description: `Optional. Number of characters to read. Defaults to ${MAX_READ}.`, default: MAX_READ }
+                    length: { type: "integer", description: `Optional. Number of characters to read. Defaults to ${MAX_READ}, hard cap ${MAX_READ_HARD}. Prefer smaller ranges for large pages.`, default: MAX_READ }
                 },
                 required: ["url"]
             }
@@ -1091,7 +1094,7 @@ IMPORTANT:
                     window_id: { type: "string", description: "The window_id of the target agent." },
                     message_index: { type: "integer", description: "Optional. Index of the message. 0=System, 1=First User Msg, -1=Latest. Leave empty for outline." },
                     offset: { type: "integer", description: "Optional. Character offset.", default: 0 },
-                    length: { type: "integer", description: "Optional. Max characters.", default: 128000 }
+                    length: { type: "integer", description: `Optional. Max characters. Defaults to ${MAX_READ}, hard cap ${MAX_READ_HARD}.`, default: MAX_READ }
                 },
                 required: ["window_id"]
             }
@@ -2312,8 +2315,11 @@ ${contextBlock}
     // 3. Read File
     read_file: async ({ file_path, offset = 0, length = MAX_READ, start_line, end_line, show_line_numbers = true }, context, signal) => {
         try {
-            const MAX_SINGLE_READ = MAX_READ;
-            const readLength = Math.min(length, MAX_SINGLE_READ);
+            const requested = Number(length);
+            const readLength = Math.min(
+                Number.isFinite(requested) && requested > 0 ? requested : MAX_READ,
+                MAX_READ_HARD
+            );
             let fileForHandler;
 
             if (file_path.startsWith('http://') || file_path.startsWith('https://')) {
@@ -2418,7 +2424,7 @@ ${contextBlock}
                     }
 
                     const lineLen = lineContent.length + 1; // +1 for '\n'
-                    if (currentLength + lineLen > MAX_READ && i > startIdx) {
+                    if (currentLength + lineLen > readLength && i > startIdx) {
                         break;
                     }
                     currentLength += lineLen;
@@ -2858,6 +2864,12 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
                 if (errorStr) result += `\n[Stderr]:\n${errorStr}`;
 
                 if (!result.trim()) result = "Command executed successfully.";
+                // 避免单次 bash 输出过大撑爆对话上下文
+                if (result.length > MAX_READ_HARD) {
+                    const head = Math.floor(MAX_READ_HARD * 0.2);
+                    const tail = MAX_READ_HARD - head - 120;
+                    result = `${result.slice(0, head)}\n\n--- [SYSTEM NOTE: BASH OUTPUT TRUNCATED] ---\nOriginal characters: ${result.length}. Use background mode + read_background_shell_output for large logs.\n\n${result.slice(-Math.max(0, tail))}`;
+                }
                 resolve(`[CWD: ${bashCwd}]\n${result}`);
             });
 
@@ -2888,7 +2900,7 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
         return output;
     },
 
-    read_background_shell_output: async ({ shell_id, offset = 0, length = 5000 }) => {
+    read_background_shell_output: async ({ shell_id, offset = 0, length = MAX_READ }) => {
         if (isChildWindow()) return await callParentShell('read', { shell_id, offset, length });
 
         const proc = backgroundShells.get(shell_id);
@@ -2897,7 +2909,11 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
         const fullLogs = proc.logs;
         const totalLength = fullLogs.length;
         const safeOffset = Math.max(0, offset);
-        const safeLength = Math.min(length, MAX_READ);
+        const requested = Number(length);
+        const safeLength = Math.min(
+            Number.isFinite(requested) && requested > 0 ? requested : MAX_READ,
+            MAX_READ_HARD
+        );
 
         const rawChunk = fullLogs.substring(safeOffset, safeOffset + safeLength);
         const chunk = stripTerminalControlSequences(rawChunk);
@@ -3135,8 +3151,11 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
                 return "Error: Invalid URL. Please provide a full URL starting with http:// or https://";
             }
 
-            const MAX_SINGLE_READ = MAX_READ;
-            const readLength = Math.min(length, MAX_SINGLE_READ);
+            const requested = Number(length);
+            const readLength = Math.min(
+                Number.isFinite(requested) && requested > 0 ? requested : MAX_READ,
+                MAX_READ_HARD
+            );
 
             const headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -3325,7 +3344,13 @@ ${agentStr}`;
 
     read_agent_chats: async (args, context, signal) => {
         const callerId = context?.senderId || args?._callerId || null;
-        const { window_id, message_index, offset = 0, length = 128000 } = args || {};
+        const { window_id, message_index, offset = 0, length = MAX_READ } = args || {};
+        const safeOffset = Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0;
+        const requestedLen = Number(length);
+        const safeLength = Math.min(
+            Number.isFinite(requestedLen) && requestedLen > 0 ? requestedLen : MAX_READ,
+            MAX_READ_HARD
+        );
 
         if (window_id === callerId) {
             return `[System Error]: You cannot use this tool to read your own window (Window ID: ${window_id}). You already have your own chat history in your current context.`;
@@ -3373,12 +3398,10 @@ ${agentStr}`;
             if (message_index === undefined || message_index === null) {
                 const outline = await win.webContents.executeJavaScript('window.__AGENT_API__.getOutline()').catch(() => null);
                 if (!outline) return `[System Notice]: Could not read chats from window ${window_id}. API not ready.${timeoutMsg}`;
-                const safeOffset = Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0;
-                const safeLength = Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 128000;
                 return `${String(outline).slice(safeOffset, safeOffset + safeLength)}${timeoutMsg}`;
             }
 
-            const msg = await win.webContents.executeJavaScript(`window.__AGENT_API__.readChatMessage(${JSON.stringify(message_index)}, ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0}, ${Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 128000})`).catch(() => null);
+            const msg = await win.webContents.executeJavaScript(`window.__AGENT_API__.readChatMessage(${JSON.stringify(message_index)}, ${safeOffset}, ${safeLength})`).catch(() => null);
             if (!msg) return `[System Notice]: Could not read chats from window ${window_id}. API not ready.${timeoutMsg}`;
 
             return `${msg}${timeoutMsg}`;

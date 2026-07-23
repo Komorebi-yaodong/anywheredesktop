@@ -1051,14 +1051,86 @@ const toHistoryMessageFromUi = (message) => {
   return null;
 };
 
-// AI 只看见最外层：compaction 只投影 summary，不展开 archivedMessages。
+const getOutermostCompactionIndexIn = (list = []) => {
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i]?.role === 'compaction') return i;
+  }
+  return -1;
+};
+
+// 旧会话可能只有 [compaction{archivedMessages}]；展开为「完整列表 + 摘要插入」
+const migrateInsertStyleChatShow = (messages = []) => {
+  const walk = (list = [], allowExpand = true) => {
+    const result = [];
+    for (const msg of (Array.isArray(list) ? list : [])) {
+      if (
+        allowExpand &&
+        msg?.role === 'compaction' &&
+        Array.isArray(msg.archivedMessages) &&
+        msg.archivedMessages.length > 0
+      ) {
+        const hasVisiblePrefix = result.some((m) => m?.role && m.role !== 'system' && m.role !== 'compaction');
+        if (!hasVisiblePrefix) {
+          result.push(...walk(msg.archivedMessages, true));
+          const { archivedMessages, expanded, collapsed, ...rest } = msg;
+          result.push({
+            ...rest,
+            coveredCount: archivedMessages.length
+          });
+          continue;
+        }
+      }
+      if (msg?.role === 'compaction') {
+        const { archivedMessages, expanded, collapsed, ...rest } = msg;
+        result.push(rest);
+      } else {
+        result.push(msg);
+      }
+    }
+    return result;
+  };
+  return walk(messages, true);
+};
+
+/**
+ * AI 投影规则：
+ * - 系统提示词
+ * - 仅最后一层（最外层）summary
+ * - 该 summary 之后的消息
+ * UI 仍完整保留压缩前消息，只是 AI 忽略它们。
+ */
 const projectCascadeToHistory = (messages = []) => {
+  const list = Array.isArray(messages) ? messages : [];
   const out = [];
-  for (const message of (Array.isArray(messages) ? messages : [])) {
+
+  for (const message of list) {
+    if (message?.role === 'system') {
+      const projected = toHistoryMessageFromUi(message);
+      if (projected) out.push(projected);
+    }
+  }
+
+  const lastCompactIdx = getOutermostCompactionIndexIn(list);
+  if (lastCompactIdx < 0) {
+    for (const message of list) {
+      if (message?.role === 'system' || message?.role === 'compaction') continue;
+      const projected = toHistoryMessageFromUi(message);
+      if (projected) out.push(projected);
+    }
+    return out;
+  }
+
+  const summaryProjected = toHistoryMessageFromUi(list[lastCompactIdx]);
+  if (summaryProjected) out.push(summaryProjected);
+
+  for (let i = lastCompactIdx + 1; i < list.length; i += 1) {
+    const message = list[i];
+    if (!message || message.role === 'system') continue;
+    // 只认最后一层 summary；其后若还有旧 compaction 标记，跳过其自身，仍保留后续真实消息
+    if (message.role === 'compaction') continue;
     const projected = toHistoryMessageFromUi(message);
     if (projected) out.push(projected);
   }
-  // Keep a system message if missing but history previously had one? rely on chat_show.
   return out;
 };
 
@@ -1076,6 +1148,14 @@ const canRestoreCompactMarker = (message = null) => {
   const outermost = chat_show.value[outermostIndex];
   if (!snapshotId) return outermostIndex >= 0;
   return outermost?.snapshotId === snapshotId || outermost?.id === snapshotId;
+};
+
+const markOutermostCanRestore = () => {
+  const outermost = getOutermostCompactionIndex();
+  chat_show.value = chat_show.value.map((msg, idx) => {
+    if (msg?.role !== 'compaction') return msg;
+    return { ...msg, canRestore: idx === outermost };
+  });
 };
 
 const estimateActiveTokens = async (messagesForAi = history.value) => {
@@ -1105,48 +1185,66 @@ const shouldCompactNow = async (messagesForAi = history.value) => {
   return Boolean(decision?.should);
 };
 
-// Preserve last N messages as visible tail outside the new summary marker.
-const splitCascadePrefixAndTail = (messages = [], keepTailCount = 0) => {
-  const list = Array.isArray(messages) ? [...messages] : [];
-  if (list.length === 0) return { prefix: [], tail: [] };
+// 当前 AI 可见窗口起点：最后一个 compaction（含），否则第一个非 system。
+const findAiWindowStartIndex = (list = []) => {
+  const lastCompact = getOutermostCompactionIndexIn(list);
+  if (lastCompact >= 0) return lastCompact;
+  for (let i = 0; i < list.length; i += 1) {
+    if (list[i]?.role !== 'system') return i;
+  }
+  return 0;
+};
 
-  // Never compact away pure system-only content.
+/**
+ * 在「AI 可见窗口」内切 prefix/tail。
+ * UI 不删除 prefix，只在 prefix 后插入 summary。
+ */
+const splitAiWindowPrefixAndTail = (messages = [], keepTailCount = 0) => {
+  const list = Array.isArray(messages) ? messages : [];
+  if (list.length === 0) {
+    return { windowStart: 0, insertIndex: 0, prefix: [], tail: [] };
+  }
+
+  const windowStart = findAiWindowStartIndex(list);
+  const windowMsgs = list.slice(windowStart);
   const nonSystemIndexes = [];
-  list.forEach((msg, idx) => {
+  windowMsgs.forEach((msg, idx) => {
     if (msg?.role !== 'system') nonSystemIndexes.push(idx);
   });
   if (nonSystemIndexes.length <= 1) {
-    return { prefix: [], tail: list };
+    return { windowStart, insertIndex: list.length, prefix: [], tail: windowMsgs };
   }
 
   let tailCount = Math.max(0, Math.floor(Number(keepTailCount) || 0));
-  // keepRecentRounds is rounds; convert to approx messages (user+assistant).
   if (tailCount === 0 && Number(compactConfig.value.keepRecentRounds) > 0) {
     tailCount = Math.floor(Number(compactConfig.value.keepRecentRounds) * 2);
   }
-  // Always leave at least 1 non-system message outside if possible, so conversation continues.
+  // 至少保留 1 条非 system 在 summary 后，便于续聊
   tailCount = Math.max(1, tailCount);
   tailCount = Math.min(tailCount, nonSystemIndexes.length - 1);
 
   const cutNonSystemPos = nonSystemIndexes.length - tailCount;
-  const cutIndex = nonSystemIndexes[cutNonSystemPos];
-  // Include system messages that appear before cut into prefix if they are first.
-  let prefix = list.slice(0, cutIndex);
-  let tail = list.slice(cutIndex);
+  let cutInWindow = nonSystemIndexes[cutNonSystemPos];
 
-  // If prefix only has system, shift more into prefix.
+  let prefix = windowMsgs.slice(0, cutInWindow);
+  let tail = windowMsgs.slice(cutInWindow);
   const prefixHasCompressible = prefix.some((msg) => msg?.role && msg.role !== 'system');
   if (!prefixHasCompressible && nonSystemIndexes.length > 1) {
-    const forcedCut = nonSystemIndexes[Math.max(0, nonSystemIndexes.length - 2)] + 1;
-    prefix = list.slice(0, forcedCut);
-    tail = list.slice(forcedCut);
+    cutInWindow = nonSystemIndexes[Math.max(0, nonSystemIndexes.length - 2)] + 1;
+    prefix = windowMsgs.slice(0, cutInWindow);
+    tail = windowMsgs.slice(cutInWindow);
   }
 
-  // Drop leading system-only from prefix? Keep system in prefix for summary context via backend flatten.
-  return { prefix, tail };
+  return {
+    windowStart,
+    insertIndex: windowStart + prefix.length,
+    prefix,
+    tail
+  };
 };
 
-const applyCascadeCompactStep = (marker, prefix, tail) => {
+// UI：在 insertIndex 插入一条压缩消息；压缩前消息全部保留可见。
+const applyCascadeCompactStep = (marker, insertIndex, prefix) => {
   const nextMarker = {
     id: messageIdCounter.value++,
     role: 'compaction',
@@ -1155,53 +1253,27 @@ const applyCascadeCompactStep = (marker, prefix, tail) => {
     summaryPrefix: marker?.summaryPrefix || DEFAULT_SUMMARY_PREFIX,
     snapshotId: marker?.snapshotId || `compact_${Date.now()}`,
     createdAt: marker?.createdAt || Date.now(),
-    collapsed: true,
-    expanded: false,
     canRestore: true,
-    archivedMessages: deepCloneSafe(prefix),
+    // 仅作备份/调试；UI 已保留原文，还原时删除该 marker 即可
+    coveredCount: Array.isArray(prefix) ? prefix.length : 0,
     timestamp: new Date().toLocaleString('sv-SE')
   };
 
-  // Cascade UI: [<prefix...>, summary, ...tail]
-  // Nested previous compaction markers remain inside archivedMessages.
-  // Only outermost marker is restorable.
-  const nestedPrefix = deepCloneSafe(prefix).map((msg) => {
-    if (msg?.role === 'compaction') {
-      return { ...msg, canRestore: false, expanded: false };
-    }
-    return msg;
-  });
-  nextMarker.archivedMessages = nestedPrefix;
-
-  chat_show.value = [nextMarker, ...deepCloneSafe(tail).map((msg) => {
-    if (msg?.role === 'compaction') return { ...msg, canRestore: false };
-    return msg;
-  })];
-  // Ensure only the newest top-level marker can restore.
-  chat_show.value = chat_show.value.map((msg, idx, arr) => {
-    if (msg?.role !== 'compaction') return msg;
-    const isLastCompaction = arr.slice(idx + 1).every((m) => m?.role !== 'compaction') && msg.role === 'compaction';
-    // top-level only; last compaction marker is outermost
-    const outermost = getOutermostCompactionIndexIn(arr);
-    return {
-      ...msg,
-      canRestore: idx === outermost
-    };
-  });
+  const safeIndex = Math.max(0, Math.min(Number(insertIndex) || 0, chat_show.value.length));
+  chat_show.value = [
+    ...chat_show.value.slice(0, safeIndex),
+    nextMarker,
+    ...chat_show.value.slice(safeIndex)
+  ];
+  markOutermostCanRestore();
   syncHistoryFromChatShow();
   compactArchives.value = [...compactArchives.value, {
     id: nextMarker.snapshotId,
     createdAt: nextMarker.createdAt,
     summary: nextMarker.summary,
-    markerId: nextMarker.id
+    markerId: nextMarker.id,
+    insertIndex: safeIndex
   }].slice(-50);
-};
-
-const getOutermostCompactionIndexIn = (list = []) => {
-  for (let i = list.length - 1; i >= 0; i -= 1) {
-    if (list[i]?.role === 'compaction') return i;
-  }
-  return -1;
 };
 
 const handleRestoreCompact = async (payload = null) => {
@@ -1227,7 +1299,7 @@ const handleRestoreCompact = async (payload = null) => {
 
   try {
     await ElMessageBox.confirm(
-      '将还原最外层压缩检查点：把 summary 替换回压缩前消息，并保留该检查点之后的新消息。',
+      '将移除最外层压缩摘要。压缩前消息本就在列表中，移除后 AI 将重新看到更早的上下文。',
       '恢复压缩前',
       {
         type: 'warning',
@@ -1239,19 +1311,16 @@ const handleRestoreCompact = async (payload = null) => {
     return;
   }
 
-  const archived = Array.isArray(outermost.archivedMessages)
-    ? deepCloneSafe(outermost.archivedMessages)
-    : [];
-  const after = chat_show.value.slice(outermostIndex + 1);
+  // UI 原文一直在，只需删除最外层 summary 标记
   chat_show.value = [
     ...chat_show.value.slice(0, outermostIndex),
-    ...archived,
-    ...after
+    ...chat_show.value.slice(outermostIndex + 1)
   ];
+  markOutermostCanRestore();
   syncHistoryFromChatShow();
   compactArchives.value = compactArchives.value.filter((item) => item?.id !== outermost.snapshotId);
   scheduleAutoSave({ reason: 'compact-restored', immediate: true });
-  showDismissibleMessage.success('已级联还原最外层压缩');
+  showDismissibleMessage.success('已还原最外层压缩');
 };
 
 const runConversationCompact = async ({ manual = true } = {}) => {
@@ -1294,7 +1363,7 @@ const runConversationCompact = async ({ manual = true } = {}) => {
         1,
         Math.floor(Number(compactConfig.value.keepRecentRounds || 0) * 2) || 3
       );
-      const { prefix, tail } = splitCascadePrefixAndTail(chat_show.value, keepTail);
+      const { insertIndex, prefix } = splitAiWindowPrefixAndTail(chat_show.value, keepTail);
       if (!prefix.length) {
         if (manual && steps === 1) {
           showDismissibleMessage.info('可压缩前缀不足，已跳过');
@@ -1310,8 +1379,12 @@ const runConversationCompact = async ({ manual = true } = {}) => {
         stage: 'cascade'
       };
 
+      // 摘要源：当前 AI 可见窗口中将被 summary 覆盖的前缀（含此前 summary 标记）
       const result = await window.api.runConversationCompact({
-        messages: projectCascadeToHistory(prefix),
+        messages: projectCascadeToHistory([
+          ...chat_show.value.filter((m) => m?.role === 'system'),
+          ...prefix
+        ]),
         chatShow: prefix,
         modelValue: model.value,
         provider: resolveProviderByModelValue(model.value),
@@ -1339,7 +1412,8 @@ const runConversationCompact = async ({ manual = true } = {}) => {
         snapshotId: result.snapshotId,
         summaryPrefix: result.summaryPrefix
       };
-      applyCascadeCompactStep(marker, prefix, tail);
+      // UI：在 prefix 后插入 summary，不删除任何旧消息
+      applyCascadeCompactStep(marker, insertIndex, prefix);
       didAny = true;
 
       if (result.modelConfig) {
@@ -6603,6 +6677,9 @@ const loadSession = async (jsonData) => {
 
     history.value = Array.isArray(jsonData.history) ? jsonData.history : [];
     chat_show.value = Array.isArray(jsonData.chat_show) ? jsonData.chat_show : [];
+    // 兼容旧版“替换式”压缩：把 archivedMessages 展开回可见列表，marker 仅作插入摘要
+    chat_show.value = migrateInsertStyleChatShow(chat_show.value);
+    markOutermostCanRestore();
     // 级联压缩：以 chat_show 为 UI 真源，重算 AI 投影 history
     if (chat_show.value.some((msg) => msg?.role === 'compaction')) {
       history.value = projectCascadeToHistory(chat_show.value);
@@ -8511,39 +8588,9 @@ const handleOpenSearch = () => {
 };
 
 const navMessages = computed(() => {
-  const nodes = [];
-  chat_show.value.forEach((msg, index) => {
-    if (!msg || msg.role === 'system') return;
-    if (msg.role === 'compaction') {
-      nodes.push({
-        ...msg,
-        originalIndex: index,
-        navKind: 'compaction',
-        role: 'compaction'
-      });
-      // When expanded, surface archived original messages into the timeline for navigation.
-      if (msg.expanded && Array.isArray(msg.archivedMessages)) {
-        msg.archivedMessages.forEach((archived, archivedIndex) => {
-          if (!archived || archived.role === 'system') return;
-          nodes.push({
-            ...archived,
-            id: `${msg.id || index}-archived-${archived.id || archivedIndex}`,
-            originalIndex: index,
-            navKind: 'archived',
-            archivedIndex,
-            role: archived.role
-          });
-        });
-      }
-      return;
-    }
-    nodes.push({
-      ...msg,
-      originalIndex: index,
-      navKind: 'normal'
-    });
-  });
-  return nodes;
+  return chat_show.value
+    .map((msg, index) => ({ ...msg, originalIndex: index, navKind: msg?.role === 'compaction' ? 'compaction' : 'normal' }))
+    .filter((msg) => msg?.role && msg.role !== 'system');
 });
 
 

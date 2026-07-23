@@ -938,44 +938,37 @@ const truncateFilename = (filename, maxLength = 30) => {
 <template>
   <div class="chat-message" v-if="message.role !== 'system'">
 
-    <!-- 上下文压缩标记：样式对齐 AI 消息气泡，并支持展开查看压缩前消息 -->
-    <div v-if="message.role === 'compaction'" class="message-wrapper ai-wrapper compaction-wrapper" ref="messageWrapperRef">
+    <!-- 压缩消息：样式对齐普通 AI 消息，不可编辑；仅插入一条标记，前后消息仍完整显示 -->
+    <div v-if="message.role === 'compaction'" class="message-wrapper ai-wrapper" ref="messageWrapperRef">
       <div class="message-meta-header ai-meta-header">
         <img :src="aiAvatar" alt="AI Avatar" class="chat-avatar-top ai-avatar">
         <div class="meta-info-column">
           <div class="meta-name-row">
-            <span class="ai-name">Context Compacted</span>
+            <span class="ai-name">上下文压缩</span>
           </div>
           <span class="timestamp-row" v-if="message.timestamp">{{ formatTimestamp(message.timestamp) }}</span>
         </div>
       </div>
 
-      <Bubble class="ai-bubble compaction-bubble" placement="start" shape="corner" maxWidth="100%">
+      <Bubble class="ai-bubble" placement="start" shape="corner" maxWidth="100%">
         <template #content>
-          <div class="compaction-summary-block">
-            <div class="compaction-badge">上下文已压缩</div>
-            <div class="markdown-wrapper" :class="{ 'collapsed': !isCompactionExpanded }">
-              <XMarkdown
-                :markdown="message.summary || (typeof message.content === 'string' ? message.content : '会话上下文已压缩为摘要。')"
-                :is-dark="isDarkMode"
-                :enable-latex="true"
-                :mermaid-config="mermaidConfig"
-                :default-theme-mode="isDarkMode ? 'dark' : 'light'"
-                :themes="{ light: 'github-light', dark: 'github-dark-default' }"
-                :allow-html="true"
-              />
-            </div>
+          <div ref="markdownRootRef" class="markdown-wrapper" @click.capture="handleMarkdownLinkClick">
+            <div class="compaction-inline-badge">上下文已压缩</div>
+            <XMarkdown
+              :markdown="message.summary || (typeof message.content === 'string' ? message.content : '会话上下文已压缩为摘要。')"
+              :is-dark="isDarkMode"
+              :enable-latex="true"
+              :mermaid-config="mermaidConfig"
+              :default-theme-mode="isDarkMode ? 'dark' : 'light'"
+              :themes="{ light: 'one-light', dark: 'vesper' }"
+              :allow-html="true"
+            />
           </div>
         </template>
         <template #footer>
           <div class="message-footer">
             <div class="footer-wrapper">
               <div class="footer-actions">
-                <el-button size="small" @click="toggleCompactionExpanded" circle>
-                  <el-icon>
-                    <component :is="isCompactionExpanded ? CaretTop : CaretBottom" />
-                  </el-icon>
-                </el-button>
                 <el-button
                   v-if="message.canRestore !== false"
                   size="small"
@@ -988,41 +981,6 @@ const truncateFilename = (filename, maxLength = 30) => {
           </div>
         </template>
       </Bubble>
-
-      <div v-if="isCompactionExpanded && Array.isArray(message.archivedMessages) && message.archivedMessages.length" class="compaction-archived-list">
-        <div class="compaction-archived-title">压缩前消息（已归档，仍可展开查看；还原后可完整编辑）</div>
-        <div
-          v-for="(archived, archivedIndex) in message.archivedMessages"
-          :key="archived.id || archivedIndex"
-          class="compaction-archived-item"
-          :class="archived.role"
-        >
-          <div class="compaction-archived-role">
-            {{ archived.role === 'user' ? '你' : (archived.role === 'assistant' ? 'AI' : (archived.role === 'compaction' ? '压缩检查点' : archived.role)) }}
-          </div>
-          <div class="compaction-archived-text">{{ formatArchivedPreview(archived) }}</div>
-          <div
-            v-if="archived.role === 'compaction' && archived.expanded && Array.isArray(archived.archivedMessages)"
-            class="compaction-archived-nested"
-          >
-            <div
-              v-for="(nested, nestedIndex) in archived.archivedMessages"
-              :key="nested.id || nestedIndex"
-              class="compaction-archived-item nested"
-            >
-              <div class="compaction-archived-role">{{ nested.role === 'user' ? '你' : (nested.role === 'assistant' ? 'AI' : nested.role) }}</div>
-              <div class="compaction-archived-text">{{ formatArchivedPreview(nested) }}</div>
-            </div>
-          </div>
-          <el-button
-            v-if="archived.role === 'compaction'"
-            size="small"
-            text
-            type="primary"
-            @click="archived.expanded = !archived.expanded"
-          >{{ archived.expanded ? '收起内层' : '展开内层' }}</el-button>
-        </div>
-      </div>
     </div>
 
     <!-- 用户消息 -->
@@ -1242,19 +1200,10 @@ const truncateFilename = (filename, maxLength = 30) => {
 }
 
 
-.compaction-wrapper {
-  width: 100%;
-}
-
-.compaction-summary-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.compaction-badge {
+.compaction-inline-badge {
   display: inline-flex;
   align-self: flex-start;
+  margin-bottom: 8px;
   padding: 2px 8px;
   border-radius: 999px;
   font-size: 12px;
@@ -1263,54 +1212,10 @@ const truncateFilename = (filename, maxLength = 30) => {
   border: 1px solid rgba(233, 30, 99, 0.28);
 }
 
-.compaction-archived-list {
-  margin-top: 10px;
-  margin-left: 44px;
-  border-left: 2px solid rgba(233, 30, 99, 0.35);
-  padding-left: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.compaction-archived-title {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.compaction-archived-item {
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-blank);
-  border-radius: 10px;
-  padding: 8px 10px;
-}
-
-.compaction-archived-role {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 4px;
-}
-
-.compaction-archived-text {
-  font-size: 13px;
-  color: var(--el-text-color-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-html.dark .compaction-badge {
+html.dark .compaction-inline-badge {
   color: #ff80ab;
   background: rgba(233, 30, 99, 0.18);
   border-color: rgba(255, 128, 171, 0.35);
-}
-
-html.dark .compaction-archived-item {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .message-wrapper {

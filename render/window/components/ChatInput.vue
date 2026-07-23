@@ -34,6 +34,7 @@ const props = defineProps({
             triggerRatio: 0.9,
             contextLength: 262144,
             contextLengthSource: 'default',
+            contextLengthManual: false,
             userMessageTokenBudget: 20000,
             keepRecentRounds: 0,
             compactPrompt: '',
@@ -65,6 +66,7 @@ const localCompactConfig = ref({
     triggerRatio: 0.9,
     contextLength: 262144,
     contextLengthSource: 'default',
+    contextLengthManual: false,
     userMessageTokenBudget: 20000,
     keepRecentRounds: 0,
     compactPrompt: '',
@@ -90,6 +92,7 @@ watch(() => props.compactConfig, (next) => {
         triggerRatio: Number.isFinite(Number(next.triggerRatio)) ? Number(next.triggerRatio) : 0.9,
         contextLength: Number.isFinite(Number(next.contextLength)) ? Number(next.contextLength) : 262144,
         contextLengthSource: next.contextLengthSource || 'default',
+        contextLengthManual: next.contextLengthManual === true || next.contextLengthSource === 'manual',
         userMessageTokenBudget: Number.isFinite(Number(next.userMessageTokenBudget)) ? Number(next.userMessageTokenBudget) : 20000,
         keepRecentRounds: Number.isFinite(Number(next.keepRecentRounds)) ? Number(next.keepRecentRounds) : 0,
         compactPrompt: typeof next.compactPrompt === 'string' ? next.compactPrompt : '',
@@ -97,6 +100,14 @@ watch(() => props.compactConfig, (next) => {
         resolvedId: typeof next.resolvedId === 'string' ? next.resolvedId : ''
     };
 }, { deep: true, immediate: true });
+
+const contextLengthSourceLabel = computed(() => {
+    const source = localCompactConfig.value.contextLengthSource || 'default';
+    if (source === 'manual' || localCompactConfig.value.contextLengthManual) return 'manual（手动）';
+    if (source === 'api') return 'api';
+    if (source === 'cache') return 'cache';
+    return source;
+});
 
 watch(() => props.compacting, (isCompacting) => {
     if (isCompacting) {
@@ -115,11 +126,19 @@ const openCompactDialog = async () => {
 };
 
 const saveCompactConfig = () => {
-    emit('save-compact-config', { ...localCompactConfig.value });
+    emit('save-compact-config', {
+        ...localCompactConfig.value,
+        contextLengthManual: true,
+        contextLengthSource: 'manual'
+    });
 };
 
 const runCompactNow = () => {
-    emit('save-compact-config', { ...localCompactConfig.value });
+    emit('save-compact-config', {
+        ...localCompactConfig.value,
+        contextLengthManual: true,
+        contextLengthSource: 'manual'
+    });
     emit('run-compact');
 };
 
@@ -1202,8 +1221,9 @@ defineExpose({ focus, senderRef });
                             <el-button :icon="RefreshRight" round @click="refreshCompactContext">重新检索</el-button>
                         </div>
                         <div class="compact-form-hint">
-                            来源：{{ localCompactConfig.contextLengthSource || 'default' }}
+                            来源：{{ contextLengthSourceLabel }}
                             <span v-if="localCompactConfig.resolvedId"> · 缓存键：{{ localCompactConfig.resolvedId }}</span>
+                            <span v-if="localCompactConfig.contextLengthManual || localCompactConfig.contextLengthSource === 'manual'"> · 手动值优先，点「重新检索」才会被 API 覆盖</span>
                         </div>
                     </div>
                 </div>

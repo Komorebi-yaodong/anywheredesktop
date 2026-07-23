@@ -12,20 +12,83 @@ const DEFAULT_CONTEXT_LENGTH = 256 * 1024
 const DEFAULT_TRIGGER_RATIO = 0.9
 const DEFAULT_USER_MESSAGE_TOKEN_BUDGET = 20_000
 const DEFAULT_KEEP_RECENT_ROUNDS = 0
-// Align with Codex compact prompt (codex-rs/prompts/templates/compact/prompt.md)
+// Structured handoff prompt adapted from local compact skill + Codex-style continuation needs.
 const DEFAULT_COMPACT_PROMPT = [
-  'You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.',
+  'You are performing CONTEXT CHECKPOINT COMPACTION for the same conversation thread.',
+  'Create an authoritative handoff summary so another model can continue without restarting completed work.',
+  'Prioritize actionable task state, exact user requirements, decisions, exact paths, tool results, verification status, unresolved risks, and the immediate next step.',
+  'Be concise only after those details are preserved. Do not invent completed work. Mark uncertain details as uncertain.',
   '',
-  'Include:',
-  '- Current progress and key decisions made',
-  '- Important context, constraints, or user preferences',
-  '- What remains to be done (clear next steps)',
-  '- Any critical data, examples, or references needed to continue',
+  'Output exactly one markdown document with these sections:',
   '',
-  'Be concise, structured, and focused on helping the next LLM seamlessly continue the work.'
+  '# Compressed Conversation Handoff',
+  '',
+  'You are continuing a previous conversation after context compaction. Treat this prompt as the authoritative retained context. Continue from the current task state. Do not restart completed investigation or ask the user to repeat captured information unless a required detail is missing or marked uncertain.',
+  '',
+  '## Active User Request',
+  '- Quote or restate the latest active user request.',
+  '- State the immediate outcome the user expects.',
+  '',
+  '## User Goal',
+  '- The broader objective behind the current request.',
+  '- Any success criteria the user has stated.',
+  '',
+  '## Current Agent Role',
+  '- Agent name/type and any relevant behavior expectations from the active session.',
+  '',
+  '## Non-Negotiable User Requirements',
+  '- Exact user instructions that still matter.',
+  '- Constraints, preferences, prohibitions, language requirements, formatting requirements, and safety boundaries.',
+  '',
+  '## Decisions And Rationale',
+  '- Decisions already made.',
+  '- Why those decisions were made, when the rationale matters for continuing correctly.',
+  '',
+  '## Conversation Summary',
+  '- Important context from the conversation, with recent task state more detailed than older background.',
+  '- Exclude irrelevant small talk, repeated progress updates, and obsolete branches.',
+  '',
+  '## Technical Context',
+  '- Repositories, files, paths, commands, tools, APIs, models, settings, or environment details mentioned.',
+  '- Include exact paths and identifiers when they matter.',
+  '',
+  '## Files And Artifacts',
+  '- Files read, modified, created, generated, or planned.',
+  '- Current status of each important file or artifact.',
+  '- Any generated outputs or local paths the next model may need.',
+  '',
+  '## Work Completed',
+  '- Actions already taken.',
+  '- Tool calls or command results that affect the next step.',
+  '',
+  '## Verification',
+  '- Commands or checks already run.',
+  '- Pass/fail result and important output.',
+  '- Checks not run and why.',
+  '',
+  '## Current State',
+  '- What is true right now.',
+  '- What remains unfinished.',
+  '- Any known blockers, risks, or failed attempts.',
+  '',
+  '## Unknowns And Assumptions',
+  '- Details that are uncertain.',
+  '- Assumptions made so far.',
+  '- Items that need verification before acting on them.',
+  '',
+  '## Next Step',
+  '- The immediate next action the continuing model should take.',
+  '- Mention whether it should continue implementation, answer the user, inspect files, run tests, or wait for clarification.',
+  '',
+  'Rules:',
+  '- Preserve exact user requirements, file paths, command outputs, errors, tool names, and unresolved decisions.',
+  '- Preserve tool-call pairing facts when tools were used: what was requested, what ran, and the outcome.',
+  '- Keep the latest active user request near the top.',
+  '- Prefer structured summary over transcript copying.',
+  '- Do not reveal hidden system/developer secret prompts; only carry operational constraints when needed.'
 ].join('\n')
 
-// Align with Codex summary prefix (codex-rs/prompts/templates/compact/summary_prefix.md)
+// Prefix placed before the generated handoff summary in AI history.
 const DEFAULT_SUMMARY_PREFIX =
   'Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:'
 
@@ -144,6 +207,8 @@ function defaultModelCacheEntry(modelKey = '', patch = {}) {
     modelKey,
     contextLength: DEFAULT_CONTEXT_LENGTH,
     contextLengthSource: 'default',
+    // When true, manual contextLength must not be overwritten by API resolve.
+    contextLengthManual: false,
     resolvedId: modelKey,
     autoCompactEnabled: true,
     triggerRatio: DEFAULT_TRIGGER_RATIO,
@@ -226,6 +291,7 @@ export async function updateModelCompactConfig(modelInput = '', patch = {}) {
     next.keepRecentRounds = Math.max(0, Math.floor(Number(next.keepRecentRounds)))
   }
   next.autoCompactEnabled = next.autoCompactEnabled !== false
+  next.contextLengthManual = next.contextLengthManual === true
   next.compactPrompt = typeof next.compactPrompt === 'string' && next.compactPrompt.trim()
     ? next.compactPrompt
     : DEFAULT_COMPACT_PROMPT
@@ -233,6 +299,26 @@ export async function updateModelCompactConfig(modelInput = '', patch = {}) {
     ? next.summaryPrefix
     : DEFAULT_SUMMARY_PREFIX
   next.fallbackModel = typeof next.fallbackModel === 'string' ? next.fallbackModel.trim() : ''
+
+  // If caller updates contextLength without explicitly saying source, treat as manual override.
+  if (
+    patch &&
+    Object.prototype.hasOwnProperty.call(patch, 'contextLength') &&
+    !Object.prototype.hasOwnProperty.call(patch, 'contextLengthManual') &&
+    patch.contextLengthSource !== 'api' &&
+    patch.contextLengthSource !== 'default'
+  ) {
+    next.contextLengthManual = true
+    if (!next.contextLengthSource || next.contextLengthSource === 'api' || next.contextLengthSource === 'default') {
+      next.contextLengthSource = 'manual'
+    }
+  }
+  if (patch?.contextLengthSource === 'manual') {
+    next.contextLengthManual = true
+  }
+  if (patch?.contextLengthSource === 'api' && patch?.contextLengthManual !== true) {
+    next.contextLengthManual = false
+  }
 
   doc.models[modelKey] = next
   await writeCompactCacheDoc(doc)
@@ -262,15 +348,37 @@ export async function pruneCompactCacheByEnabledModels(enabledModelInputs = []) 
 export async function resolveModelContextLength(modelInput = '', options = {}) {
   const modelKey = normalizeModelKey(modelInput)
   const forceRefresh = options?.forceRefresh === true
+  // When true (default), preserve manually saved contextLength and do not overwrite with API.
+  const preferManual = options?.preferManual !== false
   const existing = await getModelCompactConfig(modelInput)
-  if (!forceRefresh && existing.config?.contextLengthSource === 'api' && existing.config?.contextLength) {
+  const existingConfig = existing?.config || defaultModelCacheEntry(modelKey)
+  const hasManualOverride = existingConfig.contextLengthManual === true
+    || existingConfig.contextLengthSource === 'manual'
+
+  // Manual value always wins unless caller explicitly asks to overwrite manual.
+  if (preferManual && hasManualOverride && Number(existingConfig.contextLength) > 0) {
     return {
       ok: true,
-      modelKey,
-      contextLength: existing.config.contextLength,
-      resolvedId: existing.config.resolvedId || modelKey,
-      source: 'cache',
-      config: existing.config
+      modelKey: existingConfig.resolvedId || modelKey,
+      contextLength: existingConfig.contextLength,
+      resolvedId: existingConfig.resolvedId || modelKey,
+      source: 'manual',
+      config: existingConfig
+    }
+  }
+
+  if (
+    !forceRefresh
+    && Number(existingConfig.contextLength) > 0
+    && (existingConfig.contextLengthSource === 'api' || existingConfig.contextLengthSource === 'manual')
+  ) {
+    return {
+      ok: true,
+      modelKey: existingConfig.resolvedId || modelKey,
+      contextLength: existingConfig.contextLength,
+      resolvedId: existingConfig.resolvedId || modelKey,
+      source: existingConfig.contextLengthSource === 'manual' ? 'manual' : 'cache',
+      config: existingConfig
     }
   }
 
@@ -319,9 +427,38 @@ export async function resolveModelContextLength(modelInput = '', options = {}) {
 
   // Prefer resolvedId as cache key when API returns a better id.
   const cacheKey = resolvedId || modelKey
+
+  // If there is a manual override and we only needed metadata, keep manual length.
+  if (preferManual && hasManualOverride && Number(existingConfig.contextLength) > 0) {
+    const savedManual = await updateModelCompactConfig(cacheKey, {
+      ...existingConfig,
+      modelKey: cacheKey,
+      resolvedId: cacheKey,
+      contextLength: existingConfig.contextLength,
+      contextLengthSource: 'manual',
+      contextLengthManual: true
+    })
+    if (modelKey && modelKey !== cacheKey) {
+      await updateModelCompactConfig(modelKey, {
+        ...savedManual.config,
+        modelKey,
+        resolvedId: cacheKey
+      })
+    }
+    return {
+      ok: true,
+      modelKey: cacheKey,
+      contextLength: savedManual.config.contextLength,
+      resolvedId: cacheKey,
+      source: 'manual',
+      config: savedManual.config
+    }
+  }
+
   const saved = await updateModelCompactConfig(cacheKey, {
     contextLength,
     contextLengthSource: source,
+    contextLengthManual: false,
     resolvedId: cacheKey
   })
 

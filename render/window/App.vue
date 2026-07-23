@@ -918,58 +918,112 @@ const syncEnabledModelCompactCache = async () => {
   }
 };
 
-const loadCompactConfigForCurrentModel = async ({ forceRefresh = false } = {}) => {
+const normalizeCompactConfigState = (nextConfig = {}) => ({
+  autoCompactEnabled: nextConfig.autoCompactEnabled !== false,
+  triggerRatio: Number.isFinite(Number(nextConfig.triggerRatio)) ? Number(nextConfig.triggerRatio) : 0.9,
+  contextLength: Number.isFinite(Number(nextConfig.contextLength)) ? Number(nextConfig.contextLength) : 262144,
+  contextLengthSource: nextConfig.contextLengthSource || 'default',
+  contextLengthManual: nextConfig.contextLengthManual === true || nextConfig.contextLengthSource === 'manual',
+  userMessageTokenBudget: Number.isFinite(Number(nextConfig.userMessageTokenBudget)) ? Number(nextConfig.userMessageTokenBudget) : 20000,
+  keepRecentRounds: Number.isFinite(Number(nextConfig.keepRecentRounds)) ? Number(nextConfig.keepRecentRounds) : 0,
+  compactPrompt: typeof nextConfig.compactPrompt === 'string' ? nextConfig.compactPrompt : '',
+  fallbackModel: typeof nextConfig.fallbackModel === 'string' ? nextConfig.fallbackModel : '',
+  resolvedId: typeof nextConfig.resolvedId === 'string' ? nextConfig.resolvedId : ''
+});
+
+const loadCompactConfigForCurrentModel = async ({
+  forceRefresh = false,
+  preferManual = true
+} = {}) => {
   if (!window.api?.getModelCompactConfig) return;
   try {
-    const resolveResult = forceRefresh && window.api.resolveModelContext
-      ? await window.api.resolveModelContext(model.value, { forceRefresh: true })
-      : null;
+    // 打开弹窗：读取缓存；若无缓存才 resolve。不覆盖用户手动长度。
+    // 重新检索：forceRefresh + preferManual=false，允许 API 覆盖。
+    let resolveResult = null;
+    if (window.api.resolveModelContext) {
+      if (forceRefresh) {
+        resolveResult = await window.api.resolveModelContext(model.value, {
+          forceRefresh: true,
+          preferManual
+        });
+      } else {
+        // 非强制：优先缓存；resolve 内部也会尊重 manual
+        const cached = await window.api.getModelCompactConfig(model.value);
+        const hasCachedLength = Number(cached?.config?.contextLength) > 0;
+        if (!hasCachedLength) {
+          resolveResult = await window.api.resolveModelContext(model.value, {
+            forceRefresh: false,
+            preferManual: true
+          });
+        }
+      }
+    }
+
     const configResult = await window.api.getModelCompactConfig(model.value);
     const nextConfig = {
       ...(configResult?.config || {}),
       ...(resolveResult?.config || {})
     };
-    if (resolveResult?.contextLength) {
+
+    // 仅在没有 manual 覆盖、或明确 preferManual=false 时，才用 resolve 结果覆盖长度
+    const manualLocked = preferManual && (
+      nextConfig.contextLengthManual === true || nextConfig.contextLengthSource === 'manual'
+    );
+    if (resolveResult?.contextLength && !manualLocked) {
       nextConfig.contextLength = resolveResult.contextLength;
       nextConfig.contextLengthSource = resolveResult.source || nextConfig.contextLengthSource;
       nextConfig.resolvedId = resolveResult.resolvedId || nextConfig.resolvedId;
+      if (resolveResult.source === 'api') {
+        nextConfig.contextLengthManual = false;
+      }
     }
-    compactConfig.value = {
-      autoCompactEnabled: nextConfig.autoCompactEnabled !== false,
-      triggerRatio: Number.isFinite(Number(nextConfig.triggerRatio)) ? Number(nextConfig.triggerRatio) : 0.9,
-      contextLength: Number.isFinite(Number(nextConfig.contextLength)) ? Number(nextConfig.contextLength) : 262144,
-      contextLengthSource: nextConfig.contextLengthSource || 'default',
-      userMessageTokenBudget: Number.isFinite(Number(nextConfig.userMessageTokenBudget)) ? Number(nextConfig.userMessageTokenBudget) : 20000,
-      keepRecentRounds: Number.isFinite(Number(nextConfig.keepRecentRounds)) ? Number(nextConfig.keepRecentRounds) : 0,
-      compactPrompt: typeof nextConfig.compactPrompt === 'string' ? nextConfig.compactPrompt : '',
-      fallbackModel: typeof nextConfig.fallbackModel === 'string' ? nextConfig.fallbackModel : '',
-      resolvedId: typeof nextConfig.resolvedId === 'string' ? nextConfig.resolvedId : ''
-    };
+
+    compactConfig.value = normalizeCompactConfigState(nextConfig);
   } catch (error) {
     console.warn('[compact] load model config failed:', error);
   }
 };
 
 const handleOpenCompactDialog = async () => {
-  // Always resolve once when opening, so context length is correct without manual refresh.
-  await loadCompactConfigForCurrentModel({ forceRefresh: true });
+  // 打开时读缓存；保留用户手动上下文长度，不强制 API 覆盖
+  await loadCompactConfigForCurrentModel({ forceRefresh: false, preferManual: true });
 };
 
 const handleSaveCompactConfig = async (patch = {}) => {
   try {
     // Only update compact cache; never touch active chat request/abort controllers.
     const nextPatch = patch && typeof patch === 'object' ? { ...patch } : {};
-    const nextConfig = {
+    const nextConfig = normalizeCompactConfigState({
       ...compactConfig.value,
       ...nextPatch
-    };
+    });
+
+    // 保存时把当前 contextLength 记为手动覆盖，避免下次被 API 冲掉
+    if (Object.prototype.hasOwnProperty.call(nextPatch, 'contextLength') || true) {
+      nextConfig.contextLengthManual = true;
+      nextConfig.contextLengthSource = 'manual';
+    }
+
     if (window.api?.updateModelCompactConfig) {
-      const result = await window.api.updateModelCompactConfig(model.value, nextConfig);
+      const result = await window.api.updateModelCompactConfig(model.value, {
+        ...nextConfig,
+        contextLength: nextConfig.contextLength,
+        contextLengthSource: 'manual',
+        contextLengthManual: true
+      });
       if (result?.config) {
-        compactConfig.value = {
+        compactConfig.value = normalizeCompactConfigState({
           ...nextConfig,
-          ...result.config
-        };
+          ...result.config,
+          contextLengthManual: true,
+          contextLengthSource: result.config.contextLengthSource === 'api' && result.config.contextLengthManual
+            ? 'manual'
+            : (result.config.contextLengthSource || 'manual')
+        });
+        // 确保读回后仍是 manual
+        if (compactConfig.value.contextLengthManual) {
+          compactConfig.value.contextLengthSource = 'manual';
+        }
       } else {
         compactConfig.value = nextConfig;
       }
@@ -986,7 +1040,8 @@ const handleSaveCompactConfig = async (patch = {}) => {
 
 const handleRefreshCompactContext = async () => {
   try {
-    await loadCompactConfigForCurrentModel({ forceRefresh: true });
+    // 用户明确点「重新检索」：允许 API 覆盖手动值
+    await loadCompactConfigForCurrentModel({ forceRefresh: true, preferManual: false });
     showDismissibleMessage.success('已重新检索模型上下文长度');
   } catch (error) {
     showDismissibleMessage.error(`检索失败: ${error?.message || error}`);
@@ -1495,6 +1550,7 @@ const compactConfig = ref({
   triggerRatio: 0.9,
   contextLength: 262144,
   contextLengthSource: 'default',
+  contextLengthManual: false,
   userMessageTokenBudget: 20000,
   keepRecentRounds: 0,
   compactPrompt: '',

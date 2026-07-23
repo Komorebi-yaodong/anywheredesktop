@@ -216,7 +216,6 @@ function defaultModelCacheEntry(modelKey = '', patch = {}) {
     keepRecentRounds: DEFAULT_KEEP_RECENT_ROUNDS,
     compactPrompt: DEFAULT_COMPACT_PROMPT,
     summaryPrefix: DEFAULT_SUMMARY_PREFIX,
-    fallbackModel: '',
     updatedAt: Date.now(),
     ...patch
   }
@@ -325,7 +324,10 @@ export async function updateModelCompactConfig(modelInput = '', patch = {}) {
   next.summaryPrefix = typeof next.summaryPrefix === 'string' && next.summaryPrefix.trim()
     ? next.summaryPrefix
     : DEFAULT_SUMMARY_PREFIX
-  next.fallbackModel = typeof next.fallbackModel === 'string' ? next.fallbackModel.trim() : ''
+  // legacy field: drop fallback model if present in old caches
+  if (Object.prototype.hasOwnProperty.call(next, 'fallbackModel')) {
+    delete next.fallbackModel
+  }
 
   // If caller updates contextLength without explicitly saying source, treat as manual override.
   if (
@@ -392,9 +394,6 @@ export async function applyAdvancedCompactConfigToAll(patch = {}) {
     shared.summaryPrefix = typeof source.summaryPrefix === 'string' && source.summaryPrefix.trim()
       ? source.summaryPrefix
       : DEFAULT_SUMMARY_PREFIX
-  }
-  if (Object.prototype.hasOwnProperty.call(source, 'fallbackModel')) {
-    shared.fallbackModel = typeof source.fallbackModel === 'string' ? source.fallbackModel.trim() : ''
   }
 
   if (Object.keys(shared).length === 0) {
@@ -760,8 +759,6 @@ export async function runConversationCompaction({
   chatShow = [],
   modelValue = '',
   provider = null,
-  fallbackProvider = null,
-  fallbackModelValue = '',
   config: configPatch = null,
   signal = null,
   onProgress = null,
@@ -844,68 +841,35 @@ export async function runConversationCompaction({
     localTokens
   })
 
-  const tryModels = []
-  tryModels.push({
-    label: 'primary',
-    modelName: primaryModelName,
-    provider,
-    apiType: provider?.apiType || 'chat_completions'
-  })
-
-  const fallbackModelRaw = typeof fallbackModelValue === 'string' && fallbackModelValue.trim()
-    ? fallbackModelValue.trim()
-    : (modelConfig.fallbackModel || '')
-  if (fallbackModelRaw) {
-    const fallbackModelName = fallbackModelRaw.includes('|')
-      ? fallbackModelRaw.split('|').slice(1).join('|')
-      : fallbackModelRaw
-    tryModels.push({
-      label: 'fallback',
-      modelName: fallbackModelName,
-      provider: fallbackProvider || provider,
-      apiType: (fallbackProvider || provider)?.apiType || 'chat_completions',
-      modelValue: fallbackModelRaw
-    })
-  }
-
   let summaryText = ''
-  let usedModelLabel = 'primary'
   let lastError = null
+  const maxAttempts = 3
+  const apiType = provider?.apiType || 'chat_completions'
 
-  for (const candidate of tryModels) {
-    const maxAttempts = candidate.label === 'primary' ? 3 : 1
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      throwIfAborted(signal)
-      report('generate_summary', {
-        percent: candidate.label === 'primary' ? 30 + attempt * 12 : 75,
-        message: candidate.label === 'primary'
-          ? `生成摘要中（第 ${attempt}/3 次）…`
-          : '主模型失败，正在使用备用模型…',
-        attempt,
-        maxAttempts,
-        model: candidate.modelName,
-        modelLabel: candidate.label
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    throwIfAborted(signal)
+    report('generate_summary', {
+      percent: 30 + attempt * 12,
+      message: `生成摘要中（第 ${attempt}/${maxAttempts} 次）…`,
+      attempt,
+      maxAttempts,
+      model: primaryModelName
+    })
+    try {
+      summaryText = await requestSummaryOnce({
+        provider,
+        modelName: primaryModelName,
+        messages: summarySource,
+        compactPrompt: modelConfig.compactPrompt,
+        signal,
+        apiType
       })
-      try {
-        summaryText = await requestSummaryOnce({
-          provider: candidate.provider,
-          modelName: candidate.modelName,
-          messages: summarySource,
-          compactPrompt: modelConfig.compactPrompt,
-          signal,
-          apiType: candidate.apiType
-        })
-        if (summaryText.trim()) {
-          usedModelLabel = candidate.label
-          break
-        }
-        lastError = new Error('empty_summary')
-      } catch (error) {
-        lastError = error
-        if (isAbortError(error)) throw error
-      }
+      if (summaryText.trim()) break
+      lastError = new Error('empty_summary')
+    } catch (error) {
+      lastError = error
+      if (isAbortError(error)) throw error
     }
-    if (summaryText.trim()) break
   }
 
   throwIfAborted(signal)
@@ -930,8 +894,7 @@ export async function runConversationCompaction({
   report('completed', {
     percent: 100,
     message: '压缩完成',
-    snapshotId,
-    usedModelLabel
+    snapshotId
   })
 
   return {
@@ -955,8 +918,7 @@ export async function runConversationCompaction({
     },
     modelConfig,
     contextLength: resolveResult.contextLength,
-    localTokensBefore: localTokens,
-    usedModelLabel
+    localTokensBefore: localTokens
   }
 }
 

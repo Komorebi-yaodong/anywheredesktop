@@ -879,13 +879,6 @@ const normalizeAssistantTokenUsage = (usage) => {
 
 const canRestoreCompact = computed(() => getOutermostCompactionIndex() >= 0);
 
-const compactModelOptions = computed(() => {
-  return (modelList.value || []).map((item) => ({
-    value: item.value,
-    label: item.label || item.value
-  }));
-});
-
 const getLatestUsageTotalTokens = () => {
   for (let i = history.value.length - 1; i >= 0; i -= 1) {
     const usage = history.value[i]?.tokenUsage;
@@ -927,7 +920,6 @@ const normalizeCompactConfigState = (nextConfig = {}) => ({
   userMessageTokenBudget: Number.isFinite(Number(nextConfig.userMessageTokenBudget)) ? Number(nextConfig.userMessageTokenBudget) : 20000,
   keepRecentRounds: Number.isFinite(Number(nextConfig.keepRecentRounds)) ? Number(nextConfig.keepRecentRounds) : 3,
   compactPrompt: typeof nextConfig.compactPrompt === 'string' ? nextConfig.compactPrompt : '',
-  fallbackModel: typeof nextConfig.fallbackModel === 'string' ? nextConfig.fallbackModel : '',
   resolvedId: typeof nextConfig.resolvedId === 'string' ? nextConfig.resolvedId : ''
 });
 
@@ -1058,7 +1050,6 @@ const handleResetCompactConfig = async () => {
       keepRecentRounds: 3,
       keepRecentRoundsUserSet: true,
       compactPrompt: '',
-      fallbackModel: '',
       contextLengthManual: false,
       contextLengthSource: 'default'
     };
@@ -1116,8 +1107,7 @@ const handleApplyCompactAdvancedGlobal = async (patch = {}) => {
       triggerRatio: patch?.triggerRatio ?? compactConfig.value.triggerRatio,
       userMessageTokenBudget: patch?.userMessageTokenBudget ?? compactConfig.value.userMessageTokenBudget,
       keepRecentRounds: patch?.keepRecentRounds ?? compactConfig.value.keepRecentRounds,
-      compactPrompt: patch?.compactPrompt ?? compactConfig.value.compactPrompt,
-      fallbackModel: patch?.fallbackModel ?? compactConfig.value.fallbackModel
+      compactPrompt: patch?.compactPrompt ?? compactConfig.value.compactPrompt
     });
 
     if (result?.ok === false) {
@@ -1492,7 +1482,6 @@ const runConversationCompact = async ({ manual = true } = {}) => {
   compactAbortController = new AbortController();
 
   try {
-    const fallbackModelValue = compactConfig.value.fallbackModel || '';
     const maxCascadeSteps = 8;
     let steps = 0;
     let didAny = false;
@@ -1534,8 +1523,6 @@ const runConversationCompact = async ({ manual = true } = {}) => {
         chatShow: prefix,
         modelValue: model.value,
         provider: resolveProviderByModelValue(model.value),
-        fallbackProvider: resolveProviderByModelValue(fallbackModelValue),
-        fallbackModelValue,
         config: compactConfig.value,
         signal: compactAbortController.signal,
         progressBase,
@@ -1645,7 +1632,6 @@ const compactConfig = ref({
   userMessageTokenBudget: 20000,
   keepRecentRounds: 3,
   compactPrompt: '',
-  fallbackModel: '',
   resolvedId: ''
 });
 const compactArchives = ref([]);
@@ -8938,7 +8924,7 @@ const scrollToMessageByIndex = (index) => {
           :is-mcp-active="isMcpActive" :all-mcp-servers="availableMcpServers" :active-mcp-ids="sessionMcpServerIds"
           :active-skill-ids="sessionSkillIds" :all-skills="allSkillsList"
           :compacting="compacting" :compact-progress="compactProgress" :compact-config="compactConfig"
-          :compact-model-options="compactModelOptions" :can-restore-compact="canRestoreCompact"
+          :can-restore-compact="canRestoreCompact"
           @submit="handleSubmit" @cancel="handleCancel"
           @clear-history="handleClearHistory" @remove-file="handleRemoveFile" @upload="handleUpload"
           @send-audio="handleSendAudio" @open-mcp-dialog="handleOpenMcpDialog" @pick-file-start="handlePickFileStart"

@@ -38,11 +38,9 @@ const props = defineProps({
             userMessageTokenBudget: 20000,
             keepRecentRounds: 3,
             compactPrompt: '',
-            fallbackModel: '',
             resolvedId: ''
         })
     },
-    compactModelOptions: { type: Array, default: () => [] },
     canRestoreCompact: { type: Boolean, default: false }
 });
 
@@ -70,7 +68,6 @@ const localCompactConfig = ref({
     userMessageTokenBudget: 20000,
     keepRecentRounds: 3,
     compactPrompt: '',
-    fallbackModel: '',
     resolvedId: ''
 });
 
@@ -96,7 +93,6 @@ watch(() => props.compactConfig, (next) => {
         userMessageTokenBudget: Number.isFinite(Number(next.userMessageTokenBudget)) ? Number(next.userMessageTokenBudget) : 20000,
         keepRecentRounds: Number.isFinite(Number(next.keepRecentRounds)) ? Number(next.keepRecentRounds) : 3,
         compactPrompt: typeof next.compactPrompt === 'string' ? next.compactPrompt : '',
-        fallbackModel: typeof next.fallbackModel === 'string' ? next.fallbackModel : '',
         resolvedId: typeof next.resolvedId === 'string' ? next.resolvedId : ''
     };
 }, { deep: true, immediate: true });
@@ -157,8 +153,7 @@ const applyAdvancedToGlobal = () => {
         triggerRatio: localCompactConfig.value.triggerRatio,
         userMessageTokenBudget: localCompactConfig.value.userMessageTokenBudget,
         keepRecentRounds: localCompactConfig.value.keepRecentRounds,
-        compactPrompt: localCompactConfig.value.compactPrompt,
-        fallbackModel: localCompactConfig.value.fallbackModel
+        compactPrompt: localCompactConfig.value.compactPrompt
     });
 };
 
@@ -1293,20 +1288,6 @@ defineExpose({ focus, senderRef });
                                 </div>
                                 <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
                             </div>
-                        </div>
-                        <div class="compact-field">
-                            <div class="compact-label-row">
-                                <div class="compact-label">备用压缩模型（可空）</div>
-                                <span class="compact-inline-hint">主模型最多重试 3 次，失败后回退备用模型</span>
-                            </div>
-                            <el-select v-model="localCompactConfig.fallbackModel" clearable filterable placeholder="为空则仅使用当前模型" style="width: 100%;">
-                                <el-option
-                                    v-for="item in compactModelOptions"
-                                    :key="item.value"
-                                    :label="item.label || item.value"
-                                    :value="item.value"
-                                />
-                            </el-select>
                         </div>
                         <div class="compact-field">
                             <div class="compact-label">摘要 Prompt</div>

@@ -1593,22 +1593,28 @@ const handleRestoreCompact = async (payload = null) => {
   showDismissibleMessage.success('已还原最外层压缩');
 };
 
-const runConversationCompact = async ({ manual = true } = {}) => {
+const runConversationCompact = async ({
+  manual = true,
+  // 工具循环中：允许在 loading 时压缩，避免 tool 轮次撞上下文上限
+  allowDuringLoading = false,
+  quiet = false
+} = {}) => {
   if (compacting.value) return false;
-  if (loading.value) {
-    showDismissibleMessage.warning('请等待当前回复完成后再压缩');
+  if (loading.value && !allowDuringLoading) {
+    if (!quiet) showDismissibleMessage.warning('请等待当前回复完成后再压缩');
     return false;
   }
   if (!window.api?.runConversationCompact) {
-    showDismissibleMessage.error('压缩能力不可用');
+    if (!quiet) showDismissibleMessage.error('压缩能力不可用');
     return false;
   }
   if (!Array.isArray(chat_show.value) || chat_show.value.length === 0) {
-    showDismissibleMessage.info('当前没有可压缩的会话内容');
+    if (!quiet && manual) showDismissibleMessage.info('当前没有可压缩的会话内容');
     return false;
   }
 
   // Ensure AI projection is current before cascade decisions.
+  rehydrateHistoryToolsIfNeeded();
   syncHistoryFromChatShow();
 
   compacting.value = true;
@@ -1623,7 +1629,8 @@ const runConversationCompact = async ({ manual = true } = {}) => {
     while (steps < maxCascadeSteps) {
       steps += 1;
       const projected = projectCascadeToHistory(chat_show.value);
-      const need = manual && steps === 1
+      // 手动首步强制压一次；工具轮/自动轮只按阈值判断
+      const need = manual && steps === 1 && !allowDuringLoading
         ? true
         : await shouldCompactNow(projected);
       if (!need) break;
@@ -1634,7 +1641,7 @@ const runConversationCompact = async ({ manual = true } = {}) => {
       );
       const { insertIndex, prefix } = splitAiWindowPrefixAndTail(chat_show.value, keepTail);
       if (!prefix.length) {
-        if (manual && steps === 1) {
+        if (manual && steps === 1 && !quiet) {
           showDismissibleMessage.info('可压缩前缀不足，已跳过');
         }
         break;
@@ -1697,21 +1704,23 @@ const runConversationCompact = async ({ manual = true } = {}) => {
     }
 
     if (!didAny) {
-      if (manual) showDismissibleMessage.info('当前上下文未超过阈值，无需压缩');
+      if (manual && !quiet) showDismissibleMessage.info('当前上下文未超过阈值，无需压缩');
       return false;
     }
 
     autoCompactSuppressedForTurn.value = false;
     scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
-    showDismissibleMessage.success(manual ? `手动级联压缩完成（${steps} 步）` : `自动级联压缩完成（${steps} 步）`);
+    if (!quiet) {
+      showDismissibleMessage.success(manual ? `手动级联压缩完成（${steps} 步）` : `自动级联压缩完成（${steps} 步）`);
+    }
     return true;
   } catch (error) {
     if (error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))) {
       if (!manual) autoCompactSuppressedForTurn.value = true;
-      showDismissibleMessage.info('已取消压缩');
+      if (!quiet) showDismissibleMessage.info('已取消压缩');
       return false;
     }
-    showDismissibleMessage.error(`压缩失败: ${error?.message || error}`);
+    if (!quiet) showDismissibleMessage.error(`压缩失败: ${error?.message || error}`);
     return false;
   } finally {
     compacting.value = false;
@@ -1720,18 +1729,50 @@ const runConversationCompact = async ({ manual = true } = {}) => {
   }
 };
 
+// 工具循环内：tool 结果写回后、下一轮 AI 请求前检测并压缩
+const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request' } = {}) => {
+  if (autoCompactSuppressedForTurn.value) return false;
+  if (compacting.value) return false;
+  if (compactConfig.value.autoCompactEnabled === false) return false;
+  try {
+    rehydrateHistoryToolsIfNeeded();
+    // 不在这里 sync 掉内存 history 的 tool 细节；rehydrate 已保证 tool 完整
+    const need = await shouldCompactNow(history.value);
+    if (!need) return false;
+    const ok = await runConversationCompact({
+      manual: false,
+      allowDuringLoading: true,
+      quiet: true
+    });
+    if (ok) {
+      // 压缩后投影会变短；确保 tool 仍完整
+      rehydrateHistoryToolsIfNeeded();
+      scheduleAutoSave({ reason: `compacted-${reason}`, immediate: true });
+      showDismissibleMessage.success('上下文已自动压缩，继续处理…');
+    }
+    return ok;
+  } catch (error) {
+    console.warn('[compact] pre-request compact failed:', error);
+    return false;
+  }
+};
+
 const maybeAutoCompactAfterTurn = async () => {
   if (autoCompactSuppressedForTurn.value) return;
-  if (compacting.value || loading.value) return;
+  if (compacting.value) return;
+  // 回合结束后 loading 通常已 false；若仍 true 也允许压缩
   if (compactConfig.value.autoCompactEnabled === false) return;
   try {
-    syncHistoryFromChatShow();
+    rehydrateHistoryToolsIfNeeded();
     const need = await shouldCompactNow(history.value);
     if (need) {
-      await runConversationCompact({ manual: false });
+      await runConversationCompact({
+        manual: false,
+        allowDuringLoading: true
+      });
     }
   } catch (error) {
-    console.warn('[compact] auto compact check failed:', error);
+    console.warn('[compact] auto compact after turn failed:', error);
   } finally {
     autoCompactSuppressedForTurn.value = false;
   }
@@ -7681,6 +7722,13 @@ const askAI = async (forceSend = false) => {
     if (!added) return;
   }
 
+  // 用户消息写入后、进入 AI 请求前：若已超阈值，先压缩再开跑
+  try {
+    await maybeAutoCompactBeforeNextRequest({ reason: 'before-askAI' });
+  } catch (error) {
+    console.warn('[compact] before-askAI compact failed:', error);
+  }
+
   // --- 2. 初始化 AI 回合 ---
   loading.value = true;
   syncAutoCloseOnBlurListener();
@@ -8337,10 +8385,16 @@ const askAI = async (forceSend = false) => {
 
         throwIfTurnAborted();
         history.value.push(...toolMessages);
+        // 同步 tool 结果到当前 UI 气泡（已在 map 内写 uiToolCall.result）
         scheduleAutoSave({ reason: 'tool-calls-completed', immediate: true });
         // 工具调用完成后，把缓冲区消息插入历史，使下一轮请求即可纳入
         throwIfTurnAborted();
         await drainBufferIntoHistory();
+        throwIfTurnAborted();
+
+        // 关键：tool 结果写回后、进入下一轮 AI 请求前做上下文检测。
+        // 超限则先压缩，压缩完成后再 continue 循环发送。
+        await maybeAutoCompactBeforeNextRequest({ reason: 'after-tool-results' });
         throwIfTurnAborted();
       } else {
         if (isVoiceReply && responseMessage.audio) {

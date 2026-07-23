@@ -976,7 +976,13 @@ const truncateFilename = (filename, maxLength = 30) => {
                     <component :is="isCompactionExpanded ? CaretTop : CaretBottom" />
                   </el-icon>
                 </el-button>
-                <el-button size="small" type="primary" plain @click="emit('restore-compact', message)">恢复压缩前</el-button>
+                <el-button
+                  v-if="message.canRestore !== false"
+                  size="small"
+                  type="primary"
+                  plain
+                  @click="emit('restore-compact', message)"
+                >恢复压缩前</el-button>
               </div>
             </div>
           </div>
@@ -984,15 +990,37 @@ const truncateFilename = (filename, maxLength = 30) => {
       </Bubble>
 
       <div v-if="isCompactionExpanded && Array.isArray(message.archivedMessages) && message.archivedMessages.length" class="compaction-archived-list">
-        <div class="compaction-archived-title">压缩前消息（只读）</div>
+        <div class="compaction-archived-title">压缩前消息（已归档，仍可展开查看；还原后可完整编辑）</div>
         <div
           v-for="(archived, archivedIndex) in message.archivedMessages"
           :key="archived.id || archivedIndex"
           class="compaction-archived-item"
           :class="archived.role"
         >
-          <div class="compaction-archived-role">{{ archived.role === 'user' ? '你' : (archived.role === 'assistant' ? 'AI' : archived.role) }}</div>
+          <div class="compaction-archived-role">
+            {{ archived.role === 'user' ? '你' : (archived.role === 'assistant' ? 'AI' : (archived.role === 'compaction' ? '压缩检查点' : archived.role)) }}
+          </div>
           <div class="compaction-archived-text">{{ formatArchivedPreview(archived) }}</div>
+          <div
+            v-if="archived.role === 'compaction' && archived.expanded && Array.isArray(archived.archivedMessages)"
+            class="compaction-archived-nested"
+          >
+            <div
+              v-for="(nested, nestedIndex) in archived.archivedMessages"
+              :key="nested.id || nestedIndex"
+              class="compaction-archived-item nested"
+            >
+              <div class="compaction-archived-role">{{ nested.role === 'user' ? '你' : (nested.role === 'assistant' ? 'AI' : nested.role) }}</div>
+              <div class="compaction-archived-text">{{ formatArchivedPreview(nested) }}</div>
+            </div>
+          </div>
+          <el-button
+            v-if="archived.role === 'compaction'"
+            size="small"
+            text
+            type="primary"
+            @click="archived.expanded = !archived.expanded"
+          >{{ archived.expanded ? '收起内层' : '展开内层' }}</el-button>
         </div>
       </div>
     </div>

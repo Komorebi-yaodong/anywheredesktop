@@ -1,7 +1,7 @@
 <script setup>
 import { ref, h, onMounted, onBeforeUnmount, nextTick, watch, computed } from 'vue';
 import { ElFooter, ElRow, ElCol, ElText, ElDivider, ElButton, ElInput, ElMessage, ElMessageBox, ElTag, ElTooltip, ElScrollbar, ElIcon, ElImage, ElDialog, ElSwitch, ElSelect, ElOption, ElProgress, ElInputNumber, ElForm, ElFormItem } from 'element-plus';
-import { Close, Check, Document, Delete, Collection, Picture, ChatLineRound, Fold, RefreshRight } from '@element-plus/icons-vue';
+import { Close, Check, Document, Delete, Collection, Picture, ChatLineRound, Fold, RefreshRight, InfoFilled, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
 
 // --- Props and Emits ---
 const prompt = defineModel('prompt');
@@ -59,6 +59,7 @@ const isRecording = ref(false);
 const subAgentDialogVisible = ref(false);
 const selectedSubAgentId = ref('');
 const compactDialogVisible = ref(false);
+const advancedCollapsed = ref(true);
 const localCompactConfig = ref({
     autoCompactEnabled: true,
     triggerRatio: 0.9,
@@ -1162,8 +1163,13 @@ defineExpose({ focus, senderRef });
         :show-close="!compacting">
         <template #header>
             <div class="compact-dialog-header">
-                <div class="compact-dialog-title">会话压缩</div>
-                <div class="compact-dialog-subtitle">Codex 风格上下文检查点 · 摘要交接</div>
+                <div class="compact-dialog-title-row">
+                    <div class="compact-dialog-title">会话压缩</div>
+                    <el-tooltip content="学习codex本地压缩功能" placement="top">
+                        <el-icon class="compact-info-icon"><InfoFilled /></el-icon>
+                    </el-tooltip>
+                </div>
+                <div class="compact-dialog-subtitle">级联检查点 · 摘要交接 · 可还原</div>
             </div>
         </template>
 
@@ -1176,7 +1182,7 @@ defineExpose({ focus, senderRef });
         </div>
         <div v-else class="compact-config-block">
             <div class="compact-section-card">
-                <div class="compact-section-title">触发策略</div>
+                <div class="compact-section-title">基础设置</div>
                 <div class="compact-grid-2">
                     <div class="compact-field">
                         <div class="compact-label">自动压缩</div>
@@ -1185,13 +1191,9 @@ defineExpose({ focus, senderRef });
                     <div class="compact-field">
                         <div class="compact-label">触发阈值</div>
                         <el-input-number v-model="localCompactConfig.triggerRatio" :min="0.1" :max="0.99" :step="0.05" :precision="2" />
-                        <div class="compact-form-hint">Codex 默认 0.90（上下文 90%）</div>
+                        <div class="compact-form-hint">默认 0.90（上下文 90%）</div>
                     </div>
                 </div>
-            </div>
-
-            <div class="compact-section-card">
-                <div class="compact-section-title">上下文窗口</div>
                 <div class="compact-field">
                     <div class="compact-label">模型上下文长度（tokens）</div>
                     <div class="compact-inline-row">
@@ -1203,43 +1205,50 @@ defineExpose({ focus, senderRef });
                         <span v-if="localCompactConfig.resolvedId"> · 缓存键：{{ localCompactConfig.resolvedId }}</span>
                     </div>
                 </div>
-                <div class="compact-grid-2">
-                    <div class="compact-field">
-                        <div class="compact-label">用户消息 token 预算</div>
-                        <el-input-number v-model="localCompactConfig.userMessageTokenBudget" :min="1000" :step="1000" />
-                        <div class="compact-form-hint">Codex 默认 20000</div>
-                    </div>
-                    <div class="compact-field">
-                        <div class="compact-label">额外保留最近 N 轮原文</div>
-                        <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
-                    </div>
-                </div>
             </div>
 
             <div class="compact-section-card">
-                <div class="compact-section-title">摘要模型</div>
-                <div class="compact-field">
-                    <div class="compact-label">备用压缩模型（可空）</div>
-                    <el-select v-model="localCompactConfig.fallbackModel" clearable filterable placeholder="为空则仅使用当前模型" style="width: 100%;">
-                        <el-option
-                            v-for="item in compactModelOptions"
-                            :key="item.value"
-                            :label="item.label || item.value"
-                            :value="item.value"
-                        />
-                    </el-select>
-                    <div class="compact-form-hint">主模型最多重试 3 次，失败后回退备用模型</div>
-                </div>
-                <div class="compact-field">
-                    <div class="compact-label">摘要 Prompt（Codex）</div>
-                    <el-input v-model="localCompactConfig.compactPrompt" type="textarea" :autosize="{ minRows: 5, maxRows: 12 }" />
+                <button type="button" class="compact-advanced-toggle" @click="advancedCollapsed = !advancedCollapsed">
+                    <el-icon>
+                        <component :is="advancedCollapsed ? ArrowRight : ArrowDown" />
+                    </el-icon>
+                    <span>高级参数</span>
+                </button>
+                <div v-show="!advancedCollapsed" class="compact-advanced-body">
+                    <div class="compact-grid-2">
+                        <div class="compact-field">
+                            <div class="compact-label">用户消息 token 预算</div>
+                            <el-input-number v-model="localCompactConfig.userMessageTokenBudget" :min="1000" :step="1000" />
+                            <div class="compact-form-hint">默认 20000</div>
+                        </div>
+                        <div class="compact-field">
+                            <div class="compact-label">额外保留最近 N 轮原文</div>
+                            <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
+                        </div>
+                    </div>
+                    <div class="compact-field">
+                        <div class="compact-label">备用压缩模型（可空）</div>
+                        <el-select v-model="localCompactConfig.fallbackModel" clearable filterable placeholder="为空则仅使用当前模型" style="width: 100%;">
+                            <el-option
+                                v-for="item in compactModelOptions"
+                                :key="item.value"
+                                :label="item.label || item.value"
+                                :value="item.value"
+                            />
+                        </el-select>
+                        <div class="compact-form-hint">主模型最多重试 3 次，失败后回退备用模型</div>
+                    </div>
+                    <div class="compact-field">
+                        <div class="compact-label">摘要 Prompt</div>
+                        <el-input v-model="localCompactConfig.compactPrompt" type="textarea" :autosize="{ minRows: 5, maxRows: 12 }" />
+                    </div>
                 </div>
             </div>
         </div>
 
         <template #footer>
             <div class="compact-dialog-footer">
-                <el-button v-if="canRestoreCompact && !compacting" round @click="restoreCompact">恢复压缩前</el-button>
+                <el-button v-if="canRestoreCompact && !compacting" round @click="restoreCompact">恢复最外层压缩</el-button>
                 <div class="compact-dialog-footer-right">
                     <el-button round @click="compactDialogVisible = false" :disabled="compacting">关闭</el-button>
                     <el-button v-if="!compacting" round @click="saveCompactConfig">保存参数</el-button>
@@ -1278,10 +1287,42 @@ defineExpose({ focus, senderRef });
     gap: 2px;
 }
 
+.compact-dialog-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .compact-dialog-title {
     font-size: 16px;
     font-weight: 700;
     color: var(--el-text-color-primary);
+}
+
+.compact-info-icon {
+    color: var(--el-text-color-secondary);
+    cursor: help;
+    font-size: 15px;
+}
+
+.compact-advanced-toggle {
+    border: none;
+    background: transparent;
+    color: var(--el-text-color-primary);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.compact-advanced-body {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
 .compact-dialog-subtitle {

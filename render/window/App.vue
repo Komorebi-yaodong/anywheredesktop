@@ -877,7 +877,7 @@ const normalizeAssistantTokenUsage = (usage) => {
   };
 };
 
-const canRestoreCompact = computed(() => Array.isArray(compactArchives.value) && compactArchives.value.length > 0);
+const canRestoreCompact = computed(() => getOutermostCompactionIndex() >= 0);
 
 const compactModelOptions = computed(() => {
   return (modelList.value || []).map((item) => ({
@@ -1009,59 +1009,199 @@ const handleCancelCompact = () => {
   };
 };
 
-const findCompactionIndexBySnapshot = (snapshotId = '') => {
-  if (!snapshotId) {
-    for (let i = chat_show.value.length - 1; i >= 0; i -= 1) {
-      if (chat_show.value[i]?.role === 'compaction') return i;
-    }
-    return -1;
+const deepCloneSafe = (value) => {
+  try {
+    return JSON.parse(JSON.stringify(value ?? null));
+  } catch {
+    return value;
   }
-  return chat_show.value.findIndex((msg) => msg?.role === 'compaction' && msg?.snapshotId === snapshotId);
 };
 
-const applyCompactResult = (result) => {
-  if (!result?.ok) return;
+const DEFAULT_SUMMARY_PREFIX =
+  'Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:';
 
-  // Model-side history becomes compacted (Codex style).
-  if (Array.isArray(result.history)) {
-    history.value = result.history;
+const toHistoryMessageFromUi = (message) => {
+  if (!message || typeof message !== 'object') return null;
+  if (message.role === 'system') {
+    return { role: 'system', content: typeof message.content === 'string' ? message.content : '' };
+  }
+  if (message.role === 'compaction') {
+    const summary = String(message.summary || message.content || '').trim() || '(no summary available)';
+    const prefix = String(message.summaryPrefix || DEFAULT_SUMMARY_PREFIX);
+    return {
+      role: 'user',
+      content: `${prefix}\n${summary}`
+    };
+  }
+  if (message.role === 'user' || message.role === 'assistant' || message.role === 'tool') {
+    const next = {
+      role: message.role,
+      content: message.content
+    };
+    if (message.role === 'assistant') {
+      if (typeof message.reasoning_content === 'string') next.reasoning_content = message.reasoning_content;
+      if (Array.isArray(message.tool_calls) && message.tool_calls.length) next.tool_calls = deepCloneSafe(message.tool_calls);
+      if (message.tokenUsage) next.tokenUsage = deepCloneSafe(message.tokenUsage);
+    }
+    if (message.role === 'tool' && message.tool_call_id) {
+      next.tool_call_id = message.tool_call_id;
+    }
+    return next;
+  }
+  return null;
+};
+
+// AI 只看见最外层：compaction 只投影 summary，不展开 archivedMessages。
+const projectCascadeToHistory = (messages = []) => {
+  const out = [];
+  for (const message of (Array.isArray(messages) ? messages : [])) {
+    const projected = toHistoryMessageFromUi(message);
+    if (projected) out.push(projected);
+  }
+  // Keep a system message if missing but history previously had one? rely on chat_show.
+  return out;
+};
+
+const syncHistoryFromChatShow = () => {
+  history.value = projectCascadeToHistory(chat_show.value);
+};
+
+const getOutermostCompactionIndex = () => getOutermostCompactionIndexIn(chat_show.value);
+
+const canRestoreCompactMarker = (message = null) => {
+  const outermostIndex = getOutermostCompactionIndex();
+  if (outermostIndex < 0) return false;
+  if (!message) return true;
+  const snapshotId = message?.snapshotId || message?.id;
+  const outermost = chat_show.value[outermostIndex];
+  if (!snapshotId) return outermostIndex >= 0;
+  return outermost?.snapshotId === snapshotId || outermost?.id === snapshotId;
+};
+
+const estimateActiveTokens = async (messagesForAi = history.value) => {
+  let localTokens = 0;
+  if (window.api?.estimateCompactTokens) {
+    const estimate = await window.api.estimateCompactTokens(messagesForAi);
+    localTokens = Number(estimate?.tokens) || 0;
+  }
+  const usageTotal = getLatestUsageTotalTokens();
+  if (Number.isFinite(usageTotal) && usageTotal > 0 && localTokens > 0) {
+    const diff = Math.abs(usageTotal - localTokens);
+    return diff > localTokens * 0.8 ? localTokens : usageTotal;
+  }
+  if (Number.isFinite(usageTotal) && usageTotal > 0) return usageTotal;
+  return localTokens;
+};
+
+const shouldCompactNow = async (messagesForAi = history.value) => {
+  if (!window.api?.shouldAutoCompact) return false;
+  const activeTokens = await estimateActiveTokens(messagesForAi);
+  const decision = await window.api.shouldAutoCompact({
+    activeTokens,
+    contextLength: compactConfig.value.contextLength,
+    triggerRatio: compactConfig.value.triggerRatio,
+    autoCompactEnabled: true
+  });
+  return Boolean(decision?.should);
+};
+
+// Preserve last N messages as visible tail outside the new summary marker.
+const splitCascadePrefixAndTail = (messages = [], keepTailCount = 0) => {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  if (list.length === 0) return { prefix: [], tail: [] };
+
+  // Never compact away pure system-only content.
+  const nonSystemIndexes = [];
+  list.forEach((msg, idx) => {
+    if (msg?.role !== 'system') nonSystemIndexes.push(idx);
+  });
+  if (nonSystemIndexes.length <= 1) {
+    return { prefix: [], tail: list };
   }
 
-  // UI: insert a compaction marker in place of previous messages, keep them foldable under the marker.
-  // Newer messages after this compaction (if any) remain after the marker.
-  const markerBase = Array.isArray(result.chatShow) ? result.chatShow[0] : null;
-  const marker = {
+  let tailCount = Math.max(0, Math.floor(Number(keepTailCount) || 0));
+  // keepRecentRounds is rounds; convert to approx messages (user+assistant).
+  if (tailCount === 0 && Number(compactConfig.value.keepRecentRounds) > 0) {
+    tailCount = Math.floor(Number(compactConfig.value.keepRecentRounds) * 2);
+  }
+  // Always leave at least 1 non-system message outside if possible, so conversation continues.
+  tailCount = Math.max(1, tailCount);
+  tailCount = Math.min(tailCount, nonSystemIndexes.length - 1);
+
+  const cutNonSystemPos = nonSystemIndexes.length - tailCount;
+  const cutIndex = nonSystemIndexes[cutNonSystemPos];
+  // Include system messages that appear before cut into prefix if they are first.
+  let prefix = list.slice(0, cutIndex);
+  let tail = list.slice(cutIndex);
+
+  // If prefix only has system, shift more into prefix.
+  const prefixHasCompressible = prefix.some((msg) => msg?.role && msg.role !== 'system');
+  if (!prefixHasCompressible && nonSystemIndexes.length > 1) {
+    const forcedCut = nonSystemIndexes[Math.max(0, nonSystemIndexes.length - 2)] + 1;
+    prefix = list.slice(0, forcedCut);
+    tail = list.slice(forcedCut);
+  }
+
+  // Drop leading system-only from prefix? Keep system in prefix for summary context via backend flatten.
+  return { prefix, tail };
+};
+
+const applyCascadeCompactStep = (marker, prefix, tail) => {
+  const nextMarker = {
     id: messageIdCounter.value++,
     role: 'compaction',
-    content: result.summary || markerBase?.content || '',
-    summary: result.summary || markerBase?.summary || '',
-    snapshotId: result.snapshotId || markerBase?.snapshotId || `compact_${Date.now()}`,
-    createdAt: Date.now(),
+    content: marker?.summary || marker?.content || '',
+    summary: marker?.summary || marker?.content || '',
+    summaryPrefix: marker?.summaryPrefix || DEFAULT_SUMMARY_PREFIX,
+    snapshotId: marker?.snapshotId || `compact_${Date.now()}`,
+    createdAt: marker?.createdAt || Date.now(),
     collapsed: true,
     expanded: false,
-    archivedMessages: Array.isArray(result.archive?.chatShowBefore)
-      ? deepCloneSafe(result.archive.chatShowBefore)
-      : deepCloneSafe(chat_show.value),
+    canRestore: true,
+    archivedMessages: deepCloneSafe(prefix),
     timestamp: new Date().toLocaleString('sv-SE')
   };
 
-  // Replace entire current visible history with: [compaction marker] (+ future messages can append later)
-  // Because this is a whole-session compact checkpoint.
-  chat_show.value = [marker];
+  // Cascade UI: [<prefix...>, summary, ...tail]
+  // Nested previous compaction markers remain inside archivedMessages.
+  // Only outermost marker is restorable.
+  const nestedPrefix = deepCloneSafe(prefix).map((msg) => {
+    if (msg?.role === 'compaction') {
+      return { ...msg, canRestore: false, expanded: false };
+    }
+    return msg;
+  });
+  nextMarker.archivedMessages = nestedPrefix;
 
-  if (result.archive) {
-    compactArchives.value = [...compactArchives.value, {
-      ...result.archive,
-      historyAfter: deepCloneSafe(history.value)
-    }].slice(-20);
-  }
-  if (result.modelConfig) {
-    compactConfig.value = {
-      ...compactConfig.value,
-      ...result.modelConfig
+  chat_show.value = [nextMarker, ...deepCloneSafe(tail).map((msg) => {
+    if (msg?.role === 'compaction') return { ...msg, canRestore: false };
+    return msg;
+  })];
+  // Ensure only the newest top-level marker can restore.
+  chat_show.value = chat_show.value.map((msg, idx, arr) => {
+    if (msg?.role !== 'compaction') return msg;
+    const isLastCompaction = arr.slice(idx + 1).every((m) => m?.role !== 'compaction') && msg.role === 'compaction';
+    // top-level only; last compaction marker is outermost
+    const outermost = getOutermostCompactionIndexIn(arr);
+    return {
+      ...msg,
+      canRestore: idx === outermost
     };
+  });
+  syncHistoryFromChatShow();
+  compactArchives.value = [...compactArchives.value, {
+    id: nextMarker.snapshotId,
+    createdAt: nextMarker.createdAt,
+    summary: nextMarker.summary,
+    markerId: nextMarker.id
+  }].slice(-50);
+};
+
+const getOutermostCompactionIndexIn = (list = []) => {
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i]?.role === 'compaction') return i;
   }
-  scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
+  return -1;
 };
 
 const handleRestoreCompact = async (payload = null) => {
@@ -1070,72 +1210,48 @@ const handleRestoreCompact = async (payload = null) => {
     return;
   }
 
-  const snapshotId = typeof payload === 'string'
+  const outermostIndex = getOutermostCompactionIndex();
+  if (outermostIndex < 0) {
+    showDismissibleMessage.info('没有可恢复的压缩检查点');
+    return;
+  }
+
+  const requestedId = typeof payload === 'string'
     ? payload
-    : (payload?.snapshotId || '');
-  let archiveIndex = -1;
-  if (snapshotId) {
-    archiveIndex = compactArchives.value.findIndex((item) => item?.id === snapshotId);
-  }
-  if (archiveIndex < 0) {
-    archiveIndex = compactArchives.value.length - 1;
-  }
-  const archive = archiveIndex >= 0 ? compactArchives.value[archiveIndex] : null;
-  if (!archive) {
-    showDismissibleMessage.info('没有可恢复的压缩快照');
+    : (payload?.snapshotId || payload?.id || '');
+  const outermost = chat_show.value[outermostIndex];
+  if (requestedId && outermost?.snapshotId !== requestedId && outermost?.id !== requestedId) {
+    showDismissibleMessage.warning('请先恢复更外层的压缩，再恢复内层（级联还原）');
     return;
   }
 
   try {
-    await ElMessageBox.confirm('将把该压缩摘要插装还原为压缩前消息，压缩后新增内容会保留。是否继续？', '恢复压缩前', {
-      type: 'warning',
-      confirmButtonText: '恢复',
-      cancelButtonText: '取消'
-    });
+    await ElMessageBox.confirm(
+      '将还原最外层压缩检查点：把 summary 替换回压缩前消息，并保留该检查点之后的新消息。',
+      '恢复压缩前',
+      {
+        type: 'warning',
+        confirmButtonText: '恢复',
+        cancelButtonText: '取消'
+      }
+    );
   } catch {
     return;
   }
 
-  const markerIndex = findCompactionIndexBySnapshot(archive.id);
-  const restoredMessages = Array.isArray(archive.chatShowBefore)
-    ? deepCloneSafe(archive.chatShowBefore)
+  const archived = Array.isArray(outermost.archivedMessages)
+    ? deepCloneSafe(outermost.archivedMessages)
     : [];
-  const restoredHistory = Array.isArray(archive.historyBefore)
-    ? deepCloneSafe(archive.historyBefore)
-    : [];
-
-  if (markerIndex >= 0) {
-    // UI splice: replace only the compaction marker with archived pre-compact messages.
-    // Keep messages after the marker (new conversation content after compact).
-    const afterMessages = chat_show.value.slice(markerIndex + 1);
-    chat_show.value = [
-      ...chat_show.value.slice(0, markerIndex),
-      ...restoredMessages,
-      ...afterMessages
-    ];
-
-    // Model history splice: replace compacted prefix with pre-compact history,
-    // keep any post-compact growth after the previous compacted length.
-    const compactedLen = Array.isArray(archive.historyAfter) ? archive.historyAfter.length : history.value.length;
-    const postCompactHistory = history.value.slice(Math.min(compactedLen, history.value.length));
-    history.value = [...restoredHistory, ...postCompactHistory];
-  } else {
-    // Fallback full restore
-    history.value = restoredHistory;
-    chat_show.value = restoredMessages;
-  }
-
-  compactArchives.value = compactArchives.value.filter((_, idx) => idx !== archiveIndex);
+  const after = chat_show.value.slice(outermostIndex + 1);
+  chat_show.value = [
+    ...chat_show.value.slice(0, outermostIndex),
+    ...archived,
+    ...after
+  ];
+  syncHistoryFromChatShow();
+  compactArchives.value = compactArchives.value.filter((item) => item?.id !== outermost.snapshotId);
   scheduleAutoSave({ reason: 'compact-restored', immediate: true });
-  showDismissibleMessage.success('已插装恢复压缩前消息');
-};
-
-const deepCloneSafe = (value) => {
-  try {
-    return JSON.parse(JSON.stringify(value ?? null));
-  } catch {
-    return value;
-  }
+  showDismissibleMessage.success('已级联还原最外层压缩');
 };
 
 const runConversationCompact = async ({ manual = true } = {}) => {
@@ -1148,41 +1264,105 @@ const runConversationCompact = async ({ manual = true } = {}) => {
     showDismissibleMessage.error('压缩能力不可用');
     return false;
   }
-  if (!Array.isArray(history.value) || history.value.length === 0) {
+  if (!Array.isArray(chat_show.value) || chat_show.value.length === 0) {
     showDismissibleMessage.info('当前没有可压缩的会话内容');
     return false;
   }
 
+  // Ensure AI projection is current before cascade decisions.
+  syncHistoryFromChatShow();
+
   compacting.value = true;
-  compactProgress.value = { percent: 2, message: '准备压缩…', stage: 'prepare' };
+  compactProgress.value = { percent: 2, message: '准备级联压缩…', stage: 'prepare' };
   compactAbortController = new AbortController();
 
   try {
     const fallbackModelValue = compactConfig.value.fallbackModel || '';
-    const result = await window.api.runConversationCompact({
-      messages: history.value,
-      chatShow: chat_show.value,
-      modelValue: model.value,
-      provider: resolveProviderByModelValue(model.value),
-      fallbackProvider: resolveProviderByModelValue(fallbackModelValue),
-      fallbackModelValue,
-      config: compactConfig.value,
-      signal: compactAbortController.signal,
-      onProgress: (payload) => {
-        compactProgress.value = {
-          percent: Number(payload?.percent) || compactProgress.value.percent || 0,
-          message: payload?.message || compactProgress.value.message || '',
-          stage: payload?.stage || ''
+    const maxCascadeSteps = 8;
+    let steps = 0;
+    let didAny = false;
+
+    while (steps < maxCascadeSteps) {
+      steps += 1;
+      const projected = projectCascadeToHistory(chat_show.value);
+      const need = manual && steps === 1
+        ? true
+        : await shouldCompactNow(projected);
+      if (!need) break;
+
+      const keepTail = Math.max(
+        1,
+        Math.floor(Number(compactConfig.value.keepRecentRounds || 0) * 2) || 3
+      );
+      const { prefix, tail } = splitCascadePrefixAndTail(chat_show.value, keepTail);
+      if (!prefix.length) {
+        if (manual && steps === 1) {
+          showDismissibleMessage.info('可压缩前缀不足，已跳过');
+        }
+        break;
+      }
+
+      const progressBase = Math.min(90, (steps - 1) * 12);
+      const progressSpan = Math.max(8, 96 / maxCascadeSteps);
+      compactProgress.value = {
+        percent: progressBase + 2,
+        message: `级联压缩第 ${steps} 层…`,
+        stage: 'cascade'
+      };
+
+      const result = await window.api.runConversationCompact({
+        messages: projectCascadeToHistory(prefix),
+        chatShow: prefix,
+        modelValue: model.value,
+        provider: resolveProviderByModelValue(model.value),
+        fallbackProvider: resolveProviderByModelValue(fallbackModelValue),
+        fallbackModelValue,
+        config: compactConfig.value,
+        signal: compactAbortController.signal,
+        progressBase,
+        progressSpan,
+        onProgress: (payload) => {
+          compactProgress.value = {
+            percent: Number(payload?.percent) || compactProgress.value.percent || 0,
+            message: payload?.message || compactProgress.value.message || '',
+            stage: payload?.stage || ''
+          };
+        }
+      });
+
+      if (result?.ok === false) {
+        throw new Error(result?.error?.message || 'compact_failed');
+      }
+
+      const marker = result.marker || {
+        summary: result.summary,
+        snapshotId: result.snapshotId,
+        summaryPrefix: result.summaryPrefix
+      };
+      applyCascadeCompactStep(marker, prefix, tail);
+      didAny = true;
+
+      if (result.modelConfig) {
+        compactConfig.value = {
+          ...compactConfig.value,
+          ...result.modelConfig
         };
       }
-    });
 
-    if (result?.ok === false) {
-      throw new Error(result?.error?.message || 'compact_failed');
+      // Manual first step always runs; subsequent steps only if still over threshold.
+      if (manual && steps === 1) {
+        // continue loop to cascade if still over limit
+      }
     }
-    applyCompactResult(result);
+
+    if (!didAny) {
+      if (manual) showDismissibleMessage.info('当前上下文未超过阈值，无需压缩');
+      return false;
+    }
+
     autoCompactSuppressedForTurn.value = false;
-    showDismissibleMessage.success(manual ? '手动压缩完成' : '自动压缩完成');
+    scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
+    showDismissibleMessage.success(manual ? `手动级联压缩完成（${steps} 步）` : `自动级联压缩完成（${steps} 步）`);
     return true;
   } catch (error) {
     if (error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))) {
@@ -1203,27 +1383,10 @@ const maybeAutoCompactAfterTurn = async () => {
   if (autoCompactSuppressedForTurn.value) return;
   if (compacting.value || loading.value) return;
   if (compactConfig.value.autoCompactEnabled === false) return;
-  if (!window.api?.estimateCompactTokens || !window.api?.shouldAutoCompact) return;
-
   try {
-    const estimate = await window.api.estimateCompactTokens(history.value);
-    const localTokens = Number(estimate?.tokens) || 0;
-    const usageTotal = getLatestUsageTotalTokens();
-    let activeTokens = localTokens;
-    if (Number.isFinite(usageTotal) && usageTotal > 0 && localTokens > 0) {
-      const diff = Math.abs(usageTotal - localTokens);
-      activeTokens = diff > localTokens * 0.8 ? localTokens : usageTotal;
-    } else if (Number.isFinite(usageTotal) && usageTotal > 0) {
-      activeTokens = usageTotal;
-    }
-
-    const decision = await window.api.shouldAutoCompact({
-      activeTokens,
-      contextLength: compactConfig.value.contextLength,
-      triggerRatio: compactConfig.value.triggerRatio,
-      autoCompactEnabled: compactConfig.value.autoCompactEnabled
-    });
-    if (decision?.should) {
+    syncHistoryFromChatShow();
+    const need = await shouldCompactNow(history.value);
+    if (need) {
       await runConversationCompact({ manual: false });
     }
   } catch (error) {
@@ -3415,18 +3578,6 @@ const handleEditMessage = (index, newContent) => {
   }
   if (index < 0 || index >= chat_show.value.length) return;
 
-  let history_idx = -1;
-  let show_counter = -1;
-  for (let i = 0; i < history.value.length; i++) {
-    if (history.value[i].role !== 'tool') {
-      show_counter++;
-    }
-    if (show_counter === index) {
-      history_idx = i;
-      break;
-    }
-  }
-
   const updateContent = (message) => {
     if (!message) return;
     if (typeof message.content === 'string' || message.content === null) {
@@ -3445,10 +3596,23 @@ const handleEditMessage = (index, newContent) => {
     updateContent(chat_show.value[index]);
   }
 
+  // Best-effort sync to AI history: match by non-tool/compaction order.
+  let history_idx = -1;
+  let show_counter = -1;
+  for (let i = 0; i < history.value.length; i++) {
+    if (history.value[i].role === 'tool') continue;
+    show_counter++;
+    // Skip summary/compaction-projected user messages that aren't 1:1 with chat_show
+    if (show_counter === index) {
+      history_idx = i;
+      break;
+    }
+  }
   if (history_idx !== -1 && history.value[history_idx]) {
     updateContent(history.value[history_idx]);
-  } else {
-    console.error("错误：无法将 chat_show 索引映射到 history 索引。下次API请求可能会使用旧数据。");
+  } else if (chat_show.value[index]?.role === 'compaction') {
+    // Compaction marker is projected; rebuild AI projection from UI tree.
+    syncHistoryFromChatShow();
   }
 };
 
@@ -6439,6 +6603,10 @@ const loadSession = async (jsonData) => {
 
     history.value = Array.isArray(jsonData.history) ? jsonData.history : [];
     chat_show.value = Array.isArray(jsonData.chat_show) ? jsonData.chat_show : [];
+    // 级联压缩：以 chat_show 为 UI 真源，重算 AI 投影 history
+    if (chat_show.value.some((msg) => msg?.role === 'compaction')) {
+      history.value = projectCascadeToHistory(chat_show.value);
+    }
     prompt.value = typeof jsonData.promptDraft === 'string' ? jsonData.promptDraft : '';
     fileList.value = Array.isArray(jsonData.draftFileList) ? jsonData.draftFileList : [];
 
@@ -7192,6 +7360,7 @@ const askAI = async (forceSend = false) => {
       // chatInputRef.value?.focus({ cursor: 'end' });
 
       // --- 为本次请求创建临时消息列表 ---
+      // history 在压缩/还原后会从 chat_show 投影；正常回合继续双写，避免冲掉 tool 消息。
       let messagesForThisRequest = JSON.parse(JSON.stringify(history.value));
 
       messagesForThisRequest = messagesForThisRequest.filter(msg => {

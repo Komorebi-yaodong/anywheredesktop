@@ -509,6 +509,10 @@ async function requestSummaryOnce({
   return extractAssistantTextFromCompletion(response, apiType || provider?.apiType || 'chat_completions')
 }
 
+/**
+ * Summarize a UI/message prefix for cascade compaction.
+ * Frontend owns cascade splicing; this function only generates the handoff summary.
+ */
 export async function runConversationCompaction({
   messages = [],
   chatShow = [],
@@ -518,12 +522,22 @@ export async function runConversationCompaction({
   fallbackModelValue = '',
   config: configPatch = null,
   signal = null,
-  onProgress = null
+  onProgress = null,
+  progressBase = 0,
+  progressSpan = 100
 } = {}) {
   const report = (stage, payload = {}) => {
     if (typeof onProgress === 'function') {
       try {
-        onProgress({ stage, ...payload })
+        const localPercent = Number(payload?.percent)
+        const mappedPercent = Number.isFinite(localPercent)
+          ? Math.min(100, Math.max(0, Math.round(progressBase + (localPercent / 100) * progressSpan)))
+          : undefined
+        onProgress({
+          stage,
+          ...payload,
+          ...(mappedPercent === undefined ? {} : { percent: mappedPercent })
+        })
       } catch {
         // ignore progress callback failures
       }
@@ -532,6 +546,14 @@ export async function runConversationCompaction({
 
   throwIfAborted(signal)
   report('prepare', { percent: 5, message: '准备压缩…' })
+
+  // Prefer chatShow prefix for summarizer context when provided.
+  const sourceMessages = (Array.isArray(chatShow) && chatShow.length > 0)
+    ? chatShow
+    : messages
+  if (!Array.isArray(sourceMessages) || sourceMessages.length === 0) {
+    throw new Error('compact_source_empty')
+  }
 
   const primaryModelName = String(modelValue || '').includes('|')
     ? String(modelValue).split('|').slice(1).join('|')
@@ -551,7 +573,29 @@ export async function runConversationCompaction({
     ...(configPatch && typeof configPatch === 'object' ? configPatch : {})
   }
 
-  const localTokens = estimateMessagesTokens(messages)
+  // Flatten compaction markers into readable transcript for the summarizer.
+  const flattenForSummary = (items = [], depth = 0) => {
+    const out = []
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue
+      if (item.role === 'system') continue
+      if (item.role === 'compaction') {
+        out.push({
+          role: 'user',
+          content: `[compacted depth=${depth}] ${String(item.summary || item.content || '').trim()}`
+        })
+        if (Array.isArray(item.archivedMessages) && item.archivedMessages.length) {
+          out.push(...flattenForSummary(item.archivedMessages, depth + 1))
+        }
+        continue
+      }
+      out.push(deepClone(item))
+    }
+    return out
+  }
+
+  const summarySource = flattenForSummary(sourceMessages)
+  const localTokens = estimateMessagesTokens(summarySource)
   report('estimate_usage', {
     percent: 25,
     message: '估算上下文用量…',
@@ -604,7 +648,7 @@ export async function runConversationCompaction({
         summaryText = await requestSummaryOnce({
           provider: candidate.provider,
           modelName: candidate.modelName,
-          messages,
+          messages: summarySource,
           compactPrompt: modelConfig.compactPrompt,
           signal,
           apiType: candidate.apiType
@@ -629,45 +673,17 @@ export async function runConversationCompaction({
     throw error
   }
 
-  report('rebuild_history', { percent: 88, message: '重建上下文…' })
-
-  const built = buildCompactedHistory({
-    messages,
-    summaryText,
-    summaryPrefix: modelConfig.summaryPrefix || DEFAULT_SUMMARY_PREFIX,
-    userMessageTokenBudget: modelConfig.userMessageTokenBudget,
-    keepRecentRounds: modelConfig.keepRecentRounds
-  })
+  report('rebuild_history', { percent: 90, message: '写回压缩检查点…' })
 
   const snapshotId = `compact_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-  const sourceHistory = deepClone(messages)
-  const sourceChatShow = deepClone(chatShow)
-  const archive = {
-    id: snapshotId,
-    createdAt: Date.now(),
-    model: modelValue,
-    usedModelLabel,
-    summary: summaryText,
-    historyBefore: sourceHistory,
-    chatShowBefore: sourceChatShow,
-    configSnapshot: deepClone(modelConfig)
-  }
-
-  // UI keeps original messages (folded under compaction), while model history becomes compacted.
-  const compactedChatShow = [
-    {
-      id: Date.now(),
-      role: 'compaction',
-      content: summaryText,
-      summary: summaryText,
-      snapshotId,
-      createdAt: Date.now(),
-      collapsed: true,
-      expanded: false,
-      archivedMessages: sourceChatShow,
-      timestamp: new Date().toLocaleString('sv-SE')
-    }
-  ]
+  const summaryPrefix = modelConfig.summaryPrefix || DEFAULT_SUMMARY_PREFIX
+  const built = buildCompactedHistory({
+    messages: summarySource,
+    summaryText,
+    summaryPrefix,
+    userMessageTokenBudget: modelConfig.userMessageTokenBudget,
+    keepRecentRounds: 0
+  })
 
   report('completed', {
     percent: 100,
@@ -680,9 +696,21 @@ export async function runConversationCompaction({
     ok: true,
     snapshotId,
     summary: summaryText,
+    summaryPrefix,
+    // AI-side projection for this compacted prefix only (system + selected users + summary)
     history: built.history,
-    chatShow: compactedChatShow,
-    archive,
+    // Frontend will splice this marker into the cascade UI tree.
+    marker: {
+      role: 'compaction',
+      content: summaryText,
+      summary: summaryText,
+      snapshotId,
+      createdAt: Date.now(),
+      collapsed: true,
+      expanded: false,
+      archivedMessages: deepClone(sourceMessages),
+      timestamp: new Date().toLocaleString('sv-SE')
+    },
     modelConfig,
     contextLength: resolveResult.contextLength,
     localTokensBefore: localTokens,

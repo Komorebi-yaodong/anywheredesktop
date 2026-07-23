@@ -683,6 +683,8 @@ const handleModelLogoError = () => {
 
 watch(model, (nextModel) => {
   resolveCurrentModelLogo(nextModel);
+  // 换模型不改历史，但需确保 role=tool 仍在 history 中
+  rehydrateHistoryToolsIfNeeded();
   loadCompactConfigForCurrentModel({ forceRefresh: false }).catch((error) => {
     console.warn('[compact] model change config load failed:', error);
   });
@@ -1156,6 +1158,85 @@ const deepCloneSafe = (value) => {
 const DEFAULT_SUMMARY_PREFIX =
   'Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:';
 
+const normalizeToolResultContent = (result) => {
+  if (typeof result === 'string') return result;
+  if (result == null) return '';
+  try {
+    return JSON.stringify(result);
+  } catch {
+    return String(result);
+  }
+};
+
+// UI 里 tool 结果挂在 assistant.tool_calls[].result；API history 需要独立 role=tool 消息
+const toApiToolCallsFromUi = (toolCalls = []) => {
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return [];
+  return toolCalls
+    .map((tc) => {
+      if (!tc || typeof tc !== 'object') return null;
+      // 已是 OpenAI 结构
+      if (tc.function && (tc.id || tc.function.name)) {
+        return {
+          id: tc.id || '',
+          type: tc.type || 'function',
+          function: {
+            name: tc.function.name || '',
+            arguments: typeof tc.function.arguments === 'string'
+              ? tc.function.arguments
+              : JSON.stringify(tc.function.arguments ?? {})
+          }
+        };
+      }
+      // chat_show 结构：{ id, name, args, result, approvalStatus }
+      const id = tc.id || '';
+      const name = tc.name || tc.function?.name || '';
+      if (!id && !name) return null;
+      const args = tc.args ?? tc.arguments ?? tc.function?.arguments ?? '{}';
+      return {
+        id,
+        type: 'function',
+        function: {
+          name,
+          arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {})
+        }
+      };
+    })
+    .filter(Boolean);
+};
+
+const toToolResultMessagesFromUiAssistant = (message = {}) => {
+  const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+  if (!toolCalls.length) return [];
+  return toolCalls
+    .map((tc) => {
+      if (!tc || typeof tc !== 'object') return null;
+      const id = tc.id || tc.tool_call_id || '';
+      // 只有已有结果时才还原为 role=tool；否则 API 会报 tool_calls 未响应
+      const hasResult = Object.prototype.hasOwnProperty.call(tc, 'result')
+        || Object.prototype.hasOwnProperty.call(tc, 'content');
+      if (!id || !hasResult) return null;
+      const content = Object.prototype.hasOwnProperty.call(tc, 'result')
+        ? normalizeToolResultContent(tc.result)
+        : normalizeToolResultContent(tc.content);
+      // 尚未真正执行的占位状态不写入 history，避免脏上下文
+      if (
+        tc.approvalStatus === 'waiting'
+        || tc.approvalStatus === 'executing'
+        || content === '等待批准...'
+        || content === '执行中...'
+      ) {
+        return null;
+      }
+      return {
+        role: 'tool',
+        tool_call_id: id,
+        name: tc.name || tc.function?.name || '',
+        content
+      };
+    })
+    .filter(Boolean);
+};
+
 const toHistoryMessageFromUi = (message) => {
   if (!message || typeof message !== 'object') return null;
   if (message.role === 'system') {
@@ -1169,19 +1250,31 @@ const toHistoryMessageFromUi = (message) => {
       content: `${prefix}\n${summary}`
     };
   }
-  if (message.role === 'user' || message.role === 'assistant' || message.role === 'tool') {
-    const next = {
-      role: message.role,
+  if (message.role === 'user') {
+    return {
+      role: 'user',
       content: message.content
     };
-    if (message.role === 'assistant') {
-      if (typeof message.reasoning_content === 'string') next.reasoning_content = message.reasoning_content;
-      if (Array.isArray(message.tool_calls) && message.tool_calls.length) next.tool_calls = deepCloneSafe(message.tool_calls);
-      if (message.tokenUsage) next.tokenUsage = deepCloneSafe(message.tokenUsage);
-    }
-    if (message.role === 'tool' && message.tool_call_id) {
-      next.tool_call_id = message.tool_call_id;
-    }
+  }
+  if (message.role === 'assistant') {
+    const next = {
+      role: 'assistant',
+      content: message.content ?? null
+    };
+    if (typeof message.reasoning_content === 'string') next.reasoning_content = message.reasoning_content;
+    const apiToolCalls = toApiToolCallsFromUi(message.tool_calls);
+    if (apiToolCalls.length) next.tool_calls = apiToolCalls;
+    if (message.tokenUsage) next.tokenUsage = deepCloneSafe(message.tokenUsage);
+    return next;
+  }
+  if (message.role === 'tool') {
+    // 兼容：若 chat_show 里已有独立 tool 消息
+    const next = {
+      role: 'tool',
+      content: message.content
+    };
+    if (message.tool_call_id) next.tool_call_id = message.tool_call_id;
+    if (message.name) next.name = message.name;
     return next;
   }
   return null;
@@ -1233,8 +1326,31 @@ const migrateInsertStyleChatShow = (messages = []) => {
  * - 系统提示词
  * - 仅最后一层（最外层）summary
  * - 该 summary 之后的消息
- * UI 仍完整保留压缩前消息，只是 AI 忽略它们。
+ * 关键：assistant.tool_calls[].result 必须还原为独立 role=tool 消息，
+ * 否则保存/换模型/sync 后 tool 结果会丢失。
  */
+const appendProjectedUiMessage = (out, message) => {
+  if (!message || message.role === 'system' || message.role === 'compaction') return;
+  // 独立 tool 行（少数场景）直接投影
+  if (message.role === 'tool') {
+    const projected = toHistoryMessageFromUi(message);
+    if (projected) out.push(projected);
+    return;
+  }
+  if (message.role === 'user') {
+    const projected = toHistoryMessageFromUi(message);
+    if (projected) out.push(projected);
+    return;
+  }
+  if (message.role === 'assistant') {
+    const projected = toHistoryMessageFromUi(message);
+    if (projected) out.push(projected);
+    // 从 UI 气泡还原 tool 返回
+    const toolMsgs = toToolResultMessagesFromUiAssistant(message);
+    if (toolMsgs.length) out.push(...toolMsgs);
+  }
+};
+
 const projectCascadeToHistory = (messages = []) => {
   const list = Array.isArray(messages) ? messages : [];
   const out = [];
@@ -1249,9 +1365,7 @@ const projectCascadeToHistory = (messages = []) => {
   const lastCompactIdx = getOutermostCompactionIndexIn(list);
   if (lastCompactIdx < 0) {
     for (const message of list) {
-      if (message?.role === 'system' || message?.role === 'compaction') continue;
-      const projected = toHistoryMessageFromUi(message);
-      if (projected) out.push(projected);
+      appendProjectedUiMessage(out, message);
     }
     return out;
   }
@@ -1264,10 +1378,30 @@ const projectCascadeToHistory = (messages = []) => {
     if (!message || message.role === 'system') continue;
     // 只认最后一层 summary；其后若还有旧 compaction 标记，跳过其自身，仍保留后续真实消息
     if (message.role === 'compaction') continue;
-    const projected = toHistoryMessageFromUi(message);
-    if (projected) out.push(projected);
+    appendProjectedUiMessage(out, message);
   }
   return out;
+};
+
+const countToolMessages = (messages = []) => (
+  (Array.isArray(messages) ? messages : []).filter((m) => m?.role === 'tool').length
+);
+
+// 若 history 因旧 bug 丢失 tool，而 chat_show 的 assistant.tool_calls 仍有 result，则重建
+const rehydrateHistoryToolsIfNeeded = () => {
+  const projected = projectCascadeToHistory(chat_show.value);
+  const projectedTools = countToolMessages(projected);
+  const currentTools = countToolMessages(history.value);
+  if (projectedTools > currentTools) {
+    history.value = projected;
+    return true;
+  }
+  // 无压缩且 history 为空但 chat_show 有内容时，也重建
+  if ((!Array.isArray(history.value) || history.value.length === 0) && projected.length > 0) {
+    history.value = projected;
+    return true;
+  }
+  return false;
 };
 
 const syncHistoryFromChatShow = () => {
@@ -3290,6 +3424,8 @@ const handleChangeModel = (chosenModel) => {
   const provider = currentConfig.value.providers[currentProviderID.value];
   base_url.value = provider.url;
   api_key.value = provider.api_key;
+  // 换模型后立刻自愈 tool 消息，防止下一次请求上下文暴跌
+  rehydrateHistoryToolsIfNeeded();
   chatInputRef.value?.focus({ cursor: 'end' });
 };
 const handleAutoCloseOnBlur = () => closePage(false);
@@ -5515,17 +5651,29 @@ const saveWindowSize = async () => {
 const getSessionDataAsObject = (options = {}) => {
   const currentPromptConfig = currentConfig.value.prompts[CODE.value] || {};
   const explicitTitle = typeof options?.title === 'string' ? options.title.trim() : '';
-  // 持久化时：chat_show 必须完整保存；history 只作为 AI 投影，可从 chat_show 重算
+  // 持久化时：chat_show 必须完整保存。
+  // history 必须含完整 role=tool；若内存 history 因旧 bug 丢了 tool，从 chat_show 还原。
   const fullChatShow = Array.isArray(chat_show.value) ? chat_show.value : [];
-  const projectedHistory = fullChatShow.some((msg) => msg?.role === 'compaction')
-    ? projectCascadeToHistory(fullChatShow)
-    : (Array.isArray(history.value) ? history.value : []);
+  rehydrateHistoryToolsIfNeeded();
+  const hasCompaction = fullChatShow.some((msg) => msg?.role === 'compaction');
+  const projectedFromUi = projectCascadeToHistory(fullChatShow);
+  const memoryHistory = Array.isArray(history.value) ? history.value : [];
+  // 有压缩：以投影为准；无压缩：取 tool 更完整的一方
+  const historyToSave = hasCompaction
+    ? projectedFromUi
+    : (countToolMessages(projectedFromUi) > countToolMessages(memoryHistory)
+      ? projectedFromUi
+      : (memoryHistory.length > 0 ? memoryHistory : projectedFromUi));
+  // 同步回内存，避免后续请求继续用残缺 history
+  if (countToolMessages(historyToSave) > countToolMessages(memoryHistory) || memoryHistory.length === 0) {
+    history.value = historyToSave;
+  }
   return {
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
     autoCloseOnBlur: autoCloseOnBlur.value, model: model.value,
     sessionMetadata: { title: explicitTitle || getSessionMetadata().title },
     currentPromptConfig: currentPromptConfig,
-    history: projectedHistory,
+    history: historyToSave,
     chat_show: fullChatShow,
     selectedVoice: selectedVoice.value,
     promptDraft: prompt.value,
@@ -6827,11 +6975,13 @@ const loadSession = async (jsonData) => {
       // 有压缩标记时：绝不能用缩短后的 history 反裁 chat_show
       history.value = projectCascadeToHistory(chat_show.value);
     } else if (rawChatShow.length > 0) {
-      // 无压缩：优先完整 chat_show，并尽量同步 history
+      // 无压缩：先用落盘 history；若 tool 残缺则从 chat_show 还原
       history.value = rawHistory.length > 0 ? rawHistory : projectCascadeToHistory(chat_show.value);
+      rehydrateHistoryToolsIfNeeded();
     } else {
-      // 兼容仅有 history 的旧文件
+      // 兼容仅有 history 的旧文件（含 role=tool）
       history.value = rawHistory;
+      // UI 仍不展示独立 tool 行，tool 结果挂在 assistant.tool_calls
       chat_show.value = rawHistory
         .filter((msg) => msg?.role !== 'tool')
         .map((msg, index) => ({
@@ -6854,29 +7004,19 @@ const loadSession = async (jsonData) => {
       history.value.pop();
     }
 
+    // 再次确保 tool 结果在；旧会话可能 history 缺 tool、chat_show 仍有 result
+    rehydrateHistoryToolsIfNeeded();
+
     // 仅在「无压缩」时做旧的 history/chat_show 对齐自愈；
     // 有压缩时 history 故意更短（AI 投影），绝不可 splice 掉 UI 历史。
+    // 且绝不能按「非 tool 条数」去裁 chat_show / history 的 tool 链。
     if (!hasCompaction) {
-      const visibleHistoryCount = history.value.filter(m => m.role !== 'tool').length;
-      if (chat_show.value.length > visibleHistoryCount && visibleHistoryCount > 0) {
-        // 仅当 history 明显更完整时，不裁 chat_show；反过来 history 更长才裁 history
-        // 旧逻辑会把 chat_show 裁成 history 长度，已在压缩场景造成灾难性丢消息。
-      } else if (chat_show.value.length < visibleHistoryCount) {
-        let visibleCount = 0;
-        let cutIndex = history.value.length;
-        for (let i = 0; i < history.value.length; i++) {
-          if (history.value[i].role !== 'tool') {
-            visibleCount++;
-          }
-          if (visibleCount > chat_show.value.length) {
-            cutIndex = i;
-            break;
-          }
-        }
-        if (cutIndex < history.value.length) {
-          console.warn('[Auto-Heal] 检测到历史记录污染，自动修复了状态。');
-          history.value.splice(cutIndex);
-        }
+      const visibleHistoryCount = history.value.filter(m => m.role !== 'tool' && m.role !== 'system').length;
+      const visibleShowCount = chat_show.value.filter(m => m.role !== 'tool' && m.role !== 'system').length;
+      if (visibleShowCount < visibleHistoryCount) {
+        // history 可见消息多于 UI：可能 history 污染，按 UI 可见序列截断 history 尾部
+        // 注意：不得删除中间 tool 消息
+        console.warn('[Auto-Heal] history 可见消息多于 chat_show，跳过危险截断以保护 tool 链');
       }
     }
 
@@ -7599,7 +7739,8 @@ const askAI = async (forceSend = false) => {
       // chatInputRef.value?.focus({ cursor: 'end' });
 
       // --- 为本次请求创建临时消息列表 ---
-      // history 在压缩/还原后会从 chat_show 投影；正常回合继续双写，避免冲掉 tool 消息。
+      // 发送前自愈：若 tool 结果只在 chat_show.assistant.tool_calls.result 中，补回 history
+      rehydrateHistoryToolsIfNeeded();
       let messagesForThisRequest = JSON.parse(JSON.stringify(history.value));
 
       messagesForThisRequest = messagesForThisRequest.filter(msg => {

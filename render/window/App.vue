@@ -1048,6 +1048,54 @@ const handleRefreshCompactContext = async () => {
   }
 };
 
+const handleResetCompactConfig = async () => {
+  try {
+    // 恢复当前模型的共享参数默认值；上下文长度清掉手动覆盖后重新检索
+    const defaultPatch = {
+      autoCompactEnabled: true,
+      triggerRatio: 0.9,
+      userMessageTokenBudget: 20000,
+      keepRecentRounds: 3,
+      keepRecentRoundsUserSet: true,
+      compactPrompt: '',
+      fallbackModel: '',
+      contextLengthManual: false,
+      contextLengthSource: 'default'
+    };
+
+    if (window.api?.updateModelCompactConfig) {
+      const result = await window.api.updateModelCompactConfig(model.value, defaultPatch);
+      if (result?.config) {
+        compactConfig.value = normalizeCompactConfigState({
+          ...compactConfig.value,
+          ...result.config,
+          ...defaultPatch,
+          // compactPrompt 存库后会被填成完整默认模板
+          compactPrompt: result.config.compactPrompt || '',
+          contextLengthManual: false
+        });
+      } else {
+        compactConfig.value = normalizeCompactConfigState({
+          ...compactConfig.value,
+          ...defaultPatch
+        });
+      }
+    } else {
+      compactConfig.value = normalizeCompactConfigState({
+        ...compactConfig.value,
+        ...defaultPatch
+      });
+    }
+
+    // 重新检索 API 上下文长度（覆盖手动值）
+    await loadCompactConfigForCurrentModel({ forceRefresh: true, preferManual: false });
+    showDismissibleMessage.success('已恢复默认压缩参数');
+  } catch (error) {
+    console.error('[compact] reset config failed:', error);
+    showDismissibleMessage.error(`恢复默认失败: ${error?.message || error}`);
+  }
+};
+
 const handleApplyCompactAdvancedGlobal = async (patch = {}) => {
   try {
     // 先保存当前模型参数
@@ -8907,6 +8955,7 @@ const scrollToMessageByIndex = (index) => {
           @cancel-compact="handleCancelCompact"
           @save-compact-config="handleSaveCompactConfig"
           @apply-compact-advanced-global="handleApplyCompactAdvancedGlobal"
+          @reset-compact-config="handleResetCompactConfig"
           @refresh-compact-context="handleRefreshCompactContext"
           @restore-compact="handleRestoreCompact" />
       </div>

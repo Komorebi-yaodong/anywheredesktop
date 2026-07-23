@@ -47,7 +47,7 @@ const props = defineProps({
 });
 
 // 增加 toggle-mcp 事件
-const emit = defineEmits(['submit', 'cancel', 'clear-history', 'remove-file', 'upload', 'send-audio', 'open-mcp-dialog', 'pick-file-start', 'toggle-mcp', 'toggle-skill', 'open-skill-dialog', 'cancel-buffer', 'stop-subagent', 'acknowledge-subagent', 'acknowledge-all-subagents', 'rerun-subagent', 'open-subagent-detail', 'close-subagent-detail', 'open-compact-dialog', 'run-compact', 'cancel-compact', 'save-compact-config', 'apply-compact-advanced-global', 'refresh-compact-context', 'restore-compact']);
+const emit = defineEmits(['submit', 'cancel', 'clear-history', 'remove-file', 'upload', 'send-audio', 'open-mcp-dialog', 'pick-file-start', 'toggle-mcp', 'toggle-skill', 'open-skill-dialog', 'cancel-buffer', 'stop-subagent', 'acknowledge-subagent', 'acknowledge-all-subagents', 'rerun-subagent', 'open-subagent-detail', 'close-subagent-detail', 'open-compact-dialog', 'run-compact', 'cancel-compact', 'save-compact-config', 'apply-compact-advanced-global', 'reset-compact-config', 'refresh-compact-context', 'restore-compact']);
 
 // --- Refs and State ---
 const senderRef = ref(null);
@@ -132,6 +132,23 @@ const saveCompactConfig = () => {
         contextLengthManual: true,
         contextLengthSource: 'manual'
     });
+};
+
+const resetCompactConfigToDefault = async () => {
+    try {
+        await ElMessageBox.confirm(
+            '将当前模型的压缩参数恢复为默认值（含触发阈值、高级参数与摘要 Prompt），并重新检索上下文长度。是否继续？',
+            '恢复默认参数',
+            {
+                type: 'warning',
+                confirmButtonText: '恢复默认',
+                cancelButtonText: '取消'
+            }
+        );
+    } catch {
+        return;
+    }
+    emit('reset-compact-config');
 };
 
 const applyAdvancedToGlobal = () => {
@@ -1309,6 +1326,7 @@ defineExpose({ focus, senderRef });
                 <el-button v-if="canRestoreCompact && !compacting" round @click="restoreCompact">恢复最外层压缩</el-button>
                 <div class="compact-dialog-footer-right">
                     <el-button round @click="compactDialogVisible = false" :disabled="compacting">关闭</el-button>
+                    <el-button v-if="!compacting" round @click="resetCompactConfigToDefault">恢复默认</el-button>
                     <el-button v-if="!compacting" round @click="saveCompactConfig">保存参数</el-button>
                     <el-button v-if="!compacting" type="primary" round @click="runCompactNow">立即压缩</el-button>
                 </div>

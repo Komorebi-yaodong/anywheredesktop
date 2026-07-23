@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { fetchWithProxy, BRIDGE_UA_HEADER } from './net.js'
 import { createAnthropicCompletion } from './anthropic.js'
+import { normalizeToolCallHistory } from './message_normalize.js'
 
 const CHAT_REQUEST_TIMEOUT_MS = 120_000
 
@@ -352,7 +353,7 @@ function normalizeMessagesForChatCompletions(messages = [], reasoningEffort) {
 
 function convertMessagesToResponsesInput(messages = []) {
   const inputItems = []
-  const normalizedMessages = normalizeMessagesForChatCompletions(messages)
+  const normalizedMessages = normalizeMessagesForChatCompletions(normalizeToolCallHistory(messages))
 
   for (const msg of normalizedMessages) {
     // 1. Role 映射 (Responses API 使用 developer 代替 system)
@@ -558,7 +559,10 @@ export async function createChatCompletion(params = {}) {
     }
 
     // 标准 Chat Completions API
-    const normalizedMessages = normalizeMessagesForChatCompletions(openAiParams.messages, openAiParams.reasoning_effort)
+    const normalizedMessages = normalizeMessagesForChatCompletions(
+      normalizeToolCallHistory(openAiParams.messages),
+      openAiParams.reasoning_effort
+    )
     const chatCompletionParams = {
       ...openAiParams,
       messages: normalizedMessages,

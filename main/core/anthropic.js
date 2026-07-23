@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { fetchWithProxy } from './net.js'
+import { normalizeToolCallHistory } from './message_normalize.js'
 
 const CHAT_REQUEST_TIMEOUT_MS = 120_000
 const DEFAULT_MAX_TOKENS = 8192
@@ -167,7 +168,7 @@ function convertToolChoice(toolChoice) {
 }
 
 function buildAnthropicRequest(openAiParams) {
-  const { system, messages } = convertMessagesToAnthropic(openAiParams.messages)
+  const { system, messages } = convertMessagesToAnthropic(normalizeToolCallHistory(openAiParams.messages))
   const request = {
     model: openAiParams.model,
     max_tokens: openAiParams.max_tokens || openAiParams.max_completion_tokens || DEFAULT_MAX_TOKENS,

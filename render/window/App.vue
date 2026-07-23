@@ -761,7 +761,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       prompt.value = multilineText;
       shouldAutoSend = false;
     } else {
-      history.value.push({ role: "user", content: multilineText });
+      appendFullHistory({ role: "user", content: multilineText });
       chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }], timestamp: nowTime });
     }
   } else if (data.type === "over" && data.payload) {
@@ -770,7 +770,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       prompt.value = overText;
       shouldAutoSend = false;
     } else {
-      history.value.push({ role: "user", content: overText });
+      appendFullHistory({ role: "user", content: overText });
       chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: overText }], timestamp: nowTime });
     }
   } else if (data.type === "img" && data.payload) {
@@ -782,7 +782,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       shouldAutoSend = false;
     } else {
       const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
-      history.value.push({ role: "user", content: imageContent });
+      appendFullHistory({ role: "user", content: imageContent });
       chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: imageContent, timestamp: nowTime });
       if (normalizedUserText) {
         prompt.value = normalizedUserText;
@@ -824,7 +824,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       return;
     }
   } else if (data.type === "task" && data.payload) {
-    history.value.push({ role: "user", content: data.payload });
+    appendFullHistory({ role: "user", content: data.payload });
     chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
   } else {
     return;
@@ -1280,6 +1280,135 @@ const toHistoryMessageFromUi = (message) => {
   return null;
 };
 
+
+// Complete API transcript → current request window. The latest compaction checkpoint replaces
+// earlier messages only for outbound context; the earlier messages remain in fullHistory.
+const toRequestMessageFromFullHistory = (message = {}) => {
+  if (!message || typeof message !== 'object') return null;
+  if (message.role === 'compaction') {
+    const summary = String(message.summary || message.content || '').trim() || '(no summary available)';
+    return {
+      role: 'user',
+      content: `${String(message.summaryPrefix || DEFAULT_SUMMARY_PREFIX)}\n${summary}`
+    };
+  }
+  if (!['system', 'user', 'assistant', 'tool'].includes(message.role)) return null;
+  const cloned = deepCloneSafe(message);
+  delete cloned.id;
+  delete cloned.timestamp;
+  delete cloned.aiName;
+  delete cloned.voiceName;
+  delete cloned.status;
+  delete cloned.approvalStatus;
+  delete cloned.result;
+  delete cloned.canRestore;
+  delete cloned.coveredCount;
+  return cloned;
+};
+
+const projectFullHistoryToRequestHistory = (messages = fullHistory.value) => {
+  const list = Array.isArray(messages) ? messages : [];
+  const out = [];
+  for (const message of list) {
+    if (message?.role === 'system') {
+      const projected = toRequestMessageFromFullHistory(message);
+      if (projected) out.push(projected);
+    }
+  }
+  let lastCompactIndex = -1;
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (list[index]?.role === 'compaction') {
+      lastCompactIndex = index;
+      break;
+    }
+  }
+  const startIndex = lastCompactIndex >= 0 ? lastCompactIndex : 0;
+  for (let index = startIndex; index < list.length; index += 1) {
+    const message = list[index];
+    if (!message || message.role === 'system') continue;
+    if (message.role === 'compaction' && index !== lastCompactIndex) continue;
+    const projected = toRequestMessageFromFullHistory(message);
+    if (projected) out.push(projected);
+  }
+  return out;
+};
+
+const syncHistoryFromFullHistory = () => {
+  history.value = projectFullHistoryToRequestHistory();
+};
+
+const appendFullHistory = (...messages) => {
+  const nextMessages = messages.filter((message) => message && typeof message === 'object');
+  if (!nextMessages.length) return;
+  fullHistory.value.push(...nextMessages.map((message) => deepCloneSafe(message)));
+  syncHistoryFromFullHistory();
+};
+
+const replaceFullHistory = (messages = []) => {
+  fullHistory.value = Array.isArray(messages)
+    ? messages.filter((message) => message && typeof message === 'object').map((message) => deepCloneSafe(message))
+    : [];
+  syncHistoryFromFullHistory();
+};
+
+
+
+const projectUiToFullHistoryForLegacyMigration = (messages = []) => {
+  const full = [];
+  for (const message of (Array.isArray(messages) ? messages : [])) {
+    if (!message || typeof message !== 'object') continue;
+    if (message.role === 'compaction') {
+      full.push({
+        role: 'compaction',
+        content: String(message.summary || message.content || ''),
+        summary: String(message.summary || message.content || ''),
+        summaryPrefix: String(message.summaryPrefix || DEFAULT_SUMMARY_PREFIX),
+        snapshotId: message.snapshotId || message.id || `compact_legacy_${full.length}`,
+        createdAt: message.createdAt || Date.now()
+      });
+      continue;
+    }
+    const projected = toHistoryMessageFromUi(message);
+    if (projected) full.push(projected);
+    if (message.role === 'assistant') {
+      full.push(...toToolResultMessagesFromUiAssistant(message));
+    }
+  }
+  return full;
+};
+
+const splitFullHistoryPrefixAndTail = (messages = fullHistory.value, keepTailCount = 1) => {
+  const list = Array.isArray(messages) ? messages : [];
+  let windowStart = 0;
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (list[index]?.role === 'compaction') {
+      windowStart = index;
+      break;
+    }
+  }
+  if (windowStart === 0) {
+    const firstNonSystem = list.findIndex((message) => message?.role !== 'system');
+    windowStart = firstNonSystem >= 0 ? firstNonSystem : list.length;
+  }
+  const windowMessages = list.slice(windowStart);
+  const visibleIndexes = [];
+  windowMessages.forEach((message, index) => {
+    if (message?.role && message.role !== 'system' && message.role !== 'tool') visibleIndexes.push(index);
+  });
+  if (visibleIndexes.length <= 1) return { insertIndex: list.length, prefix: [], tail: windowMessages };
+  const tailCount = Math.min(
+    Math.max(1, Math.floor(Number(keepTailCount) || 1)),
+    visibleIndexes.length - 1
+  );
+  const cutIndex = visibleIndexes[visibleIndexes.length - tailCount];
+  return {
+    insertIndex: windowStart + cutIndex,
+    prefix: windowMessages.slice(0, cutIndex),
+    tail: windowMessages.slice(cutIndex)
+  };
+};
+
+
 const getOutermostCompactionIndexIn = (list = []) => {
   for (let i = list.length - 1; i >= 0; i -= 1) {
     if (list[i]?.role === 'compaction') return i;
@@ -1387,25 +1516,26 @@ const countToolMessages = (messages = []) => (
   (Array.isArray(messages) ? messages : []).filter((m) => m?.role === 'tool').length
 );
 
-// 若 history 因旧 bug 丢失 tool，而 chat_show 的 assistant.tool_calls 仍有 result，则重建
+// New sessions never rebuild API history from UI. This remains only for one-time legacy migration.
 const rehydrateHistoryToolsIfNeeded = () => {
-  const projected = projectCascadeToHistory(chat_show.value);
-  const projectedTools = countToolMessages(projected);
-  const currentTools = countToolMessages(history.value);
-  if (projectedTools > currentTools) {
-    history.value = projected;
-    return true;
+  if (Array.isArray(fullHistory.value) && fullHistory.value.length > 0) {
+    syncHistoryFromFullHistory();
+    return false;
   }
-  // 无压缩且 history 为空但 chat_show 有内容时，也重建
-  if ((!Array.isArray(history.value) || history.value.length === 0) && projected.length > 0) {
-    history.value = projected;
+  const projected = projectCascadeToHistory(chat_show.value);
+  if (projected.length > 0) {
+    replaceFullHistory(projected);
     return true;
   }
   return false;
 };
 
 const syncHistoryFromChatShow = () => {
-  history.value = projectCascadeToHistory(chat_show.value);
+  if (Array.isArray(fullHistory.value) && fullHistory.value.length > 0) {
+    syncHistoryFromFullHistory();
+    return;
+  }
+  replaceFullHistory(projectCascadeToHistory(chat_show.value));
 };
 
 const getOutermostCompactionIndex = () => getOutermostCompactionIndexIn(chat_show.value);
@@ -1514,7 +1644,7 @@ const splitAiWindowPrefixAndTail = (messages = [], keepTailCount = 0) => {
 };
 
 // UI：在 insertIndex 插入一条压缩消息；压缩前消息全部保留可见。
-const applyCascadeCompactStep = (marker, insertIndex, prefix) => {
+const applyCascadeCompactStep = (marker, insertIndex, prefix, fullInsertIndex = insertIndex) => {
   const nextMarker = {
     id: messageIdCounter.value++,
     role: 'compaction',
@@ -1536,7 +1666,16 @@ const applyCascadeCompactStep = (marker, insertIndex, prefix) => {
     ...chat_show.value.slice(safeIndex)
   ];
   markOutermostCanRestore();
-  syncHistoryFromChatShow();
+  const safeFullInsertIndex = Math.max(0, Math.min(Number(fullInsertIndex) || 0, fullHistory.value.length));
+  fullHistory.value.splice(safeFullInsertIndex, 0, {
+    role: 'compaction',
+    content: nextMarker.summary,
+    summary: nextMarker.summary,
+    summaryPrefix: nextMarker.summaryPrefix,
+    snapshotId: nextMarker.snapshotId,
+    createdAt: nextMarker.createdAt
+  });
+  syncHistoryFromFullHistory();
   compactArchives.value = [...compactArchives.value, {
     id: nextMarker.snapshotId,
     createdAt: nextMarker.createdAt,
@@ -1587,7 +1726,10 @@ const handleRestoreCompact = async (payload = null) => {
     ...chat_show.value.slice(outermostIndex + 1)
   ];
   markOutermostCanRestore();
-  syncHistoryFromChatShow();
+  fullHistory.value = fullHistory.value.filter((message) => (
+    message?.role !== 'compaction' || (message?.snapshotId || message?.id) !== outermost.snapshotId
+  ));
+  syncHistoryFromFullHistory();
   compactArchives.value = compactArchives.value.filter((item) => item?.id !== outermost.snapshotId);
   scheduleAutoSave({ reason: 'compact-restored', immediate: true });
   showDismissibleMessage.success('已还原最外层压缩');
@@ -1613,9 +1755,9 @@ const runConversationCompact = async ({
     return false;
   }
 
-  // Ensure AI projection is current before cascade decisions.
+  // Full API history is the compression source; UI is only updated after summary succeeds.
   rehydrateHistoryToolsIfNeeded();
-  syncHistoryFromChatShow();
+  syncHistoryFromFullHistory();
 
   compacting.value = true;
   compactProgress.value = { percent: 2, message: '准备级联压缩…', stage: 'prepare' };
@@ -1634,7 +1776,7 @@ const runConversationCompact = async ({
       }
 
       steps += 1;
-      const projected = projectCascadeToHistory(chat_show.value);
+      const projected = projectFullHistoryToRequestHistory();
       // 手动首步强制压一次；工具轮/自动轮只按阈值判断
       const need = manual && steps === 1 && !allowDuringLoading
         ? true
@@ -1650,7 +1792,8 @@ const runConversationCompact = async ({
         1,
         Math.floor(Number(compactConfig.value.keepRecentRounds || 0) * 2) || 3
       );
-      const { insertIndex, prefix } = splitAiWindowPrefixAndTail(chat_show.value, keepTail);
+      const { insertIndex: fullInsertIndex, prefix } = splitFullHistoryPrefixAndTail(fullHistory.value, keepTail);
+      const uiSplit = splitAiWindowPrefixAndTail(chat_show.value, keepTail);
       if (!prefix.length) {
         if (manual && steps === 1 && !quiet) {
           showDismissibleMessage.info('可压缩前缀不足，已跳过');
@@ -1669,13 +1812,12 @@ const runConversationCompact = async ({
         stage: 'cascade'
       };
 
-      // 摘要源：当前 AI 可见窗口中将被 summary 覆盖的前缀（含此前 summary 标记）
+      // Summary is an ordinary request over the exact API-level prefix being covered.
       const result = await window.api.runConversationCompact({
-        messages: projectCascadeToHistory([
-          ...chat_show.value.filter((m) => m?.role === 'system'),
+        messages: [
+          ...fullHistory.value.filter((message) => message?.role === 'system'),
           ...prefix
-        ]),
-        chatShow: prefix,
+        ],
         modelValue: model.value,
         provider: resolveProviderByModelValue(model.value),
         config: compactConfig.value,
@@ -1700,8 +1842,8 @@ const runConversationCompact = async ({
         snapshotId: result.snapshotId,
         summaryPrefix: result.summaryPrefix
       };
-      // UI：在 prefix 后插入 summary，不删除任何旧消息
-      applyCascadeCompactStep(marker, insertIndex, prefix);
+      // UI keeps the original messages; fullHistory receives the checkpoint at the same logical cut.
+      applyCascadeCompactStep(marker, uiSplit.insertIndex, uiSplit.prefix, fullInsertIndex);
       didAny = true;
 
       if (result.modelConfig) {
@@ -1803,6 +1945,8 @@ const applyTokenUsageToAssistantMessage = (chatShowIndex, tokenUsage) => {
 const currentProviderID = ref(defaultConfig.config.providerOrder[0]);
 const base_url = ref("");
 const api_key = ref("");
+// fullHistory is the only complete API-level transcript. history/chat_show are derived request/UI views.
+const fullHistory = ref([]);
 const history = ref([]);
 const chat_show = ref([]);
 const loading = ref(false);
@@ -2263,9 +2407,9 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   if (turnMeta && !turnMeta.cancellationRecorded) {
     const missingToolMessages = buildMissingToolAbortMessages();
     if (missingToolMessages.length > 0) {
-      history.value.push(...missingToolMessages);
+      appendFullHistory(...missingToolMessages);
     }
-    history.value.push({
+    appendFullHistory({
       role: 'assistant',
       content: finalContent,
       reasoning_content: finalReasoningContent || null
@@ -4001,23 +4145,14 @@ const handleEditMessage = (index, newContent) => {
     updateContent(chat_show.value[index]);
   }
 
-  // Best-effort sync to AI history: match by non-tool/compaction order.
-  let history_idx = -1;
-  let show_counter = -1;
-  for (let i = 0; i < history.value.length; i++) {
-    if (history.value[i].role === 'tool') continue;
-    show_counter++;
-    // Skip summary/compaction-projected user messages that aren't 1:1 with chat_show
-    if (show_counter === index) {
-      history_idx = i;
-      break;
-    }
-  }
-  if (history_idx !== -1 && history.value[history_idx]) {
-    updateContent(history.value[history_idx]);
-  } else if (chat_show.value[index]?.role === 'compaction') {
-    // Compaction marker is projected; rebuild AI projection from UI tree.
-    syncHistoryFromChatShow();
+  // Update the matching complete API message; UI is never used to rebuild fullHistory.
+  const fullVisibleIndexes = fullHistory.value
+    .map((message, fullIndex) => (message?.role === 'tool' ? -1 : fullIndex))
+    .filter((fullIndex) => fullIndex >= 0);
+  const fullIndex = fullVisibleIndexes[index];
+  if (Number.isInteger(fullIndex) && fullHistory.value[fullIndex]) {
+    updateContent(fullHistory.value[fullIndex]);
+    syncHistoryFromFullHistory();
   }
 };
 
@@ -4417,7 +4552,7 @@ onMounted(async () => {
 
     if (currentPromptConfig.prompt) {
       currentSystemPrompt.value = currentPromptConfig.prompt;
-      history.value = [{ role: "system", content: currentPromptConfig.prompt }];
+      replaceFullHistory([{ role: "system", content: currentPromptConfig.prompt }]);
       chat_show.value = [{
         role: "system",
         content: currentPromptConfig.prompt,
@@ -4425,7 +4560,7 @@ onMounted(async () => {
       }];
     } else {
       currentSystemPrompt.value = "";
-      history.value = [];
+      replaceFullHistory([]);
       chat_show.value = [];
     }
 
@@ -4468,7 +4603,7 @@ onMounted(async () => {
         const system_time = new Date().toLocaleString('sv-SE');
         const pre_prompt = `## Scheduled Task\n\n**system_time**:${system_time}\n\n`;
         const suffix_prompt = "\n\nScheduled task triggered! This is a task that you need to execute autonomously without human intervention. Please execute immediately and provide correct feedback.";
-        history.value.push({ role: "user", content: pre_prompt + data.payload + suffix_prompt });
+        appendFullHistory({ role: "user", content: pre_prompt + data.payload + suffix_prompt });
         chat_show.value.push({
           id: messageIdCounter.value++,
           role: "user",
@@ -4509,7 +4644,7 @@ onMounted(async () => {
       if (data.type === "multiline-text" && data.payload) {
         if (directSendConfig.normal) {
           const multilineText = String(data.payload);
-          history.value.push({ role: "user", content: multilineText });
+          appendFullHistory({ role: "user", content: multilineText });
           chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }] });
           shouldDirectSend = true;
         } else {
@@ -4530,7 +4665,7 @@ onMounted(async () => {
           if (CODE.value.trim().toLowerCase().includes(data.payload.trim().toLowerCase())) { /* do nothing */ }
           else {
             if (directSendConfig.normal) {
-              history.value.push({ role: "user", content: data.payload });
+              appendFullHistory({ role: "user", content: data.payload });
               chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }] });
               shouldDirectSend = true;
             } else { prompt.value = data.payload; }
@@ -4538,7 +4673,7 @@ onMounted(async () => {
         }
       } else if (data.type === "img" && data.payload) {
         if (directSendConfig.image) {
-          history.value.push({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
+          appendFullHistory({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
           chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
           if (normalizedUserText) {
             prompt.value = normalizedUserText;
@@ -5713,28 +5848,17 @@ const saveWindowSize = async () => {
 const getSessionDataAsObject = (options = {}) => {
   const currentPromptConfig = currentConfig.value.prompts[CODE.value] || {};
   const explicitTitle = typeof options?.title === 'string' ? options.title.trim() : '';
-  // 持久化时：chat_show 必须完整保存。
-  // history 必须含完整 role=tool；若内存 history 因旧 bug 丢了 tool，从 chat_show 还原。
-  const fullChatShow = Array.isArray(chat_show.value) ? chat_show.value : [];
+  // Persist the complete API transcript and derive the current request window from it.
   rehydrateHistoryToolsIfNeeded();
-  const hasCompaction = fullChatShow.some((msg) => msg?.role === 'compaction');
-  const projectedFromUi = projectCascadeToHistory(fullChatShow);
-  const memoryHistory = Array.isArray(history.value) ? history.value : [];
-  // 有压缩：以投影为准；无压缩：取 tool 更完整的一方
-  const historyToSave = hasCompaction
-    ? projectedFromUi
-    : (countToolMessages(projectedFromUi) > countToolMessages(memoryHistory)
-      ? projectedFromUi
-      : (memoryHistory.length > 0 ? memoryHistory : projectedFromUi));
-  // 同步回内存，避免后续请求继续用残缺 history
-  if (countToolMessages(historyToSave) > countToolMessages(memoryHistory) || memoryHistory.length === 0) {
-    history.value = historyToSave;
-  }
+  syncHistoryFromFullHistory();
+  const fullChatShow = Array.isArray(chat_show.value) ? chat_show.value : [];
+  const historyToSave = history.value;
   return {
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
     autoCloseOnBlur: autoCloseOnBlur.value, model: model.value,
     sessionMetadata: { title: explicitTitle || getSessionMetadata().title },
     currentPromptConfig: currentPromptConfig,
+    fullHistory: fullHistory.value,
     history: historyToSave,
     chat_show: fullChatShow,
     selectedVoice: selectedVoice.value,
@@ -7026,61 +7150,44 @@ const loadSession = async (jsonData) => {
     isInit.value = jsonData.isInit;
     autoCloseOnBlur.value = jsonData.autoCloseOnBlur;
 
-    // UI 真源优先完整恢复 chat_show；history 仅为 AI 投影，长度可以更短
+    // New format: fullHistory is the only complete API transcript. Older files migrate once.
+    const rawFullHistory = Array.isArray(jsonData.fullHistory) ? jsonData.fullHistory : [];
     const rawChatShow = Array.isArray(jsonData.chat_show) ? jsonData.chat_show : [];
     const rawHistory = Array.isArray(jsonData.history) ? jsonData.history : [];
-    chat_show.value = migrateInsertStyleChatShow(rawChatShow);
-    markOutermostCanRestore();
+    const hasNewFullHistory = rawFullHistory.length > 0;
 
-    const hasCompaction = chat_show.value.some((msg) => msg?.role === 'compaction');
-    if (hasCompaction) {
-      // 有压缩标记时：绝不能用缩短后的 history 反裁 chat_show
-      history.value = projectCascadeToHistory(chat_show.value);
+    if (hasNewFullHistory) {
+      replaceFullHistory(rawFullHistory);
+    } else if (rawHistory.length > 0 && !rawChatShow.some((message) => message?.role === 'compaction')) {
+      replaceFullHistory(rawHistory);
     } else if (rawChatShow.length > 0) {
-      // 无压缩：先用落盘 history；若 tool 残缺则从 chat_show 还原
-      history.value = rawHistory.length > 0 ? rawHistory : projectCascadeToHistory(chat_show.value);
-      rehydrateHistoryToolsIfNeeded();
+      replaceFullHistory(projectUiToFullHistoryForLegacyMigration(rawChatShow));
     } else {
-      // 兼容仅有 history 的旧文件（含 role=tool）
-      history.value = rawHistory;
-      // UI 仍不展示独立 tool 行，tool 结果挂在 assistant.tool_calls
-      chat_show.value = rawHistory
-        .filter((msg) => msg?.role !== 'tool')
-        .map((msg, index) => ({
+      replaceFullHistory(rawHistory);
+    }
+
+    // Preserve the existing rendered tree where available; it is a UI cache, never the API truth.
+    if (rawChatShow.length > 0) {
+      chat_show.value = migrateInsertStyleChatShow(rawChatShow);
+    } else {
+      chat_show.value = fullHistory.value
+        .filter((message) => message?.role !== 'tool')
+        .map((message, index) => ({
           id: messageIdCounter.value + index + 1,
-          ...msg,
-          timestamp: msg.timestamp || new Date().toLocaleString('sv-SE')
+          ...deepCloneSafe(message),
+          timestamp: message.timestamp || new Date().toLocaleString('sv-SE')
         }));
       messageIdCounter.value += chat_show.value.length + 1;
     }
+    markOutermostCanRestore();
+    syncHistoryFromFullHistory();
 
     prompt.value = typeof jsonData.promptDraft === 'string' ? jsonData.promptDraft : '';
     fileList.value = Array.isArray(jsonData.draftFileList) ? jsonData.draftFileList : [];
 
-    while (
-      history.value.length > 0 &&
-      history.value[history.value.length - 1].role === 'assistant' &&
-      !history.value[history.value.length - 1].content &&
-      !(history.value[history.value.length - 1].tool_calls?.length > 0)
-    ) {
-      history.value.pop();
-    }
-
-    // 再次确保 tool 结果在；旧会话可能 history 缺 tool、chat_show 仍有 result
-    rehydrateHistoryToolsIfNeeded();
-
-    // 仅在「无压缩」时做旧的 history/chat_show 对齐自愈；
-    // 有压缩时 history 故意更短（AI 投影），绝不可 splice 掉 UI 历史。
-    // 且绝不能按「非 tool 条数」去裁 chat_show / history 的 tool 链。
-    if (!hasCompaction) {
-      const visibleHistoryCount = history.value.filter(m => m.role !== 'tool' && m.role !== 'system').length;
-      const visibleShowCount = chat_show.value.filter(m => m.role !== 'tool' && m.role !== 'system').length;
-      if (visibleShowCount < visibleHistoryCount) {
-        // history 可见消息多于 UI：可能 history 污染，按 UI 可见序列截断 history 尾部
-        // 注意：不得删除中间 tool 消息
-        console.warn('[Auto-Heal] history 可见消息多于 chat_show，跳过危险截断以保护 tool 链');
-      }
-    }
+    // The derived request window may intentionally be shorter after compaction.
+    // Never trim or restore it from the UI cache after fullHistory has been loaded.
+    syncHistoryFromFullHistory();
 
     selectedVoice.value = jsonData.selectedVoice || '';
     tempReasoningEffort.value = jsonData.currentPromptConfig?.reasoning_effort || 'default';
@@ -7435,7 +7542,7 @@ const sendAgentToolMessage = async ({ text, filePaths, source = 'agent_tool' } =
     ? contentList[0].text
     : contentList;
 
-  history.value.push({ role: 'user', content: contentForHistory });
+  appendFullHistory({ role: 'user', content: contentForHistory });
   chat_show.value.push({
     id: messageIdCounter.value++,
     role: 'user',
@@ -7694,7 +7801,7 @@ const appendCurrentInputToHistory = async () => {
   const userTimestamp = new Date().toLocaleString('sv-SE');
 
   if (!hasPendingFiles && promptText) {
-    history.value.push({ role: "user", content: promptText });
+    appendFullHistory({ role: "user", content: promptText });
     chat_show.value.push({
       id: messageIdCounter.value++,
       role: "user",
@@ -7715,7 +7822,7 @@ const appendCurrentInputToHistory = async () => {
     const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
       ? userContentList[0].text
       : userContentList;
-    history.value.push({ role: "user", content: contentForHistory });
+    appendFullHistory({ role: "user", content: contentForHistory });
     chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
     prompt.value = "";
     scheduleAutoSave({ reason: 'user-message', immediate: true });
@@ -8209,7 +8316,7 @@ const askAI = async (forceSend = false) => {
 
 
 
-      history.value.push(responseMessage);
+      appendFullHistory(responseMessage);
       throwIfTurnAborted();
 
       // --- 更新 UI 气泡 ---
@@ -8418,7 +8525,7 @@ const askAI = async (forceSend = false) => {
             }
           });
         }
-        history.value.push(...safeToolMessages);
+        appendFullHistory(...safeToolMessages);
         scheduleAutoSave({ reason: 'tool-calls-completed', immediate: true });
         // 工具调用完成后，把缓冲区消息插入历史，使下一轮请求即可纳入
         throwIfTurnAborted();
@@ -8495,7 +8602,7 @@ const askAI = async (forceSend = false) => {
       currentBubble.reasoning_content = finalReasoningContent;
       currentBubble.status = 'error';
 
-      history.value.push({
+      appendFullHistory({
         role: 'assistant',
         content: finalContent,
         reasoning_content: finalReasoningContent || null
@@ -8658,7 +8765,11 @@ const reaskAI = async () => {
     const showItemsToRemove = history.value.slice(lastVisibleMessageIndexInHistory)
       .filter(m => m.role !== 'tool').length;
 
-    history.value.splice(lastVisibleMessageIndexInHistory, historyItemsToRemove);
+    const lastVisibleMessageIndexInFullHistory = fullHistory.value.findLastIndex((message) => message?.role === 'assistant');
+    if (lastVisibleMessageIndexInFullHistory >= 0) {
+      fullHistory.value.splice(lastVisibleMessageIndexInFullHistory);
+      syncHistoryFromFullHistory();
+    }
     if (showItemsToRemove > 0) {
       chat_show.value.splice(chat_show.value.length - showItemsToRemove);
     }
@@ -8711,18 +8822,26 @@ const deleteMessage = (index) => {
     show_delete_count = 1;
   }
 
+  // Map the UI item to the corresponding non-tool full-history item, then remove its tool results too.
+  const fullVisibleIndexes = fullHistory.value
+    .map((message, fullIndex) => (message?.role === 'tool' ? -1 : fullIndex))
+    .filter((fullIndex) => fullIndex >= 0);
+  const fullStartIndex = fullVisibleIndexes[show_start_idx];
+  if (Number.isInteger(fullStartIndex)) {
+    let fullDeleteCount = 1;
+    if (fullHistory.value[fullStartIndex]?.role === 'assistant') {
+      const calledIds = new Set((fullHistory.value[fullStartIndex]?.tool_calls || []).map((call) => call?.id).filter(Boolean));
+      let cursor = fullStartIndex + 1;
+      while (cursor < fullHistory.value.length && fullHistory.value[cursor]?.role === 'tool') {
+        if (calledIds.size === 0 || calledIds.has(fullHistory.value[cursor]?.tool_call_id)) fullDeleteCount += 1;
+        cursor += 1;
+      }
+    }
+    fullHistory.value.splice(fullStartIndex, fullDeleteCount);
+  }
   chat_show.value.splice(show_start_idx, show_delete_count);
-
-  // 删除后重算最外层可还原标记 + AI 投影
-  if (typeof markOutermostCanRestore === 'function') {
-    markOutermostCanRestore();
-  }
-  if (typeof syncHistoryFromChatShow === 'function') {
-    syncHistoryFromChatShow();
-  } else {
-    // 兼容：无压缩时尽量按旧逻辑从 history 对齐（不应走到这里）
-    history.value = history.value;
-  }
+  markOutermostCanRestore();
+  syncHistoryFromFullHistory();
 
   const deletedIndexInShow = index;
   const newCollapsedMessages = new Set();
@@ -8756,10 +8875,10 @@ const clearHistory = async () => {
   const systemPromptToKeep = systemPromptFromConfig ? { role: "system", content: systemPromptFromConfig } : systemPromptFromHistory;
 
   if (systemPromptToKeep) {
-    history.value = [systemPromptToKeep];
+    replaceFullHistory([systemPromptToKeep]);
     chat_show.value = [{ ...systemPromptToKeep, id: messageIdCounter.value++ }];
   } else {
-    history.value = [];
+    replaceFullHistory([]);
     chat_show.value = [];
   }
 

@@ -786,10 +786,10 @@ export async function runConversationCompaction({
   throwIfAborted(signal)
   report('prepare', { percent: 5, message: '准备压缩…' })
 
-  // Prefer chatShow prefix for summarizer context when provided.
-  const sourceMessages = (Array.isArray(chatShow) && chatShow.length > 0)
-    ? chatShow
-    : messages
+  // Summary requests must use the canonical API-level transcript. chatShow is UI-only metadata.
+  const sourceMessages = (Array.isArray(messages) && messages.length > 0)
+    ? messages
+    : chatShow
   if (!Array.isArray(sourceMessages) || sourceMessages.length === 0) {
     throw new Error('compact_source_empty')
   }

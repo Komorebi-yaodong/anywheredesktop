@@ -103,9 +103,10 @@ watch(() => props.compactConfig, (next) => {
 
 const contextLengthSourceLabel = computed(() => {
     const source = localCompactConfig.value.contextLengthSource || 'default';
-    if (source === 'manual' || localCompactConfig.value.contextLengthManual) return 'manual（手动）';
+    if (source === 'manual' || localCompactConfig.value.contextLengthManual) return '手动';
     if (source === 'api') return 'api';
-    if (source === 'cache') return 'cache';
+    if (source === 'cache') return '缓存';
+    if (source === 'default') return '默认';
     return source;
 });
 
@@ -1236,7 +1237,6 @@ defineExpose({ focus, senderRef });
                         <div class="compact-form-hint">
                             来源：{{ contextLengthSourceLabel }}
                             <span v-if="localCompactConfig.resolvedId"> · 缓存键：{{ localCompactConfig.resolvedId }}</span>
-                            <span v-if="localCompactConfig.contextLengthManual || localCompactConfig.contextLengthSource === 'manual'"> · 手动值优先，点「重新检索」才会被 API 覆盖</span>
                         </div>
                     </div>
                 </div>
@@ -1297,7 +1297,7 @@ defineExpose({ focus, senderRef });
                         </div>
                         <div class="compact-advanced-actions">
                             <el-button type="warning" plain round @click="applyAdvancedToGlobal">应用到全局</el-button>
-                            <div class="compact-form-hint">将高级参数同步到所有已缓存模型（不改各模型上下文长度）。需完全重启应用后生效新 IPC。</div>
+                            <div class="compact-form-hint">将高级参数同步到所有已缓存模型（不改各模型上下文长度）</div>
                         </div>
                     </div>
                 </div>

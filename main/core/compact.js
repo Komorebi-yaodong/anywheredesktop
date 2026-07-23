@@ -253,10 +253,29 @@ export async function getModelCompactConfig(modelInput = '') {
   }
   const doc = await readCompactCacheDoc()
   const existing = doc.models?.[modelKey]
+  if (!existing) {
+    return {
+      ok: true,
+      modelKey,
+      config: defaultModelCacheEntry(modelKey)
+    }
+  }
+
+  const config = deepClone({ ...defaultModelCacheEntry(modelKey), ...existing, modelKey })
+
+  // 旧默认 keepRecentRounds=0 → 迁移为新默认 3；用户显式保存过则保留
+  if (
+    config.keepRecentRoundsUserSet !== true
+    && (!Object.prototype.hasOwnProperty.call(existing, 'keepRecentRounds')
+      || Number(existing.keepRecentRounds) === 0)
+  ) {
+    config.keepRecentRounds = DEFAULT_KEEP_RECENT_ROUNDS
+  }
+
   return {
     ok: true,
     modelKey,
-    config: existing ? deepClone({ ...defaultModelCacheEntry(modelKey), ...existing }) : defaultModelCacheEntry(modelKey)
+    config
   }
 }
 
@@ -289,6 +308,14 @@ export async function updateModelCompactConfig(modelInput = '', patch = {}) {
   }
   if (Number.isFinite(Number(next.keepRecentRounds))) {
     next.keepRecentRounds = Math.max(0, Math.floor(Number(next.keepRecentRounds)))
+  } else {
+    next.keepRecentRounds = DEFAULT_KEEP_RECENT_ROUNDS
+  }
+  // 只要写过 keepRecentRounds（含 0），视为用户意图，之后不再自动迁移
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'keepRecentRounds')) {
+    next.keepRecentRoundsUserSet = true
+  } else if (previous.keepRecentRoundsUserSet === true) {
+    next.keepRecentRoundsUserSet = true
   }
   next.autoCompactEnabled = next.autoCompactEnabled !== false
   next.contextLengthManual = next.contextLengthManual === true

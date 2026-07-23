@@ -36,13 +36,15 @@ const emit = defineEmits(['copy-text', 're-ask', 'delete-message', 'toggle-colla
 const editInputRef = ref(null);
 const isEditing = ref(false);
 const editedContent = ref('');
+// 压缩摘要默认折叠，避免长 handoff 占满视野
 const isCompactionExpanded = ref(false);
 const messageWrapperRef = ref(null);
 const markdownRootRef = ref(null);
 
 watch(() => props.message?.expanded, (expanded) => {
   if (props.message?.role === 'compaction') {
-    isCompactionExpanded.value = Boolean(expanded);
+    // undefined/null → 默认折叠；仅显式 true 才展开
+    isCompactionExpanded.value = expanded === true;
   }
 }, { immediate: true });
 
@@ -938,7 +940,7 @@ const truncateFilename = (filename, maxLength = 30) => {
 <template>
   <div class="chat-message" v-if="message.role !== 'system'">
 
-    <!-- 压缩消息：样式对齐普通 AI 消息，不可编辑；仅插入一条标记，前后消息仍完整显示 -->
+    <!-- 压缩消息：样式对齐普通 AI 消息，默认折叠摘要，可展开；不可编辑 -->
     <div v-if="message.role === 'compaction'" class="message-wrapper ai-wrapper" ref="messageWrapperRef">
       <div class="message-meta-header ai-meta-header">
         <img :src="aiAvatar" alt="AI Avatar" class="chat-avatar-top ai-avatar">
@@ -952,7 +954,7 @@ const truncateFilename = (filename, maxLength = 30) => {
 
       <Bubble class="ai-bubble" placement="start" shape="corner" maxWidth="100%">
         <template #content>
-          <div ref="markdownRootRef" class="markdown-wrapper" @click.capture="handleMarkdownLinkClick">
+          <div ref="markdownRootRef" class="markdown-wrapper" :class="{ 'collapsed': !isCompactionExpanded }" @click.capture="handleMarkdownLinkClick">
             <div class="compaction-inline-badge">上下文已压缩</div>
             <XMarkdown
               :markdown="message.summary || (typeof message.content === 'string' ? message.content : '会话上下文已压缩为摘要。')"
@@ -967,15 +969,22 @@ const truncateFilename = (filename, maxLength = 30) => {
         </template>
         <template #footer>
           <div class="message-footer compaction-footer">
-            <button
-              v-if="message.canRestore !== false"
-              type="button"
-              class="compaction-restore-btn"
-              @click="emit('restore-compact', message)"
-            >
-              <span class="compaction-restore-icon">↺</span>
-              <span>恢复压缩前</span>
-            </button>
+            <div class="compaction-footer-row">
+              <el-button size="small" circle @click="toggleCompactionExpanded">
+                <el-icon>
+                  <component :is="isCompactionExpanded ? CaretTop : CaretBottom" />
+                </el-icon>
+              </el-button>
+              <button
+                v-if="message.canRestore !== false"
+                type="button"
+                class="compaction-restore-btn"
+                @click="emit('restore-compact', message)"
+              >
+                <span class="compaction-restore-icon">↺</span>
+                <span>恢复压缩前</span>
+              </button>
+            </div>
           </div>
         </template>
       </Bubble>
@@ -1221,8 +1230,16 @@ html.dark .compaction-inline-badge {
   margin-top: 4px;
 }
 
-.compaction-restore-btn {
+.compaction-footer-row {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compaction-restore-btn {
+  flex: 1 1 auto;
+  width: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;

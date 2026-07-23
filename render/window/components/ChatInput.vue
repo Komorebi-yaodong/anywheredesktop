@@ -1160,7 +1160,7 @@ defineExpose({ focus, senderRef });
 
     <el-dialog v-model="compactDialogVisible" width="min(620px, 94vw)"
         class="compact-config-dialog glass-dialog" append-to-body destroy-on-close :close-on-click-modal="!compacting"
-        :show-close="!compacting">
+        :show-close="!compacting" align-center>
         <template #header>
             <div class="compact-dialog-header">
                 <div class="compact-dialog-title-row">
@@ -1173,74 +1173,76 @@ defineExpose({ focus, senderRef });
             </div>
         </template>
 
-        <div v-if="compacting" class="compact-progress-block">
-            <div class="compact-progress-title">{{ compactStatusText }}</div>
-            <el-progress :percentage="compactPercent" :stroke-width="14" striped striped-flow status="success" />
-            <div class="compact-progress-actions">
-                <el-button type="danger" plain round @click="cancelCompact">取消压缩</el-button>
-            </div>
-        </div>
-        <div v-else class="compact-config-block">
-            <div class="compact-section-card">
-                <div class="compact-section-title">基础设置</div>
-                <div class="compact-grid-2">
-                    <div class="compact-field">
-                        <div class="compact-label">自动压缩</div>
-                        <el-switch v-model="localCompactConfig.autoCompactEnabled" active-text="回合结束后检测" />
-                    </div>
-                    <div class="compact-field">
-                        <div class="compact-label">触发阈值</div>
-                        <el-input-number v-model="localCompactConfig.triggerRatio" :min="0.1" :max="0.99" :step="0.05" :precision="2" />
-                        <div class="compact-form-hint">默认 0.90（上下文 90%）</div>
-                    </div>
-                </div>
-                <div class="compact-field">
-                    <div class="compact-label">模型上下文长度（tokens）</div>
-                    <div class="compact-inline-row">
-                        <el-input-number v-model="localCompactConfig.contextLength" :min="1024" :step="1024" />
-                        <el-button :icon="RefreshRight" round @click="refreshCompactContext">重新检索</el-button>
-                    </div>
-                    <div class="compact-form-hint">
-                        来源：{{ localCompactConfig.contextLengthSource || 'default' }}
-                        <span v-if="localCompactConfig.resolvedId"> · 缓存键：{{ localCompactConfig.resolvedId }}</span>
-                    </div>
+        <div class="compact-dialog-scroll">
+            <div v-if="compacting" class="compact-progress-block">
+                <div class="compact-progress-title">{{ compactStatusText }}</div>
+                <el-progress :percentage="compactPercent" :stroke-width="14" striped striped-flow status="success" />
+                <div class="compact-progress-actions">
+                    <el-button type="danger" plain round @click="cancelCompact">取消压缩</el-button>
                 </div>
             </div>
-
-            <div class="compact-section-card">
-                <button type="button" class="compact-advanced-toggle" @click="advancedCollapsed = !advancedCollapsed">
-                    <el-icon>
-                        <component :is="advancedCollapsed ? ArrowRight : ArrowDown" />
-                    </el-icon>
-                    <span>高级参数</span>
-                </button>
-                <div v-show="!advancedCollapsed" class="compact-advanced-body">
+            <div v-else class="compact-config-block">
+                <div class="compact-section-card">
+                    <div class="compact-section-title">基础设置</div>
                     <div class="compact-grid-2">
                         <div class="compact-field">
-                            <div class="compact-label">用户消息 token 预算</div>
-                            <el-input-number v-model="localCompactConfig.userMessageTokenBudget" :min="1000" :step="1000" />
-                            <div class="compact-form-hint">默认 20000</div>
+                            <div class="compact-label">自动压缩</div>
+                            <el-switch v-model="localCompactConfig.autoCompactEnabled" active-text="回合结束后检测" />
                         </div>
                         <div class="compact-field">
-                            <div class="compact-label">额外保留最近 N 轮原文</div>
-                            <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
+                            <div class="compact-label">触发阈值</div>
+                            <el-input-number v-model="localCompactConfig.triggerRatio" :min="0.1" :max="0.99" :step="0.05" :precision="2" />
+                            <div class="compact-form-hint">默认 0.90（上下文 90%）</div>
                         </div>
                     </div>
                     <div class="compact-field">
-                        <div class="compact-label">备用压缩模型（可空）</div>
-                        <el-select v-model="localCompactConfig.fallbackModel" clearable filterable placeholder="为空则仅使用当前模型" style="width: 100%;">
-                            <el-option
-                                v-for="item in compactModelOptions"
-                                :key="item.value"
-                                :label="item.label || item.value"
-                                :value="item.value"
-                            />
-                        </el-select>
-                        <div class="compact-form-hint">主模型最多重试 3 次，失败后回退备用模型</div>
+                        <div class="compact-label">模型上下文长度（tokens）</div>
+                        <div class="compact-inline-row">
+                            <el-input-number v-model="localCompactConfig.contextLength" :min="1024" :step="1024" />
+                            <el-button :icon="RefreshRight" round @click="refreshCompactContext">重新检索</el-button>
+                        </div>
+                        <div class="compact-form-hint">
+                            来源：{{ localCompactConfig.contextLengthSource || 'default' }}
+                            <span v-if="localCompactConfig.resolvedId"> · 缓存键：{{ localCompactConfig.resolvedId }}</span>
+                        </div>
                     </div>
-                    <div class="compact-field">
-                        <div class="compact-label">摘要 Prompt</div>
-                        <el-input v-model="localCompactConfig.compactPrompt" type="textarea" :autosize="{ minRows: 5, maxRows: 12 }" />
+                </div>
+
+                <div class="compact-section-card">
+                    <button type="button" class="compact-advanced-toggle" @click="advancedCollapsed = !advancedCollapsed">
+                        <el-icon>
+                            <component :is="advancedCollapsed ? ArrowRight : ArrowDown" />
+                        </el-icon>
+                        <span>高级参数</span>
+                    </button>
+                    <div v-show="!advancedCollapsed" class="compact-advanced-body">
+                        <div class="compact-grid-2">
+                            <div class="compact-field">
+                                <div class="compact-label">用户消息 token 预算</div>
+                                <el-input-number v-model="localCompactConfig.userMessageTokenBudget" :min="1000" :step="1000" />
+                                <div class="compact-form-hint">默认 20000</div>
+                            </div>
+                            <div class="compact-field">
+                                <div class="compact-label">额外保留最近 N 轮原文</div>
+                                <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
+                            </div>
+                        </div>
+                        <div class="compact-field">
+                            <div class="compact-label">备用压缩模型（可空）</div>
+                            <el-select v-model="localCompactConfig.fallbackModel" clearable filterable placeholder="为空则仅使用当前模型" style="width: 100%;">
+                                <el-option
+                                    v-for="item in compactModelOptions"
+                                    :key="item.value"
+                                    :label="item.label || item.value"
+                                    :value="item.value"
+                                />
+                            </el-select>
+                            <div class="compact-form-hint">主模型最多重试 3 次，失败后回退备用模型</div>
+                        </div>
+                        <div class="compact-field">
+                            <div class="compact-label">摘要 Prompt</div>
+                            <el-input v-model="localCompactConfig.compactPrompt" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" />
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1266,19 +1268,59 @@ defineExpose({ focus, senderRef });
     overflow: hidden;
     border: 1px solid var(--el-border-color-lighter);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16);
+    display: flex;
+    flex-direction: column;
+    max-height: min(82vh, 720px);
+    margin-top: 0 !important;
 }
 
 .compact-config-dialog :deep(.el-dialog__header) {
     margin-right: 0;
     padding: 16px 18px 8px;
+    flex-shrink: 0;
 }
 
 .compact-config-dialog :deep(.el-dialog__body) {
     padding: 8px 18px 4px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 .compact-config-dialog :deep(.el-dialog__footer) {
     padding: 10px 18px 16px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--el-border-color-extra-light);
+}
+
+.compact-dialog-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: min(56vh, 480px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+}
+
+.compact-dialog-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.compact-dialog-scroll::-webkit-scrollbar-thumb {
+    background: var(--el-border-color);
+    border-radius: 999px;
+}
+
+.compact-dialog-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+html.dark .compact-dialog-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
 }
 
 .compact-dialog-header {
@@ -2604,5 +2646,64 @@ html.dark .subagent-detail-dialog .subagent-detail-task-scroll::-webkit-scrollba
 html.dark .subagent-detail-dialog .subagent-detail-output-scroll::-webkit-scrollbar-thumb:hover {
     background: #999;
     background-clip: content-box;
+}
+
+/* 会话压缩弹窗：限制在视口内，内容区内部滚动（append-to-body 需非 scoped） */
+.compact-config-dialog.el-dialog {
+    margin-top: 6vh !important;
+    max-height: min(84vh, 760px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 16px;
+}
+
+.compact-config-dialog .el-dialog__header {
+    flex-shrink: 0;
+    margin-right: 0;
+    padding: 16px 18px 8px;
+}
+
+.compact-config-dialog .el-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 8px 18px 4px;
+}
+
+.compact-config-dialog .el-dialog__footer {
+    flex-shrink: 0;
+    padding: 10px 18px 16px;
+    border-top: 1px solid var(--el-border-color-extra-light);
+}
+
+.compact-config-dialog .compact-dialog-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: min(58vh, 520px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+}
+
+.compact-config-dialog .compact-dialog-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.compact-config-dialog .compact-dialog-scroll::-webkit-scrollbar-thumb {
+    background: var(--el-border-color);
+    border-radius: 999px;
+}
+
+html.dark .compact-config-dialog .el-dialog__footer {
+    border-top-color: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .compact-config-dialog .compact-dialog-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
 }
 </style>

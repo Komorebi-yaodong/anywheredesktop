@@ -1048,6 +1048,37 @@ const handleRefreshCompactContext = async () => {
   }
 };
 
+const handleApplyCompactAdvancedGlobal = async (patch = {}) => {
+  try {
+    if (!window.api?.applyAdvancedCompactConfigToAll) {
+      showDismissibleMessage.error('全局应用能力不可用');
+      return;
+    }
+    // 先保存当前模型，再同步到全部缓存
+    await handleSaveCompactConfig({
+      ...compactConfig.value,
+      ...(patch || {}),
+      contextLengthManual: true,
+      contextLengthSource: 'manual'
+    });
+    const result = await window.api.applyAdvancedCompactConfigToAll({
+      autoCompactEnabled: patch?.autoCompactEnabled ?? compactConfig.value.autoCompactEnabled,
+      triggerRatio: patch?.triggerRatio ?? compactConfig.value.triggerRatio,
+      userMessageTokenBudget: patch?.userMessageTokenBudget ?? compactConfig.value.userMessageTokenBudget,
+      keepRecentRounds: patch?.keepRecentRounds ?? compactConfig.value.keepRecentRounds,
+      compactPrompt: patch?.compactPrompt ?? compactConfig.value.compactPrompt,
+      fallbackModel: patch?.fallbackModel ?? compactConfig.value.fallbackModel
+    });
+    const updated = Number(result?.updated) || 0;
+    showDismissibleMessage.success(updated > 0
+      ? `高级参数已应用到 ${updated} 个模型缓存`
+      : '当前没有可更新的模型缓存');
+  } catch (error) {
+    console.error('[compact] apply advanced global failed:', error);
+    showDismissibleMessage.error(`应用到全局失败: ${error?.message || error}`);
+  }
+};
+
 const handleCancelCompact = () => {
   if (compactAbortController) {
     try {
@@ -8870,6 +8901,7 @@ const scrollToMessageByIndex = (index) => {
           @run-compact="() => runConversationCompact({ manual: true })"
           @cancel-compact="handleCancelCompact"
           @save-compact-config="handleSaveCompactConfig"
+          @apply-compact-advanced-global="handleApplyCompactAdvancedGlobal"
           @refresh-compact-context="handleRefreshCompactContext"
           @restore-compact="handleRestoreCompact" />
       </div>
@@ -10175,8 +10207,9 @@ html.dark .app-container {
   }
 
   &.compaction {
-    background: rgba(233, 30, 99, 0.95);
+    background: linear-gradient(90deg, #f6c945 0%, #e0a800 100%);
     height: 3px;
+    box-shadow: 0 0 6px rgba(224, 168, 0, 0.45);
   }
 
   &.archived {
@@ -10219,7 +10252,8 @@ html.dark {
   }
 
   .timeline-node.compaction {
-    background: rgba(255, 128, 171, 0.98);
+    background: linear-gradient(90deg, #ffd666 0%, #faad14 100%);
+    box-shadow: 0 0 8px rgba(250, 173, 20, 0.5);
   }
 }
 

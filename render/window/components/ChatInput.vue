@@ -47,7 +47,7 @@ const props = defineProps({
 });
 
 // 增加 toggle-mcp 事件
-const emit = defineEmits(['submit', 'cancel', 'clear-history', 'remove-file', 'upload', 'send-audio', 'open-mcp-dialog', 'pick-file-start', 'toggle-mcp', 'toggle-skill', 'open-skill-dialog', 'cancel-buffer', 'stop-subagent', 'acknowledge-subagent', 'acknowledge-all-subagents', 'rerun-subagent', 'open-subagent-detail', 'close-subagent-detail', 'open-compact-dialog', 'run-compact', 'cancel-compact', 'save-compact-config', 'refresh-compact-context', 'restore-compact']);
+const emit = defineEmits(['submit', 'cancel', 'clear-history', 'remove-file', 'upload', 'send-audio', 'open-mcp-dialog', 'pick-file-start', 'toggle-mcp', 'toggle-skill', 'open-skill-dialog', 'cancel-buffer', 'stop-subagent', 'acknowledge-subagent', 'acknowledge-all-subagents', 'rerun-subagent', 'open-subagent-detail', 'close-subagent-detail', 'open-compact-dialog', 'run-compact', 'cancel-compact', 'save-compact-config', 'apply-compact-advanced-global', 'refresh-compact-context', 'restore-compact']);
 
 // --- Refs and State ---
 const senderRef = ref(null);
@@ -130,6 +130,17 @@ const saveCompactConfig = () => {
         ...localCompactConfig.value,
         contextLengthManual: true,
         contextLengthSource: 'manual'
+    });
+};
+
+const applyAdvancedToGlobal = () => {
+    emit('apply-compact-advanced-global', {
+        autoCompactEnabled: localCompactConfig.value.autoCompactEnabled,
+        triggerRatio: localCompactConfig.value.triggerRatio,
+        userMessageTokenBudget: localCompactConfig.value.userMessageTokenBudget,
+        keepRecentRounds: localCompactConfig.value.keepRecentRounds,
+        compactPrompt: localCompactConfig.value.compactPrompt,
+        fallbackModel: localCompactConfig.value.fallbackModel
     });
 };
 
@@ -1263,6 +1274,10 @@ defineExpose({ focus, senderRef });
                             <div class="compact-label">摘要 Prompt</div>
                             <el-input v-model="localCompactConfig.compactPrompt" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" />
                         </div>
+                        <div class="compact-advanced-actions">
+                            <el-button type="warning" plain round @click="applyAdvancedToGlobal">应用到全局</el-button>
+                            <div class="compact-form-hint">将高级参数同步到所有已缓存模型（不改各模型上下文长度）</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1385,6 +1400,14 @@ html.dark .compact-dialog-scroll::-webkit-scrollbar-thumb {
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+.compact-advanced-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding-top: 4px;
 }
 
 .compact-dialog-subtitle {

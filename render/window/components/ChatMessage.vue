@@ -966,18 +966,16 @@ const truncateFilename = (filename, maxLength = 30) => {
           </div>
         </template>
         <template #footer>
-          <div class="message-footer">
-            <div class="footer-wrapper">
-              <div class="footer-actions">
-                <el-button
-                  v-if="message.canRestore !== false"
-                  size="small"
-                  type="primary"
-                  plain
-                  @click="emit('restore-compact', message)"
-                >恢复压缩前</el-button>
-              </div>
-            </div>
+          <div class="message-footer compaction-footer">
+            <button
+              v-if="message.canRestore !== false"
+              type="button"
+              class="compaction-restore-btn"
+              @click="emit('restore-compact', message)"
+            >
+              <span class="compaction-restore-icon">↺</span>
+              <span>恢复压缩前</span>
+            </button>
           </div>
         </template>
       </Bubble>
@@ -1216,6 +1214,60 @@ html.dark .compaction-inline-badge {
   color: #ff80ab;
   background: rgba(233, 30, 99, 0.18);
   border-color: rgba(255, 128, 171, 0.35);
+}
+
+.compaction-footer {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.compaction-restore-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 1px solid rgba(250, 173, 20, 0.45);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 236, 179, 0.55) 0%, rgba(255, 214, 102, 0.28) 100%);
+  color: #8a6400;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  box-shadow: 0 4px 14px rgba(250, 173, 20, 0.16);
+}
+
+.compaction-restore-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(250, 173, 20, 0.7);
+  box-shadow: 0 8px 20px rgba(250, 173, 20, 0.24);
+  background: linear-gradient(180deg, rgba(255, 241, 194, 0.75) 0%, rgba(255, 214, 102, 0.4) 100%);
+}
+
+.compaction-restore-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(250, 173, 20, 0.18);
+}
+
+.compaction-restore-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+html.dark .compaction-restore-btn {
+  border-color: rgba(255, 214, 102, 0.4);
+  background: linear-gradient(180deg, rgba(250, 173, 20, 0.28) 0%, rgba(250, 173, 20, 0.12) 100%);
+  color: #ffd666;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+html.dark .compaction-restore-btn:hover {
+  border-color: rgba(255, 214, 102, 0.65);
+  background: linear-gradient(180deg, rgba(250, 173, 20, 0.38) 0%, rgba(250, 173, 20, 0.18) 100%);
 }
 
 .message-wrapper {

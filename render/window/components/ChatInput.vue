@@ -1,7 +1,7 @@
 <script setup>
 import { ref, h, onMounted, onBeforeUnmount, nextTick, watch, computed } from 'vue';
-import { ElFooter, ElRow, ElCol, ElText, ElDivider, ElButton, ElInput, ElMessage, ElMessageBox, ElTag, ElTooltip, ElScrollbar, ElIcon, ElImage, ElDialog } from 'element-plus';
-import { Close, Check, Document, Delete, Collection, Picture, ChatLineRound } from '@element-plus/icons-vue';
+import { ElFooter, ElRow, ElCol, ElText, ElDivider, ElButton, ElInput, ElMessage, ElMessageBox, ElTag, ElTooltip, ElScrollbar, ElIcon, ElImage, ElDialog, ElSwitch, ElSelect, ElOption, ElProgress, ElInputNumber, ElForm, ElFormItem } from 'element-plus';
+import { Close, Check, Document, Delete, Collection, Picture, ChatLineRound, Fold, RefreshRight } from '@element-plus/icons-vue';
 
 // --- Props and Emits ---
 const prompt = defineModel('prompt');
@@ -21,11 +21,32 @@ const props = defineProps({
     allSkills: { type: Array, default: () => [] },
     appendBuffer: { type: Array, default: () => [] },
     subAgentTasks: { type: Array, default: () => [] },
-    subAgentDetails: { type: Object, default: () => ({}) }
+    subAgentDetails: { type: Object, default: () => ({}) },
+    compacting: { type: Boolean, default: false },
+    compactProgress: {
+        type: Object,
+        default: () => ({ percent: 0, message: '', stage: '' })
+    },
+    compactConfig: {
+        type: Object,
+        default: () => ({
+            autoCompactEnabled: true,
+            triggerRatio: 0.9,
+            contextLength: 262144,
+            contextLengthSource: 'default',
+            userMessageTokenBudget: 20000,
+            keepRecentRounds: 0,
+            compactPrompt: '',
+            fallbackModel: '',
+            resolvedId: ''
+        })
+    },
+    compactModelOptions: { type: Array, default: () => [] },
+    canRestoreCompact: { type: Boolean, default: false }
 });
 
 // 增加 toggle-mcp 事件
-const emit = defineEmits(['submit', 'cancel', 'clear-history', 'remove-file', 'upload', 'send-audio', 'open-mcp-dialog', 'pick-file-start', 'toggle-mcp', 'toggle-skill', 'open-skill-dialog', 'cancel-buffer', 'stop-subagent', 'acknowledge-subagent', 'acknowledge-all-subagents', 'rerun-subagent', 'open-subagent-detail', 'close-subagent-detail']);
+const emit = defineEmits(['submit', 'cancel', 'clear-history', 'remove-file', 'upload', 'send-audio', 'open-mcp-dialog', 'pick-file-start', 'toggle-mcp', 'toggle-skill', 'open-skill-dialog', 'cancel-buffer', 'stop-subagent', 'acknowledge-subagent', 'acknowledge-all-subagents', 'rerun-subagent', 'open-subagent-detail', 'close-subagent-detail', 'open-compact-dialog', 'run-compact', 'cancel-compact', 'save-compact-config', 'refresh-compact-context', 'restore-compact']);
 
 // --- Refs and State ---
 const senderRef = ref(null);
@@ -37,6 +58,80 @@ const isRecording = ref(false);
 
 const subAgentDialogVisible = ref(false);
 const selectedSubAgentId = ref('');
+const compactDialogVisible = ref(false);
+const localCompactConfig = ref({
+    autoCompactEnabled: true,
+    triggerRatio: 0.9,
+    contextLength: 262144,
+    contextLengthSource: 'default',
+    userMessageTokenBudget: 20000,
+    keepRecentRounds: 0,
+    compactPrompt: '',
+    fallbackModel: '',
+    resolvedId: ''
+});
+
+const compactPercent = computed(() => {
+    const value = Number(props.compactProgress?.percent);
+    if (!Number.isFinite(value)) return 0;
+    return Math.min(100, Math.max(0, Math.round(value)));
+});
+const compactStatusText = computed(() => {
+    if (!props.compacting) return '';
+    return props.compactProgress?.message || '正在压缩…';
+});
+const interactionLocked = computed(() => Boolean(props.loading || props.compacting));
+
+watch(() => props.compactConfig, (next) => {
+    if (!next || typeof next !== 'object') return;
+    localCompactConfig.value = {
+        autoCompactEnabled: next.autoCompactEnabled !== false,
+        triggerRatio: Number.isFinite(Number(next.triggerRatio)) ? Number(next.triggerRatio) : 0.9,
+        contextLength: Number.isFinite(Number(next.contextLength)) ? Number(next.contextLength) : 262144,
+        contextLengthSource: next.contextLengthSource || 'default',
+        userMessageTokenBudget: Number.isFinite(Number(next.userMessageTokenBudget)) ? Number(next.userMessageTokenBudget) : 20000,
+        keepRecentRounds: Number.isFinite(Number(next.keepRecentRounds)) ? Number(next.keepRecentRounds) : 0,
+        compactPrompt: typeof next.compactPrompt === 'string' ? next.compactPrompt : '',
+        fallbackModel: typeof next.fallbackModel === 'string' ? next.fallbackModel : '',
+        resolvedId: typeof next.resolvedId === 'string' ? next.resolvedId : ''
+    };
+}, { deep: true, immediate: true });
+
+watch(() => props.compacting, (isCompacting) => {
+    if (isCompacting) {
+        compactDialogVisible.value = true;
+    }
+});
+
+const openCompactDialog = () => {
+    if (props.compacting) {
+        compactDialogVisible.value = true;
+        return;
+    }
+    emit('open-compact-dialog');
+    compactDialogVisible.value = true;
+};
+
+const saveCompactConfig = () => {
+    emit('save-compact-config', { ...localCompactConfig.value });
+};
+
+const runCompactNow = () => {
+    emit('save-compact-config', { ...localCompactConfig.value });
+    emit('run-compact');
+};
+
+const cancelCompact = () => {
+    emit('cancel-compact');
+};
+
+const refreshCompactContext = () => {
+    emit('refresh-compact-context');
+};
+
+const restoreCompact = () => {
+    emit('restore-compact');
+};
 
 const selectedSubAgent = computed(() => {
     const summary = props.subAgentTasks.find((item) => item?.subagent_id === selectedSubAgentId.value) || null;
@@ -956,11 +1051,21 @@ defineExpose({ focus, senderRef });
                                 </el-button>
                             </el-tooltip>
                             <el-tooltip content="Skill 技能库">
-                                <el-button size="default" circle :disabled="isRecording"
+                                <el-button size="default" circle :disabled="isRecording || compacting"
                                     :class="{ 'is-active-special': activeSkillIds && activeSkillIds.length > 0 }"
                                     @click="$emit('open-skill-dialog')">
                                     <el-icon :size="18">
                                         <Collection />
+                                    </el-icon>
+                                </el-button>
+                            </el-tooltip>
+                            <el-tooltip :content="compacting ? '压缩进行中…' : '会话压缩'">
+                                <el-button size="default" circle
+                                    :disabled="isRecording"
+                                    :class="{ 'is-active-special': compacting || canRestoreCompact }"
+                                    @click="openCompactDialog">
+                                    <el-icon :size="18">
+                                        <Fold />
                                     </el-icon>
                                 </el-button>
                             </el-tooltip>
@@ -1051,9 +1156,120 @@ defineExpose({ focus, senderRef });
         </template>
     </el-dialog>
 
+    <el-dialog v-model="compactDialogVisible" title="会话压缩" width="min(560px, 94vw)"
+        class="compact-config-dialog" append-to-body destroy-on-close :close-on-click-modal="!compacting">
+        <div v-if="compacting" class="compact-progress-block">
+            <div class="compact-progress-title">{{ compactStatusText }}</div>
+            <el-progress :percentage="compactPercent" :stroke-width="12" striped striped-flow />
+            <div class="compact-progress-actions">
+                <el-button type="danger" plain @click="cancelCompact">取消压缩</el-button>
+            </div>
+        </div>
+        <div v-else class="compact-config-block">
+            <el-form label-position="top" class="compact-form">
+                <el-form-item label="启用自动压缩（回合结束后检测）">
+                    <el-switch v-model="localCompactConfig.autoCompactEnabled" />
+                </el-form-item>
+                <el-form-item label="触发阈值（上下文占用比例）">
+                    <el-input-number v-model="localCompactConfig.triggerRatio" :min="0.1" :max="0.99" :step="0.05" :precision="2" />
+                    <span class="compact-form-hint">Codex 默认约 0.90</span>
+                </el-form-item>
+                <el-form-item label="模型上下文长度（tokens）">
+                    <div class="compact-inline-row">
+                        <el-input-number v-model="localCompactConfig.contextLength" :min="1024" :step="1024" :controls="true" />
+                        <el-button :icon="RefreshRight" @click="refreshCompactContext">重新检索</el-button>
+                    </div>
+                    <div class="compact-form-hint">
+                        来源：{{ localCompactConfig.contextLengthSource || 'default' }}
+                        <span v-if="localCompactConfig.resolvedId"> · 缓存键：{{ localCompactConfig.resolvedId }}</span>
+                    </div>
+                </el-form-item>
+                <el-form-item label="保留最近用户消息 token 预算">
+                    <el-input-number v-model="localCompactConfig.userMessageTokenBudget" :min="1000" :step="1000" />
+                </el-form-item>
+                <el-form-item label="额外保留最近 N 轮原文">
+                    <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
+                </el-form-item>
+                <el-form-item label="备用压缩模型（可空）">
+                    <el-select v-model="localCompactConfig.fallbackModel" clearable filterable placeholder="为空则仅使用当前模型" style="width: 100%;">
+                        <el-option
+                            v-for="item in compactModelOptions"
+                            :key="item.value"
+                            :label="item.label || item.value"
+                            :value="item.value"
+                        />
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="自定义摘要 Prompt">
+                    <el-input v-model="localCompactConfig.compactPrompt" type="textarea" :autosize="{ minRows: 4, maxRows: 10 }" />
+                </el-form-item>
+            </el-form>
+        </div>
+        <template #footer>
+            <div class="compact-dialog-footer">
+                <el-button v-if="canRestoreCompact && !compacting" @click="restoreCompact">恢复压缩前</el-button>
+                <div class="compact-dialog-footer-right">
+                    <el-button @click="compactDialogVisible = false" :disabled="compacting">关闭</el-button>
+                    <el-button v-if="!compacting" @click="saveCompactConfig">保存参数</el-button>
+                    <el-button v-if="!compacting" type="primary" @click="runCompactNow">立即压缩</el-button>
+                </div>
+            </div>
+        </template>
+    </el-dialog>
+
 </template>
 
 <style scoped>
+.compact-config-dialog :deep(.el-dialog__body) {
+    padding-top: 8px;
+}
+
+.compact-progress-block,
+.compact-config-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.compact-progress-title {
+    font-size: 14px;
+    color: var(--el-text-color-primary);
+}
+
+.compact-progress-actions,
+.compact-inline-row,
+.compact-dialog-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.compact-dialog-footer {
+    width: 100%;
+    justify-content: space-between;
+}
+
+.compact-dialog-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.compact-form-hint {
+    margin-left: 8px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+}
+
+.compact-inline-row .el-input-number {
+    flex: 1;
+}
+
+html.dark .compact-progress-title {
+    color: var(--el-text-color-primary);
+}
+
 /* Base Styles */
 .drag-overlay {
     position: fixed;

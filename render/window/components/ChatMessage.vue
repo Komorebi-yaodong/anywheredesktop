@@ -32,10 +32,11 @@ const props = defineProps({
   isAutoApprove: Boolean,
 });
 
-const emit = defineEmits(['copy-text', 're-ask', 'delete-message', 'toggle-collapse', 'avatar-click', 'edit-message', 'edit-message-requested', 'edit-finished', 'cancel-tool-call', 'confirm-tool', 'reject-tool', 'update-auto-approve', 'submit-choice']);
+const emit = defineEmits(['copy-text', 're-ask', 'delete-message', 'toggle-collapse', 'avatar-click', 'edit-message', 'edit-message-requested', 'edit-finished', 'cancel-tool-call', 'confirm-tool', 'reject-tool', 'update-auto-approve', 'submit-choice', 'restore-compact']);
 const editInputRef = ref(null);
 const isEditing = ref(false);
 const editedContent = ref('');
+const isCompactionExpanded = ref(false);
 const messageWrapperRef = ref(null);
 const markdownRootRef = ref(null);
 let copyButtonRafId = 0;
@@ -914,8 +915,27 @@ const truncateFilename = (filename, maxLength = 30) => {
 <template>
   <div class="chat-message" v-if="message.role !== 'system'">
 
+    <!-- 上下文压缩标记 -->
+    <div v-if="message.role === 'compaction'" class="message-wrapper compaction-wrapper" ref="messageWrapperRef">
+      <div class="compaction-card">
+        <div class="compaction-header">
+          <span class="compaction-title">上下文已压缩</span>
+          <span class="timestamp-row" v-if="message.timestamp">{{ formatTimestamp(message.timestamp) }}</span>
+        </div>
+        <div class="compaction-summary" :class="{ 'is-collapsed': message.collapsed !== false && !isCompactionExpanded }">
+          {{ message.summary || (typeof message.content === 'string' ? message.content : '会话上下文已压缩为摘要。') }}
+        </div>
+        <div class="compaction-actions">
+          <el-button size="small" text type="primary" @click="isCompactionExpanded = !isCompactionExpanded">
+            {{ isCompactionExpanded ? '收起摘要' : '展开摘要' }}
+          </el-button>
+          <el-button size="small" text @click="emit('restore-compact', message)">恢复压缩前</el-button>
+        </div>
+      </div>
+    </div>
+
     <!-- 用户消息 -->
-    <div v-if="message.role === 'user'" class="message-wrapper user-wrapper" ref="messageWrapperRef">
+    <div v-else-if="message.role === 'user'" class="message-wrapper user-wrapper" ref="messageWrapperRef">
       <div class="message-meta-header user-meta-header">
         <div class="meta-info-column user-meta-info-column">
           <div class="meta-name-row user-meta-name-row">
@@ -1128,6 +1148,63 @@ const truncateFilename = (filename, maxLength = 30) => {
   overflow-x: hidden;
   padding: 0;
   --bubble-radius: 22px;
+}
+
+
+.compaction-wrapper {
+  width: 100%;
+  margin: 8px 0 12px;
+}
+
+.compaction-card {
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-light);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.compaction-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.compaction-title {
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+
+.compaction-summary {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.55;
+  max-height: none;
+}
+
+.compaction-summary.is-collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.compaction-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+html.dark .compaction-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+html.dark .compaction-title {
+  color: var(--el-color-primary-light-3);
 }
 
 .message-wrapper {

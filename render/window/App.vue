@@ -581,6 +581,9 @@ const updateModelListAndMap = (config) => {
   modelList.value = newModelList;
   modelMap.value = newModelMap;
   syncModelDialogProviderCollapseStates(config);
+  syncEnabledModelCompactCache().catch((error) => {
+    console.warn('[compact] sync enabled model cache failed:', error);
+  });
 };
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -680,6 +683,9 @@ const handleModelLogoError = () => {
 
 watch(model, (nextModel) => {
   resolveCurrentModelLogo(nextModel);
+  loadCompactConfigForCurrentModel({ forceRefresh: false }).catch((error) => {
+    console.warn('[compact] model change config load failed:', error);
+  });
 }, { immediate: false });
 
 
@@ -871,6 +877,282 @@ const normalizeAssistantTokenUsage = (usage) => {
   };
 };
 
+const canRestoreCompact = computed(() => Array.isArray(compactArchives.value) && compactArchives.value.length > 0);
+
+const compactModelOptions = computed(() => {
+  return (modelList.value || []).map((item) => ({
+    value: item.value,
+    label: item.label || item.value
+  }));
+});
+
+const getLatestUsageTotalTokens = () => {
+  for (let i = history.value.length - 1; i >= 0; i -= 1) {
+    const usage = history.value[i]?.tokenUsage;
+    const total = Number(usage?.total_tokens);
+    if (Number.isFinite(total) && total > 0) return total;
+  }
+  for (let i = chat_show.value.length - 1; i >= 0; i -= 1) {
+    const usage = chat_show.value[i]?.tokenUsage;
+    const total = Number(usage?.total_tokens);
+    if (Number.isFinite(total) && total > 0) return total;
+  }
+  return null;
+};
+
+const resolveProviderByModelValue = (modelValue = '') => {
+  const raw = String(modelValue || '');
+  if (!raw.includes('|')) return null;
+  const providerId = raw.split('|')[0];
+  return currentConfig.value?.providers?.[providerId] || null;
+};
+
+const syncEnabledModelCompactCache = async () => {
+  try {
+    const enabled = (modelList.value || []).map((item) => item.value).filter(Boolean);
+    if (window.api?.pruneCompactCache) {
+      await window.api.pruneCompactCache(enabled);
+    }
+  } catch (error) {
+    console.warn('[compact] prune cache failed:', error);
+  }
+};
+
+const loadCompactConfigForCurrentModel = async ({ forceRefresh = false } = {}) => {
+  if (!window.api?.getModelCompactConfig) return;
+  try {
+    const resolveResult = forceRefresh && window.api.resolveModelContext
+      ? await window.api.resolveModelContext(model.value, { forceRefresh: true })
+      : null;
+    const configResult = await window.api.getModelCompactConfig(model.value);
+    const nextConfig = {
+      ...(configResult?.config || {}),
+      ...(resolveResult?.config || {})
+    };
+    if (resolveResult?.contextLength) {
+      nextConfig.contextLength = resolveResult.contextLength;
+      nextConfig.contextLengthSource = resolveResult.source || nextConfig.contextLengthSource;
+      nextConfig.resolvedId = resolveResult.resolvedId || nextConfig.resolvedId;
+    }
+    compactConfig.value = {
+      autoCompactEnabled: nextConfig.autoCompactEnabled !== false,
+      triggerRatio: Number.isFinite(Number(nextConfig.triggerRatio)) ? Number(nextConfig.triggerRatio) : 0.9,
+      contextLength: Number.isFinite(Number(nextConfig.contextLength)) ? Number(nextConfig.contextLength) : 262144,
+      contextLengthSource: nextConfig.contextLengthSource || 'default',
+      userMessageTokenBudget: Number.isFinite(Number(nextConfig.userMessageTokenBudget)) ? Number(nextConfig.userMessageTokenBudget) : 20000,
+      keepRecentRounds: Number.isFinite(Number(nextConfig.keepRecentRounds)) ? Number(nextConfig.keepRecentRounds) : 0,
+      compactPrompt: typeof nextConfig.compactPrompt === 'string' ? nextConfig.compactPrompt : '',
+      fallbackModel: typeof nextConfig.fallbackModel === 'string' ? nextConfig.fallbackModel : '',
+      resolvedId: typeof nextConfig.resolvedId === 'string' ? nextConfig.resolvedId : ''
+    };
+  } catch (error) {
+    console.warn('[compact] load model config failed:', error);
+  }
+};
+
+const handleOpenCompactDialog = async () => {
+  await loadCompactConfigForCurrentModel({ forceRefresh: false });
+};
+
+const handleSaveCompactConfig = async (patch = {}) => {
+  try {
+    compactConfig.value = {
+      ...compactConfig.value,
+      ...(patch || {})
+    };
+    if (window.api?.updateModelCompactConfig) {
+      const result = await window.api.updateModelCompactConfig(model.value, compactConfig.value);
+      if (result?.config) {
+        compactConfig.value = {
+          ...compactConfig.value,
+          ...result.config
+        };
+      }
+    }
+    showDismissibleMessage.success('压缩参数已保存');
+  } catch (error) {
+    showDismissibleMessage.error(`保存压缩参数失败: ${error?.message || error}`);
+  }
+};
+
+const handleRefreshCompactContext = async () => {
+  try {
+    await loadCompactConfigForCurrentModel({ forceRefresh: true });
+    showDismissibleMessage.success('已重新检索模型上下文长度');
+  } catch (error) {
+    showDismissibleMessage.error(`检索失败: ${error?.message || error}`);
+  }
+};
+
+const handleCancelCompact = () => {
+  if (compactAbortController) {
+    try {
+      compactAbortController.abort();
+    } catch {
+      // ignore
+    }
+  }
+  autoCompactSuppressedForTurn.value = true;
+  compactProgress.value = {
+    percent: compactProgress.value?.percent || 0,
+    message: '正在取消压缩…',
+    stage: 'cancelling'
+  };
+};
+
+const applyCompactResult = (result) => {
+  if (!result?.ok) return;
+  if (Array.isArray(result.history)) {
+    history.value = result.history;
+  }
+  if (Array.isArray(result.chatShow)) {
+    chat_show.value = result.chatShow.map((item, index) => ({
+      id: item.id ?? (messageIdCounter.value + index + 1),
+      ...item
+    }));
+    messageIdCounter.value += result.chatShow.length + 1;
+  }
+  if (result.archive) {
+    compactArchives.value = [...compactArchives.value, result.archive].slice(-20);
+  }
+  if (result.modelConfig) {
+    compactConfig.value = {
+      ...compactConfig.value,
+      ...result.modelConfig
+    };
+  }
+  scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
+};
+
+const handleRestoreCompact = async () => {
+  if (compacting.value) {
+    showDismissibleMessage.warning('压缩进行中，暂不可恢复');
+    return;
+  }
+  const archive = compactArchives.value[compactArchives.value.length - 1];
+  if (!archive) {
+    showDismissibleMessage.info('没有可恢复的压缩快照');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('将恢复到最近一次压缩前的历史，是否继续？', '恢复压缩前', {
+      type: 'warning',
+      confirmButtonText: '恢复',
+      cancelButtonText: '取消'
+    });
+  } catch {
+    return;
+  }
+  history.value = Array.isArray(archive.historyBefore) ? deepCloneSafe(archive.historyBefore) : [];
+  chat_show.value = Array.isArray(archive.chatShowBefore) ? deepCloneSafe(archive.chatShowBefore) : [];
+  compactArchives.value = compactArchives.value.slice(0, -1);
+  scheduleAutoSave({ reason: 'compact-restored', immediate: true });
+  showDismissibleMessage.success('已恢复压缩前历史');
+};
+
+const deepCloneSafe = (value) => {
+  try {
+    return JSON.parse(JSON.stringify(value ?? null));
+  } catch {
+    return value;
+  }
+};
+
+const runConversationCompact = async ({ manual = true } = {}) => {
+  if (compacting.value) return false;
+  if (loading.value) {
+    showDismissibleMessage.warning('请等待当前回复完成后再压缩');
+    return false;
+  }
+  if (!window.api?.runConversationCompact) {
+    showDismissibleMessage.error('压缩能力不可用');
+    return false;
+  }
+  if (!Array.isArray(history.value) || history.value.length === 0) {
+    showDismissibleMessage.info('当前没有可压缩的会话内容');
+    return false;
+  }
+
+  compacting.value = true;
+  compactProgress.value = { percent: 2, message: '准备压缩…', stage: 'prepare' };
+  compactAbortController = new AbortController();
+
+  try {
+    const fallbackModelValue = compactConfig.value.fallbackModel || '';
+    const result = await window.api.runConversationCompact({
+      messages: history.value,
+      chatShow: chat_show.value,
+      modelValue: model.value,
+      provider: resolveProviderByModelValue(model.value),
+      fallbackProvider: resolveProviderByModelValue(fallbackModelValue),
+      fallbackModelValue,
+      config: compactConfig.value,
+      signal: compactAbortController.signal,
+      onProgress: (payload) => {
+        compactProgress.value = {
+          percent: Number(payload?.percent) || compactProgress.value.percent || 0,
+          message: payload?.message || compactProgress.value.message || '',
+          stage: payload?.stage || ''
+        };
+      }
+    });
+
+    if (result?.ok === false) {
+      throw new Error(result?.error?.message || 'compact_failed');
+    }
+    applyCompactResult(result);
+    autoCompactSuppressedForTurn.value = false;
+    showDismissibleMessage.success(manual ? '手动压缩完成' : '自动压缩完成');
+    return true;
+  } catch (error) {
+    if (error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))) {
+      if (!manual) autoCompactSuppressedForTurn.value = true;
+      showDismissibleMessage.info('已取消压缩');
+      return false;
+    }
+    showDismissibleMessage.error(`压缩失败: ${error?.message || error}`);
+    return false;
+  } finally {
+    compacting.value = false;
+    compactAbortController = null;
+    compactProgress.value = { percent: 0, message: '', stage: '' };
+  }
+};
+
+const maybeAutoCompactAfterTurn = async () => {
+  if (autoCompactSuppressedForTurn.value) return;
+  if (compacting.value || loading.value) return;
+  if (compactConfig.value.autoCompactEnabled === false) return;
+  if (!window.api?.estimateCompactTokens || !window.api?.shouldAutoCompact) return;
+
+  try {
+    const estimate = await window.api.estimateCompactTokens(history.value);
+    const localTokens = Number(estimate?.tokens) || 0;
+    const usageTotal = getLatestUsageTotalTokens();
+    let activeTokens = localTokens;
+    if (Number.isFinite(usageTotal) && usageTotal > 0 && localTokens > 0) {
+      const diff = Math.abs(usageTotal - localTokens);
+      activeTokens = diff > localTokens * 0.8 ? localTokens : usageTotal;
+    } else if (Number.isFinite(usageTotal) && usageTotal > 0) {
+      activeTokens = usageTotal;
+    }
+
+    const decision = await window.api.shouldAutoCompact({
+      activeTokens,
+      contextLength: compactConfig.value.contextLength,
+      triggerRatio: compactConfig.value.triggerRatio,
+      autoCompactEnabled: compactConfig.value.autoCompactEnabled
+    });
+    if (decision?.should) {
+      await runConversationCompact({ manual: false });
+    }
+  } catch (error) {
+    console.warn('[compact] auto compact check failed:', error);
+  } finally {
+    autoCompactSuppressedForTurn.value = false;
+  }
+};
+
 const applyTokenUsageToAssistantMessage = (chatShowIndex, tokenUsage) => {
   const normalizedUsage = normalizeAssistantTokenUsage(tokenUsage);
   if (!normalizedUsage || chatShowIndex < 0) return null;
@@ -889,6 +1171,22 @@ const api_key = ref("");
 const history = ref([]);
 const chat_show = ref([]);
 const loading = ref(false);
+const compacting = ref(false);
+const compactProgress = ref({ percent: 0, message: '', stage: '' });
+const compactConfig = ref({
+  autoCompactEnabled: true,
+  triggerRatio: 0.9,
+  contextLength: 262144,
+  contextLengthSource: 'default',
+  userMessageTokenBudget: 20000,
+  keepRecentRounds: 0,
+  compactPrompt: '',
+  fallbackModel: '',
+  resolvedId: ''
+});
+const compactArchives = ref([]);
+const autoCompactSuppressedForTurn = ref(false);
+let compactAbortController = null;
 const prompt = ref("");
 const signalController = ref(null);
 const activeAssistantTurnId = ref(0);
@@ -2725,13 +3023,23 @@ const onAvatarClick = async (role, event) => {
 };
 
 const handleSubmit = () => {
+  if (compacting.value) {
+    showDismissibleMessage.warning('压缩进行中，暂不可发送');
+    return;
+  }
   if (loading.value || isPreparingSend.value) {
     enqueueInputToBuffer();
     return;
   }
   askAI(false);
 };
-const handleCancel = () => cancelAskAI();
+const handleCancel = () => {
+  if (compacting.value) {
+    handleCancelCompact();
+    return;
+  }
+  cancelAskAI();
+};
 const handleClearHistory = () => clearHistory();
 const handleRemoveFile = (index) => fileList.value.splice(index, 1);
 const handleUpload = async ({ fileList: newFiles }) => {
@@ -3021,6 +3329,10 @@ const handleDownloadImageFromViewer = async (url) => {
 };
 
 const handleEditMessage = (index, newContent) => {
+  if (compacting.value) {
+    showDismissibleMessage.warning('压缩进行中，暂不可编辑历史');
+    return;
+  }
   if (index < 0 || index >= chat_show.value.length) return;
 
   let history_idx = -1;
@@ -3254,7 +3566,7 @@ onMounted(async () => {
   // 暴露给后台MCP调用的 Agent API
 
   window.__AGENT_API__ = {
-    isBusy: () => loading.value,
+    isBusy: () => loading.value || compacting.value,
 
     getChatLength: () => chat_show.value.length,
 
@@ -4765,7 +5077,9 @@ const getSessionDataAsObject = (options = {}) => {
     taskList: taskList.value,
     conversationOwnerId: ensureConversationOwnerId(),
     subAgentTasks: subAgentTasks.value.map(normalizeSubAgentSummary).filter(Boolean),
-    subAgentDetails: subAgentDetails.value
+    subAgentDetails: subAgentDetails.value,
+    compactArchives: compactArchives.value,
+    compactConfig: compactConfig.value
   };
 }
 const saveSessionToCloud = async () => {
@@ -6028,6 +6342,13 @@ const loadSession = async (jsonData) => {
     : '';
   ensureConversationOwnerId();
   restoreSubAgentTasksFromSession(jsonData);
+  compactArchives.value = Array.isArray(jsonData.compactArchives) ? jsonData.compactArchives : [];
+  if (jsonData.compactConfig && typeof jsonData.compactConfig === 'object') {
+    compactConfig.value = {
+      ...compactConfig.value,
+      ...jsonData.compactConfig
+    };
+  }
 
   try {
     CODE.value = jsonData.CODE;
@@ -6715,7 +7036,7 @@ const appendCurrentInputToHistory = async () => {
 };
 
 const askAI = async (forceSend = false) => {
-  if (loading.value || isPreparingSend.value) return;
+  if (loading.value || isPreparingSend.value || compacting.value) return;
   if (isMcpLoading.value) {
     showDismissibleMessage.info('正在加载工具，请稍后再试...');
     return;
@@ -7536,6 +7857,12 @@ const askAI = async (forceSend = false) => {
       currentTaskConfig.value = null; // 清空标记，避免后续手动问答也触发
     } else {
       scheduleAutoSave({ reason: 'assistant-turn-finalized', immediate: true }); // 普通对话的自动保存
+      if (stillOwnsTurn) {
+        // 自动压缩：仅在回合结束后检测
+        maybeAutoCompactAfterTurn().catch((error) => {
+          console.warn('[compact] auto compact after turn failed:', error);
+        });
+      }
     }
     if (stillOwnsTurn) {
       activeAssistantTurnMeta = null;
@@ -7632,8 +7959,8 @@ const reaskAI = async () => {
 };
 
 const deleteMessage = (index) => {
-  if (loading.value) {
-    showDismissibleMessage.warning('请等待当前回复完成后再操作');
+  if (loading.value || compacting.value) {
+    showDismissibleMessage.warning(compacting.value ? '压缩进行中，暂不可编辑历史' : '请等待当前回复完成后再操作');
     return;
   }
   if (index < 0 || index >= chat_show.value.length) return;
@@ -8034,7 +8361,7 @@ const scrollToMessageByIndex = (index) => {
             @re-ask="handleReAsk" @toggle-collapse="handleToggleCollapse" @show-system-prompt="handleShowSystemPrompt"
             @avatar-click="onAvatarClick" @edit-message-requested="handleEditStart" @edit-finished="handleEditEnd"
             @edit-message="handleEditMessage" @cancel-tool-call="handleCancelToolCall"
-            @submit-choice="handleChoiceSubmit" />
+            @submit-choice="handleChoiceSubmit" @restore-compact="handleRestoreCompact" />
         </el-main>
 
         <div class="unified-nav-sidebar" v-if="chat_show.length > 0">
@@ -8104,10 +8431,13 @@ const scrollToMessageByIndex = (index) => {
         </div>
 
         <ChatInput ref="chatInputRef" v-model:prompt="prompt" v-model:fileList="fileList"
-          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading"
+          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting"
           :ctrlEnterToSend="currentConfig.CtrlEnterToSend" :layout="inputLayout" :voiceList="currentConfig.voiceList"
           :is-mcp-active="isMcpActive" :all-mcp-servers="availableMcpServers" :active-mcp-ids="sessionMcpServerIds"
-          :active-skill-ids="sessionSkillIds" :all-skills="allSkillsList" @submit="handleSubmit" @cancel="handleCancel"
+          :active-skill-ids="sessionSkillIds" :all-skills="allSkillsList"
+          :compacting="compacting" :compact-progress="compactProgress" :compact-config="compactConfig"
+          :compact-model-options="compactModelOptions" :can-restore-compact="canRestoreCompact"
+          @submit="handleSubmit" @cancel="handleCancel"
           @clear-history="handleClearHistory" @remove-file="handleRemoveFile" @upload="handleUpload"
           @send-audio="handleSendAudio" @open-mcp-dialog="handleOpenMcpDialog" @pick-file-start="handlePickFileStart"
           @toggle-mcp="handleQuickMcpToggle" @toggle-skill="handleQuickSkillToggle"
@@ -8117,7 +8447,13 @@ const scrollToMessageByIndex = (index) => {
           @acknowledge-subagent="acknowledgeSubAgentFromInput"
           @acknowledge-all-subagents="acknowledgeAllFinishedSubAgentsFromInput"
           @rerun-subagent="rerunSubAgentFromInput"
-          @open-subagent-detail="openSubAgentDetailFromInput" @close-subagent-detail="closeSubAgentDetailFromInput" />
+          @open-subagent-detail="openSubAgentDetailFromInput" @close-subagent-detail="closeSubAgentDetailFromInput"
+          @open-compact-dialog="handleOpenCompactDialog"
+          @run-compact="() => runConversationCompact({ manual: true })"
+          @cancel-compact="handleCancelCompact"
+          @save-compact-config="handleSaveCompactConfig"
+          @refresh-compact-context="handleRefreshCompactContext"
+          @restore-compact="handleRestoreCompact" />
       </div>
     </el-container>
   </main>

@@ -119,6 +119,8 @@ export function registerIpcHandlers({
   chatApi,
   mcpApi,
   skillApi,
+  compactApi,
+
   updaterApi,
 
   minimizeWindow,
@@ -492,7 +494,77 @@ handleInvoke('data:getUser', async () => {
     return dataApi.getUser()
   })
 
-  handleInvoke('data:getConfig', async () => {
+  
+  handleInvoke('compact:getCache', async () => {
+    return compactApi.getCompactCacheSnapshot()
+  })
+
+  handleInvoke('compact:getModelConfig', async (_event, modelInput = '') => {
+    return compactApi.getModelCompactConfig(modelInput)
+  })
+
+  handleInvoke('compact:updateModelConfig', async (_event, modelInput = '', patch = {}) => {
+    return compactApi.updateModelCompactConfig(modelInput, patch)
+  })
+
+  handleInvoke('compact:resolveContext', async (_event, modelInput = '', options = {}) => {
+    return compactApi.resolveModelContextLength(modelInput, options)
+  })
+
+  handleInvoke('compact:pruneCache', async (_event, enabledModels = []) => {
+    return compactApi.pruneCompactCacheByEnabledModels(enabledModels)
+  })
+
+  handleInvoke('compact:estimateTokens', async (_event, messages = []) => {
+    const tokens = compactApi.estimateMessagesTokens(messages)
+    return { ok: true, tokens }
+  })
+
+  handleInvoke('compact:shouldAuto', async (_event, input = {}) => {
+    return {
+      ok: true,
+      should: compactApi.shouldAutoCompact(input || {})
+    }
+  })
+
+  handleInvoke('compact:run', async (event, input = {}, meta = {}) => {
+    const signalToken = typeof meta?.signalToken === 'string' ? meta.signalToken : ''
+    const callbackToken = typeof meta?.callbackToken === 'string' ? meta.callbackToken : ''
+    const controller = new AbortController()
+    const signalKey = signalToken ? getLiveSignalKey(event.sender.id, signalToken) : ''
+
+    if (signalKey) {
+      liveSignalControllers.set(signalKey, controller)
+    }
+    if (meta?.aborted) {
+      controller.abort()
+    }
+
+    try {
+      return await compactApi.runConversationCompaction({
+        ...(input && typeof input === 'object' ? input : {}),
+        signal: controller.signal,
+        onProgress: callbackToken
+          ? (payload) => {
+              try {
+                event.sender.send('window:callback', {
+                  token: callbackToken,
+                  payload: typeof payload === 'string' ? payload : JSON.parse(JSON.stringify(payload))
+                })
+              } catch {
+                // ignore progress callback failure
+              }
+            }
+          : null
+      })
+    } finally {
+      if (signalKey) {
+        liveSignalControllers.delete(signalKey)
+      }
+    }
+  })
+
+handleInvoke('data:getConfig', async () => {
     return dataApi.getConfig()
   })
 

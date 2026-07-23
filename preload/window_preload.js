@@ -325,6 +325,35 @@ const api = {
   listProviderModels,
   batchTestProviderKeys: (input = {}) => electronAPI.ipcRenderer.invoke('chat:batchTestProviderKeys', input),
 
+  getCompactCache: () => electronAPI.ipcRenderer.invoke('compact:getCache'),
+  getModelCompactConfig: (modelInput = '') => electronAPI.ipcRenderer.invoke('compact:getModelConfig', modelInput),
+  updateModelCompactConfig: (modelInput = '', patch = {}) => electronAPI.ipcRenderer.invoke('compact:updateModelConfig', modelInput, patch),
+  resolveModelContext: (modelInput = '', options = {}) => electronAPI.ipcRenderer.invoke('compact:resolveContext', modelInput, options),
+  pruneCompactCache: (enabledModels = []) => electronAPI.ipcRenderer.invoke('compact:pruneCache', toPlainPayload(enabledModels) || []),
+  estimateCompactTokens: (messages = []) => electronAPI.ipcRenderer.invoke('compact:estimateTokens', toPlainPayload(messages) || []),
+  shouldAutoCompact: (input = {}) => electronAPI.ipcRenderer.invoke('compact:shouldAuto', toPlainPayload(input) || {}),
+  runConversationCompact: async (input = {}, options = {}) => {
+    const signal = options?.signal || input?.signal || null
+    const onProgress = typeof options?.onProgress === 'function'
+      ? options.onProgress
+      : (typeof input?.onProgress === 'function' ? input.onProgress : null)
+    const signalToken = registerSignal(signal)
+    const callbackToken = registerCallback(onProgress)
+    const nextInput = { ...(toPlainPayload(input) || {}) }
+    delete nextInput.signal
+    delete nextInput.onProgress
+    try {
+      return await electronAPI.ipcRenderer.invoke('compact:run', nextInput, {
+        signalToken,
+        callbackToken,
+        aborted: Boolean(signal?.aborted)
+      })
+    } finally {
+      unregisterSignal(signalToken)
+      unregisterCallback(callbackToken)
+    }
+  },
+
   getMcpToolCache: async () => {
     const result = await electronAPI.ipcRenderer.invoke('mcp:getToolCache')
     return result?.cache || result || {}

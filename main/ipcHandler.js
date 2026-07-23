@@ -507,6 +507,10 @@ handleInvoke('data:getUser', async () => {
     return compactApi.updateModelCompactConfig(modelInput, patch)
   })
 
+  handleInvoke('compact:applyAdvancedToAll', async (_event, patch = {}) => {
+    return compactApi.applyAdvancedCompactConfigToAll(patch)
+  })
+
   handleInvoke('compact:resolveContext', async (_event, modelInput = '', options = {}) => {
     return compactApi.resolveModelContextLength(modelInput, options)
   })

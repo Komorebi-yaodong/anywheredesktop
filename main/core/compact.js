@@ -325,6 +325,84 @@ export async function updateModelCompactConfig(modelInput = '', patch = {}) {
   return { ok: true, modelKey, config: deepClone(next) }
 }
 
+
+/**
+ * Apply shared advanced compact settings to every cached model entry.
+ * Does NOT overwrite per-model contextLength / resolvedId / logos.
+ */
+export async function applyAdvancedCompactConfigToAll(patch = {}) {
+  const doc = await readCompactCacheDoc()
+  const models = doc.models && typeof doc.models === 'object' ? doc.models : {}
+  const keys = Object.keys(models)
+  if (keys.length === 0) {
+    return { ok: true, updated: 0, models: {} }
+  }
+
+  const source = deepClone(patch || {})
+  // Only propagate shared advanced fields; keep model-specific window length intact.
+  const shared = {}
+  if (Object.prototype.hasOwnProperty.call(source, 'autoCompactEnabled')) {
+    shared.autoCompactEnabled = source.autoCompactEnabled !== false
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'triggerRatio')) {
+    const ratio = Number(source.triggerRatio)
+    if (Number.isFinite(ratio)) shared.triggerRatio = Math.min(0.99, Math.max(0.1, ratio))
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'userMessageTokenBudget')) {
+    const budget = Number(source.userMessageTokenBudget)
+    if (Number.isFinite(budget)) shared.userMessageTokenBudget = Math.max(1000, Math.floor(budget))
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'keepRecentRounds')) {
+    const rounds = Number(source.keepRecentRounds)
+    if (Number.isFinite(rounds)) shared.keepRecentRounds = Math.max(0, Math.floor(rounds))
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'compactPrompt')) {
+    shared.compactPrompt = typeof source.compactPrompt === 'string' && source.compactPrompt.trim()
+      ? source.compactPrompt
+      : DEFAULT_COMPACT_PROMPT
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'summaryPrefix')) {
+    shared.summaryPrefix = typeof source.summaryPrefix === 'string' && source.summaryPrefix.trim()
+      ? source.summaryPrefix
+      : DEFAULT_SUMMARY_PREFIX
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'fallbackModel')) {
+    shared.fallbackModel = typeof source.fallbackModel === 'string' ? source.fallbackModel.trim() : ''
+  }
+
+  if (Object.keys(shared).length === 0) {
+    return { ok: true, updated: 0, models: deepClone(models) }
+  }
+
+  let updated = 0
+  for (const key of keys) {
+    const previous = models[key] && typeof models[key] === 'object'
+      ? models[key]
+      : defaultModelCacheEntry(key)
+    models[key] = {
+      ...defaultModelCacheEntry(key),
+      ...previous,
+      ...shared,
+      modelKey: key,
+      // preserve model-specific window settings
+      contextLength: previous.contextLength,
+      contextLengthSource: previous.contextLengthSource,
+      contextLengthManual: previous.contextLengthManual === true,
+      resolvedId: previous.resolvedId || key,
+      updatedAt: Date.now()
+    }
+    updated += 1
+  }
+
+  doc.models = models
+  await writeCompactCacheDoc(doc)
+  return {
+    ok: true,
+    updated,
+    models: deepClone(models)
+  }
+}
+
 export async function pruneCompactCacheByEnabledModels(enabledModelInputs = []) {
   const enabledKeys = new Set(
     (Array.isArray(enabledModelInputs) ? enabledModelInputs : [])

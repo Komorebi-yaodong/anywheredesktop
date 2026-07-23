@@ -5438,11 +5438,19 @@ const saveWindowSize = async () => {
 const getSessionDataAsObject = (options = {}) => {
   const currentPromptConfig = currentConfig.value.prompts[CODE.value] || {};
   const explicitTitle = typeof options?.title === 'string' ? options.title.trim() : '';
+  // 持久化时：chat_show 必须完整保存；history 只作为 AI 投影，可从 chat_show 重算
+  const fullChatShow = Array.isArray(chat_show.value) ? chat_show.value : [];
+  const projectedHistory = fullChatShow.some((msg) => msg?.role === 'compaction')
+    ? projectCascadeToHistory(fullChatShow)
+    : (Array.isArray(history.value) ? history.value : []);
   return {
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
     autoCloseOnBlur: autoCloseOnBlur.value, model: model.value,
     sessionMetadata: { title: explicitTitle || getSessionMetadata().title },
-    currentPromptConfig: currentPromptConfig, history: history.value, chat_show: chat_show.value, selectedVoice: selectedVoice.value,
+    currentPromptConfig: currentPromptConfig,
+    history: projectedHistory,
+    chat_show: fullChatShow,
+    selectedVoice: selectedVoice.value,
     promptDraft: prompt.value,
     draftFileList: fileList.value,
     activeMcpServerIds: sessionMcpServerIds.value || [],
@@ -6731,15 +6739,32 @@ const loadSession = async (jsonData) => {
     isInit.value = jsonData.isInit;
     autoCloseOnBlur.value = jsonData.autoCloseOnBlur;
 
-    history.value = Array.isArray(jsonData.history) ? jsonData.history : [];
-    chat_show.value = Array.isArray(jsonData.chat_show) ? jsonData.chat_show : [];
-    // 兼容旧版“替换式”压缩：把 archivedMessages 展开回可见列表，marker 仅作插入摘要
-    chat_show.value = migrateInsertStyleChatShow(chat_show.value);
+    // UI 真源优先完整恢复 chat_show；history 仅为 AI 投影，长度可以更短
+    const rawChatShow = Array.isArray(jsonData.chat_show) ? jsonData.chat_show : [];
+    const rawHistory = Array.isArray(jsonData.history) ? jsonData.history : [];
+    chat_show.value = migrateInsertStyleChatShow(rawChatShow);
     markOutermostCanRestore();
-    // 级联压缩：以 chat_show 为 UI 真源，重算 AI 投影 history
-    if (chat_show.value.some((msg) => msg?.role === 'compaction')) {
+
+    const hasCompaction = chat_show.value.some((msg) => msg?.role === 'compaction');
+    if (hasCompaction) {
+      // 有压缩标记时：绝不能用缩短后的 history 反裁 chat_show
       history.value = projectCascadeToHistory(chat_show.value);
+    } else if (rawChatShow.length > 0) {
+      // 无压缩：优先完整 chat_show，并尽量同步 history
+      history.value = rawHistory.length > 0 ? rawHistory : projectCascadeToHistory(chat_show.value);
+    } else {
+      // 兼容仅有 history 的旧文件
+      history.value = rawHistory;
+      chat_show.value = rawHistory
+        .filter((msg) => msg?.role !== 'tool')
+        .map((msg, index) => ({
+          id: messageIdCounter.value + index + 1,
+          ...msg,
+          timestamp: msg.timestamp || new Date().toLocaleString('sv-SE')
+        }));
+      messageIdCounter.value += chat_show.value.length + 1;
     }
+
     prompt.value = typeof jsonData.promptDraft === 'string' ? jsonData.promptDraft : '';
     fileList.value = Array.isArray(jsonData.draftFileList) ? jsonData.draftFileList : [];
 
@@ -6752,25 +6777,29 @@ const loadSession = async (jsonData) => {
       history.value.pop();
     }
 
-    const visibleHistoryCount = history.value.filter(m => m.role !== 'tool').length;
-    if (chat_show.value.length > visibleHistoryCount) {
-      console.warn(`[Auto-Heal] 检测到 UI 节点冗余，自动清理了 ${chat_show.value.length - visibleHistoryCount} 条异常显示节点。`);
-      chat_show.value.splice(visibleHistoryCount);
-    } else if (chat_show.value.length < visibleHistoryCount) {
-      let visibleCount = 0;
-      let cutIndex = history.value.length;
-      for (let i = 0; i < history.value.length; i++) {
-        if (history.value[i].role !== 'tool') {
-          visibleCount++;
+    // 仅在「无压缩」时做旧的 history/chat_show 对齐自愈；
+    // 有压缩时 history 故意更短（AI 投影），绝不可 splice 掉 UI 历史。
+    if (!hasCompaction) {
+      const visibleHistoryCount = history.value.filter(m => m.role !== 'tool').length;
+      if (chat_show.value.length > visibleHistoryCount && visibleHistoryCount > 0) {
+        // 仅当 history 明显更完整时，不裁 chat_show；反过来 history 更长才裁 history
+        // 旧逻辑会把 chat_show 裁成 history 长度，已在压缩场景造成灾难性丢消息。
+      } else if (chat_show.value.length < visibleHistoryCount) {
+        let visibleCount = 0;
+        let cutIndex = history.value.length;
+        for (let i = 0; i < history.value.length; i++) {
+          if (history.value[i].role !== 'tool') {
+            visibleCount++;
+          }
+          if (visibleCount > chat_show.value.length) {
+            cutIndex = i;
+            break;
+          }
         }
-        if (visibleCount > chat_show.value.length) {
-          cutIndex = i;
-          break;
+        if (cutIndex < history.value.length) {
+          console.warn('[Auto-Heal] 检测到历史记录污染，自动修复了状态。');
+          history.value.splice(cutIndex);
         }
-      }
-      if (cutIndex < history.value.length) {
-        console.warn('[Auto-Heal] 检测到历史记录污染，自动修复了状态。');
-        history.value.splice(cutIndex);
       }
     }
 

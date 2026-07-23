@@ -328,6 +328,7 @@ const api = {
   getCompactCache: () => electronAPI.ipcRenderer.invoke('compact:getCache'),
   getModelCompactConfig: (modelInput = '') => electronAPI.ipcRenderer.invoke('compact:getModelConfig', modelInput),
   updateModelCompactConfig: (modelInput = '', patch = {}) => electronAPI.ipcRenderer.invoke('compact:updateModelConfig', modelInput, patch),
+  applyAdvancedCompactConfigToAll: (patch = {}) => electronAPI.ipcRenderer.invoke('compact:applyAdvancedToAll', toPlainPayload(patch) || {}),
   resolveModelContext: (modelInput = '', options = {}) => electronAPI.ipcRenderer.invoke('compact:resolveContext', modelInput, options),
   pruneCompactCache: (enabledModels = []) => electronAPI.ipcRenderer.invoke('compact:pruneCache', toPlainPayload(enabledModels) || []),
   estimateCompactTokens: (messages = []) => electronAPI.ipcRenderer.invoke('compact:estimateTokens', toPlainPayload(messages) || []),

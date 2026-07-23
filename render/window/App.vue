@@ -1622,18 +1622,29 @@ const runConversationCompact = async ({
   compactAbortController = new AbortController();
 
   try {
-    const maxCascadeSteps = 8;
+    // 无层数上限：每步将超阈值前缀有损压成单条 summary，直到低于阈值、无前缀或用户取消
     let steps = 0;
     let didAny = false;
 
-    while (steps < maxCascadeSteps) {
+    while (true) {
+      if (compactAbortController?.signal?.aborted) {
+        const abortError = new Error('Aborted');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
+
       steps += 1;
       const projected = projectCascadeToHistory(chat_show.value);
       // 手动首步强制压一次；工具轮/自动轮只按阈值判断
       const need = manual && steps === 1 && !allowDuringLoading
         ? true
         : await shouldCompactNow(projected);
-      if (!need) break;
+      if (!need) {
+        // 未执行任何压缩时 steps 回退，避免成功文案显示虚高步数
+        if (!didAny) steps = 0;
+        else steps -= 1;
+        break;
+      }
 
       const keepTail = Math.max(
         1,
@@ -1644,13 +1655,16 @@ const runConversationCompact = async ({
         if (manual && steps === 1 && !quiet) {
           showDismissibleMessage.info('可压缩前缀不足，已跳过');
         }
+        if (!didAny) steps = 0;
+        else steps -= 1;
         break;
       }
 
-      const progressBase = Math.min(90, (steps - 1) * 12);
-      const progressSpan = Math.max(8, 96 / maxCascadeSteps);
+      // 无限级联：进度按步渐进，上限 96%，避免依赖固定层数
+      const progressBase = Math.min(88, 4 + (steps - 1) * 6);
+      const progressSpan = 8;
       compactProgress.value = {
-        percent: progressBase + 2,
+        percent: progressBase + 1,
         message: `级联压缩第 ${steps} 层…`,
         stage: 'cascade'
       };
@@ -1696,11 +1710,7 @@ const runConversationCompact = async ({
           ...result.modelConfig
         };
       }
-
-      // Manual first step always runs; subsequent steps only if still over threshold.
-      if (manual && steps === 1) {
-        // continue loop to cascade if still over limit
-      }
+      // 继续循环：若仍超阈值则再压一层，直至阈值以下
     }
 
     if (!didAny) {

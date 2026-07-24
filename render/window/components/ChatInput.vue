@@ -1202,8 +1202,8 @@ defineExpose({ focus, senderRef });
     </el-dialog>
 
     <el-dialog v-model="compactDialogVisible" width="min(620px, 94vw)"
-        class="compact-config-dialog glass-dialog" append-to-body destroy-on-close :close-on-click-modal="!compacting"
-        :show-close="!compacting" align-center>
+        class="compact-config-dialog glass-dialog" append-to-body destroy-on-close :close-on-click-modal="true"
+        :show-close="true" align-center>
         <template #header>
             <div class="compact-dialog-header">
                 <div class="compact-dialog-title-row">
@@ -1217,12 +1217,13 @@ defineExpose({ focus, senderRef });
         </template>
 
         <div class="compact-dialog-scroll">
-            <!-- 压缩进行中：只显示进度 + 取消，不展示底部关闭等按钮 -->
+            <!-- 压缩进行中：进度 + 取消；右下角可关闭弹窗继续查看历史（不中止压缩） -->
             <div v-if="compacting" class="compact-progress-block">
                 <div class="compact-progress-title">{{ compactStatusText }}</div>
                 <el-progress :percentage="compactPercent" :stroke-width="14" striped striped-flow status="success" />
                 <div class="compact-progress-actions">
                     <el-button type="danger" plain round @click="cancelCompact">取消压缩</el-button>
+                    <el-button round @click="compactDialogVisible = false">关闭</el-button>
                 </div>
             </div>
             <div v-else class="compact-config-block">
@@ -1508,6 +1509,11 @@ html.dark .compact-dialog-scroll::-webkit-scrollbar-thumb {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.compact-progress-actions {
+    width: 100%;
+    justify-content: space-between;
 }
 
 .compact-dialog-footer {

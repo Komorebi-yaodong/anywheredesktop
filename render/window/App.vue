@@ -1158,6 +1158,7 @@ const handleCancelCompact = () => {
       // ignore
     }
   }
+  // 仅跳过当前回合剩余的自动检测；下一回合必须恢复自动压缩。
   autoCompactSuppressedForTurn.value = true;
   compactProgress.value = {
     percent: compactProgress.value?.percent || 0,
@@ -1888,6 +1889,7 @@ const runConversationCompact = async ({
         modelValue: model.value,
         provider: resolveProviderByModelValue(model.value),
         config: compactConfig.value,
+        stream: (currentConfig.value.prompts?.[CODE.value]?.stream ?? true) && !selectedVoice.value,
         signal: compactAbortController.signal,
         progressBase,
         progressSpan,
@@ -1945,7 +1947,9 @@ const runConversationCompact = async ({
     }
     return true;
   } catch (error) {
-    if (error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))) {
+    // 仅认定本地压缩控制器已真实中止为用户取消；网关返回的 abort 文案仍是请求失败。
+    const cancelledByUser = compactAbortController?.signal?.aborted === true;
+    if (cancelledByUser) {
       if (!manual) autoCompactSuppressedForTurn.value = true;
       if (!quiet) showDismissibleMessage.info('已取消压缩');
       return false;
@@ -1961,7 +1965,10 @@ const runConversationCompact = async ({
 
 // 工具循环内：tool 结果写回后、下一轮 AI 请求前检测并压缩
 const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request' } = {}) => {
-  if (autoCompactSuppressedForTurn.value) return false;
+  if (autoCompactSuppressedForTurn.value) {
+    autoCompactSuppressedForTurn.value = false;
+    return false;
+  }
   if (compacting.value) return false;
   if (compactConfig.value.autoCompactEnabled === false) return false;
   try {
@@ -1988,7 +1995,10 @@ const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request' } = {}
 };
 
 const maybeAutoCompactAfterTurn = async () => {
-  if (autoCompactSuppressedForTurn.value) return;
+  if (autoCompactSuppressedForTurn.value) {
+    autoCompactSuppressedForTurn.value = false;
+    return;
+  }
   if (compacting.value) return;
   // 回合结束后 loading 通常已 false；若仍 true 也允许压缩
   if (compactConfig.value.autoCompactEnabled === false) return;
@@ -8763,10 +8773,8 @@ const askAI = async (forceSend = false) => {
     } else {
       scheduleAutoSave({ reason: 'assistant-turn-finalized', immediate: true }); // 普通对话的自动保存
       if (stillOwnsTurn) {
-        // 自动压缩：仅在回合结束后检测
-        maybeAutoCompactAfterTurn().catch((error) => {
-          console.warn('[compact] auto compact after turn failed:', error);
-        });
+        // 等待自动压缩检测完成，避免与 loading 结束后的缓冲消息续发竞争。
+        await maybeAutoCompactAfterTurn();
       }
     }
     if (stillOwnsTurn) {

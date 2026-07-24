@@ -326,6 +326,8 @@ const api = {
   batchTestProviderKeys: (input = {}) => electronAPI.ipcRenderer.invoke('chat:batchTestProviderKeys', input),
 
   getCompactCache: () => electronAPI.ipcRenderer.invoke('compact:getCache'),
+  importCompactCache: (models = {}) =>
+    electronAPI.ipcRenderer.invoke('compact:importCache', toPlainPayload(models) || {}),
   getModelCompactConfig: (modelInput = '') => electronAPI.ipcRenderer.invoke('compact:getModelConfig', modelInput),
   updateModelCompactConfig: (modelInput = '', patch = {}) => electronAPI.ipcRenderer.invoke('compact:updateModelConfig', modelInput, patch),
   applyAdvancedCompactConfigToAll: (patch = {}) => electronAPI.ipcRenderer.invoke('compact:applyAdvancedToAll', toPlainPayload(patch) || {}),

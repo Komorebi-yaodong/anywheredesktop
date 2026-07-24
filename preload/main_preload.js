@@ -120,6 +120,10 @@ getDroppedFilePath: (file) => {
     electronAPI.ipcRenderer.invoke('data:restoreImportedConfig', importedConfig),
   exportMemoryData: () => electronAPI.ipcRenderer.invoke('data:exportMemoryData'),
   importMemoryData: (memories) => electronAPI.ipcRenderer.invoke('data:importMemoryData', memories),
+  // Compact cache is stored separately from main config; expose for settings export/import.
+  getCompactCache: () => electronAPI.ipcRenderer.invoke('compact:getCache'),
+  importCompactCache: (models = {}) =>
+    electronAPI.ipcRenderer.invoke('compact:importCache', toPlainPayload(models) || {}),
 
   coderedirect: (label = '', payload = null) =>
     electronAPI.ipcRenderer.invoke('data:coderedirect', label, payload),

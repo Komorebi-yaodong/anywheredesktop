@@ -499,6 +499,10 @@ handleInvoke('data:getUser', async () => {
     return compactApi.getCompactCacheSnapshot()
   })
 
+  handleInvoke('compact:importCache', async (_event, models = {}) => {
+    return compactApi.importCompactCacheModels(models)
+  })
+
   handleInvoke('compact:getModelConfig', async (_event, modelInput = '') => {
     return compactApi.getModelCompactConfig(modelInput)
   })

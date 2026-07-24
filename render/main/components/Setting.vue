@@ -979,6 +979,20 @@ async function exportConfig() {
       }
     }
 
+    if (window.api && window.api.getCompactCache) {
+      try {
+        const compactCache = await window.api.getCompactCache();
+        const models = compactCache?.models && typeof compactCache.models === 'object'
+          ? compactCache.models
+          : null;
+        if (models && Object.keys(models).length > 0) {
+          configToExport.compactCache = { models };
+        }
+      } catch (error) {
+        console.warn('[exportConfig] compact cache export skipped:', error);
+      }
+    }
+
     const saveResult = await window.api?.showSaveDialog?.({
       title: t('setting.dataManagement.exportButton'),
       defaultPath: 'Anywhere_config.json',
@@ -1041,6 +1055,17 @@ async function importConfig() {
         throw new Error(getErrorMessage(memoryResult, 'import memory failed'));
       }
       delete importedData.memories;
+    }
+
+    if (importedData.compactCache && window.api && window.api.importCompactCache) {
+      const compactModels = importedData.compactCache?.models && typeof importedData.compactCache.models === 'object'
+        ? importedData.compactCache.models
+        : (typeof importedData.compactCache === 'object' ? importedData.compactCache : {});
+      const compactResult = await window.api.importCompactCache(compactModels);
+      if (compactResult && compactResult.ok === false) {
+        throw new Error(getErrorMessage(compactResult, 'import compact cache failed'));
+      }
+      delete importedData.compactCache;
     }
 
     if (window.api && window.api.restoreImportedConfig) {
@@ -1207,6 +1232,20 @@ async function backupToWebdav() {
               }
             }
 
+            if (window.api && window.api.getCompactCache) {
+              try {
+                const compactCache = await window.api.getCompactCache();
+                const models = compactCache?.models && typeof compactCache.models === 'object'
+                  ? compactCache.models
+                  : null;
+                if (models && Object.keys(models).length > 0) {
+                  configToBackup.compactCache = { models };
+                }
+              } catch (error) {
+                console.warn('[backupToWebdav] compact cache export skipped:', error);
+              }
+            }
+
             const writeResult = await window.api?.writeWebdavBackup?.(
               buildWebdavInput({
                 filename,
@@ -1315,6 +1354,17 @@ async function restoreFromWebdav(file) {
         throw new Error(getErrorMessage(memoryResult, 'import memory failed'));
       }
       delete importedData.memories;
+    }
+
+    if (importedData.compactCache && window.api && window.api.importCompactCache) {
+      const compactModels = importedData.compactCache?.models && typeof importedData.compactCache.models === 'object'
+        ? importedData.compactCache.models
+        : (typeof importedData.compactCache === 'object' ? importedData.compactCache : {});
+      const compactResult = await window.api.importCompactCache(compactModels);
+      if (compactResult && compactResult.ok === false) {
+        throw new Error(getErrorMessage(compactResult, 'import compact cache failed'));
+      }
+      delete importedData.compactCache;
     }
 
     if (window.api && window.api.restoreImportedConfig) {

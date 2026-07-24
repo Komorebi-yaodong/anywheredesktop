@@ -881,20 +881,6 @@ const normalizeAssistantTokenUsage = (usage) => {
 
 const canRestoreCompact = computed(() => getOutermostCompactionIndex() >= 0);
 
-const getLatestUsageTotalTokens = () => {
-  for (let i = history.value.length - 1; i >= 0; i -= 1) {
-    const usage = history.value[i]?.tokenUsage;
-    const total = Number(usage?.total_tokens);
-    if (Number.isFinite(total) && total > 0) return total;
-  }
-  for (let i = chat_show.value.length - 1; i >= 0; i -= 1) {
-    const usage = chat_show.value[i]?.tokenUsage;
-    const total = Number(usage?.total_tokens);
-    if (Number.isFinite(total) && total > 0) return total;
-  }
-  return null;
-};
-
 const resolveProviderByModelValue = (modelValue = '') => {
   const raw = String(modelValue || '');
   if (!raw.includes('|')) return null;
@@ -1625,16 +1611,17 @@ const markOutermostCanRestore = () => {
 };
 
 const getCompactTokenSnapshot = async (messagesForAi = history.value) => {
+  // 自动压缩只看本地估算：压缩后对 summary + 尾部原文重新 estimate，
+  // 避免沿用压缩前 assistant.tokenUsage.total_tokens 导致立刻二次压缩。
   let localTokens = 0;
   if (window.api?.estimateCompactTokens) {
     const estimate = await window.api.estimateCompactTokens(messagesForAi);
     localTokens = Math.max(0, Number(estimate?.tokens) || 0);
   }
-  const usageTotalTokens = Math.max(0, Number(getLatestUsageTotalTokens()) || 0);
   return {
     localTokens,
-    usageTotalTokens,
-    activeTokens: Math.max(localTokens, usageTotalTokens)
+    usageTotalTokens: 0,
+    activeTokens: localTokens
   };
 };
 

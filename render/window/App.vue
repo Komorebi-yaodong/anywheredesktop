@@ -919,7 +919,6 @@ const normalizeCompactConfigState = (nextConfig = {}) => ({
   contextLength: Number.isFinite(Number(nextConfig.contextLength)) ? Number(nextConfig.contextLength) : 262144,
   contextLengthSource: nextConfig.contextLengthSource || 'default',
   contextLengthManual: nextConfig.contextLengthManual === true || nextConfig.contextLengthSource === 'manual',
-  userMessageTokenBudget: Number.isFinite(Number(nextConfig.userMessageTokenBudget)) ? Number(nextConfig.userMessageTokenBudget) : 20000,
   keepRecentRounds: Number.isFinite(Number(nextConfig.keepRecentRounds)) ? Number(nextConfig.keepRecentRounds) : 3,
   compactPrompt: typeof nextConfig.compactPrompt === 'string' ? nextConfig.compactPrompt : '',
   resolvedId: typeof nextConfig.resolvedId === 'string' ? nextConfig.resolvedId : ''
@@ -1048,7 +1047,6 @@ const handleResetCompactConfig = async () => {
     const defaultPatch = {
       autoCompactEnabled: true,
       triggerRatio: 0.9,
-      userMessageTokenBudget: 20000,
       keepRecentRounds: 3,
       keepRecentRoundsUserSet: true,
       compactPrompt: '',
@@ -1107,7 +1105,6 @@ const handleApplyCompactAdvancedGlobal = async (patch = {}) => {
     const result = await window.api.applyAdvancedCompactConfigToAll({
       autoCompactEnabled: patch?.autoCompactEnabled ?? compactConfig.value.autoCompactEnabled,
       triggerRatio: patch?.triggerRatio ?? compactConfig.value.triggerRatio,
-      userMessageTokenBudget: patch?.userMessageTokenBudget ?? compactConfig.value.userMessageTokenBudget,
       keepRecentRounds: patch?.keepRecentRounds ?? compactConfig.value.keepRecentRounds,
       compactPrompt: patch?.compactPrompt ?? compactConfig.value.compactPrompt
     });
@@ -1964,7 +1961,6 @@ const compactConfig = ref({
   contextLength: 262144,
   contextLengthSource: 'default',
   contextLengthManual: false,
-  userMessageTokenBudget: 20000,
   keepRecentRounds: 3,
   compactPrompt: '',
   resolvedId: ''

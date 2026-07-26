@@ -1822,7 +1822,7 @@ html.dark .markdown-body :deep(.quick-start-custom-card) {
 :deep(.doc-dialog .el-dialog__header) {
   padding: 10px 16px 14px !important;
   margin-right: 0;
-  border-bottom: 1px solid var(--border-primary);
+  border-bottom: 0px solid var(--border-primary);
 }
 
 :global(.app-update-message-box) {

@@ -1360,32 +1360,7 @@ const replaceFullHistory = (messages = []) => {
 };
 
 
-// fullHistory is the content authority. chat_show may additionally contain UI-only fields,
-// but its non-tool message sequence must always remain renderable from fullHistory.
-const normalizeComparableMessageContent = (content) => {
-  if (!Array.isArray(content)) return content ?? null;
-  const parts = content.filter((part) => part && !part.isTranscript);
-  if (parts.length === 1 && parts[0]?.type === 'text') return parts[0].text ?? '';
-  if (parts.length > 0 && parts.every((part) => part?.type === 'text')) {
-    return parts.map((part) => part.text ?? '').join('');
-  }
-  return parts;
-};
-
-const getComparableVisibleMessageSignature = (message = {}, { fromUi = false } = {}) => {
-  if (!message || typeof message !== 'object') return '';
-  if (message.role === 'compaction') {
-    return `compaction:${String(message.snapshotId || message.id || '')}`;
-  }
-  const source = fromUi ? toHistoryMessageFromUi(message) : toRequestMessageFromFullHistory(message);
-  if (!source) return '';
-  return JSON.stringify({
-    role: source.role,
-    content: normalizeComparableMessageContent(source.content),
-    reasoning_content: source.reasoning_content ?? null
-  });
-};
-
+// Keep edit mapping in terms of visible messages so tool records never shift indexes.
 const getVisibleFullHistoryIndexes = () => fullHistory.value
   .map((message, fullIndex) => (message?.role === 'tool' ? -1 : fullIndex))
   .filter((fullIndex) => fullIndex >= 0);
@@ -1394,122 +1369,33 @@ const getVisibleChatShowIndexes = () => chat_show.value
   .map((message, showIndex) => (message?.role === 'tool' ? -1 : showIndex))
   .filter((showIndex) => showIndex >= 0);
 
-const buildToolResultIndex = () => {
-  const results = new Map();
-  fullHistory.value.forEach((message) => {
-    if (message?.role !== 'tool' || !message.tool_call_id) return;
-    results.set(message.tool_call_id, normalizeToolResultContent(message.content));
-  });
-  return results;
-};
-
-const toUiToolCallsFromFullHistory = (toolCalls = [], toolResults = new Map()) => {
-  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return [];
-  return toolCalls
-    .map((toolCall) => {
-      if (!toolCall || typeof toolCall !== 'object') return null;
-      const id = toolCall.id || toolCall.tool_call_id || '';
-      const name = toolCall.name || toolCall.function?.name || '';
-      if (!id && !name) return null;
-      const hasResult = id && toolResults.has(id);
-      return {
-        id,
-        name,
-        args: toolCall.args ?? toolCall.arguments ?? toolCall.function?.arguments ?? '{}',
-        result: hasResult ? toolResults.get(id) : '等待批准...',
-        approvalStatus: hasResult ? 'finished' : (toolCall.approvalStatus || 'waiting')
-      };
-    })
-    .filter(Boolean);
-};
-
-const normalizeRenderableAssistantToolCalls = (message, toolResults) => {
-  if (message?.role !== 'assistant') return message;
-  return {
-    ...message,
-    tool_calls: toUiToolCallsFromFullHistory(message.tool_calls, toolResults)
-  };
-};
-
-const createRenderableMessageFromFullHistory = (message, previousMessage = null, toolResults = new Map()) => {
-  const renderableMessage = normalizeRenderableAssistantToolCalls(deepCloneSafe(message), toolResults);
-  if (renderableMessage?.role === 'assistant') {
-    renderableMessage.aiName = previousMessage?.aiName || getCurrentAssistantDisplayName();
-    renderableMessage.voiceName = previousMessage?.voiceName || selectedVoice.value || '';
-  }
-  return {
-    ...renderableMessage,
-    id: previousMessage?.id ?? messageIdCounter.value++,
-    timestamp: previousMessage?.timestamp || message?.timestamp || new Date().toLocaleString('sv-SE')
-  };
-};
-
-// Self-heal persisted or runtime UI-cache drift without changing the API transcript.
-// Existing matching bubbles retain their UI metadata; only unmatched in-flight assistant bubbles survive separately.
-const reconcileChatShowWithFullHistory = () => {
-  const toolResults = buildToolResultIndex();
-  const expected = fullHistory.value.filter((message) => message?.role !== 'tool');
-  const current = chat_show.value.filter((message) => message?.role !== 'tool');
-  const expectedSignatures = expected.map((message) => getComparableVisibleMessageSignature(message));
-  const currentSignatures = current.map((message) => getComparableVisibleMessageSignature(message, { fromUi: true }));
-  const isRenderableToolCall = (toolCall) => (
-    toolCall && typeof toolCall.name === 'string' && Object.prototype.hasOwnProperty.call(toolCall, 'args')
-  );
-  const isAligned = expected.length === current.length
-    && expectedSignatures.every((signature, index) => signature && signature === currentSignatures[index])
-    && expected.every((message, index) => {
-      if (message?.role !== 'assistant') return true;
-      const expectedToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-      const currentToolCalls = Array.isArray(current[index]?.tool_calls) ? current[index].tool_calls : [];
-      return expectedToolCalls.length === currentToolCalls.length && currentToolCalls.every(isRenderableToolCall);
-    });
-  if (isAligned) return false;
-
-  const reusableBySignature = new Map();
-  current.forEach((message, index) => {
-    const signature = currentSignatures[index];
-    if (!signature) return;
-    const matches = reusableBySignature.get(signature) || [];
-    matches.push(message);
-    reusableBySignature.set(signature, matches);
-  });
-
-  const reusedMessages = new Set();
-  const repaired = expected.map((message, index) => {
-    const signature = expectedSignatures[index];
-    const matches = reusableBySignature.get(signature) || [];
-    const previousMessage = matches.shift() || null;
-    if (previousMessage) reusedMessages.add(previousMessage);
-    if (matches.length) reusableBySignature.set(signature, matches);
-    else reusableBySignature.delete(signature);
-    if (!previousMessage) return createRenderableMessageFromFullHistory(message, null, toolResults);
-    const normalizedMessage = normalizeRenderableAssistantToolCalls(deepCloneSafe(message), toolResults);
-    if (normalizedMessage?.role === 'assistant') {
-      normalizedMessage.aiName = previousMessage.aiName || getCurrentAssistantDisplayName();
-      normalizedMessage.voiceName = previousMessage.voiceName || selectedVoice.value || '';
+// UI metadata is not part of fullHistory. Fill only missing assistant names from adjacent UI bubbles.
+// Do not infer a model name when the whole conversation has no recorded assistant name.
+const inheritMissingAssistantDisplayNames = () => {
+  const messages = Array.isArray(chat_show.value) ? chat_show.value : [];
+  let previousAiName = '';
+  messages.forEach((message) => {
+    if (message?.role !== 'assistant') return;
+    const aiName = typeof message.aiName === 'string' ? message.aiName.trim() : '';
+    if (aiName) {
+      previousAiName = aiName;
+    } else if (previousAiName) {
+      message.aiName = previousAiName;
     }
-    return {
-      ...previousMessage,
-      ...normalizedMessage,
-      id: previousMessage.id,
-      timestamp: previousMessage.timestamp || message?.timestamp || new Date().toLocaleString('sv-SE')
-    };
   });
 
-  // During an active response, a trailing assistant bubble may not have reached fullHistory yet.
-  // Preserve unmatched assistant bubbles so reconciliation never interrupts streaming output.
-  if (loading.value) {
-    current
-      .filter((message) => message?.role === 'assistant' && !reusedMessages.has(message))
-      .forEach((message) => repaired.push(message));
+  let nextAiName = '';
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'assistant') continue;
+    const aiName = typeof message.aiName === 'string' ? message.aiName.trim() : '';
+    if (aiName) {
+      nextAiName = aiName;
+    } else if (nextAiName) {
+      message.aiName = nextAiName;
+    }
   }
-
-  chat_show.value = repaired;
-  markOutermostCanRestore();
-  return true;
 };
-
-
 
 const projectUiToFullHistoryForLegacyMigration = (messages = []) => {
   const full = [];
@@ -4359,8 +4245,6 @@ const handleEditMessage = (index, newContent) => {
   if (index < 0 || index >= chat_show.value.length) return false;
 
   const editedMessageId = chat_show.value[index]?.id;
-  // Repair older persisted UI caches before deriving a logical message position.
-  reconcileChatShowWithFullHistory();
   const showIndex = chat_show.value.findIndex((message) => message?.id === editedMessageId);
   if (showIndex < 0) return false;
 
@@ -4420,7 +4304,6 @@ const handleEditEnd = async ({ id, action, content }) => {
     showDismissibleMessage.warning('消息状态已变化，请重新编辑');
     return;
   }
-  reconcileChatShowWithFullHistory();
   const updatedIndex = chat_show.value.findIndex((message) => message?.id === id);
   scheduleAutoSave({ reason: 'message-edited', immediate: true });
   showDismissibleMessage.success('消息已更新');
@@ -7510,8 +7393,8 @@ const loadSession = async (jsonData) => {
       const maxId = Math.max(...chat_show.value.map(m => m.id || 0));
       messageIdCounter.value = maxId + 1;
     }
-    // Repair historical files where fullHistory was persisted but chat_show lost a visible bubble.
-    reconcileChatShowWithFullHistory();
+    // Preserve historical model labels from adjacent assistant bubbles without rebuilding the UI cache.
+    inheritMissingAssistantDisplayNames();
 
     const systemMessageIndex = history.value.findIndex(m => m.role === 'system');
     if (systemMessageIndex !== -1) {
@@ -8122,9 +8005,6 @@ const askAI = async (forceSend = false) => {
     }
     if (!added) return;
   }
-
-  // Before a new turn, heal any stale UI cache without changing the API transcript.
-  reconcileChatShowWithFullHistory();
 
   // 用户消息写入后、进入 AI 请求前：若已超阈值，先压缩再开跑
   try {

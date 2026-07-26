@@ -2007,7 +2007,7 @@ async function pullSelectedCloudSkillsToLocal() {
                         <span class="setting-option-label">{{ t('setting.desktop.mainToggle.label') }}</span>
                         <span class="setting-option-description">{{ t('setting.desktop.mainToggle.description') }}</span>
                       </div>
-                      <el-button class="shortcut-record-btn" @click="startShortcutRecording('mainToggle')">
+                      <el-button class="shortcut-record-btn" :class="{ 'is-recording': shortcutRecorder.active && shortcutRecorder.target === 'mainToggle' }" @click="startShortcutRecording('mainToggle')">
                         {{ shortcutRecorder.active && shortcutRecorder.target === 'mainToggle' ? t('setting.desktop.mainToggle.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.mainToggle) || t('setting.desktop.mainToggle.placeholder') }}
                       </el-button>
                     </div>
@@ -2017,7 +2017,7 @@ async function pullSelectedCloudSkillsToLocal() {
                         <span class="setting-option-label">{{ t('setting.desktop.quickSummon.label') }}</span>
                         <span class="setting-option-description">{{ t('setting.desktop.quickSummon.description') }}</span>
                       </div>
-                      <el-button class="shortcut-record-btn" @click="startShortcutRecording('quickSummon')">
+                      <el-button class="shortcut-record-btn" :class="{ 'is-recording': shortcutRecorder.active && shortcutRecorder.target === 'quickSummon' }" @click="startShortcutRecording('quickSummon')">
                         {{ shortcutRecorder.active && shortcutRecorder.target === 'quickSummon' ? t('setting.desktop.quickSummon.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.quickSummon) || t('setting.desktop.quickSummon.placeholder') }}
                       </el-button>
                     </div>
@@ -2027,7 +2027,7 @@ async function pullSelectedCloudSkillsToLocal() {
                         <span class="setting-option-label">{{ t('setting.desktop.appendFollowUp.label') }}</span>
                         <span class="setting-option-description">{{ t('setting.desktop.appendFollowUp.description') }}</span>
                       </div>
-                      <el-button class="shortcut-record-btn" @click="startShortcutRecording('appendFollowUp')">
+                      <el-button class="shortcut-record-btn" :class="{ 'is-recording': shortcutRecorder.active && shortcutRecorder.target === 'appendFollowUp' }" @click="startShortcutRecording('appendFollowUp')">
                         {{ shortcutRecorder.active && shortcutRecorder.target === 'appendFollowUp' ? t('setting.desktop.appendFollowUp.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.appendFollowUp) || t('setting.desktop.appendFollowUp.placeholder') }}
                       </el-button>
                     </div>
@@ -2038,7 +2038,7 @@ async function pullSelectedCloudSkillsToLocal() {
                         <span class="setting-option-label">{{ t('setting.desktop.toggleFocusedWindowAutoClose.label') }}</span>
                         <span class="setting-option-description">{{ t('setting.desktop.toggleFocusedWindowAutoClose.description') }}</span>
                       </div>
-                      <el-button class="shortcut-record-btn" @click="startShortcutRecording('toggleFocusedWindowAutoClose')">
+                      <el-button class="shortcut-record-btn" :class="{ 'is-recording': shortcutRecorder.active && shortcutRecorder.target === 'toggleFocusedWindowAutoClose' }" @click="startShortcutRecording('toggleFocusedWindowAutoClose')">
                         {{ shortcutRecorder.active && shortcutRecorder.target === 'toggleFocusedWindowAutoClose' ? t('setting.desktop.toggleFocusedWindowAutoClose.placeholder') : toDisplayShortcut(currentConfig.desktop.shortcuts.toggleFocusedWindowAutoClose) || t('setting.desktop.toggleFocusedWindowAutoClose.placeholder') }}
                       </el-button>
                     </div>
@@ -2060,7 +2060,7 @@ async function pullSelectedCloudSkillsToLocal() {
                         <el-select v-model="binding.promptKey" style="width: 220px;" filterable @change="handleDesktopShortcutChange">
                           <el-option v-for="prompt in availableWindowPrompts" :key="prompt.key" :label="prompt.key" :value="prompt.key" />
                         </el-select>
-                        <el-button class="shortcut-record-btn small" @click="startShortcutRecording('promptBinding', index)">
+                        <el-button class="shortcut-record-btn small" :class="{ 'is-recording': shortcutRecorder.active && shortcutRecorder.target === 'promptBinding' && shortcutRecorder.index === index }" @click="startShortcutRecording('promptBinding', index)">
                           {{ shortcutRecorder.active && shortcutRecorder.target === 'promptBinding' && shortcutRecorder.index === index ? t('setting.desktop.promptShortcuts.shortcutPlaceholder') : (toDisplayShortcut(binding.accelerator) || t('setting.desktop.promptShortcuts.shortcutPlaceholder')) }}
                         </el-button>
                         <el-switch v-model="binding.enabled" @change="handleDesktopShortcutChange" />
@@ -3271,5 +3271,247 @@ html.dark .icon-action-button {
   justify-content: center;
 }
 
+
+
+/* Settings experience refinement: visual-only, preserves ordering and persistence logic. */
+.settings-page-container {
+  --panda-bg: #f5f7fb;
+  --panda-card-bg: rgba(255, 255, 255, 0.9);
+  --panda-text-main: #18181b;
+  --panda-text-sub: #71717a;
+  --panda-accent: #2563eb;
+  --panda-border: rgba(24, 24, 27, 0.1);
+  --panda-hover: rgba(37, 99, 235, 0.055);
+  --panda-shadow: 0 18px 40px -34px rgba(15, 23, 42, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  position: relative;
+}
+
+html.dark .settings-page-container {
+  --panda-bg: rgba(9, 9, 11, 0.54);
+  --panda-card-bg: rgba(24, 24, 27, 0.78);
+  --panda-text-main: #f4f4f5;
+  --panda-text-sub: #a1a1aa;
+  --panda-accent: #60a5fa;
+  --panda-border: rgba(255, 255, 255, 0.095);
+  --panda-hover: rgba(96, 165, 250, 0.1);
+  --panda-shadow: 0 22px 44px -34px rgba(0, 0, 0, 0.78), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.settings-scrollbar-wrapper {
+  max-width: 1060px;
+}
+
+.settings-content {
+  padding: 8px clamp(4px, 1.5vw, 16px) 64px;
+}
+
+.draggable-list {
+  gap: 14px;
+}
+
+.settings-card {
+  border-radius: 18px;
+  border-color: var(--panda-border);
+  background: var(--panda-card-bg);
+  box-shadow: var(--panda-shadow);
+  backdrop-filter: blur(16px) saturate(132%);
+  -webkit-backdrop-filter: blur(16px) saturate(132%);
+  transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+}
+
+.settings-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--panda-accent) 28%, var(--panda-border));
+  box-shadow: 0 22px 46px -34px rgba(15, 23, 42, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.76);
+}
+
+html.dark .settings-card:hover {
+  box-shadow: 0 24px 48px -32px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.card-header {
+  min-height: 58px;
+  padding: 15px 18px 15px 20px;
+  border-bottom-color: var(--panda-border);
+  background: linear-gradient(105deg, color-mix(in srgb, var(--panda-bg) 64%, transparent), transparent 62%);
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.card-header:hover {
+  background: linear-gradient(105deg, var(--panda-hover), transparent 70%);
+}
+
+.card-header:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--panda-accent) 70%, transparent);
+  outline-offset: -3px;
+}
+
+.card-header > span,
+.card-header :deep(span) {
+  font-size: 15px;
+  font-weight: 720;
+  letter-spacing: -0.025em;
+}
+
+.collapse-icon {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border: 1px solid var(--panda-border);
+  background: color-mix(in srgb, var(--panda-bg) 78%, transparent);
+  color: var(--panda-text-sub);
+}
+
+.collapse-icon.is-expanded {
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 8px 16px -12px rgba(37, 99, 235, 0.92);
+}
+
+.card-body {
+  padding: 8px 16px 16px;
+}
+
+.setting-option-item {
+  min-height: 62px;
+  padding: 12px 14px;
+  margin-bottom: 4px;
+  border-radius: 12px;
+  border-color: transparent;
+  transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.setting-option-item:hover {
+  border-color: color-mix(in srgb, var(--panda-border) 78%, var(--panda-accent));
+  background-color: var(--panda-hover);
+}
+
+.setting-option-item:focus-within {
+  border-color: color-mix(in srgb, var(--panda-accent) 58%, var(--panda-border));
+  background-color: var(--panda-hover);
+}
+
+.setting-text-content {
+  gap: 4px;
+}
+
+.setting-option-label {
+  font-size: 13px;
+  font-weight: 680;
+  letter-spacing: -0.012em;
+}
+
+.setting-option-description {
+  max-width: 620px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.desktop-shortcut-list {
+  margin: 14px 4px 2px;
+  padding: 14px;
+  gap: 10px;
+  border: 1px solid var(--panda-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panda-bg) 74%, transparent);
+}
+
+.desktop-shortcut-list-head {
+  padding: 2px 2px 8px;
+}
+
+.desktop-shortcut-row {
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panda-card-bg) 86%, var(--panda-bg));
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.desktop-shortcut-row:focus-within {
+  border-color: color-mix(in srgb, var(--panda-accent) 52%, var(--panda-border));
+  box-shadow: 0 12px 24px -22px color-mix(in srgb, var(--panda-accent) 64%, transparent);
+}
+
+.shortcut-record-btn {
+  min-height: 34px;
+  border-style: dashed !important;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px !important;
+  letter-spacing: 0.015em;
+  transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.shortcut-record-btn:hover {
+  border-color: color-mix(in srgb, var(--panda-accent) 62%, var(--panda-border)) !important;
+  background: var(--panda-hover) !important;
+}
+
+.shortcut-record-btn.is-recording {
+  color: #ffffff !important;
+  border-style: solid !important;
+  border-color: transparent !important;
+  background: linear-gradient(135deg, #2563eb, #4f46e5) !important;
+  box-shadow: 0 10px 20px -14px rgba(37, 99, 235, 0.92);
+  animation: shortcut-recording-pulse 1.35s ease-in-out infinite;
+}
+
+:deep(.el-input__wrapper),
+:deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 10px;
+  border-color: var(--panda-border);
+  background: color-mix(in srgb, var(--panda-bg) 84%, transparent);
+}
+
+:deep(.el-input__wrapper:hover),
+:deep(.el-select__wrapper:hover) {
+  border-color: color-mix(in srgb, var(--panda-accent) 40%, var(--panda-border));
+}
+
+:deep(.el-input__wrapper.is-focus),
+:deep(.el-select__wrapper.is-focused) {
+  border-color: var(--panda-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--panda-accent) 18%, transparent) !important;
+}
+
+.el-button:not(.is-link) {
+  min-height: 32px;
+  border-radius: 10px;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.el-button:not(.is-link):hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--panda-accent) 42%, var(--panda-border));
+}
+
+.el-button:not(.is-link):active {
+  transform: translateY(0) scale(0.98);
+}
+
+:deep(.el-switch__core) {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+
+:deep(.el-switch.is-checked .el-switch__core) {
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+}
+
+@keyframes shortcut-recording-pulse {
+  50% { box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.12), 0 10px 20px -14px rgba(37, 99, 235, 0.92); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-card,
+  .setting-option-item,
+  .shortcut-record-btn,
+  .el-button:not(.is-link) {
+    transition: none;
+  }
+
+  .shortcut-record-btn.is-recording {
+    animation: none;
+  }
+}
 
 </style>

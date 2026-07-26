@@ -1920,4 +1920,172 @@ html.dark .markdown-body :deep(.quick-start-custom-card) {
   text-decoration: underline;
 }
 
+
+/* Main workspace visual system: retains all existing navigation icons and behaviour. */
+.common-layout,
+.el-container {
+  --workspace-ink: #18181b;
+  --workspace-muted: #71717a;
+  --workspace-line: rgba(24, 24, 27, 0.09);
+  --workspace-surface: rgba(255, 255, 255, 0.72);
+  --workspace-surface-strong: rgba(255, 255, 255, 0.9);
+  position: relative;
+  padding: clamp(14px, 2vw, 24px);
+  isolation: isolate;
+  background:
+    radial-gradient(72rem 40rem at -10% -18%, rgba(96, 165, 250, 0.16), transparent 58%),
+    radial-gradient(56rem 34rem at 110% 118%, rgba(129, 140, 248, 0.12), transparent 60%),
+    linear-gradient(145deg, #fafafa 0%, #f4f4f5 52%, #f8fafc 100%);
+}
+
+.common-layout::before,
+.common-layout::after {
+  z-index: -1;
+  filter: blur(18px);
+}
+
+.common-layout::before {
+  width: 20rem;
+  height: 20rem;
+  top: -10rem;
+  right: 18%;
+  left: auto;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.common-layout::after {
+  width: 18rem;
+  height: 18rem;
+  left: -9rem;
+  right: auto;
+  bottom: -11rem;
+  background: rgba(191, 219, 254, 0.26);
+}
+
+html.dark .common-layout,
+html.dark .el-container {
+  --workspace-ink: #f4f4f5;
+  --workspace-muted: #a1a1aa;
+  --workspace-line: rgba(255, 255, 255, 0.09);
+  --workspace-surface: rgba(24, 24, 27, 0.72);
+  --workspace-surface-strong: rgba(24, 24, 27, 0.9);
+  background:
+    radial-gradient(70rem 38rem at -10% -18%, rgba(30, 64, 175, 0.22), transparent 58%),
+    radial-gradient(52rem 32rem at 108% 116%, rgba(67, 56, 202, 0.2), transparent 60%),
+    linear-gradient(145deg, #09090b 0%, #111114 52%, #0f1017 100%);
+}
+
+html.dark .common-layout::before {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+html.dark .common-layout::after {
+  background: rgba(30, 64, 175, 0.16);
+}
+
+.el-header {
+  height: 72px;
+  padding: 0 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 22px;
+  background: var(--workspace-surface);
+  box-shadow: 0 18px 44px -34px rgba(15, 23, 42, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+}
+
+html.dark .el-header {
+  box-shadow: 0 18px 48px -32px rgba(0, 0, 0, 0.64), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.left-actions-col,
+.header-title-col,
+.tabs-col {
+  display: flex;
+  align-items: center;
+}
+
+.header-title-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: clamp(18px, 2vw, 23px);
+  font-weight: 720;
+  color: var(--workspace-ink);
+  letter-spacing: -0.04em;
+}
+
+.tabs-container {
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--workspace-surface-strong) 80%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
+html.dark .tabs-container {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.tab-button {
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--workspace-muted);
+  transition: transform 0.18s ease, background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.tab-button:hover {
+  transform: translateY(-1px);
+  background-color: color-mix(in srgb, var(--workspace-surface-strong) 88%, transparent);
+  color: var(--workspace-ink);
+  box-shadow: 0 8px 18px -16px rgba(15, 23, 42, 0.45);
+}
+
+.tab-button:active {
+  transform: translateY(0) scale(0.96);
+}
+
+.tab-button:focus-visible,
+.doc-dialog__version:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.7);
+  outline-offset: 3px;
+}
+
+.active-tab,
+.active-tab:hover {
+  color: #ffffff !important;
+  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%) !important;
+  box-shadow: 0 10px 22px -14px rgba(37, 99, 235, 0.88) !important;
+  border-color: transparent !important;
+  outline: none !important;
+}
+
+.el-main {
+  padding: clamp(12px, 1.8vw, 20px);
+  border: 1px solid var(--workspace-line);
+  border-radius: 26px;
+  background: var(--workspace-surface);
+  box-shadow: 0 22px 52px -38px rgba(15, 23, 42, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+}
+
+.el-main::before {
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.22), transparent 32%);
+}
+
+html.dark .el-main {
+  box-shadow: 0 24px 56px -36px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-button,
+  .header-title-text {
+    transition: none;
+  }
+}
+
 </style>

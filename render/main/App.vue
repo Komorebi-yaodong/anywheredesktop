@@ -1340,8 +1340,8 @@ html.dark .el-main {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
-  background: rgba(15, 23, 42, 0.06);
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(24, 24, 27, 0.06);
+  border: 1px solid rgba(24, 24, 27, 0.08);
   white-space: nowrap;
 }
 
@@ -1353,7 +1353,7 @@ html.dark .el-main {
 
 .doc-dialog__version:hover {
   color: var(--text-primary);
-  border-color: rgba(15, 23, 42, 0.18);
+  border-color: rgba(24, 24, 27, 0.18);
 }
 
 .doc-dialog__version:focus-visible {
@@ -1607,7 +1607,7 @@ html.dark .doc-menu :deep(.el-menu-item:hover) {
   border: 1px solid var(--border-primary);
   border-radius: 22px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(250, 250, 250, 0.82) 100%);
-  box-shadow: 0 14px 30px -26px rgba(15, 23, 42, 0.28);
+  box-shadow: 0 14px 30px -26px rgba(24, 24, 27, 0.28);
 }
 
 html.dark .markdown-body :deep(.quick-start-hero),
@@ -1933,9 +1933,9 @@ html.dark .markdown-body :deep(.quick-start-custom-card) {
   padding: clamp(14px, 2vw, 24px);
   isolation: isolate;
   background:
-    radial-gradient(72rem 40rem at -10% -18%, rgba(96, 165, 250, 0.16), transparent 58%),
-    radial-gradient(56rem 34rem at 110% 118%, rgba(129, 140, 248, 0.12), transparent 60%),
-    linear-gradient(145deg, #fafafa 0%, #f4f4f5 52%, #f8fafc 100%);
+    radial-gradient(72rem 40rem at -10% -18%, rgba(24, 24, 27, 0.07), transparent 58%),
+    radial-gradient(56rem 34rem at 110% 118%, rgba(24, 24, 27, 0.07), transparent 60%),
+    linear-gradient(145deg, #fafafa 0%, #f4f4f5 52%, #f5f5f5 100%);
 }
 
 .common-layout::before,
@@ -1959,7 +1959,7 @@ html.dark .markdown-body :deep(.quick-start-custom-card) {
   left: -9rem;
   right: auto;
   bottom: -11rem;
-  background: rgba(191, 219, 254, 0.26);
+  background: rgba(24, 24, 27, 0.07);
 }
 
 html.dark .common-layout,
@@ -1970,9 +1970,9 @@ html.dark .el-container {
   --workspace-surface: rgba(24, 24, 27, 0.72);
   --workspace-surface-strong: rgba(24, 24, 27, 0.9);
   background:
-    radial-gradient(70rem 38rem at -10% -18%, rgba(30, 64, 175, 0.22), transparent 58%),
-    radial-gradient(52rem 32rem at 108% 116%, rgba(67, 56, 202, 0.2), transparent 60%),
-    linear-gradient(145deg, #09090b 0%, #111114 52%, #0f1017 100%);
+    radial-gradient(70rem 38rem at -10% -18%, rgba(255, 255, 255, 0.045), transparent 58%),
+    radial-gradient(52rem 32rem at 108% 116%, rgba(255, 255, 255, 0.03), transparent 60%),
+    linear-gradient(145deg, #09090b 0%, #111111 52%, #18181b 100%);
 }
 
 html.dark .common-layout::before {
@@ -1980,7 +1980,7 @@ html.dark .common-layout::before {
 }
 
 html.dark .common-layout::after {
-  background: rgba(30, 64, 175, 0.16);
+  background: rgba(24, 24, 27, 0.07);
 }
 
 .el-header {
@@ -1990,7 +1990,7 @@ html.dark .common-layout::after {
   border: 1px solid var(--workspace-line);
   border-radius: 22px;
   background: var(--workspace-surface);
-  box-shadow: 0 18px 44px -34px rgba(15, 23, 42, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  box-shadow: 0 18px 44px -34px rgba(24, 24, 27, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(18px) saturate(145%);
   -webkit-backdrop-filter: blur(18px) saturate(145%);
 }
@@ -2041,7 +2041,7 @@ html.dark .tabs-container {
   transform: translateY(-1px);
   background-color: color-mix(in srgb, var(--workspace-surface-strong) 88%, transparent);
   color: var(--workspace-ink);
-  box-shadow: 0 8px 18px -16px rgba(15, 23, 42, 0.45);
+  box-shadow: 0 8px 18px -16px rgba(24, 24, 27, 0.45);
 }
 
 .tab-button:active {
@@ -2050,17 +2050,29 @@ html.dark .tabs-container {
 
 .tab-button:focus-visible,
 .doc-dialog__version:focus-visible {
-  outline: 2px solid rgba(37, 99, 235, 0.7);
+  outline: 2px solid rgba(24, 24, 27, 0.62);
   outline-offset: 3px;
 }
 
 .active-tab,
 .active-tab:hover {
   color: #ffffff !important;
-  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%) !important;
-  box-shadow: 0 10px 22px -14px rgba(37, 99, 235, 0.88) !important;
+  background: #18181b !important;
+  box-shadow: 0 10px 22px -14px rgba(24, 24, 27, 0.62) !important;
   border-color: transparent !important;
   outline: none !important;
+}
+
+html.dark .tab-button:focus-visible,
+html.dark .doc-dialog__version:focus-visible {
+  outline-color: rgba(255, 255, 255, 0.72);
+}
+
+html.dark .active-tab,
+html.dark .active-tab:hover {
+  color: #18181b !important;
+  background: #f4f4f5 !important;
+  box-shadow: 0 10px 22px -14px rgba(0, 0, 0, 0.7) !important;
 }
 
 .el-main {
@@ -2068,7 +2080,7 @@ html.dark .tabs-container {
   border: 1px solid var(--workspace-line);
   border-radius: 26px;
   background: var(--workspace-surface);
-  box-shadow: 0 22px 52px -38px rgba(15, 23, 42, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  box-shadow: 0 22px 52px -38px rgba(24, 24, 27, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(18px) saturate(135%);
   -webkit-backdrop-filter: blur(18px) saturate(135%);
 }

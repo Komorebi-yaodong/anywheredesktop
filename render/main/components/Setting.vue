@@ -3275,14 +3275,14 @@ html.dark .icon-action-button {
 
 /* Settings experience refinement: visual-only, preserves ordering and persistence logic. */
 .settings-page-container {
-  --panda-bg: #f5f7fb;
+  --panda-bg: #f4f4f5;
   --panda-card-bg: rgba(255, 255, 255, 0.9);
   --panda-text-main: #18181b;
   --panda-text-sub: #71717a;
-  --panda-accent: #2563eb;
+  --panda-accent: #18181b;
   --panda-border: rgba(24, 24, 27, 0.1);
-  --panda-hover: rgba(37, 99, 235, 0.055);
-  --panda-shadow: 0 18px 40px -34px rgba(15, 23, 42, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --panda-hover: rgba(24, 24, 27, 0.08);
+  --panda-shadow: 0 18px 40px -34px rgba(24, 24, 27, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.8);
   position: relative;
 }
 
@@ -3291,9 +3291,9 @@ html.dark .settings-page-container {
   --panda-card-bg: rgba(24, 24, 27, 0.78);
   --panda-text-main: #f4f4f5;
   --panda-text-sub: #a1a1aa;
-  --panda-accent: #60a5fa;
+  --panda-accent: #f4f4f5;
   --panda-border: rgba(255, 255, 255, 0.095);
-  --panda-hover: rgba(96, 165, 250, 0.1);
+  --panda-hover: rgba(255, 255, 255, 0.075);
   --panda-shadow: 0 22px 44px -34px rgba(0, 0, 0, 0.78), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
@@ -3322,7 +3322,7 @@ html.dark .settings-page-container {
 .settings-card:hover {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--panda-accent) 28%, var(--panda-border));
-  box-shadow: 0 22px 46px -34px rgba(15, 23, 42, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.76);
+  box-shadow: 0 22px 46px -34px rgba(24, 24, 27, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.76);
 }
 
 html.dark .settings-card:hover {
@@ -3363,10 +3363,10 @@ html.dark .settings-card:hover {
 }
 
 .collapse-icon.is-expanded {
-  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  background: linear-gradient(135deg, #18181b, #18181b);
   border-color: transparent;
   color: #ffffff;
-  box-shadow: 0 8px 16px -12px rgba(37, 99, 235, 0.92);
+  box-shadow: 0 8px 16px -12px rgba(24, 24, 27, 0.08);
 }
 
 .card-body {
@@ -3450,8 +3450,8 @@ html.dark .settings-card:hover {
   color: #ffffff !important;
   border-style: solid !important;
   border-color: transparent !important;
-  background: linear-gradient(135deg, #2563eb, #4f46e5) !important;
-  box-shadow: 0 10px 20px -14px rgba(37, 99, 235, 0.92);
+  background: linear-gradient(135deg, #18181b, #18181b) !important;
+  box-shadow: 0 10px 20px -14px rgba(24, 24, 27, 0.08);
   animation: shortcut-recording-pulse 1.35s ease-in-out infinite;
 }
 
@@ -3494,11 +3494,25 @@ html.dark .settings-card:hover {
 }
 
 :deep(.el-switch.is-checked .el-switch__core) {
-  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  background: linear-gradient(135deg, #18181b, #18181b);
 }
 
 @keyframes shortcut-recording-pulse {
-  50% { box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.12), 0 10px 20px -14px rgba(37, 99, 235, 0.92); }
+  50% { box-shadow: 0 0 0 5px rgba(24, 24, 27, 0.08), 0 10px 20px -14px rgba(24, 24, 27, 0.08); }
+}
+
+
+/* Keep active controls legible in dark mode while preserving the monochrome palette. */
+html.dark .collapse-icon.is-expanded,
+html.dark .shortcut-record-btn.is-recording,
+html.dark :deep(.el-switch.is-checked .el-switch__core) {
+  background: #f4f4f5 !important;
+  color: #18181b !important;
+  box-shadow: 0 10px 20px -14px rgba(0, 0, 0, 0.72);
+}
+
+html.dark :deep(.el-switch.is-checked .el-switch__action) {
+  background-color: #18181b;
 }
 
 @media (prefers-reduced-motion: reduce) {

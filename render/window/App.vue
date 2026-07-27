@@ -920,26 +920,20 @@ const loadCompactConfigForCurrentModel = async ({
   const loadVersion = ++compactConfigLoadVersion;
   const requestedModel = model.value;
   try {
-    // 打开弹窗：读取缓存；若无缓存才 resolve。不覆盖用户手动长度。
-    // 重新检索：forceRefresh + preferManual=false，允许 API 覆盖。
+    // 优先级：用户手动值最高；其他模型均复用“重新检索”的 API resolve；API 失败才回退默认值。
     let resolveResult = null;
     if (window.api.resolveModelContext) {
-      if (forceRefresh) {
-        resolveResult = await window.api.resolveModelContext(requestedModel, {
-          forceRefresh: true,
-          preferManual
-        });
-      } else {
-        // 非强制：优先缓存；resolve 内部也会尊重 manual
-        const cached = await window.api.getModelCompactConfig(requestedModel);
-        const hasCachedLength = Number(cached?.config?.contextLength) > 0;
-        if (!hasCachedLength) {
-          resolveResult = await window.api.resolveModelContext(requestedModel, {
-            forceRefresh: false,
-            preferManual: true
-          });
-        }
-      }
+      const cached = await window.api.getModelCompactConfig(requestedModel);
+      const cachedConfig = cached?.config || {};
+      const hasManualOverride = cachedConfig.contextLengthManual === true
+        || cachedConfig.contextLengthSource === 'manual';
+
+      // 非手动模型在切换/打开时执行与“重新检索”完全相同的 API resolve；
+      // 只有用户保存过的长度可以跳过刷新并保持最高优先级。
+      resolveResult = await window.api.resolveModelContext(requestedModel, {
+        forceRefresh: forceRefresh || !hasManualOverride,
+        preferManual
+      });
     }
 
     const configResult = await window.api.getModelCompactConfig(requestedModel);

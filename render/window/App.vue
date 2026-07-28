@@ -473,6 +473,22 @@ const getMessageElementByIndex = (index) => {
   return target?.$el?.nodeType === 1 ? target.$el : null;
 };
 
+let navigationScrollRequestId = 0;
+const NAVIGATION_SCROLL_ALIGNMENT_TOLERANCE = 3;
+
+// ChatMessage is nested in flex wrappers with margins, so offsetTop is not reliably relative
+// to the el-main scrollport. Use viewport rectangles to derive the actual scroll-container target.
+const getContainerRelativeScrollTop = (container, messageElement) => {
+  const containerRect = container.getBoundingClientRect();
+  const messageRect = messageElement.getBoundingClientRect();
+  const desired = container.scrollTop + messageRect.top - containerRect.top;
+  return Math.max(0, Math.min(desired, container.scrollHeight - container.clientHeight));
+};
+
+const getMessageViewportOffset = (container, messageElement) => (
+  messageElement.getBoundingClientRect().top - container.getBoundingClientRect().top
+);
+
 const nextAnimationFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
 
@@ -3669,22 +3685,18 @@ const forceScrollToBottom = () => {
 const findFocusedMessageIndex = () => {
   const container = chatContainerRef.value?.$el;
   if (!container) return;
-  const scrollTop = container.scrollTop;
+  const containerRect = container.getBoundingClientRect();
   let closestIndex = -1;
   let smallestDistance = Infinity;
-  for (let i = chat_show.value.length - 1; i >= 0; i--) {
-    const msgComponent = getMessageComponentByIndex(i);
-    if (msgComponent) {
-      const el = msgComponent.$el;
-      const elTop = el.offsetTop;
-      const elBottom = elTop + el.clientHeight;
-      if (elTop < scrollTop + container.clientHeight && elBottom > scrollTop) {
-        const distance = Math.abs(elTop - scrollTop);
-        if (distance < smallestDistance) {
-          smallestDistance = distance;
-          closestIndex = i;
-        }
-      }
+  for (let index = chat_show.value.length - 1; index >= 0; index -= 1) {
+    const element = getMessageElementByIndex(index);
+    if (!element) continue;
+    const messageRect = element.getBoundingClientRect();
+    if (messageRect.top >= containerRect.bottom || messageRect.bottom <= containerRect.top) continue;
+    const distance = Math.abs(messageRect.top - containerRect.top);
+    if (distance < smallestDistance) {
+      smallestDistance = distance;
+      closestIndex = index;
     }
   }
   if (closestIndex !== -1) focusedMessageIndex.value = closestIndex;
@@ -3742,29 +3754,21 @@ const handleScroll = (event) => {
 const navigateToPreviousMessage = () => {
   findFocusedMessageIndex();
   const currentIndex = focusedMessageIndex.value;
-  if (currentIndex === null) return;
-  const targetComponent = getMessageComponentByIndex(currentIndex);
+  if (currentIndex === null || currentIndex === undefined) return;
   const container = chatContainerRef.value?.$el;
-  if (!targetComponent || !container) return;
-  const element = targetComponent.$el;
-  const scrollDifference = container.scrollTop - element.offsetTop;
-  if (scrollDifference > 5) {
-    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    centerActiveNavNode(currentIndex);
+  const element = getMessageElementByIndex(currentIndex);
+  if (!container || !element) return;
+  if (getMessageViewportOffset(container, element) < -NAVIGATION_SCROLL_ALIGNMENT_TOLERANCE) {
+    scrollToMessageByIndex(currentIndex);
   } else if (currentIndex > 0) {
-    const newIndex = currentIndex - 1;
-    focusedMessageIndex.value = newIndex;
-    const previousComponent = getMessageComponentByIndex(newIndex);
-    if (previousComponent) previousComponent.$el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    scrollToMessageByIndex(currentIndex - 1);
   }
 };
 
 const navigateToNextMessage = () => {
   findFocusedMessageIndex();
   if (focusedMessageIndex.value !== null && focusedMessageIndex.value < chat_show.value.length - 1) {
-    focusedMessageIndex.value++;
-    const targetComponent = getMessageComponentByIndex(focusedMessageIndex.value);
-    if (targetComponent) targetComponent.$el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    scrollToMessageByIndex(focusedMessageIndex.value + 1);
   } else {
     forceScrollToBottom();
   }
@@ -9460,25 +9464,35 @@ const scrollToMessageByIndex = async (index) => {
   const targetId = chat_show.value[index]?.id;
   if (targetId === undefined || targetId === null) return false;
 
-  // A freshly restored conversation may not have completed ChatMessage ref binding or final layout.
-  // Retry only this explicit click across two frames; never keep a background polling loop.
+  const requestId = ++navigationScrollRequestId;
+  let didResolveTarget = false;
+  // Explicit navigation only: compute against the actual scrollport and correct layout shifts
+  // across two subsequent frames. No background polling survives this click.
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (requestId !== navigationScrollRequestId) return false;
     const currentIndex = chat_show.value.findIndex((message) => message?.id === targetId);
-    const element = currentIndex >= 0 ? getMessageElementByIndex(currentIndex) : null;
     const container = chatContainerRef.value?.$el;
-    if (element && container) {
+    const element = currentIndex >= 0 ? getMessageElementByIndex(currentIndex) : null;
+    if (container && element) {
+      didResolveTarget = true;
       isSticky.value = false;
       isAtBottom.value = false;
       showScrollToBottomButton.value = true;
-      container.scrollTo({ top: Math.max(0, element.offsetTop), behavior: 'smooth' });
+      const viewportOffset = getMessageViewportOffset(container, element);
+      if (Math.abs(viewportOffset) > NAVIGATION_SCROLL_ALIGNMENT_TOLERANCE) {
+        withTemporaryAutoScroll(container, () => {
+          container.scrollTop = getContainerRelativeScrollTop(container, element);
+          lastKnownChatScrollTop = container.scrollTop;
+        });
+      }
       focusedMessageIndex.value = currentIndex;
       centerActiveNavNode(currentIndex);
-      return true;
     }
+    if (attempt === 2) break;
     await nextTick();
-    if (attempt < 2) await nextAnimationFrame();
+    await nextAnimationFrame();
   }
-  return false;
+  return didResolveTarget;
 };
 </script>
 

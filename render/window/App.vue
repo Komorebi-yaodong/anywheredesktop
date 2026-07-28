@@ -1377,35 +1377,43 @@ const getVisibleChatShowIndexes = () => chat_show.value
 const TAIL_BUBBLE_RECOVERY_LIMIT = 80;
 let tailBubbleRecoveryRafId = null;
 
+const normalizeRenderableContent = (content) => {
+  if (!Array.isArray(content)) return content ?? null;
+  const parts = content.filter((part) => part && !part.isTranscript);
+  if (parts.length > 0 && parts.every((part) => part?.type === 'text')) {
+    return parts.map((part) => part.text ?? '').join('');
+  }
+  return parts.map((part) => (
+    part?.type === 'text' ? { type: 'text', text: part.text ?? '' } : part
+  ));
+};
+
+// Recovery aligns visible bubbles, not API/tool metadata. Assistant tool_calls use different
+// storage shapes in fullHistory and chat_show, so they must not affect the visual anchor.
 const getComparableRenderableSignature = (message = {}, { fromUi = false } = {}) => {
   const source = fromUi ? toHistoryMessageFromUi(message) : toRequestMessageFromFullHistory(message);
   if (!source || !['user', 'assistant'].includes(source.role)) return '';
   return JSON.stringify({
     role: source.role,
-    content: source.content ?? null,
-    reasoning_content: source.reasoning_content ?? null
+    content: normalizeRenderableContent(source.content)
   });
 };
 
-const findLatestTailUserMessage = (preferredSignature = '') => {
+const getTailFullHistoryStartIndex = () => {
   const full = Array.isArray(fullHistory.value) ? fullHistory.value : [];
-  const compactIndex = getOutermostCompactionIndexIn(full);
-  const start = Math.max(compactIndex + 1, full.length - TAIL_BUBBLE_RECOVERY_LIMIT);
-  for (let index = full.length - 1; index >= start; index -= 1) {
-    const message = full[index];
-    if (message?.role !== 'user') continue;
-    const signature = getComparableRenderableSignature(message);
-    if (!preferredSignature || signature === preferredSignature) return { index, message, signature };
-  }
-  return null;
+  return Math.max(getOutermostCompactionIndexIn(full) + 1, full.length - TAIL_BUBBLE_RECOVERY_LIMIT);
+};
+
+const getTailChatShowStartIndex = () => {
+  const ui = Array.isArray(chat_show.value) ? chat_show.value : [];
+  return Math.max(0, getOutermostCompactionIndexIn(ui) + 1, ui.length - TAIL_BUBBLE_RECOVERY_LIMIT);
 };
 
 const findTailUiMessageIndexBySignature = (signature, occurrenceFromEnd = 1) => {
   if (!signature) return -1;
   const ui = Array.isArray(chat_show.value) ? chat_show.value : [];
-  const start = Math.max(0, getOutermostCompactionIndexIn(ui) + 1, ui.length - TAIL_BUBBLE_RECOVERY_LIMIT);
   let seen = 0;
-  for (let index = ui.length - 1; index >= start; index -= 1) {
+  for (let index = ui.length - 1; index >= getTailChatShowStartIndex(); index -= 1) {
     if (getComparableRenderableSignature(ui[index], { fromUi: true }) !== signature) continue;
     seen += 1;
     if (seen === occurrenceFromEnd) return index;
@@ -1413,67 +1421,80 @@ const findTailUiMessageIndexBySignature = (signature, occurrenceFromEnd = 1) => 
   return -1;
 };
 
-const getTailFullMessageOccurrence = (targetIndex, signature) => {
-  if (!signature) return 0;
-  const full = Array.isArray(fullHistory.value) ? fullHistory.value : [];
-  const start = Math.max(getOutermostCompactionIndexIn(full) + 1, full.length - TAIL_BUBBLE_RECOVERY_LIMIT);
-  let seen = 0;
-  for (let index = start; index <= Math.min(targetIndex, full.length - 1); index += 1) {
-    if (getComparableRenderableSignature(full[index]) === signature) seen += 1;
-  }
-  return seen;
-};
-
 const countTailUiMessageSignatures = (signature) => {
   if (!signature) return 0;
-  const ui = Array.isArray(chat_show.value) ? chat_show.value : [];
-  const start = Math.max(0, getOutermostCompactionIndexIn(ui) + 1, ui.length - TAIL_BUBBLE_RECOVERY_LIMIT);
   let count = 0;
-  for (let index = start; index < ui.length; index += 1) {
-    if (getComparableRenderableSignature(ui[index], { fromUi: true }) === signature) count += 1;
+  for (let index = getTailChatShowStartIndex(); index < chat_show.value.length; index += 1) {
+    if (getComparableRenderableSignature(chat_show.value[index], { fromUi: true }) === signature) count += 1;
   }
   return count;
 };
 
-const ensureLatestTailUserBubble = (preferredUiMessage = null) => {
-  const preferredSignature = preferredUiMessage?.role === 'user'
-    ? getComparableRenderableSignature(preferredUiMessage, { fromUi: true })
-    : '';
-  const target = findLatestTailUserMessage(preferredSignature);
-  if (!target || !target.signature) return false;
+const getTailFullSignatureOccurrence = (targetIndex, signature) => {
+  if (!signature) return 0;
+  let count = 0;
+  for (let index = getTailFullHistoryStartIndex(); index <= targetIndex; index += 1) {
+    if (getComparableRenderableSignature(fullHistory.value[index]) === signature) count += 1;
+  }
+  return count;
+};
 
-  const targetOccurrence = getTailFullMessageOccurrence(target.index, target.signature);
-  if (countTailUiMessageSignatures(target.signature) >= targetOccurrence) return false;
-
+const recoverTailUserBubbleAt = (targetIndex) => {
   const full = fullHistory.value;
+  const target = full[targetIndex];
+  if (target?.role !== 'user') return false;
+  const signature = getComparableRenderableSignature(target);
+  if (!signature) return false;
+
+  // Preserve duplicate user turns: a matching signature is only present when its full-history
+  // occurrence count is already represented in the bounded UI tail.
+  const occurrence = getTailFullSignatureOccurrence(targetIndex, signature);
+  if (countTailUiMessageSignatures(signature) >= occurrence) return false;
+
   let insertIndex = -1;
-  for (let index = target.index - 1; index >= Math.max(0, target.index - TAIL_BUBBLE_RECOVERY_LIMIT); index -= 1) {
+  for (let index = targetIndex + 1; index < full.length && index < targetIndex + TAIL_BUBBLE_RECOVERY_LIMIT; index += 1) {
     if (full[index]?.role === 'tool' || full[index]?.role === 'compaction') continue;
-    const previousUiIndex = findTailUiMessageIndexBySignature(getComparableRenderableSignature(full[index]));
-    if (previousUiIndex >= 0) {
-      insertIndex = previousUiIndex + 1;
+    const nextUiIndex = findTailUiMessageIndexBySignature(getComparableRenderableSignature(full[index]));
+    if (nextUiIndex >= 0) {
+      insertIndex = nextUiIndex;
       break;
     }
   }
   if (insertIndex < 0) {
-    for (let index = target.index + 1; index < Math.min(full.length, target.index + TAIL_BUBBLE_RECOVERY_LIMIT); index += 1) {
+    for (let index = targetIndex - 1; index >= getTailFullHistoryStartIndex(); index -= 1) {
       if (full[index]?.role === 'tool' || full[index]?.role === 'compaction') continue;
-      const nextUiIndex = findTailUiMessageIndexBySignature(getComparableRenderableSignature(full[index]));
-      if (nextUiIndex >= 0) {
-        insertIndex = nextUiIndex;
+      const previousUiIndex = findTailUiMessageIndexBySignature(getComparableRenderableSignature(full[index]));
+      if (previousUiIndex >= 0) {
+        insertIndex = previousUiIndex + 1;
         break;
       }
     }
   }
   if (insertIndex < 0) insertIndex = chat_show.value.length;
 
-  const recovered = {
-    ...deepCloneSafe(target.message),
+  chat_show.value.splice(insertIndex, 0, {
+    ...deepCloneSafe(target),
     id: messageIdCounter.value++,
-    timestamp: target.message?.timestamp || new Date().toLocaleString('sv-SE')
-  };
-  chat_show.value.splice(insertIndex, 0, recovered);
+    timestamp: target.timestamp || new Date().toLocaleString('sv-SE')
+  });
   return true;
+};
+
+// Recover every missing user bubble in the bounded compacted tail, preserving full-history order.
+// This intentionally does not rebuild existing UI bubbles or inspect save/close hot paths.
+const ensureLatestTailUserBubble = (preferredUiMessage = null) => {
+  const preferredSignature = preferredUiMessage?.role === 'user'
+    ? getComparableRenderableSignature(preferredUiMessage, { fromUi: true })
+    : '';
+  let recovered = false;
+  for (let index = getTailFullHistoryStartIndex(); index < fullHistory.value.length; index += 1) {
+    const message = fullHistory.value[index];
+    if (message?.role !== 'user') continue;
+    const signature = getComparableRenderableSignature(message);
+    if (preferredSignature && signature !== preferredSignature) continue;
+    recovered = recoverTailUserBubbleAt(index) || recovered;
+  }
+  return recovered;
 };
 
 const scheduleLatestTailUserBubbleRecovery = () => {

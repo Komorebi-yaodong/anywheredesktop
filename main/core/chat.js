@@ -235,8 +235,8 @@ export async function batchTestProviderKeys(params = {}) {
   if (rawKeys.length === 0) return { ok: true, total: 0, results: [] }
 
   const promptMessages = [
-    { role: 'system', content: 'You are a connectivity probe. Always reply with exactly: pong' },
-    { role: 'user', content: 'ping' }
+    { role: 'system', content: 'You are a helpful assistant. Keep your response concise.' },
+    { role: 'user', content: '请用一句简短的话介绍你的主要能力。' }
   ]
 
   const results = new Array(rawKeys.length)

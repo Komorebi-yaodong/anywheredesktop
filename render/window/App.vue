@@ -1455,6 +1455,29 @@ const matchesEditFallbackAnchors = (fullIndex, previousAnchors, nextAnchors) => 
   return true;
 };
 
+
+// New tail messages are appended to both stores in order. When a stale historical UI cache
+// shifts the visible index, align the suffix backwards before using the broader anchor search.
+// This keeps duplicate text elsewhere in the transcript from rejecting edits to -1/-2 messages.
+const resolveEditableTailFullHistoryIndex = (showIndex) => {
+  let fullCursor = fullHistory.value.length - 1;
+  for (let uiCursor = chat_show.value.length - 1; uiCursor >= showIndex; uiCursor -= 1) {
+    const signature = getComparableRenderableSignature(chat_show.value[uiCursor], { fromUi: true });
+    if (!signature) continue;
+
+    while (
+      fullCursor >= 0
+      && getComparableRenderableSignature(fullHistory.value[fullCursor]) !== signature
+    ) {
+      fullCursor -= 1;
+    }
+    if (fullCursor < 0) return -1;
+    if (uiCursor === showIndex) return fullCursor;
+    fullCursor -= 1;
+  }
+  return -1;
+};
+
 const resolveEditableFullHistoryIndex = (showIndex) => {
   const visibleShowIndexes = getVisibleChatShowIndexes();
   const logicalIndex = visibleShowIndexes.indexOf(showIndex);
@@ -1471,6 +1494,9 @@ const resolveEditableFullHistoryIndex = (showIndex) => {
   ) return fastIndex;
 
   if (!targetSignature) return -1;
+
+  const tailIndex = resolveEditableTailFullHistoryIndex(showIndex);
+  if (tailIndex >= 0) return tailIndex;
 
   const previousAnchors = getEditFallbackAnchorSignatures(showIndex - 1, -1);
   const nextAnchors = getEditFallbackAnchorSignatures(showIndex + 1, 1);

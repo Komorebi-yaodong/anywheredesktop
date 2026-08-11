@@ -200,26 +200,35 @@ function normalizeBatchTestError(error, fallbackStatus = 0) {
 }
 
 function extractBatchTestText(response = {}, apiType = 'chat_completions') {
-  if (apiType === 'responses' || apiType === 'codex') {
-    if (typeof response?.output_text === 'string' && response.output_text.trim()) {
-      return response.output_text.trim()
+  const responseCandidates = [response, response?.data]
+    .filter((candidate) => candidate && typeof candidate === 'object')
+
+  for (const candidate of responseCandidates) {
+    if (apiType === 'responses' || apiType === 'codex') {
+      if (typeof candidate.output_text === 'string' && candidate.output_text.trim()) {
+        return candidate.output_text.trim()
+      }
+
+      if (Array.isArray(candidate.output)) {
+        const text = candidate.output
+          .flatMap((item) => Array.isArray(item?.content) ? item.content : [])
+          .map((content) => {
+            if (content?.type === 'output_text') return String(content.text || '')
+            return ''
+          })
+          .join('')
+          .trim()
+        if (text) return text
+      }
+
+      continue
     }
 
-    if (Array.isArray(response?.output)) {
-      return response.output
-        .flatMap((item) => Array.isArray(item?.content) ? item.content : [])
-        .map((content) => {
-          if (content?.type === 'output_text') return String(content.text || '')
-          return ''
-        })
-        .join('')
-        .trim()
-    }
-
-    return ''
+    const text = String(candidate.choices?.[0]?.message?.content || '').trim()
+    if (text) return text
   }
 
-  return String(response?.choices?.[0]?.message?.content || '').trim()
+  return ''
 }
 
 export async function batchTestProviderKeys(params = {}) {

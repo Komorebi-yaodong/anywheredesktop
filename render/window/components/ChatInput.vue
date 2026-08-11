@@ -1265,7 +1265,7 @@ defineExpose({ focus, senderRef });
                     </button>
                     <div v-show="!advancedCollapsed" class="compact-advanced-body">
                         <div class="compact-grid-2">
-                            <div class="compact-field">
+                            <div class="compact-field compact-display-control">
                                 <div class="compact-label-row">
                                     <div class="compact-label">额外保留最近 N 轮原文</div>
                                     <el-tooltip
@@ -1276,7 +1276,7 @@ defineExpose({ focus, senderRef });
                                         <el-icon class="compact-info-icon"><InfoFilled /></el-icon>
                                     </el-tooltip>
                                 </div>
-                                <div class="compact-inline-row">
+                                <div class="compact-display-control-row">
                                     <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
                                     <el-switch v-model="localCompactConfig.hideCompactedMessages" active-text="隐藏被压缩的消息" />
                                 </div>
@@ -1591,6 +1591,37 @@ html.dark .compact-progress-track {
 .compact-inline-row .el-input-number {
     flex: 1;
 }
+
+.compact-display-control {
+    grid-column: 1 / -1;
+}
+
+.compact-display-control-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+}
+
+.compact-display-control-row .el-input-number {
+    flex: 0 0 auto;
+    width: 132px;
+}
+
+.compact-display-control-row .el-switch {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+    .compact-display-control-row {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 10px;
+    }
+}
+
 
 html.dark .compact-section-card {
     background: rgba(255, 255, 255, 0.03);

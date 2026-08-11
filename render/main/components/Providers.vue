@@ -470,7 +470,7 @@ function get_model_function(add, modelId) {
   });
 }
 
-// [修改] 排序函数：现在支持在分组内部排序
+// 排序函数：现在支持在分组内部排序
 function change_order(flag) {
   if (!provider_key.value) return;
   const currentId = provider_key.value;
@@ -829,7 +829,7 @@ async function deleteSelectedBatchTestKeys() {
                     </el-tooltip>
                   </h2>
                   <div class="header-buttons">
-                    <!-- [修改] 禁用状态绑定到 canMoveUp/canMoveDown -->
+                    <!-- 禁用状态绑定到 canMoveUp/canMoveDown -->
                     <el-button :icon="ArrowUp" circle plain size="small" :title="t('providers.moveUpTooltip')"
                       :disabled="!canMoveUp" @click="change_order('up')" />
                     <el-button :icon="ArrowDown" circle plain size="small" :title="t('providers.moveDownTooltip')"

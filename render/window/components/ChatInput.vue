@@ -36,6 +36,7 @@ const props = defineProps({
             contextLengthSource: 'default',
             contextLengthManual: false,
             keepRecentRounds: 3,
+            hideCompactedMessages: true,
             compactPrompt: '',
             resolvedId: ''
         })
@@ -84,6 +85,7 @@ watch(() => props.compactConfig, (next) => {
         contextLengthSource: next.contextLengthSource || 'default',
         contextLengthManual: next.contextLengthManual === true || next.contextLengthSource === 'manual',
         keepRecentRounds: Number.isFinite(Number(next.keepRecentRounds)) ? Number(next.keepRecentRounds) : 3,
+        hideCompactedMessages: next.hideCompactedMessages !== false,
         compactPrompt: typeof next.compactPrompt === 'string' ? next.compactPrompt : '',
         resolvedId: typeof next.resolvedId === 'string' ? next.resolvedId : ''
     };
@@ -142,6 +144,7 @@ const applyAdvancedToGlobal = () => {
         autoCompactEnabled: localCompactConfig.value.autoCompactEnabled,
         triggerRatio: localCompactConfig.value.triggerRatio,
         keepRecentRounds: localCompactConfig.value.keepRecentRounds,
+        hideCompactedMessages: localCompactConfig.value.hideCompactedMessages,
         compactPrompt: localCompactConfig.value.compactPrompt
     });
 };
@@ -1273,7 +1276,10 @@ defineExpose({ focus, senderRef });
                                         <el-icon class="compact-info-icon"><InfoFilled /></el-icon>
                                     </el-tooltip>
                                 </div>
-                                <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
+                                <div class="compact-inline-row">
+                                    <el-input-number v-model="localCompactConfig.keepRecentRounds" :min="0" :max="20" :step="1" />
+                                    <el-switch v-model="localCompactConfig.hideCompactedMessages" active-text="隐藏被压缩的消息" />
+                                </div>
                             </div>
                         </div>
                         <div class="compact-field">

@@ -932,6 +932,7 @@ const normalizeCompactConfigState = (nextConfig = {}) => ({
   contextLengthSource: nextConfig.contextLengthSource || 'default',
   contextLengthManual: nextConfig.contextLengthManual === true || nextConfig.contextLengthSource === 'manual',
   keepRecentRounds: Number.isFinite(Number(nextConfig.keepRecentRounds)) ? Number(nextConfig.keepRecentRounds) : 3,
+  hideCompactedMessages: nextConfig.hideCompactedMessages !== false,
   compactPrompt: typeof nextConfig.compactPrompt === 'string' ? nextConfig.compactPrompt : '',
   resolvedId: typeof nextConfig.resolvedId === 'string' ? nextConfig.resolvedId : ''
 });
@@ -1069,6 +1070,7 @@ const handleResetCompactConfig = async () => {
       autoCompactEnabled: true,
       triggerRatio: 0.9,
       keepRecentRounds: 3,
+      hideCompactedMessages: true,
       keepRecentRoundsUserSet: true,
       compactPrompt: '',
       contextLengthManual: false,
@@ -1127,6 +1129,7 @@ const handleApplyCompactAdvancedGlobal = async (patch = {}) => {
       autoCompactEnabled: patch?.autoCompactEnabled ?? compactConfig.value.autoCompactEnabled,
       triggerRatio: patch?.triggerRatio ?? compactConfig.value.triggerRatio,
       keepRecentRounds: patch?.keepRecentRounds ?? compactConfig.value.keepRecentRounds,
+      hideCompactedMessages: patch?.hideCompactedMessages ?? compactConfig.value.hideCompactedMessages,
       compactPrompt: patch?.compactPrompt ?? compactConfig.value.compactPrompt
     });
 
@@ -1754,6 +1757,19 @@ const getOutermostCompactionIndexIn = (list = []) => {
   return -1;
 };
 
+const renderedChatMessages = computed(() => {
+  const messages = Array.isArray(chat_show.value) ? chat_show.value : [];
+  const outermostIndex = compactConfig.value.hideCompactedMessages === false
+    ? -1
+    : getOutermostCompactionIndexIn(messages);
+  const startIndex = outermostIndex >= 0 ? outermostIndex : 0;
+  return messages.slice(startIndex).map((message, index) => ({
+    message,
+    index: startIndex + index
+  }));
+});
+
+
 // 旧会话可能只有 [compaction{archivedMessages}]；展开为「完整列表 + 摘要插入」
 const migrateInsertStyleChatShow = (messages = []) => {
   const walk = (list = [], allowExpand = true) => {
@@ -2325,6 +2341,7 @@ const compactConfig = ref({
   contextLengthSource: 'default',
   contextLengthManual: false,
   keepRecentRounds: 3,
+  hideCompactedMessages: true,
   compactPrompt: '',
   resolvedId: ''
 });
@@ -9615,7 +9632,7 @@ const scrollToMessageByIndex = async (index) => {
         <el-main ref="chatContainerRef" class="chat-main custom-scrollbar" @click="handleMainClick"
           @wheel.passive="markUserScrollIntent" @touchstart.passive="markUserScrollIntent"
           @pointerdown="markUserScrollIntent" @scroll="handleScroll">
-          <ChatMessage v-for="(message, index) in chat_show" :key="message.id" :is-auto-approve="isAutoApproveTools"
+          <ChatMessage v-for="{ message, index } in renderedChatMessages" :key="message.id" :is-auto-approve="isAutoApproveTools"
             @update-auto-approve="handleToggleAutoApprove" @confirm-tool="handleToolApproval"
             @reject-tool="handleToolApproval" :ref="el => setMessageRef(el, message.id)" :message="message"
             :index="index" :is-last-message="index === chat_show.length - 1" :is-loading="loading"

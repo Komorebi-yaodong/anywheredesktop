@@ -204,6 +204,7 @@ function defaultModelCacheEntry(modelKey = '', patch = {}) {
     autoCompactEnabled: true,
     triggerRatio: DEFAULT_TRIGGER_RATIO,
     keepRecentRounds: DEFAULT_KEEP_RECENT_ROUNDS,
+    hideCompactedMessages: true,
     compactPrompt: DEFAULT_COMPACT_PROMPT,
     summaryPrefix: DEFAULT_SUMMARY_PREFIX,
     updatedAt: Date.now(),
@@ -447,6 +448,9 @@ export async function applyAdvancedCompactConfigToAll(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(source, 'keepRecentRounds')) {
     const rounds = Number(source.keepRecentRounds)
     if (Number.isFinite(rounds)) shared.keepRecentRounds = Math.max(0, Math.floor(rounds))
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'hideCompactedMessages')) {
+    shared.hideCompactedMessages = source.hideCompactedMessages !== false
   }
   if (Object.prototype.hasOwnProperty.call(source, 'compactPrompt')) {
     shared.compactPrompt = typeof source.compactPrompt === 'string' && source.compactPrompt.trim()

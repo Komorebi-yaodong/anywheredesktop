@@ -2560,6 +2560,7 @@ const currentImageViewerIndex = ref(0);
 
 const toolCallControllers = ref(new Map());
 let activeAssistantTurnMeta = null;
+let isReasking = false;
 const tempSessionMcpServerIds = ref([]);
 
 const isAutoApproveTools = ref(true);
@@ -4152,7 +4153,7 @@ const syncStickyScrollAfterRender = () => {
 const handleSaveSession = () => handleSaveAction();
 const handleDeleteMessage = (index) => deleteMessage(index);
 const handleCopyText = (content, index) => copyText(content, index);
-const handleReAsk = () => reaskAI();
+const handleReAsk = (assistantMessageId) => reaskAI(assistantMessageId);
 const handleShowSystemPrompt = () => {
   systemPromptContent.value = currentSystemPrompt.value;
   systemPromptDialogVisible.value = true;
@@ -9169,40 +9170,63 @@ const cancelAskAI = () => {
   focusChatInputIfSafe({ cursor: 'end' });
 };
 const copyText = async (content, index) => { if (loading.value && index === chat_show.value.length - 1) return; await window.api.copyText(content); };
-const reaskAI = async () => {
-  if (loading.value) return;
-
-  // fullHistory remains the authoritative transcript after compaction. history is only the shorter
-  // outbound projection, so it must never decide how many UI bubbles to remove.
-  const lastVisibleMessageIndexInFullHistory = fullHistory.value.findLastIndex((message) => (
-    message?.role === 'user' || message?.role === 'assistant'
-  ));
-  if (lastVisibleMessageIndexInFullHistory < 0) {
-    showDismissibleMessage.warning('没有可以重新提问的用户消息');
+const reaskAI = async (assistantMessageId = null) => {
+  if (loading.value || isReasking) return;
+  if (compacting.value || isPreparingSend.value) {
+    showDismissibleMessage.warning('当前状态暂不可重新请求');
     return;
   }
 
-  const lastVisibleMessage = fullHistory.value[lastVisibleMessageIndexInFullHistory];
-  if (lastVisibleMessage.role === 'assistant') {
-    const assistantSignature = getComparableRenderableSignature(lastVisibleMessage);
-    fullHistory.value.splice(lastVisibleMessageIndexInFullHistory);
-    syncHistoryFromFullHistory();
+  isReasking = true;
+  try {
+    // fullHistory remains the authoritative transcript after compaction. history is only the shorter
+    // outbound projection, so it must never decide how many UI bubbles to remove.
+    const lastVisibleMessageIndexInFullHistory = fullHistory.value.findLastIndex((message) => (
+      message?.role === 'user' || message?.role === 'assistant'
+    ));
+    if (lastVisibleMessageIndexInFullHistory < 0) {
+      showDismissibleMessage.warning('没有可以重新提问的用户消息');
+      return;
+    }
 
-    // Remove only the matching trailing assistant bubble. Never infer a UI deletion count from
-    // the compacted request projection, which could otherwise remove the preceding user bubble.
-    const showIndex = findTailUiMessageIndexBySignature(assistantSignature);
-    if (showIndex >= 0) chat_show.value.splice(showIndex, 1);
-  } else if (lastVisibleMessage.role === 'user') {
-    // A stale persisted cache can omit this bubble although the outgoing request has it.
-    ensureLatestTailUserBubble();
-  } else {
-    showDismissibleMessage.warning('无法从此消息类型重新提问。');
-    return;
+    const lastVisibleMessage = fullHistory.value[lastVisibleMessageIndexInFullHistory];
+    if (lastVisibleMessage.role === 'assistant') {
+      const assistantSignature = getComparableRenderableSignature(lastVisibleMessage);
+      const hasAssistantMessageId = assistantMessageId !== null && assistantMessageId !== undefined;
+      const idMatchedShowIndex = hasAssistantMessageId
+        ? chat_show.value.findIndex((message) => message?.role === 'assistant' && message.id === assistantMessageId)
+        : -1;
+      // IDs are stable for live bubbles. Keep the signature lookup only for legacy callers that
+      // cannot provide one; never mutate fullHistory until a UI deletion target is verified.
+      const showIndex = hasAssistantMessageId
+        ? idMatchedShowIndex
+        : findTailUiMessageIndexBySignature(assistantSignature);
+      const lastVisibleMessageIndexInShow = chat_show.value.findLastIndex((message) => (
+        message?.role === 'user' || message?.role === 'assistant'
+      ));
+      if (showIndex < 0 || showIndex !== lastVisibleMessageIndexInShow) {
+        showDismissibleMessage.warning('消息状态已变化，未重新请求');
+        return;
+      }
+
+      // Delete the verified UI bubble and the authoritative transcript together before starting
+      // the new request. This prevents a stale UI cache from leaving the old reply on screen.
+      chat_show.value.splice(showIndex, 1);
+      fullHistory.value.splice(lastVisibleMessageIndexInFullHistory);
+      syncHistoryFromFullHistory();
+    } else if (lastVisibleMessage.role === 'user') {
+      // A stale persisted cache can omit this bubble although the outgoing request has it.
+      ensureLatestTailUserBubble();
+    } else {
+      showDismissibleMessage.warning('无法从此消息类型重新提问。');
+      return;
+    }
+
+    collapsedMessages.value.clear();
+    await askAI(true);
+  } finally {
+    isReasking = false;
   }
-
-  collapsedMessages.value.clear();
-  await nextTick();
-  await askAI(true);
 };
 
 const deleteMessage = (index) => {

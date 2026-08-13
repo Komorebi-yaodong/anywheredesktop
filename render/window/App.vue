@@ -1757,6 +1757,9 @@ const getOutermostCompactionIndexIn = (list = []) => {
   return -1;
 };
 
+// This computed intentionally depends only on list structure and message roles. Streaming updates
+// mutate the last message content, so Vue keeps this projection cached instead of re-scanning history.
+
 const renderedChatMessages = computed(() => {
   const messages = Array.isArray(chat_show.value) ? chat_show.value : [];
   const outermostIndex = compactConfig.value.hideCompactedMessages === false
@@ -8332,6 +8335,7 @@ const askAI = async (forceSend = false) => {
   const apiType = currentProviderConfig?.apiType || 'chat_completions';
 
   let currentAssistantChatShowIndex = -1;
+  let cancelPendingStreamingDisplay = null;
 
   try {
     // --- 3. 开始工具调用循环 ---
@@ -8484,6 +8488,7 @@ const askAI = async (forceSend = false) => {
         let aggregatedExtraContent = null;
         let aggregatedUsage = null;
         let lastUpdateTime = Date.now();
+        let streamingDisplayRafId = null;
 
         const responsesItemIdToIndexMap = new Map();
 
@@ -8503,6 +8508,20 @@ const askAI = async (forceSend = false) => {
           lastUpdateTime = Date.now();
           syncStickyScrollAfterRender();
           scheduleLoadingAutoSave('assistant-stream');
+        };
+
+        // Receive every chunk immediately, but merge expensive Vue/Markdown/layout work into one frame.
+        const cancelScheduledStreamingDisplay = () => {
+          if (streamingDisplayRafId !== null) cancelAnimationFrame(streamingDisplayRafId);
+          streamingDisplayRafId = null;
+        };
+        cancelPendingStreamingDisplay = cancelScheduledStreamingDisplay;
+        const scheduleStreamingDisplay = () => {
+          if (streamingDisplayRafId !== null) return;
+          streamingDisplayRafId = requestAnimationFrame(() => {
+            streamingDisplayRafId = null;
+            flushStreamingDisplay();
+          });
         };
 
         for await (const part of stream) {
@@ -8528,10 +8547,8 @@ const askAI = async (forceSend = false) => {
               if (chat_show.value[currentAssistantChatShowIndex].status !== 'thinking') {
                 chat_show.value[currentAssistantChatShowIndex].status = 'thinking';
               }
-              if (Date.now() - lastUpdateTime > 100) {
-                chat_show.value[currentAssistantChatShowIndex].reasoning_content = aggregatedReasoningContent;
-                lastUpdateTime = Date.now();
-              }
+              // The content update below is frame-coalesced with regular output.
+              // Keep this branch state-only so reasoning does not bypass the UI throttle.
             }
             else if (part.type === 'response.output_item.added') {
               if (part.item && part.item.type === 'function_call') {
@@ -8569,10 +8586,8 @@ const askAI = async (forceSend = false) => {
               if (chat_show.value[currentAssistantChatShowIndex].status !== 'thinking') {
                 chat_show.value[currentAssistantChatShowIndex].status = 'thinking';
               }
-              if (Date.now() - lastUpdateTime > 100) {
-                chat_show.value[currentAssistantChatShowIndex].reasoning_content = aggregatedReasoningContent;
-                lastUpdateTime = Date.now();
-              }
+              // The content update below is frame-coalesced with regular output.
+              // Keep this branch state-only so reasoning does not bypass the UI throttle.
             }
 
             if (delta.content) {
@@ -8627,15 +8642,17 @@ const askAI = async (forceSend = false) => {
           }
 
           if (Date.now() - lastUpdateTime > throttleDelay) {
-            flushStreamingDisplay();
+            scheduleStreamingDisplay();
           }
         }
         if (isTurnAborted()) {
+          cancelScheduledStreamingDisplay();
           if (isCurrentAssistantTurn()) {
             flushStreamingDisplay(true);
           }
           throw createAbortError();
         }
+        cancelScheduledStreamingDisplay();
         flushStreamingDisplay(true);
 
 
@@ -8986,6 +9003,9 @@ const askAI = async (forceSend = false) => {
       }
     }
   } catch (error) {
+    // A queued frame must never overwrite the cancellation/error terminal state.
+    cancelPendingStreamingDisplay?.();
+    cancelPendingStreamingDisplay = null;
     const aborted = isAbortError(error);
     const staleTurn = !isCurrentAssistantTurn();
     if (staleTurn) {
@@ -9035,6 +9055,8 @@ const askAI = async (forceSend = false) => {
     scheduleAutoSave({ reason: aborted ? 'assistant-cancelled-error' : 'assistant-error', immediate: true });
 
   } finally {
+    cancelPendingStreamingDisplay?.();
+    cancelPendingStreamingDisplay = null;
     const stillOwnsTurn = activeAssistantTurnMeta === turnMeta;
     const stillOwnsSignal = signalController.value === requestAbortController;
     if (stillOwnsTurn || stillOwnsSignal) {
@@ -9533,11 +9555,18 @@ const handleOpenSearch = () => {
   }
 };
 
-const navMessages = computed(() => {
-  return chat_show.value
-    .map((msg, index) => ({ ...msg, originalIndex: index, navKind: msg?.role === 'compaction' ? 'compaction' : 'normal' }))
-    .filter((msg) => msg?.role && msg.role !== 'system');
-});
+// Reuse the visible-message projection so hidden compacted history also leaves the
+// navigation DOM. Keep original chat_show indexes for edit/delete/navigation compatibility.
+const navMessages = computed(() => renderedChatMessages.value
+  .filter(({ message }) => message?.role && message.role !== 'system')
+  .map(({ message, index }) => ({
+    id: message.id,
+    role: message.role,
+    message,
+    originalIndex: index,
+    navKind: message.role === 'compaction' ? 'compaction' : 'normal'
+  }))
+);
 
 
 
@@ -9696,7 +9725,7 @@ const scrollToMessageByIndex = async (index) => {
             <div ref="navTimelineScrollerRef" class="timeline-scroller no-scrollbar">
               <div v-for="msg in navMessages" :key="msg.id" class="timeline-node-wrapper"
                 :data-original-index="msg.originalIndex" @click="scrollToMessageByIndex(msg.originalIndex)">
-                <el-tooltip :content="getMessagePreviewText(msg)" placement="left" :show-after="200" :enterable="false"
+                <el-tooltip :content="getMessagePreviewText(msg.message)" placement="left" :show-after="200" :enterable="false"
                   effect="dark">
                   <div class="timeline-node" :class="[
                     msg.role,

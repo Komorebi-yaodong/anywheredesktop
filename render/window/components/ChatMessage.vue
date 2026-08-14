@@ -481,6 +481,11 @@ const onCopyImage = async () => {
 
 
 // 如果是最后一条消息 && 正在加载 && 没有正在进行的思考内容
+const preparingStatusText = computed(() => {
+  if (props.message?.status === 'compacting') return '正在压缩上下文…';
+  return props.message?.status === 'preparing' ? '正在检查上下文并准备请求…' : '';
+});
+
 const showBubbleLoading = computed(() => {
   if (!props.isLastMessage || !props.isLoading) return false;
   
@@ -867,7 +872,7 @@ const collapseThinking = () => {
 const hasContentToShow = computed(() => {
   const hasText = renderedMarkdownContent.value && renderedMarkdownContent.value.trim().length > 0;
   const hasTools = props.message.tool_calls && props.message.tool_calls.length > 0;
-  return hasText || hasTools || isEditing.value || showBubbleLoading.value;
+  return hasText || hasTools || Boolean(preparingStatusText.value) || isEditing.value || showBubbleLoading.value;
 });
 
 const shouldShowCollapseButton = computed(() => {
@@ -1089,7 +1094,8 @@ const truncateFilename = (filename, maxLength = 30) => {
           </Thinking>
         </template>
         <template #content v-if="hasContentToShow">
-          <div v-if="!isEditing" ref="markdownRootRef" class="markdown-wrapper" :class="{ 'collapsed': isCollapsed }" @click.capture="handleMarkdownLinkClick">
+          <div v-if="preparingStatusText" class="preparing-status-text">{{ preparingStatusText }}</div>
+          <div v-else-if="!isEditing" ref="markdownRootRef" class="markdown-wrapper" :class="{ 'collapsed': isCollapsed }" @click.capture="handleMarkdownLinkClick">
             <XMarkdown :markdown="renderedMarkdownContent" :is-dark="isDarkMode" :enable-latex="true"
               :mermaid-config="mermaidConfig" :default-theme-mode="isDarkMode ? 'dark' : 'light'"
               :themes="{ light: 'one-light', dark: 'vesper' }" :allow-html="true" />
@@ -2269,6 +2275,14 @@ html.dark .token-usage-row {
   opacity: 0.8;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+
+.preparing-status-text {
+  color: var(--el-text-color-secondary, #667085);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 2px 0;
 }
 
 .message-thinking {

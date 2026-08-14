@@ -2256,7 +2256,7 @@ const runConversationCompact = async ({
 };
 
 // 工具循环内：tool 结果写回后、下一轮 AI 请求前检测并压缩
-const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request' } = {}) => {
+const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request', onCompacting } = {}) => {
   if (autoCompactSuppressedForTurn.value) {
     autoCompactSuppressedForTurn.value = false;
     return false;
@@ -2268,6 +2268,7 @@ const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request' } = {}
     // 不在这里 sync 掉内存 history 的 tool 细节；rehydrate 已保证 tool 完整
     const need = await shouldCompactNow(history.value);
     if (!need) return false;
+    onCompacting?.();
     const ok = await runConversationCompact({
       manual: false,
       allowDuringLoading: true,
@@ -2778,6 +2779,7 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   }
 
   const currentBubble = chat_show.value[assistantBubbleIndex];
+  delete currentBubble.isPreparing;
   const finalContent = appendTerminalNoticeToAssistantContent(currentBubble.content, ASSISTANT_CANCELLED_NOTICE_MARKDOWN);
   const finalReasoningContent = typeof currentBubble.reasoning_content === 'string'
     ? currentBubble.reasoning_content
@@ -6271,7 +6273,10 @@ const getSessionDataAsObject = (options = {}) => {
   rehydrateHistoryToolsIfNeeded();
   syncHistoryFromFullHistory();
   // Do not reconcile chat_show here: serializing must stay off the close/save hot path.
-  const fullChatShow = Array.isArray(chat_show.value) ? chat_show.value : [];
+  // A preparing bubble is visual feedback only; never persist it as conversation history.
+  const fullChatShow = Array.isArray(chat_show.value)
+    ? chat_show.value.filter((message) => message?.isPreparing !== true)
+    : [];
   const historyToSave = history.value;
   return {
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
@@ -8277,14 +8282,8 @@ const askAI = async (forceSend = false) => {
     if (!added) return;
   }
 
-  // 用户消息写入后、进入 AI 请求前：若已超阈值，先压缩再开跑
-  try {
-    await maybeAutoCompactBeforeNextRequest({ reason: 'before-askAI' });
-  } catch (error) {
-    console.warn('[compact] before-askAI compact failed:', error);
-  }
-
-  // --- 2. 初始化 AI 回合 ---
+  // --- 2. 初始化 AI 回合并立即显示 UI 专用准备气泡 ---
+  // This bubble is deliberately absent from fullHistory until a real assistant result exists.
   loading.value = true;
   syncAutoCloseOnBlurListener();
   const turnId = activeAssistantTurnId.value + 1;
@@ -8308,6 +8307,56 @@ const askAI = async (forceSend = false) => {
     }
   };
 
+  const preparingAssistantMessageId = messageIdCounter.value++;
+  chat_show.value.push({
+    id: preparingAssistantMessageId,
+    role: 'assistant',
+    content: [],
+    reasoning_content: '',
+    status: 'preparing',
+    aiName: getCurrentAssistantDisplayName(),
+    voiceName: selectedVoice.value,
+    tool_calls: [],
+    startTime: Date.now(),
+    isPreparing: true
+  });
+  turnMeta.assistantMessageId = preparingAssistantMessageId;
+  let currentAssistantChatShowIndex = chat_show.value.length - 1;
+  let hasReusedPreparingBubble = false;
+  let cancelPendingStreamingDisplay = null;
+
+  // Yield a DOM tick and paint frame before token estimation / compaction work.
+  await nextTick();
+  await nextAnimationFrame();
+  if (isAtBottom.value) {
+    isSticky.value = true;
+    scrollToBottom('auto');
+  }
+  if (isTurnAborted()) {
+    if (!turnMeta.cancellationRecorded) finalizeCancelledAssistantTurn(turnMeta);
+    return;
+  }
+
+  // 用户消息写入后、进入 AI 请求前：若已超阈值，先压缩再开跑。
+  // The UI bubble remains visual-only while this asynchronous preflight is running.
+  try {
+    await maybeAutoCompactBeforeNextRequest({
+      reason: 'before-askAI',
+      onCompacting: () => {
+        const preparingBubble = chat_show.value.find((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
+        if (preparingBubble) preparingBubble.status = 'compacting';
+      }
+    });
+  } catch (error) {
+    console.warn('[compact] before-askAI compact failed:', error);
+  }
+  const preparingBubble = chat_show.value.find((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
+  if (preparingBubble) preparingBubble.status = 'preparing';
+  if (isTurnAborted()) {
+    if (!turnMeta.cancellationRecorded) finalizeCancelledAssistantTurn(turnMeta);
+    return;
+  }
+
   const shouldTriggerAutoNaming = !defaultConversationName.value && chat_show.value.filter(msg => msg.role === 'user').length === 1;
   if (shouldTriggerAutoNaming) {
     triggerAutoNamingForFirstUserMessage({ force: false, requestSignal }).catch((error) => {
@@ -8315,14 +8364,6 @@ const askAI = async (forceSend = false) => {
         console.warn('[Auto Naming] trigger failed:', error);
       }
     });
-  }
-
-  await nextTick();
-  if (isTurnAborted()) return;
-
-  if (isAtBottom.value) {
-    isSticky.value = true;
-    scrollToBottom('auto');
   }
 
   const currentPromptConfig = currentConfig.value.prompts[CODE.value];
@@ -8333,9 +8374,6 @@ const askAI = async (forceSend = false) => {
   // 获取当前服务商的 API 类型
   const currentProviderConfig = currentConfig.value.providers[currentProviderID.value];
   const apiType = currentProviderConfig?.apiType || 'chat_completions';
-
-  let currentAssistantChatShowIndex = -1;
-  let cancelPendingStreamingDisplay = null;
 
   try {
     // --- 3. 开始工具调用循环 ---
@@ -8462,16 +8500,29 @@ const askAI = async (forceSend = false) => {
       }
 
       throwIfTurnAborted();
-      const assistantMessageId = messageIdCounter.value++;
-      chat_show.value.push({
-        id: assistantMessageId,
-        role: "assistant", content: [], reasoning_content: "", status: "",
-        aiName: modelMap.value[model.value] || model.value.split('|')[1],
-        voiceName: selectedVoice.value, tool_calls: [],
-        startTime: Date.now()
-      });
+      const preparingIndex = hasReusedPreparingBubble
+        ? -1
+        : chat_show.value.findIndex((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
+      let assistantMessageId;
+      if (preparingIndex >= 0) {
+        currentAssistantChatShowIndex = preparingIndex;
+        assistantMessageId = preparingAssistantMessageId;
+        const preparingBubble = chat_show.value[preparingIndex];
+        delete preparingBubble.isPreparing;
+        preparingBubble.status = '';
+        hasReusedPreparingBubble = true;
+      } else {
+        assistantMessageId = messageIdCounter.value++;
+        chat_show.value.push({
+          id: assistantMessageId,
+          role: "assistant", content: [], reasoning_content: "", status: "",
+          aiName: modelMap.value[model.value] || model.value.split('|')[1],
+          voiceName: selectedVoice.value, tool_calls: [],
+          startTime: Date.now()
+        });
+        currentAssistantChatShowIndex = chat_show.value.length - 1;
+      }
       turnMeta.assistantMessageId = assistantMessageId;
-      currentAssistantChatShowIndex = chat_show.value.length - 1;
 
       if (isAtBottom.value) scrollToBottom('auto');
 
@@ -9029,6 +9080,7 @@ const askAI = async (forceSend = false) => {
     }
 
     const currentBubble = chat_show.value[errorBubbleIndex];
+    delete currentBubble.isPreparing;
     let finalContent;
     let finalReasoningContent;
     if (aborted) {

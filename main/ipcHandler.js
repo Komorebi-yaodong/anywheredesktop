@@ -592,6 +592,15 @@ handleInvoke('data:getConfig', async () => {
     return dataApi.restoreImportedConfig(importedConfig)
   })
 
+
+  handleInvoke('data:getTaskDeviceIdentity', async () => dataApi.getTaskDeviceIdentity())
+  handleInvoke('data:setTaskDeviceEnabled', async (_event, taskId = '', enabled = false) => {
+    return dataApi.setTaskDeviceEnabled(taskId, enabled)
+  })
+  handleInvoke('data:removeTaskAppliedDevice', async (_event, taskId = '', device = {}) => {
+    return dataApi.removeTaskAppliedDevice(taskId, device)
+  })
+
   handleInvoke('data:exportMemoryData', async () => {
     return dataApi.exportMemoryData()
   })

@@ -1,5 +1,7 @@
 import { runTaskById } from './task_runner.js'
 
+import { reconcileTaskDeviceState, setCurrentTaskDeviceEnabled } from './task_devices.js'
+
 const CHECK_INTERVAL_MS = 1000
 const PROCESSED_SLOT_TTL_MS = 48 * 60 * 60 * 1000
 let schedulerTimer = null
@@ -141,6 +143,10 @@ async function checkTasks({ dataApi, openWindow } = {}) {
       const now = Date.now()
       const nowDate = new Date(now)
       const task = tasks[taskId]
+
+      const deviceState = reconcileTaskDeviceState(task)
+      if (!deviceState.enabled) continue
+      needsUpdate = needsUpdate || deviceState.changed
       const slotKey = getDueRunSlotKey(taskId, task, now, nowDate)
       if (!slotKey) continue
 
@@ -155,7 +161,7 @@ async function checkTasks({ dataApi, openWindow } = {}) {
         task.lastRunTime = completedAt
         task.lastRunSlotKey = slotKey
         if (task.triggerType === 'single') {
-          task.enabled = false
+          setCurrentTaskDeviceEnabled(task, false)
         }
         processedRunSlots.set(slotKey, completedAt)
         needsUpdate = true

@@ -6,6 +6,14 @@ import { app } from 'electron'
 import { safeClone } from '../dataConverter.js'
 import { fetchWithProxy } from './net.js'
 import { getBuiltinServers as getBuiltinMcpServers } from './mcp_builtin.js'
+
+import {
+  getCurrentTaskDevice,
+  reconcileTaskDeviceStates,
+  removeTaskAppliedDevice as removeTaskAppliedDeviceEntry,
+  serializeTasksForSharedStorage,
+  setCurrentTaskDeviceEnabled
+} from './task_devices.js'
 import {
   get as dbGet,
   put as dbPut,
@@ -568,7 +576,7 @@ function splitConfigForStorage(fullConfig) {
     promptsPart: ensureObject(prompts, {}),
     providersPart: ensureObject(providers, {}),
     mcpServersPart: ensureObject(mcpServers, {}),
-    tasksPart: ensureObject(tasks, {}),
+    tasksPart: serializeTasksForSharedStorage(tasks),
     localConfigPart
   }
 }
@@ -1054,6 +1062,12 @@ async function readStoredConfigSnapshot() {
   mergedConfig.providers = ensureObject(providersPart, deepClone(defaultConfig.config.providers))
   mergedConfig.mcpServers = ensureObject(mcpServersPart, {})
   mergedConfig.tasks = ensureObject(tasksPart, {})
+
+  const taskDeviceReconcile = reconcileTaskDeviceStates(mergedConfig.tasks)
+  const sharedTasks = serializeTasksForSharedStorage(mergedConfig.tasks)
+  if (taskDeviceReconcile.changed || JSON.stringify(tasksPart) !== JSON.stringify(sharedTasks)) {
+    await writeDocData(TASKS_DOC_ID, sharedTasks)
+  }
   mergedConfig.skillPath = typeof localPart.skillPath === 'string' ? localPart.skillPath : ''
 
   if (!mergedConfig.webdav || typeof mergedConfig.webdav !== 'object') {
@@ -1144,6 +1158,9 @@ async function persistConfigSnapshot(config, options = {}) {
       })
     }
   }
+
+
+  reconcileTaskDeviceStates(plainConfig.tasks)
 
   if (!skipNotify) {
     await notifyConfigUpdated(plainConfig)
@@ -1511,6 +1528,38 @@ export async function savePromptWindowSettings(promptKey, settings = {}) {  if 
   }
   return result
 }
+
+export function getTaskDeviceIdentity() {
+  return getCurrentTaskDevice()
+}
+
+export async function setTaskDeviceEnabled(taskId = '', enabled = false) {
+  const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : ''
+  if (!normalizedTaskId) throw new Error('task_id_required')
+
+  const configResult = await getConfig()
+  const config = ensureObject(configResult?.config, {})
+  const task = config?.tasks?.[normalizedTaskId]
+  if (!task || typeof task !== 'object') throw new Error('task_not_found')
+
+  setCurrentTaskDeviceEnabled(task, enabled === true)
+  if (task.enabled) task.lastRunTime = Date.now()
+  return updateConfigWithoutFeatures({ config })
+}
+
+export async function removeTaskAppliedDevice(taskId = '', device = {}) {
+  const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : ''
+  if (!normalizedTaskId) throw new Error('task_id_required')
+
+  const configResult = await getConfig()
+  const config = ensureObject(configResult?.config, {})
+  const task = config?.tasks?.[normalizedTaskId]
+  if (!task || typeof task !== 'object') throw new Error('task_not_found')
+
+  removeTaskAppliedDeviceEntry(task, device)
+  return updateConfigWithoutFeatures({ config })
+}
+
 
 export async function addTaskHistory(taskId, logEntry) {
   if (typeof taskId !== 'string' || !taskId.trim()) {

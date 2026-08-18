@@ -7,6 +7,7 @@ import { handleFilePath, parseFileObject } from './file.js'
 import { createChatCompletion } from './chat.js'
 import { get as dbGet, put as dbPut, remove as dbRemove, allDocs as dbAllDocs } from './db.js'
 import { getConfig, updateConfigWithoutFeatures, resolveDefaultAssistantModel } from './data.js'
+import { setCurrentTaskDeviceEnabled } from './task_devices.js'
 import { fetchWithProxy } from './net.js'
 import * as MarkitdownModule from 'markitdown-js'
 import { encode as encodeTokens, decode as decodeTokens } from 'gpt-tokenizer'
@@ -3562,6 +3563,7 @@ ${agentStr}`;
                 singleDate: single_date || new Date().toISOString().split('T')[0],
                 singleTime: '12:00',
             };
+            setCurrentTaskDeviceEnabled(newTask, enabled === true);
 
             if (interval_time_ranges && Array.isArray(interval_time_ranges)) {
                 newTask.intervalTimeRanges = interval_time_ranges.map(r => r.split('-')).filter(r => r.length === 2);
@@ -3745,10 +3747,10 @@ ${agentStr}`;
 
             if (!targetId) return `Error: Task "${task_name_or_id}" not found.`;
 
-            tasks[targetId].enabled = enable;
+            setCurrentTaskDeviceEnabled(tasks[targetId], enable === true);
 
             // Reset last run time if enabling, so it doesn't trigger immediately if missed
-            if (enable) {
+            if (tasks[targetId].enabled) {
                 tasks[targetId].lastRunTime = Date.now();
             }
 

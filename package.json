@@ -48,6 +48,7 @@
     "markitdown-js": "^0.0.14",
     "mime-db": "^1.54.0",
     "node-domexception": "^1.0.0",
+    "node-machine-id": "^1.1.12",
     "openai": "6.18.0",
     "pinyin-pro": "^3.28.0",
     "webdav": "^5.9.0",

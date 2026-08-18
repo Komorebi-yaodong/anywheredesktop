@@ -1,3 +1,5 @@
+import { reconcileTaskDeviceState } from './task_devices.js'
+
 export async function runTaskById({ taskId = '', dataApi, openWindow } = {}) {
   const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : ''
   if (!normalizedTaskId) {
@@ -33,6 +35,16 @@ export async function runTaskById({ taskId = '', dataApi, openWindow } = {}) {
     return {
       success: false,
       reason: 'task_not_found',
+      taskId: normalizedTaskId
+    }
+  }
+
+
+  const deviceState = reconcileTaskDeviceState(task)
+  if (!deviceState.enabled) {
+    return {
+      success: false,
+      reason: 'task_not_enabled_on_current_device',
       taskId: normalizedTaskId
     }
   }

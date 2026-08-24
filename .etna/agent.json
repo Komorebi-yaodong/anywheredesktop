@@ -1,0 +1,27 @@
+{
+  "schema": "etna-agent-contract/v1",
+  "generatedBy": "Agent Etna",
+  "agent": {
+    "name": "core",
+    "role": null,
+    "repo": "Komorebi-yaodong/anywheredesktop",
+    "branch": "main"
+  },
+  "calibration": null,
+  "guardrails": [
+    "No behavioral calibration set yet — Agent Etna uses general defaults until you calibrate this agent."
+  ],
+  "changelog": [
+    {
+      "date": "2026-08-24",
+      "cycleNumber": 1,
+      "changes": [
+        {
+          "capability": "intent-comprehension",
+          "rationale": "The agent needs to be explicitly told to clarify ambiguous or abstract requests by relating them to its concrete capabilities."
+        }
+      ],
+      "merged": true
+    }
+  ]
+}

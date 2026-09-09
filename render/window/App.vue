@@ -2564,6 +2564,9 @@ const currentImageViewerIndex = ref(0);
 
 const toolCallControllers = ref(new Map());
 let activeAssistantTurnMeta = null;
+// Must be initialized before reask/buffer guards and MCP completion watchers reference it.
+const isMcpLoading = ref(false);
+let isFlushingAppendBuffer = false;
 let isReasking = false;
 const tempSessionMcpServerIds = ref([]);
 
@@ -2634,14 +2637,21 @@ const drainBufferIntoHistory = async () => {
 };
 
 const flushAppendBuffer = async () => {
-  if (loading.value || isPreparingSend.value) return;
-  const appendedAny = await drainBufferIntoHistory();
-  if (appendedAny) {
-    await askAI(true);
+  // A buffered turn may begin only after the previous turn has fully released ownership.
+  // isMcpLoading is deliberately declared before this function.
+  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value) return;
+  isFlushingAppendBuffer = true;
+  try {
+    const appendedAny = await drainBufferIntoHistory();
+    if (appendedAny) {
+      await askAI(true);
+    }
+  } finally {
+    isFlushingAppendBuffer = false;
   }
 };
 
-watch(loading, (now, prev) => {
+watch(isMcpLoading, (now, prev) => {
   if (prev && !now) {
     nextTick(() => { flushAppendBuffer(); });
   }
@@ -3304,7 +3314,6 @@ const isMcpDialogVisible = ref(false);
 const sessionMcpServerIds = ref([]);
 const openaiFormattedTools = ref([]);
 const mcpSearchQuery = ref('');
-const isMcpLoading = ref(false);
 const mcpFilter = ref('all');
 const isRefreshingMcp = ref(false);
 const mcpToolCache = ref({});
@@ -9155,10 +9164,6 @@ const askAI = async (forceSend = false) => {
     cancelPendingStreamingDisplay = null;
     const stillOwnsTurn = activeAssistantTurnMeta === turnMeta;
     const stillOwnsSignal = signalController.value === requestAbortController;
-    if (stillOwnsTurn || stillOwnsSignal) {
-      loading.value = false;
-      syncAutoCloseOnBlurListener();
-    }
     if (stillOwnsSignal) {
       signalController.value = null;
     }
@@ -9227,8 +9232,13 @@ const askAI = async (forceSend = false) => {
         await maybeAutoCompactAfterTurn();
       }
     }
-    if (stillOwnsTurn) {
+    if (activeAssistantTurnMeta === turnMeta) {
+      // Do not release busy state until this turn has completed every finalizer above.
+      // The next buffered turn is started only after ownership is cleared.
       activeAssistantTurnMeta = null;
+      loading.value = false;
+      syncAutoCloseOnBlurListener();
+      await flushAppendBuffer();
     }
   }
 };
@@ -9285,13 +9295,14 @@ const cancelAskAI = () => {
   loading.value = false;
   syncAutoCloseOnBlurListener();
   scheduleAutoSave({ reason: 'assistant-cancelled', immediate: true });
+  nextTick(() => { flushAppendBuffer(); });
   focusChatInputIfSafe({ cursor: 'end' });
 };
 const copyText = async (content, index) => { if (loading.value && index === chat_show.value.length - 1) return; await window.api.copyText(content); };
 const reaskAI = async (assistantMessageId = null) => {
   if (loading.value || isReasking) return;
-  if (compacting.value || isPreparingSend.value) {
-    showDismissibleMessage.warning('当前状态暂不可重新请求');
+  if (isMcpLoading.value || compacting.value || isPreparingSend.value) {
+    showDismissibleMessage.warning(isMcpLoading.value ? '工具加载中，暂不可重新请求' : '当前状态暂不可重新请求');
     return;
   }
 

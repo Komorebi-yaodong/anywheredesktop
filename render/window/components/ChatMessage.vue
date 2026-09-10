@@ -663,7 +663,7 @@ const formatMessageFile = (content) => {
 };
 
 const isEditable = computed(() => {
-  if (props.message.role === 'user') return true;
+  if (props.message.role === 'user') return props.message.origin !== 'view_image';
   const content = props.message.content;
   if (typeof content === 'string') return true;
   if (Array.isArray(content)) {
@@ -1006,7 +1006,7 @@ const truncateFilename = (filename, maxLength = 30) => {
       <div class="message-meta-header user-meta-header">
         <div class="meta-info-column user-meta-info-column">
           <div class="meta-name-row user-meta-name-row">
-            <span class="user-name">{{ userNickname || 'User' }}</span>
+            <span class="user-name">{{ message.origin === 'view_image' ? '工具读取图片' : (userNickname || 'User') }}</span>
           </div>
           <span class="timestamp-row" v-if="message.timestamp">{{ formatTimestamp(message.timestamp) }}</span>
         </div>

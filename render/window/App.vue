@@ -1280,10 +1280,13 @@ const toHistoryMessageFromUi = (message) => {
     };
   }
   if (message.role === 'user') {
-    return {
+    const next = {
       role: 'user',
       content: message.content
     };
+    if (message.origin === 'view_image') next.origin = 'view_image';
+    if (message.sourceToolCallId) next.sourceToolCallId = message.sourceToolCallId;
+    return next;
   }
   if (message.role === 'assistant') {
     const next = {
@@ -1332,6 +1335,9 @@ const toRequestMessageFromFullHistory = (message = {}) => {
   delete cloned.result;
   delete cloned.canRestore;
   delete cloned.coveredCount;
+  // UI-only metadata: the actual user content remains the durable multimodal API payload.
+  delete cloned.origin;
+  delete cloned.sourceToolCallId;
   return cloned;
 };
 
@@ -1699,7 +1705,7 @@ const splitFullHistoryPrefixAndTail = async (
   const windowMessages = list.slice(windowStart);
   const userStartIndexes = [];
   windowMessages.forEach((message, index) => {
-    if (message?.role === 'user' && index > 0) userStartIndexes.push(index);
+    if (isUserAuthoredMessage(message) && index > 0) userStartIndexes.push(index);
   });
   if (userStartIndexes.length === 0 || !Number.isFinite(Number(maxPrefixTokens)) || maxPrefixTokens <= 0) {
     return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]), maxPrefixTokens: Math.max(0, Number(maxPrefixTokens) || 0), tailStartUserOrdinal: 0 };
@@ -1971,7 +1977,7 @@ const splitAiWindowPrefixAndTail = (messages = [], tailStartUserOrdinal = 0) => 
   const windowMsgs = list.slice(windowStart);
   const userStartIndexes = [];
   windowMsgs.forEach((message, index) => {
-    if (message?.role === 'user' && index > 0) userStartIndexes.push(index);
+    if (isUserAuthoredMessage(message) && index > 0) userStartIndexes.push(index);
   });
   if (userStartIndexes.length === 0) return { windowStart, insertIndex: list.length, prefix: [], tail: windowMsgs };
 
@@ -2532,7 +2538,7 @@ const getConversationDisplayName = () => {
   const normalizedTitle = typeof defaultConversationName.value === 'string' ? defaultConversationName.value.trim() : '';
   if (normalizedTitle) return normalizedTitle;
 
-  const firstUserMsg = chat_show.value.find(msg => msg.role === 'user');
+  const firstUserMsg = chat_show.value.find(isUserAuthoredMessage);
   if (!firstUserMsg) return CODE.value || 'AI';
 
   const content = firstUserMsg.content;
@@ -2818,7 +2824,36 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   return assistantBubbleIndex;
 };
 
-// 单条 tool 结果进入 history 的硬顶，防止第三方 MCP / 意外大输出瞬间撑爆上下文
+// view_image results become regular, visible user media messages. This makes image context
+// durable across reask, save/restore, exports, and model-protocol switches.
+const getViewImagePayload = (result) => {
+  if (result?.__anywhereToolResult !== 'image') return null;
+  const mimeType = result?.image?.mimeType;
+  const encodedBytes = result?.image?.encodedBytes;
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(mimeType)) return null;
+  if (typeof encodedBytes !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(encodedBytes)) return null;
+  return {
+    dataUrl: `data:${mimeType};base64,${encodedBytes}`,
+    detail: result?.image?.detail === 'original' ? 'original' : 'high',
+    displayText: typeof result?.display?.text === 'string' ? result.display.text : 'Local image loaded for visual inspection.'
+  };
+};
+
+const isViewImageMessage = (message = {}) => message?.role === 'user' && message?.origin === 'view_image';
+const isUserAuthoredMessage = (message = {}) => message?.role === 'user' && !isViewImageMessage(message);
+
+const createViewImageMessage = (toolCallId, payload) => ({
+  id: messageIdCounter.value++,
+  role: 'user',
+  origin: 'view_image',
+  sourceToolCallId: toolCallId,
+  timestamp: new Date().toLocaleString('sv-SE'),
+  content: [
+    { type: 'text', text: 'The image returned by the view_image tool is attached below. Use it as visual context to continue the task.' },
+    { type: 'image_url', image_url: { url: payload.dataUrl, detail: payload.detail } }
+  ]
+});
+
 const MAX_TOOL_RESULT_CHARS = 48 * 1000;
 
 const truncateToolResultForHistory = (text = '') => {
@@ -5779,7 +5814,7 @@ const generateSuggestedConversationBasename = async ({
   firstUserMsg = null,
   allowFastModel = true
 } = {}) => {
-  const targetFirstUserMsg = firstUserMsg || chat_show.value.find(msg => msg.role === 'user') || null;
+  const targetFirstUserMsg = firstUserMsg || chat_show.value.find(isUserAuthoredMessage) || null;
   const fallbackNamePrefix = getFallbackConversationNamePrefix(targetFirstUserMsg) || CODE.value || 'AI';
   let generatedBaseTitle = '';
 
@@ -6015,7 +6050,7 @@ const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSign
     return defaultConversationName.value || '';
   }
 
-  const firstUserMsg = chat_show.value.find(msg => msg.role === 'user');
+  const firstUserMsg = chat_show.value.find(isUserAuthoredMessage);
   if (!firstUserMsg) return '';
 
   cancelAutoNamingRequest();
@@ -8414,7 +8449,7 @@ const askAI = async (forceSend = false) => {
     return;
   }
 
-  const shouldTriggerAutoNaming = !defaultConversationName.value && chat_show.value.filter(msg => msg.role === 'user').length === 1;
+  const shouldTriggerAutoNaming = !defaultConversationName.value && chat_show.value.filter(isUserAuthoredMessage).length === 1;
   if (shouldTriggerAutoNaming) {
     triggerAutoNamingForFirstUserMessage({ force: false, requestSignal }).catch((error) => {
       if (!isAbortError(error)) {
@@ -8866,6 +8901,7 @@ const askAI = async (forceSend = false) => {
 
 
       appendFullHistory(responseMessage);
+
       throwIfTurnAborted();
 
       // --- 更新 UI 气泡 ---
@@ -8903,6 +8939,9 @@ const askAI = async (forceSend = false) => {
         await nextTick();
         throwIfTurnAborted();
 
+        // Tool-generated images are stored as visible, durable user media messages after
+        // their matching text tool outputs. Keep an ID map because calls may execute in parallel.
+        const viewImageMessagesByToolCallId = new Map();
         // 工具调用执行逻辑
         const toolMessages = await Promise.all(
           responseMessage.tool_calls.map(async (toolCall) => {
@@ -9028,7 +9067,13 @@ const askAI = async (forceSend = false) => {
                   withConversationOwnerContext(executionContext)
                 );
 
-                toolContent = formatToolResult(result);
+                const imagePayload = getViewImagePayload(result);
+                if (imagePayload) {
+                  viewImageMessagesByToolCallId.set(toolCall.id, createViewImageMessage(toolCall.id, imagePayload));
+                  toolContent = imagePayload.displayText;
+                } else {
+                  toolContent = formatToolResult(result);
+                }
                 throwIfTurnAborted();
 
                 if (uiToolCall) uiToolCall.result = toolContent;
@@ -9074,7 +9119,15 @@ const askAI = async (forceSend = false) => {
             }
           });
         }
-        appendFullHistory(...safeToolMessages);
+        const viewImageMessages = responseMessage.tool_calls
+          .map((toolCall) => viewImageMessagesByToolCallId.get(toolCall.id))
+          .filter(Boolean);
+        // Preserve strict tool-call/result adjacency first; visible image messages follow as
+        // ordinary user multimodal context and are therefore durable for reask and restore.
+        appendFullHistory(...safeToolMessages, ...viewImageMessages);
+        if (viewImageMessages.length > 0) {
+          chat_show.value.push(...viewImageMessages.map((message) => deepCloneSafe(message)));
+        }
         scheduleAutoSave({ reason: 'tool-calls-completed', immediate: true });
         // 工具调用完成后，把缓冲区消息插入历史，使下一轮请求即可纳入
         throwIfTurnAborted();
@@ -9390,6 +9443,10 @@ const deleteMessage = (index) => {
     while (chat_show.value[end + 1]?.role === 'tool') {
       end += 1;
     }
+    const calledIds = new Set(msgToDeleteInShow.tool_calls.map((call) => call?.id).filter(Boolean));
+    while (isViewImageMessage(chat_show.value[end + 1]) && calledIds.has(chat_show.value[end + 1]?.sourceToolCallId)) {
+      end += 1;
+    }
     show_delete_count = end - index + 1;
   }
 
@@ -9411,6 +9468,10 @@ const deleteMessage = (index) => {
       let cursor = fullStartIndex + 1;
       while (cursor < fullHistory.value.length && fullHistory.value[cursor]?.role === 'tool') {
         if (calledIds.size === 0 || calledIds.has(fullHistory.value[cursor]?.tool_call_id)) fullDeleteCount += 1;
+        cursor += 1;
+      }
+      while (isViewImageMessage(fullHistory.value[cursor]) && calledIds.has(fullHistory.value[cursor]?.sourceToolCallId)) {
+        fullDeleteCount += 1;
         cursor += 1;
       }
     }

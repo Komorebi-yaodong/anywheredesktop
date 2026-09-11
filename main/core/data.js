@@ -4,7 +4,7 @@ import crypto from 'node:crypto'
 import { app } from 'electron'
 
 import { safeClone } from '../dataConverter.js'
-import { fetchWithProxy } from './net.js'
+import { fetchWithProxy, normalizeNetworkProxyConfig } from './net.js'
 import { getBuiltinServers as getBuiltinMcpServers } from './mcp_builtin.js'
 
 import {
@@ -279,10 +279,11 @@ export const defaultConfig = {
         compactReserveOutput: 8000
       }
     },
-    settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],
+    settingsCardOrder: ['general', 'desktop', 'networkProxy', 'voice', 'data', 'webdav'],
     settingsCardCollapsed: {
       general: false,
       desktop: false,
+      networkProxy: false,
       voice: false,
       data: false,
       webdav: false
@@ -651,6 +652,11 @@ const rootDefaults = {
     isAlwaysOnTop_global: true,
     autoCloseOnBlur_global: true,
     autoSaveChat_global: false,
+    networkProxy: {
+      enabled: false,
+      server: '',
+      bypassRules: '<local>'
+    },
     zoom: 1,
     fastWindowPosition: null,
     voiceList: [...defaultConfig.config.voiceList],
@@ -671,10 +677,11 @@ const rootDefaults = {
         quickStartOpened: false
       }
     },
-    settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],
+    settingsCardOrder: ['general', 'desktop', 'networkProxy', 'voice', 'data', 'webdav'],
     settingsCardCollapsed: {
       general: false,
       desktop: false,
+      networkProxy: false,
       voice: false,
       data: false,
       webdav: false
@@ -695,6 +702,18 @@ const rootDefaults = {
       config[key] = deepClone(value)
       changed = true
     }
+  }
+
+
+  try {
+    const normalizedNetworkProxy = normalizeNetworkProxyConfig(config.networkProxy)
+    if (JSON.stringify(config.networkProxy) !== JSON.stringify(normalizedNetworkProxy)) {
+      config.networkProxy = normalizedNetworkProxy
+      changed = true
+    }
+  } catch {
+    config.networkProxy = deepClone(rootDefaults.networkProxy)
+    changed = true
   }
 
   config.providers = ensureObject(config.providers, deepClone(defaultConfig.config.providers))
@@ -1193,7 +1212,19 @@ export async function getConfig() {
 export async function saveSetting(keyPath, value) {
   await ensureConfigDocsIfMissing()
 
-  const normalizedValue = deepClone(value)
+  let normalizedValue = deepClone(value)
+
+
+  if (keyPath === 'networkProxy') {
+    try {
+      normalizedValue = normalizeNetworkProxyConfig(normalizedValue)
+    } catch (error) {
+      return {
+        success: false,
+        message: error?.message || 'network_proxy_server_invalid'
+      }
+    }
+  }
 
   if (keyPath === 'skillPath' || keyPath === 'webdav.localChatPath') {
     const localDoc = await readDocData(getLocalConfigId(), {

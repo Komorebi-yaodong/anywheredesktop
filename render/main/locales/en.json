@@ -935,7 +935,28 @@
         "restoreSuccess": "Restore successful.",
         "restoreFailed": "Restore failed."
       }
+    },    "networkProxy": {
+      "title": "Network Proxy",
+      "enabled": {
+        "label": "Enable app-only proxy",
+        "description": "Only affects Anywhere Desktop model requests, WebDAV, and built-in web tools; it does not change the system proxy."
+      },
+      "server": {
+        "label": "Proxy server",
+        "description": "Supports unauthenticated HTTP, HTTPS, or SOCKS5 proxies. A port is required.",
+        "placeholder": "Example: http://127.0.0.1:7890 or socks5://127.0.0.1:1080"
+      },
+      "bypassRules": {
+        "label": "Bypass rules",
+        "description": "Separate rules with commas. <local> bypasses localhost and local addresses by default.",
+        "placeholder": "<local>,*.lan,192.168.1.0/24"
+      },
+      "serverRequired": "Enter a proxy server first.",
+      "serverInvalid": "Invalid proxy server. Use an unauthenticated HTTP, HTTPS, or SOCKS5 URL with a port.",
+      "saved": "Network proxy configuration applied."
     },
+
+
     "desktop": {
       "title": "Desktop Settings",
       "closeToTray": {

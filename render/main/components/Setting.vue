@@ -90,6 +90,8 @@ const selectedLanguage = ref(locale.value);
 const collapsedCards = ref({
   general: false,
   desktop: false,
+
+  networkProxy: false,
   voice: false,
   data: false,
   webdav: false
@@ -98,6 +100,7 @@ const collapsedCards = ref({
 const cardDefinitions = {
   general: { id: 'general', titleKey: 'setting.title' },
   desktop: { id: 'desktop', titleKey: 'setting.desktop.title' },
+  networkProxy: { id: 'networkProxy', titleKey: 'setting.networkProxy.title' },
   voice: { id: 'voice', titleKey: 'setting.voice.title' },
   data: { id: 'data', titleKey: 'setting.dataManagement.title' },
   webdav: { id: 'webdav', titleKey: null, staticTitle: 'WebDAV' }
@@ -309,6 +312,7 @@ function initCardOrder() {
     settingsCards.value = [
       cardDefinitions.general,
       cardDefinitions.desktop,
+      cardDefinitions.networkProxy,
       cardDefinitions.voice,
       cardDefinitions.data,
       cardDefinitions.webdav
@@ -424,6 +428,7 @@ onMounted(() => {
   if (currentConfig.value) {
     ensureDesktopConfig();
     ensureDesktopProfileConfig();
+    ensureNetworkProxyConfig();
     initCardOrder();
   }
 });
@@ -441,6 +446,7 @@ watch(() => currentConfig.value, (newVal) => {
   if (newVal) {
     ensureDesktopConfig();
     ensureDesktopProfileConfig();
+    ensureNetworkProxyConfig();
     initCardOrder();
   }
 }, { once: true });
@@ -457,7 +463,7 @@ onBeforeUnmount(() => {
 async function saveSingleSetting(keyPath, value) {
   try {
     if (window.api && window.api.saveSetting) {
-      await window.api.saveSetting(keyPath, value);
+      return await window.api.saveSetting(keyPath, value);
     }
   } catch (error) {
     console.error(`Error saving setting for ${keyPath}:`, error);
@@ -687,6 +693,65 @@ function ensureDesktopConfig() {
     accelerator: toDisplayShortcut(item?.accelerator || '')
   }))
 }
+
+function ensureNetworkProxyConfig() {
+  if (!currentConfig.value.networkProxy || typeof currentConfig.value.networkProxy !== 'object') {
+    currentConfig.value.networkProxy = { enabled: false, server: '', bypassRules: '<local>' }
+  }
+  if (typeof currentConfig.value.networkProxy.enabled !== 'boolean') currentConfig.value.networkProxy.enabled = false
+  if (typeof currentConfig.value.networkProxy.server !== 'string') currentConfig.value.networkProxy.server = ''
+  if (typeof currentConfig.value.networkProxy.bypassRules !== 'string' || !currentConfig.value.networkProxy.bypassRules.trim()) {
+    currentConfig.value.networkProxy.bypassRules = '<local>'
+  }
+}
+
+function normalizeManualProxyServer(value = '') {
+  const server = String(value || '').trim()
+  if (!server) throw new Error('required')
+
+  let parsed
+  try {
+    parsed = new URL(server)
+  } catch {
+    throw new Error('invalid')
+  }
+
+  const rawAuthority = server.slice(server.indexOf('://') + 3)
+  const hasExplicitPort = /^[^:\[\]]+:\d+$/.test(rawAuthority)
+  if (!['http:', 'https:', 'socks5:'].includes(parsed.protocol) || !parsed.hostname || !hasExplicitPort || parsed.username || parsed.password || !['', '/'].includes(parsed.pathname) || parsed.search || parsed.hash) {
+    throw new Error('invalid')
+  }
+
+  return server
+}
+
+async function saveNetworkProxyConfig() {
+  ensureNetworkProxyConfig()
+  try {
+    currentConfig.value.networkProxy.server = normalizeManualProxyServer(currentConfig.value.networkProxy.server)
+    currentConfig.value.networkProxy.bypassRules = String(currentConfig.value.networkProxy.bypassRules || '<local>').trim() || '<local>'
+    const result = await saveSingleSetting('networkProxy', JSON.parse(JSON.stringify(currentConfig.value.networkProxy)))
+    if (result?.success === false) throw new Error('invalid')
+    ElMessage.success(t('setting.networkProxy.saved'))
+  } catch (error) {
+    ElMessage.error(t(error?.message === 'required' ? 'setting.networkProxy.serverRequired' : 'setting.networkProxy.serverInvalid'))
+  }
+}
+
+async function handleNetworkProxyEnabledChange(enabled) {
+  ensureNetworkProxyConfig()
+  if (enabled) {
+    await saveNetworkProxyConfig()
+    return
+  }
+  const result = await saveSingleSetting('networkProxy', JSON.parse(JSON.stringify(currentConfig.value.networkProxy)))
+  if (result?.success === false) {
+    ElMessage.error(t('setting.networkProxy.serverInvalid'))
+    return
+  }
+  ElMessage.success(t('setting.networkProxy.saved'))
+}
+
 
 function normalizeModifierToken(token = '') {
   const compact = String(token).replace(/\s+/g, '').toLowerCase()
@@ -2081,6 +2146,47 @@ async function pullSelectedCloudSkillsToLocal() {
                       </div>
                     </div>
                   </div>
+                  <div v-if="element.id === 'networkProxy'" class="card-body">
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.networkProxy.enabled.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.networkProxy.enabled.description') }}</span>
+                      </div>
+                      <el-switch v-model="currentConfig.networkProxy.enabled" @change="handleNetworkProxyEnabledChange" />
+                    </div>
+
+                    <div class="setting-option-item">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.networkProxy.server.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.networkProxy.server.description') }}</span>
+                      </div>
+                      <el-input
+                        v-model="currentConfig.networkProxy.server"
+                        :disabled="!currentConfig.networkProxy.enabled"
+                        :placeholder="t('setting.networkProxy.server.placeholder')"
+                        class="network-proxy-input"
+                        @keyup.enter="saveNetworkProxyConfig"
+                        @blur="currentConfig.networkProxy.enabled && saveNetworkProxyConfig()"
+                      />
+                    </div>
+
+                    <div class="setting-option-item no-border">
+                      <div class="setting-text-content">
+                        <span class="setting-option-label">{{ t('setting.networkProxy.bypassRules.label') }}</span>
+                        <span class="setting-option-description">{{ t('setting.networkProxy.bypassRules.description') }}</span>
+                      </div>
+                      <el-input
+                        v-model="currentConfig.networkProxy.bypassRules"
+                        :disabled="!currentConfig.networkProxy.enabled"
+                        :placeholder="t('setting.networkProxy.bypassRules.placeholder')"
+                        class="network-proxy-input"
+                        @keyup.enter="saveNetworkProxyConfig"
+                        @blur="currentConfig.networkProxy.enabled && saveNetworkProxyConfig()"
+                      />
+                    </div>
+                  </div>
+
+
 
 <div v-if="element.id === 'voice'" class="card-body">
                     <div class="voice-list-container">

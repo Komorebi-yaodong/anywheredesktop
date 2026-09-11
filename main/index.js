@@ -56,7 +56,7 @@ import * as updaterApi from './core/updater.js'
 import * as compactApi from './core/compact.js'
 
 
-import { installRequestHeaderBridge } from './core/net.js'
+import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
 import { startTaskScheduler } from './core/task_scheduler.js'
 
 let appTray = null
@@ -613,6 +613,9 @@ async function syncDesktopRuntimeFromConfig() {
   const desktop = config.desktop && typeof config.desktop === 'object' ? config.desktop : {}
 
   syncNativeThemeFromConfig(config)
+  await applyNetworkProxyConfig(config.networkProxy).catch((error) => {
+    console.error('network-proxy:apply-failed', error?.message || error)
+  })
   setMainWindowCloseBehavior(desktop.closeToTray === false ? 'close' : 'tray')
 
   try {

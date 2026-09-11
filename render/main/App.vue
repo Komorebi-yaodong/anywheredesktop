@@ -64,10 +64,11 @@ const fallbackDefaultConfig = {
       autoSaveChat: false
     }
   },
-  settingsCardOrder: ['general', 'desktop', 'voice', 'data', 'webdav'],
+  settingsCardOrder: ['general', 'desktop', 'networkProxy', 'voice', 'data', 'webdav'],
   settingsCardCollapsed: {
     general: false,
     desktop: false,
+    networkProxy: false,
     voice: false,
     data: false,
     webdav: false
@@ -85,6 +86,11 @@ const fallbackDefaultConfig = {
   isAlwaysOnTop_global: true,
   autoCloseOnBlur_global: true,
   autoSaveChat_global: false,
+  networkProxy: {
+    enabled: false,
+    server: '',
+    bypassRules: '<local>'
+  },
   zoom: 1,
   webdav: {
     url: '',

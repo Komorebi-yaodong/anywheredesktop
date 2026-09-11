@@ -1,4 +1,4 @@
-import { net, session } from 'electron'
+import { app, net, session } from 'electron'
 
 function buildHeadersCompat(inputHeaders = {}) {
   try {
@@ -16,6 +16,61 @@ function buildHeadersCompat(inputHeaders = {}) {
 
 
 const DEFAULT_FETCH_TIMEOUT_MS = 30000
+
+
+const DEFAULT_PROXY_BYPASS_RULES = '<local>'
+const PROXY_SCHEMES = new Set(['http:', 'https:', 'socks5:'])
+
+export function normalizeNetworkProxyConfig(input = {}) {
+  const source = input && typeof input === 'object' ? input : {}
+  const enabled = source.enabled === true
+  const server = typeof source.server === 'string' ? source.server.trim() : ''
+  const bypassRules = typeof source.bypassRules === 'string' && source.bypassRules.trim()
+    ? source.bypassRules.trim()
+    : DEFAULT_PROXY_BYPASS_RULES
+
+  if (!enabled) return { enabled: false, server: '', bypassRules }
+  if (!server) throw new Error('network_proxy_server_required')
+
+  let parsed
+  try {
+    parsed = new URL(server)
+  } catch {
+    throw new Error('network_proxy_server_invalid')
+  }
+
+  const rawAuthority = server.slice(server.indexOf('://') + 3)
+  const hasExplicitPort = /^[^:\[\]]+:\d+$/.test(rawAuthority)
+  if (!PROXY_SCHEMES.has(parsed.protocol) || !parsed.hostname || !hasExplicitPort || parsed.username || parsed.password || !['', '/'].includes(parsed.pathname) || parsed.search || parsed.hash) {
+    throw new Error('network_proxy_server_invalid')
+  }
+
+  return {
+    enabled: true,
+    server,
+    bypassRules
+  }
+}
+
+export async function applyNetworkProxyConfig(input = {}) {
+  const config = normalizeNetworkProxyConfig(input)
+  const proxyConfig = config.enabled
+    ? { mode: 'fixed_servers', proxyRules: config.server, proxyBypassRules: config.bypassRules }
+    : { mode: 'direct' }
+
+  if (typeof app?.setProxy === 'function') {
+    await app.setProxy(proxyConfig)
+  }
+
+  const targetSession = session?.defaultSession
+  if (typeof targetSession?.setProxy === 'function') {
+    await targetSession.setProxy(proxyConfig)
+    await targetSession.closeAllConnections?.()
+  }
+
+  return config
+}
+
 
 function normalizeTimeoutMs(value, fallback = DEFAULT_FETCH_TIMEOUT_MS) {
   const numericValue = Number(value)

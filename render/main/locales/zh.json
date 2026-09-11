@@ -935,7 +935,28 @@
         "restoreSuccess": "恢复成功",
         "restoreFailed": "恢复失败"
       }
+    },    "networkProxy": {
+      "title": "网络代理",
+      "enabled": {
+        "label": "启用独立代理",
+        "description": "仅影响 Anywhere Desktop 的模型请求、WebDAV 和内置联网工具；不影响系统全局代理。"
+      },
+      "server": {
+        "label": "代理地址",
+        "description": "支持无认证 HTTP、HTTPS 或 SOCKS5 代理，必须包含端口。",
+        "placeholder": "例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+      },
+      "bypassRules": {
+        "label": "不使用代理的地址",
+        "description": "使用英文逗号分隔；默认 <local> 会绕过 localhost 和本地地址。",
+        "placeholder": "<local>,*.lan,192.168.1.0/24"
+      },
+      "serverRequired": "请先填写代理地址。",
+      "serverInvalid": "代理地址无效：仅支持无认证的 HTTP、HTTPS 或 SOCKS5 地址，且必须包含端口。",
+      "saved": "网络代理配置已生效。"
     },
+
+
     "desktop": {
       "title": "桌面端设置",
       "closeToTray": {

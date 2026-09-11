@@ -2155,7 +2155,7 @@ async function pullSelectedCloudSkillsToLocal() {
                       <el-switch v-model="currentConfig.networkProxy.enabled" @change="handleNetworkProxyEnabledChange" />
                     </div>
 
-                    <div class="setting-option-item">
+                    <div class="setting-option-item network-proxy-item">
                       <div class="setting-text-content">
                         <span class="setting-option-label">{{ t('setting.networkProxy.server.label') }}</span>
                         <span class="setting-option-description">{{ t('setting.networkProxy.server.description') }}</span>
@@ -2170,7 +2170,7 @@ async function pullSelectedCloudSkillsToLocal() {
                       />
                     </div>
 
-                    <div class="setting-option-item no-border">
+                    <div class="setting-option-item no-border network-proxy-item">
                       <div class="setting-text-content">
                         <span class="setting-option-label">{{ t('setting.networkProxy.bypassRules.label') }}</span>
                         <span class="setting-option-description">{{ t('setting.networkProxy.bypassRules.description') }}</span>
@@ -3633,6 +3633,30 @@ html.dark :deep(.el-switch.is-checked .el-switch__core) {
 html.dark :deep(.el-switch.is-checked .el-switch__action) {
   background-color: #18181b;
 }
+
+/* The proxy card has longer descriptions; keep controls from consuming the text column. */
+.network-proxy-item .setting-text-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.network-proxy-input {
+  width: 320px;
+  flex: 0 0 320px;
+}
+
+@media (max-width: 760px) {
+  .network-proxy-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .network-proxy-input {
+    width: 100%;
+    flex-basis: auto;
+  }
+}
+
 
 @media (prefers-reduced-motion: reduce) {
   .settings-card,

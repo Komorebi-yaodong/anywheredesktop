@@ -48,6 +48,7 @@ import * as dataApi from './core/data.js'
 import * as fileApi from './core/file.js'
 import * as webdavApi from './core/webdav.js'
 import * as projectsApi from './core/projects.js'
+import * as conversationApi from './core/conversationStore.js'
 import * as chatApi from './core/chat.js'
 import * as mcpApi from './core/mcp.js'
 import * as skillApi from './core/skill.js'
@@ -704,6 +705,7 @@ app.whenReady().then(async () => {
     fileApi,
     webdavApi,
     projectsApi,
+    conversationApi,
     chatApi,
     mcpApi,
     skillApi,

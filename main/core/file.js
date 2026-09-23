@@ -757,6 +757,16 @@ const resolveFallbackTitle = (basename, sessionData) => {
   return normalizedBasename
 }
 
+const SESSION_METADATA_PROBE_BYTES = 256 * 1024
+
+const decodeJsonStringToken = (rawValue = '') => {
+  try {
+    return JSON.parse(`"${rawValue}"`)
+  } catch {
+    return ''
+  }
+}
+
 const readSessionMetadata = async (filePath, basename, cacheContext = null) => {
   const cacheKey = buildLocalSessionCacheKey(filePath)
 
@@ -768,18 +778,25 @@ const readSessionMetadata = async (filePath, basename, cacheContext = null) => {
     }
   }
 
+  let handle
   try {
-    const rawContent = await fs.readFile(filePath, 'utf-8')
-    const sessionData = JSON.parse(rawContent)
-    if (!sessionData || sessionData.anywhere_history !== true) {
-      if (cacheKey) {
-        localSessionMetadataCache.delete(cacheKey)
-      }
+    const fileSize = Math.max(0, Number(cacheContext?.stats?.size) || SESSION_METADATA_PROBE_BYTES)
+    const readLength = Math.min(fileSize, SESSION_METADATA_PROBE_BYTES)
+    if (readLength <= 0) return null
+
+    handle = await fs.open(filePath, 'r')
+    const buffer = Buffer.allocUnsafe(readLength)
+    const { bytesRead } = await handle.read(buffer, 0, readLength, 0)
+    const head = buffer.toString('utf8', 0, bytesRead)
+    if (!/["']anywhere_history["']\s*:\s*true\b/.test(head)) {
+      if (cacheKey) localSessionMetadataCache.delete(cacheKey)
       return null
     }
 
+    const metadataMatch = head.match(/"sessionMetadata"\s*:\s*\{[\s\S]*?"title"\s*:\s*"((?:\\.|[^"\\])*)"/)
+    const title = metadataMatch ? decodeJsonStringToken(metadataMatch[1]).trim() : ''
     const normalizedMetadata = {
-      title: resolveFallbackTitle(basename, sessionData)
+      title: title || resolveFallbackTitle(basename, null)
     }
 
     if (cacheContext?.stats && cacheKey) {
@@ -792,10 +809,10 @@ const readSessionMetadata = async (filePath, basename, cacheContext = null) => {
 
     return cloneSessionMetadataCacheEntry(normalizedMetadata)
   } catch {
-    if (cacheKey) {
-      localSessionMetadataCache.delete(cacheKey)
-    }
+    if (cacheKey) localSessionMetadataCache.delete(cacheKey)
     return null
+  } finally {
+    await handle?.close().catch(() => {})
   }
 }
 

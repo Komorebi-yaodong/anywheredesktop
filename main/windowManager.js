@@ -779,6 +779,11 @@ async function buildWindowInitMessage(payload = {}, senderId = '', fullConfig = 
     contextId: typeof payload?.contextId === 'string' ? payload.contextId : '',
     summonData: payload?.summonData && typeof payload.summonData === 'object' ? payload.summonData : null,
     filename: typeof payload?.filename === 'string' ? payload.filename : '',
+    conversation:
+      payload?.conversation && typeof payload.conversation === 'object' && !Array.isArray(payload.conversation)
+        ? payload.conversation
+        : null,
+    conversationTitle: typeof payload?.conversationTitle === 'string' ? payload.conversationTitle : '',
     taskConfig: payload?.taskConfig ?? null,
     tempPromptConfig:
       payload?.tempPromptConfig && typeof payload.tempPromptConfig === 'object'

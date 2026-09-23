@@ -1338,6 +1338,10 @@ const toRequestMessageFromFullHistory = (message = {}) => {
   // UI-only metadata: the actual user content remains the durable multimodal API payload.
   delete cloned.origin;
   delete cloned.sourceToolCallId;
+  delete cloned.storageId;
+  delete cloned.uiStorageId;
+  delete cloned.storageOrdinal;
+  delete cloned.uiStorageOrder;
   return cloned;
 };
 
@@ -1367,6 +1371,57 @@ const projectFullHistoryToRequestHistory = (messages = fullHistory.value) => {
   }
   return out;
 };
+
+const reloadConversationWindowFromStore = async ({ activeOnly = true, pageSize = 200 } = {}) => {
+  const storage = currentConversationStorage.value;
+  if (!storage?.conversationId || !storage?.dirPath) return false;
+  const opened = await window.api.openConversation({
+    dirPath: storage.dirPath,
+    reference: storage.conversationId,
+    activeOnly,
+    pageSize
+  });
+  replaceFullHistory(opened.sessionData?.fullHistory || []);
+  chat_show.value = Array.isArray(opened.sessionData?.chat_show) ? opened.sessionData.chat_show : [];
+  syncHistoryFromFullHistory();
+  const paging = opened.sessionData?.conversationStorage || {};
+  currentConversationStorage.value = {
+    ...storage,
+    title: opened.descriptor?.title || storage.title,
+    revision: Number(opened.descriptor?.revision) || storage.revision,
+    isPaged: paging.isPaged === true,
+    loadedFromOrdinal: Number(paging.loadedFromOrdinal) || 0,
+    loadedFromUiOrder: Number(paging.loadedFromUiOrder) || 0,
+    pageSize: Number(paging.pageSize) || 0,
+    hasMore: paging.isPaged === true
+  };
+  return true;
+};
+
+const hydratePagedConversationForCompaction = async () => {
+  if (!currentConversationStorage.value?.isPaged) return false;
+  await reloadConversationWindowFromStore({ activeOnly: false, pageSize: 0 });
+  return true;
+};
+
+
+const buildRequestHistoryForCurrentConversation = async () => {
+  const storage = currentConversationStorage.value;
+  const paging = storage?.isPaged ? storage : null;
+  if (!paging?.conversationId || !paging?.dirPath) {
+    return projectFullHistoryToRequestHistory();
+  }
+  const result = await window.api.getConversationRequestMessages({
+    dirPath: paging.dirPath,
+    conversationId: paging.conversationId
+  });
+  const persisted = Array.isArray(result?.messages) ? result.messages : [];
+  const loadedFrom = Math.max(1, Number(paging.loadedFromOrdinal) || 1);
+  const prefix = persisted.filter((message) => message?.role !== 'system' && Number(message?.storageOrdinal) < loadedFrom);
+  const merged = [...fullHistory.value.filter((message) => message?.role === 'system'), ...prefix, ...fullHistory.value.filter((message) => message?.role !== 'system')];
+  return projectFullHistoryToRequestHistory(merged);
+};
+
 
 const syncHistoryFromFullHistory = () => {
   history.value = projectFullHistoryToRequestHistory();
@@ -1921,6 +1976,44 @@ const markOutermostCanRestore = () => {
   });
 };
 
+const compactToolSchemaTokenCache = new Map();
+const estimateCurrentDynamicRequestOverhead = async () => {
+  if (!window.api?.estimateCompactTokens) return 0;
+  const overheadMessages = [];
+  if (openaiFormattedTools.value.length > 0 || sessionSkillIds.value.length > 0) {
+    overheadMessages.push({ role: 'system', content: generateMcpSystemPrompt() });
+  }
+  let activeTools = [...openaiFormattedTools.value];
+  if (sessionSkillIds.value.length > 0) {
+    try {
+      const runtimeSkillPath = await getRuntimeSkillPath();
+      if (runtimeSkillPath) {
+        const skillTool = await window.api.getSkillToolDefinition(runtimeSkillPath, sessionSkillIds.value);
+        if (skillTool) activeTools.push(skillTool);
+      }
+    } catch (error) {
+      console.warn('[compact] skill tool token estimate skipped:', error);
+    }
+  }
+  let toolTokens = 0;
+  if (activeTools.length > 0) {
+    const schemaText = JSON.stringify(normalizeToolsForRequest(activeTools));
+    if (compactToolSchemaTokenCache.has(schemaText)) {
+      toolTokens = compactToolSchemaTokenCache.get(schemaText);
+    } else {
+      const estimate = await window.api.estimateCompactTokens([{ role: 'system', content: schemaText }]);
+      toolTokens = Math.max(0, Number(estimate?.tokens) || 0);
+      compactToolSchemaTokenCache.clear();
+      compactToolSchemaTokenCache.set(schemaText, toolTokens);
+    }
+  }
+  const promptEstimate = overheadMessages.length
+    ? await window.api.estimateCompactTokens(overheadMessages)
+    : { tokens: 0 };
+  return Math.max(0, Number(promptEstimate?.tokens) || 0) + toolTokens;
+};
+
+
 const getCompactTokenSnapshot = async (messagesForAi = history.value) => {
   // 自动压缩只看本地估算：压缩后对 summary + 尾部原文重新 estimate，
   // 避免沿用压缩前 assistant.tokenUsage.total_tokens 导致立刻二次压缩。
@@ -1929,10 +2022,12 @@ const getCompactTokenSnapshot = async (messagesForAi = history.value) => {
     const estimate = await window.api.estimateCompactTokens(messagesForAi);
     localTokens = Math.max(0, Number(estimate?.tokens) || 0);
   }
+  const requestOverheadTokens = await estimateCurrentDynamicRequestOverhead();
   return {
     localTokens,
+    requestOverheadTokens,
     usageTotalTokens: 0,
-    activeTokens: localTokens
+    activeTokens: localTokens + requestOverheadTokens
   };
 };
 
@@ -2071,7 +2166,57 @@ const handleRestoreCompact = async (payload = null) => {
     return;
   }
 
-  // UI 原文一直在，只需删除最外层 summary 标记
+  const storage = currentConversationStorage.value;
+  if (storage?.format === 'sqlite' && storage?.conversationId && storage?.dirPath) {
+    if (conversationReadOnly.value) {
+      showDismissibleMessage.warning('当前会话为只读模式，无法恢复压缩');
+      return;
+    }
+    try {
+      const restored = await window.api.restoreConversationCompaction({
+        dirPath: storage.dirPath,
+        conversationId: storage.conversationId,
+        snapshotId: outermost.snapshotId || outermost.id,
+        expectedRevision: storage.revision,
+        holderInstanceId: conversationInstanceId,
+        leaseEpoch: conversationLease.value?.leaseEpoch,
+        pageSize: 200
+      });
+      const sessionData = restored?.sessionData || {};
+      const paging = sessionData.conversationStorage || {};
+      replaceFullHistory(Array.isArray(sessionData.fullHistory) ? sessionData.fullHistory : []);
+      chat_show.value = Array.isArray(sessionData.chat_show) ? sessionData.chat_show : [];
+      compactArchives.value = Array.isArray(sessionData.compactArchives)
+        ? sessionData.compactArchives
+        : compactArchives.value.filter((item) => item?.id !== outermost.snapshotId);
+      currentConversationStorage.value = {
+        ...storage,
+        title: restored?.descriptor?.title || storage.title,
+        revision: Number(restored?.descriptor?.revision) || storage.revision,
+        isPaged: paging.isPaged === true,
+        loadedFromOrdinal: Number(paging.loadedFromOrdinal) || 0,
+        loadedFromUiOrder: Number(paging.loadedFromUiOrder) || 0,
+        pageSize: Number(paging.pageSize) || 0,
+        hasMore: paging.isPaged === true
+      };
+      markOutermostCanRestore();
+      syncHistoryFromFullHistory();
+      await nextTick();
+      scrollToBottom();
+      showDismissibleMessage.success('已还原最外层压缩');
+      return;
+    } catch (error) {
+      if (/conversation_(revision_conflict|write_lease_lost)/.test(String(error?.message || ''))) {
+        conversationReadOnly.value = true;
+        showDismissibleMessage.warning('会话编辑权已失效，当前窗口已切换为只读模式');
+        return;
+      }
+      showDismissibleMessage.error(`恢复压缩失败: ${error?.message || error}`);
+      return;
+    }
+  }
+
+  // Legacy JSON sessions keep the complete transcript in memory, so removing the marker is sufficient.
   chat_show.value = [
     ...chat_show.value.slice(0, outermostIndex),
     ...chat_show.value.slice(outermostIndex + 1)
@@ -2092,6 +2237,8 @@ const runConversationCompact = async ({
   allowDuringLoading = false,
   quiet = false
 } = {}) => {
+  let hydratedPagedConversation = false;
+
   if (compacting.value) return false;
   if (loading.value && !allowDuringLoading) {
     if (!quiet) showDismissibleMessage.warning('请等待当前回复完成后再压缩');
@@ -2106,7 +2253,8 @@ const runConversationCompact = async ({
     return false;
   }
 
-  // Full API history is the compression source; UI is only updated after summary succeeds.
+  // Full API history is the compression source; paged DB sessions hydrate only for the compact transaction.
+  hydratedPagedConversation = await hydratePagedConversationForCompaction();
   rehydrateHistoryToolsIfNeeded();
   syncHistoryFromFullHistory();
 
@@ -2239,7 +2387,12 @@ const runConversationCompact = async ({
     }
 
     autoCompactSuppressedForTurn.value = false;
-    scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
+    if (hydratedPagedConversation) {
+      await executeAutoSaveRequest({ reason: 'conversation-compacted', force: true, version: ++sessionMutationVersion });
+      await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 });
+    } else {
+      scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
+    }
     if (!quiet) {
       showDismissibleMessage.success(manual ? `手动级联压缩完成（${steps} 步）` : `自动级联压缩完成（${steps} 步）`);
     }
@@ -2255,6 +2408,9 @@ const runConversationCompact = async ({
     if (!quiet) showDismissibleMessage.error(`压缩失败: ${error?.message || error}`);
     return false;
   } finally {
+    if (hydratedPagedConversation && currentConversationStorage.value?.isPaged === false) {
+      await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 }).catch(() => {});
+    }
     compacting.value = false;
     compactAbortController = null;
     compactProgress.value = { percent: 0, message: '', stage: '' };
@@ -2272,7 +2428,7 @@ const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request', onCom
   try {
     rehydrateHistoryToolsIfNeeded();
     // 不在这里 sync 掉内存 history 的 tool 细节；rehydrate 已保证 tool 完整
-    const need = await shouldCompactNow(history.value);
+    const need = await shouldCompactNow(await buildRequestHistoryForCurrentConversation());
     if (!need) return false;
     onCompacting?.();
     const ok = await runConversationCompact({
@@ -2303,7 +2459,7 @@ const maybeAutoCompactAfterTurn = async () => {
   if (compactConfig.value.autoCompactEnabled === false) return;
   try {
     rehydrateHistoryToolsIfNeeded();
-    const need = await shouldCompactNow(history.value);
+    const need = await shouldCompactNow(await buildRequestHistoryForCurrentConversation());
     if (need) {
       await runConversationCompact({
         manual: false,
@@ -2365,6 +2521,70 @@ const fileList = ref([]);
 const zoomLevel = ref(1);
 const collapsedMessages = ref(new Set());
 const defaultConversationName = ref("");
+const currentConversationStorage = ref(null);
+const conversationReadOnly = ref(false);
+const conversationLease = ref(null);
+const conversationInstanceId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+  ? crypto.randomUUID()
+  : `window_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+let conversationLeaseHeartbeatTimer = null;
+
+const stopConversationLeaseHeartbeat = () => {
+  if (conversationLeaseHeartbeatTimer) {
+    clearInterval(conversationLeaseHeartbeatTimer);
+    conversationLeaseHeartbeatTimer = null;
+  }
+};
+
+const releaseCurrentConversationLease = async () => {
+  stopConversationLeaseHeartbeat();
+  const storage = currentConversationStorage.value;
+  const lease = conversationLease.value;
+  conversationLease.value = null;
+  const dirPath = storage?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
+  if (!storage?.conversationId || !lease?.leaseEpoch || !dirPath) return;
+  await window.api.releaseConversationWriteLease({
+    dirPath,
+    conversationId: storage.conversationId,
+    holderInstanceId: conversationInstanceId,
+    leaseEpoch: lease.leaseEpoch
+  }).catch(() => {});
+};
+
+const acquireCurrentConversationLease = async () => {
+  stopConversationLeaseHeartbeat();
+  const storage = currentConversationStorage.value;
+  const dirPath = currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
+  if (!storage?.conversationId || !dirPath) return;
+  const lease = await window.api.acquireConversationWriteLease({
+    dirPath,
+    conversationId: storage.conversationId,
+    holderInstanceId: conversationInstanceId,
+    holderApp: 'desktop'
+  });
+  conversationReadOnly.value = lease?.readonly === true || lease?.ok === false;
+  conversationLease.value = lease?.ok ? lease : null;
+  if (conversationReadOnly.value) {
+    showDismissibleMessage.warning(`该会话正在由${lease?.holderApp || '另一个客户端'}编辑，当前以只读模式打开`);
+    return;
+  }
+  conversationLeaseHeartbeatTimer = setInterval(async () => {
+    const currentLease = conversationLease.value;
+    const currentStorage = currentConversationStorage.value;
+    if (!currentLease?.leaseEpoch || !currentStorage?.conversationId) return;
+    const result = await window.api.heartbeatConversationWriteLease({
+      dirPath: currentStorage.dirPath || currentConfig.value?.webdav?.localChatPath || '',
+      conversationId: currentStorage.conversationId,
+      holderInstanceId: conversationInstanceId,
+      leaseEpoch: currentLease.leaseEpoch
+    }).catch(() => ({ ok: false }));
+    if (!result?.ok) {
+      conversationReadOnly.value = true;
+      stopConversationLeaseHeartbeat();
+      showDismissibleMessage.warning('会话编辑权已失效，已切换为只读模式');
+    }
+  }, 5000);
+};
 const selectedVoice = ref(null);
 const tempReasoningEffort = ref('default');
 const messageIdCounter = ref(0);
@@ -3873,12 +4093,63 @@ const markUserScrollIntent = () => {
 };
 
 
+let isLoadingOlderConversationPage = false;
+const loadOlderConversationPage = async (scrollElement) => {
+  const storage = currentConversationStorage.value;
+  if (!storage?.isPaged || storage.hasMore === false || isLoadingOlderConversationPage) return;
+  if (!storage.loadedFromOrdinal && !storage.loadedFromUiOrder) return;
+  isLoadingOlderConversationPage = true;
+  const previousHeight = scrollElement?.scrollHeight || 0;
+  try {
+    const page = await window.api.loadConversationPage({
+      dirPath: storage.dirPath,
+      conversationId: storage.conversationId,
+      beforeOrdinal: storage.loadedFromOrdinal || null,
+      beforeUiOrder: storage.loadedFromUiOrder || null,
+      pageSize: storage.pageSize || 200
+    });
+    const knownMessageIds = new Set(fullHistory.value.map((message) => message?.storageId).filter(Boolean));
+    const olderMessages = (page.messages || []).filter((message) => message?.role !== 'system' && !knownMessageIds.has(message?.storageId));
+    const knownUiIds = new Set(chat_show.value.map((message) => message?.uiStorageId).filter(Boolean));
+    const olderUi = (page.uiMessages || []).filter((message) => message?.role !== 'system' && !knownUiIds.has(message?.uiStorageId));
+    if (olderMessages.length) {
+      fullHistory.value = [
+        ...fullHistory.value.filter((message) => message?.role === 'system'),
+        ...olderMessages,
+        ...fullHistory.value.filter((message) => message?.role !== 'system')
+      ];
+    }
+    if (olderUi.length) {
+      chat_show.value = [
+        ...chat_show.value.filter((message) => message?.role === 'system'),
+        ...olderUi,
+        ...chat_show.value.filter((message) => message?.role !== 'system')
+      ];
+    }
+    syncHistoryFromFullHistory();
+    currentConversationStorage.value = {
+      ...storage,
+      loadedFromOrdinal: Number(page.loadedFromOrdinal) || storage.loadedFromOrdinal,
+      loadedFromUiOrder: Number(page.loadedFromUiOrder) || storage.loadedFromUiOrder,
+      hasMore: page.hasMore !== false
+    };
+    await nextTick();
+    if (scrollElement) scrollElement.scrollTop += Math.max(0, scrollElement.scrollHeight - previousHeight);
+  } catch (error) {
+    console.warn('[conversation] load older page failed:', error);
+  } finally {
+    isLoadingOlderConversationPage = false;
+  }
+};
+
+
 // 滚动监听：仅负责更新 isSticky 状态和 UI 按钮显示
 const handleScroll = (event) => {
   if (isForcingScroll.value) return;
 
   const el = event.target;
   if (!el) return;
+  if (el.scrollTop <= 80) void loadOlderConversationPage(el);
 
   // 计算距离底部的距离
   const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -4239,6 +4510,11 @@ const onAvatarClick = async (role, event) => {
 };
 
 const handleSubmit = () => {
+  if (conversationReadOnly.value) {
+    showDismissibleMessage.warning('当前会话正在其他客户端编辑，本窗口为只读模式');
+    return;
+  }
+
   if (compacting.value) {
     showDismissibleMessage.warning('压缩进行中，暂不可发送');
     return;
@@ -4545,6 +4821,11 @@ const handleDownloadImageFromViewer = async (url) => {
 };
 
 const handleEditMessage = (index, newContent) => {
+  if (conversationReadOnly.value) {
+    showDismissibleMessage.warning('当前会话为只读模式，无法编辑消息');
+    return false;
+  }
+
   if (compacting.value) {
     showDismissibleMessage.warning('压缩进行中，暂不可编辑历史');
     return false;
@@ -4713,7 +4994,7 @@ const closePage = async (force_save = false) => {
       console.warn('[Sub-Agent] Kill-on-close failed:', e);
     }
 
-    if (currentConfig.value?.webdav?.localChatPath && (defaultConversationName.value || shouldForceSave)) {
+    if ((currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath) && (defaultConversationName.value || shouldForceSave)) {
       try {
         const closeVersion = sessionMutationVersion;
         await executeAutoSaveRequest({
@@ -4735,6 +5016,8 @@ const closePage = async (force_save = false) => {
         console.error("关闭时自动保存失败:", e);
       }
     }
+
+    await releaseCurrentConversationLease();
 
     await window.api.windowControl('close-window');
   } catch (error) {
@@ -5038,7 +5321,32 @@ onMounted(async () => {
 
     if (data) {
       basic_msg.value = { code: data.code, type: data.type, payload: data.payload };
-      if (data.filename) defaultConversationName.value = data.filename.replace(/\.json$/i, '');
+      if (data.conversation?.descriptor && data.conversation?.sessionData) {
+        const descriptor = data.conversation.descriptor;
+        currentConversationStorage.value = {
+          format: 'sqlite',
+          conversationId: descriptor.conversationId,
+          dbFile: descriptor.dbFile,
+          title: descriptor.title,
+          revision: Number(descriptor.revision) || 0,
+          dirPath: data.conversation.worktreeDir || currentConfig.value?.webdav?.localChatPath || '',
+          storageMode: data.conversation.storageMode || descriptor.storageMode || 'local',
+          isPaged: data.conversation.sessionData?.conversationStorage?.isPaged === true,
+          loadedFromOrdinal: Number(data.conversation.sessionData?.conversationStorage?.loadedFromOrdinal) || 0,
+          loadedFromUiOrder: Number(data.conversation.sessionData?.conversationStorage?.loadedFromUiOrder) || 0,
+          pageSize: Number(data.conversation.sessionData?.conversationStorage?.pageSize) || 0,
+          hasMore: data.conversation.sessionData?.conversationStorage?.isPaged === true
+        };
+        defaultConversationName.value = descriptor.title || data.conversationTitle || '';
+        isSessionRestored = true;
+        await loadSession(data.conversation.sessionData);
+        autoCloseOnBlur.value = false;
+        await acquireCurrentConversationLease();
+      } else if (data.conversationTitle) {
+        defaultConversationName.value = data.conversationTitle;
+      } else if (data.filename) {
+        defaultConversationName.value = data.filename.replace(/\.json$/i, '');
+      }
       if (data.type === "task") {
         currentTaskConfig.value = data.taskConfig;
 
@@ -5545,7 +5853,7 @@ const isCurrentPromptAutoSaveEnabled = () => {
 };
 
 const isNamedLocalConversationAvailable = () => Boolean(
-  currentConfig.value?.webdav?.localChatPath &&
+  (currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath) &&
   typeof defaultConversationName.value === 'string' &&
   defaultConversationName.value.trim()
 );
@@ -5891,14 +6199,19 @@ const stripJsonName = (value) => {
 
 const normalizeWindowProjects = (data) => {
   const projects = Array.isArray(data?.projects) ? data.projects : [];
+  const conversations = data?.conversations && typeof data.conversations === 'object' && !Array.isArray(data.conversations)
+    ? data.conversations
+    : {};
   return {
-    version: Number(data?.version) || 1,
+    version: Number(data?.version) || 2,
+    conversations,
     projects: projects
       .filter((p) => p && typeof p === 'object')
       .map((p) => ({
         id: String(p.id || '').trim(),
         name: String(p.name || '').trim() || String(p.id || '').trim(),
-        files: Array.isArray(p.files) ? p.files.map((f) => String(f || '').trim()).filter(Boolean) : []
+        files: Array.isArray(p.files) ? p.files.map((f) => String(f || '').trim()).filter(Boolean) : [],
+        conversationIds: Array.isArray(p.conversationIds) ? p.conversationIds.map((id) => String(id || '').trim()).filter(Boolean) : []
       }))
       .filter((p) => p.id)
   };
@@ -6093,7 +6406,7 @@ const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSign
 };
 
 const autoSaveSession = async (force = false, { skipProjectAssignment = false, version = sessionMutationVersion } = {}) => {
-  if (!currentConfig.value?.webdav?.localChatPath) {
+  if (!currentConversationStorage.value?.dirPath && !currentConfig.value?.webdav?.localChatPath) {
     return false;
   }
 
@@ -6114,36 +6427,60 @@ const autoSaveSession = async (force = false, { skipProjectAssignment = false, v
     return false;
   }
 
-  // 6. 执行写入操作
+  // 6. 执行数据库增量快照写入；物理 dbFile 永远不参与会话标题。
   try {
+    if (conversationReadOnly.value) return false;
+    let storage = currentConversationStorage.value;
+    const dirPath = storage?.dirPath || currentConfig.value.webdav.localChatPath;
     const sessionData = getSessionDataAsObject();
-    const jsonString = JSON.stringify(sessionData, null, 2);
-    const filename = `${defaultConversationName.value}.json`;
-    const filePath = `${currentConfig.value.webdav.localChatPath}/${filename}`;
-    await window.api.writeLocalFile(filePath, jsonString);
 
-    if (!skipProjectAssignment) {
-      try {
-        const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(currentConfig.value.webdav.localChatPath));
-        const existingProjectId = findProjectIdByFilename(localProjects, filename);
-        if (!existingProjectId && autoSaveProjectId) {
-          const projectName = localProjects.projects.find((p) => p.id === autoSaveProjectId)?.name || '';
-          await reassignLocalProject({
-            projectId: autoSaveProjectId,
-            projectName,
-            addFilename: filename,
-            removeFilenames: []
-          });
-        }
-      } catch (projectError) {
-        console.warn('[projects] auto-save local project assignment failed:', projectError);
-      }
+    if (!storage?.conversationId) {
+      const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(dirPath));
+      const projectName = localProjects.projects.find((p) => p.id === autoSaveProjectId)?.name || '';
+      const created = await window.api.createConversation({
+        dirPath,
+        title: defaultConversationName.value,
+        sessionData,
+        projectId: skipProjectAssignment ? '' : autoSaveProjectId,
+        projectName
+      });
+      storage = {
+        format: 'sqlite',
+        conversationId: created.descriptor.conversationId,
+        dbFile: created.descriptor.dbFile,
+        title: created.descriptor.title,
+        revision: Number(created.descriptor.revision) || 0,
+        dirPath,
+        storageMode: 'local'
+      };
+      currentConversationStorage.value = storage;
+      await acquireCurrentConversationLease();
+    } else {
+      const saved = await window.api.saveConversationSnapshot({
+        dirPath,
+        conversationId: storage.conversationId,
+        expectedRevision: storage.revision,
+        holderInstanceId: conversationInstanceId,
+        leaseEpoch: conversationLease.value?.leaseEpoch,
+        title: defaultConversationName.value,
+        sessionData
+      });
+      storage = {
+        ...storage,
+        title: saved.title || defaultConversationName.value,
+        revision: Number(saved.revision) || storage.revision
+      };
+      currentConversationStorage.value = storage;
     }
 
     lastPersistedSessionVersion = Math.max(lastPersistedSessionVersion, Number(version) || 0);
     lastAutoSaveAt = Date.now();
     return true;
   } catch (error) {
+    if (/conversation_(revision_conflict|write_lease_lost)/.test(String(error?.message || ''))) {
+      conversationReadOnly.value = true;
+      showDismissibleMessage.warning('会话已在其他客户端更新，当前窗口已切换为只读模式');
+    }
     console.error('Auto-save failed:', error);
     return false;
   }
@@ -6239,6 +6576,8 @@ const scheduleLoadingAutoSave = (reason = 'loading-progress') => {
 
 
 onBeforeUnmount(() => {
+  void releaseCurrentConversationLease();
+
 
   if (tailBubbleRecoveryRafId !== null) {
     cancelAnimationFrame(tailBubbleRecoveryRafId);
@@ -6317,6 +6656,16 @@ const saveWindowSize = async () => {
 }
 
 const getSessionDataAsObject = (options = {}) => {
+  const createStorageId = () => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+  fullHistory.value.forEach((message) => {
+    if (message && typeof message === 'object' && !message.storageId) message.storageId = createStorageId();
+  });
+  chat_show.value.forEach((message) => {
+    if (message && typeof message === 'object' && !message.uiStorageId) message.uiStorageId = createStorageId();
+  });
+
   const currentPromptConfig = currentConfig.value.prompts[CODE.value] || {};
   const explicitTitle = typeof options?.title === 'string' ? options.title.trim() : '';
   // Persist the complete API transcript and derive the current request window from it.
@@ -6348,7 +6697,13 @@ const getSessionDataAsObject = (options = {}) => {
     subAgentTasks: subAgentTasks.value.map(normalizeSubAgentSummary).filter(Boolean),
     subAgentDetails: subAgentDetails.value,
     compactArchives: compactArchives.value,
-    compactConfig: compactConfig.value
+    compactConfig: compactConfig.value,
+    conversationStorage: currentConversationStorage.value ? {
+      isPaged: currentConversationStorage.value.isPaged === true,
+      loadedFromOrdinal: Number(currentConversationStorage.value.loadedFromOrdinal) || 0,
+      loadedFromUiOrder: Number(currentConversationStorage.value.loadedFromUiOrder) || 0,
+      pageSize: Number(currentConversationStorage.value.pageSize) || 0
+    } : null
   };
 }
 const saveSessionToCloud = async () => {
@@ -6401,32 +6756,46 @@ const saveSessionToCloud = async () => {
           showDismissibleMessage.info('正在保存到云端...');
           try {
             const sessionData = getSessionDataAsObject({ title: finalBasename });
-            const jsonString = JSON.stringify(sessionData, null, 2);
             const webdavConfig = buildWindowWebdavConfig();
-            const fileSystemTimes = await resolveWindowCloudSaveFileSystemTimes(filename);
-            const writeResult = await window.api.writeWebdavBackup({
-              webdavConfig,
-              filename,
-              content: jsonString,
-              overwrite: true,
-              ensureDirectory: true,
-              useChatMetadata: true,
-              chatMetadata: buildWindowChatMetadataPayload(filename, {
-                sessionData,
-                createdAt: fileSystemTimes.createdAt,
-                updatedAt: fileSystemTimes.updatedAt
-              })
+            let storage = currentConversationStorage.value;
+            if (!storage?.conversationId) {
+              const localDir = currentConfig.value?.webdav?.localChatPath || '';
+              const created = localDir
+                ? await window.api.createConversation({ dirPath: localDir, title: finalBasename, sessionData })
+                : await window.api.createCloudConversationWorktree({ title: finalBasename, sessionData });
+              storage = {
+                format: 'sqlite',
+                conversationId: created.descriptor.conversationId,
+                dbFile: created.descriptor.dbFile,
+                title: created.descriptor.title,
+                revision: Number(created.descriptor.revision) || 0,
+                dirPath: created.worktreeDir || localDir,
+                storageMode: created.storageMode || (localDir ? 'local' : 'cloud')
+              };
+              currentConversationStorage.value = storage;
+              await acquireCurrentConversationLease();
+            } else if (finalBasename !== storage.title) {
+              const renamed = await window.api.renameConversation({ dirPath: storage.dirPath, conversationId: storage.conversationId, title: finalBasename });
+              storage = { ...storage, title: renamed.title, revision: Number(renamed.revision) || storage.revision };
+              currentConversationStorage.value = storage;
+            }
+            await executeAutoSaveRequest({ reason: 'manual-cloud-save', force: true, version: ++sessionMutationVersion });
+            storage = currentConversationStorage.value;
+            const uploadResult = await window.api.uploadCloudConversationRemote({
+              dirPath: storage.dirPath,
+              conversationId: storage.conversationId,
+              remote: { webdavConfig, useChatMetadata: false }
             });
-            if (writeResult?.ok === false) {
-              throw new Error(writeResult.message || '保存到云端失败');
-            }
-            // 更新云端项目归属（写入 projects.yaml）
-            try {
-              const projectName = projectsData.projects.find((p) => p.id === selectedProjectId.value)?.name || '';
-              await assignCloudProject({ projectId: selectedProjectId.value, projectName, basename: filename });
-            } catch (projectError) {
-              console.warn('[projects] 更新云端项目归属失败:', projectError);
-            }
+            if (!uploadResult?.descriptor) throw new Error('保存到云端失败');
+            const cloudProjects = normalizeWindowProjects(await window.api.readCloudProjects({ webdavConfig }));
+            const descriptor = {
+              ...uploadResult.descriptor,
+              storageMode: 'cloud'
+            };
+            await window.api.writeCloudProjects({ webdavConfig }, {
+              ...cloudProjects,
+              conversations: { ...cloudProjects.conversations, [storage.conversationId]: descriptor }
+            });
             defaultConversationName.value = finalBasename;
             showDismissibleMessage.success('会话已成功保存到云端！');
             done();
@@ -7016,41 +7385,54 @@ const saveSessionAsJson = async () => {
           instance.confirmButtonLoading = true;
           try {
             const sessionData = getSessionDataAsObject({ title: finalBasename });
-            const jsonString = JSON.stringify(sessionData, null, 2);
             const localChatPath = currentConfig.value.webdav?.localChatPath;
 
-            // 优化逻辑：如果有本地路径，直接写入；否则弹出保存框
             if (localChatPath) {
-              const separator = currentOS.value === 'win' ? '\\' : '/';
-              const fullPath = `${localChatPath}${separator}${finalFilename}`;
-              // 直接写入文件，不弹窗
-              await window.api.writeLocalFile(fullPath, jsonString);
-              // 更新项目归属（仅在已配置本地路径时维护 projects.yaml）
-              try {
-                const oldFilename = defaultConversationName.value ? `${defaultConversationName.value}.json` : '';
-                const removeFilenames = oldFilename && oldFilename !== finalFilename ? [oldFilename] : [];
-                const projectName = projectsData.projects.find((p) => p.id === selectedProjectId.value)?.name || '';
-                await reassignLocalProject({
-                  projectId: selectedProjectId.value,
-                  projectName,
-                  addFilename: finalFilename,
-                  removeFilenames
+              const projectName = projectsData.projects.find((p) => p.id === selectedProjectId.value)?.name || '';
+              if (currentConversationStorage.value?.conversationId) {
+                await window.api.renameConversation({
+                  dirPath: localChatPath,
+                  conversationId: currentConversationStorage.value.conversationId,
+                  title: finalBasename
                 });
-              } catch (projectError) {
-                console.warn('[projects] 更新本地项目归属失败:', projectError);
+                currentConversationStorage.value = {
+                  ...currentConversationStorage.value,
+                  title: finalBasename
+                };
+                defaultConversationName.value = finalBasename;
+                await executeAutoSaveRequest({ reason: 'manual-save', force: true, version: ++sessionMutationVersion });
+              } else {
+                const created = await window.api.createConversation({
+                  dirPath: localChatPath,
+                  title: finalBasename,
+                  sessionData,
+                  projectId: selectedProjectId.value,
+                  projectName
+                });
+                currentConversationStorage.value = {
+                  format: 'sqlite',
+                  conversationId: created.descriptor.conversationId,
+                  dbFile: created.descriptor.dbFile,
+                  title: created.descriptor.title,
+                  revision: Number(created.descriptor.revision) || 0,
+                  dirPath: localChatPath,
+                  storageMode: 'local'
+                };
+                defaultConversationName.value = created.descriptor.title;
+                await acquireCurrentConversationLease();
               }
             } else {
-              // 未配置路径，弹出系统选择框
+              // Compatibility export only: the managed conversation store is SQLite.
+              const jsonString = JSON.stringify(sessionData, null, 2);
               await window.api.saveFile({
-                title: '保存聊天会话',
+                title: '导出旧版 JSON 会话',
                 defaultPath: finalFilename,
-                buttonLabel: '保存',
+                buttonLabel: '导出',
                 filters: [{ name: 'JSON 文件', extensions: ['json'] }, { name: '所有文件', extensions: ['*'] }],
                 fileContent: jsonString
               });
+              defaultConversationName.value = finalBasename;
             }
-
-            defaultConversationName.value = finalBasename;
             showDismissibleMessage.success('会话已成功保存！');
             done();
           } catch (error) {
@@ -7066,55 +7448,50 @@ const saveSessionAsJson = async () => {
   } catch (error) { if (error !== 'cancel' && error !== 'close') console.error('MessageBox error:', error); }
 };
 
-// 重命名当前会话逻辑
+// 重命名只更新逻辑 title；随机数据库文件名永不随标题变化。
 const handleRenameSession = async () => {
-  if (autoCloseOnBlur.value) handleTogglePin(); // 暂停失焦关闭，防止弹窗时窗口消失
+  if (autoCloseOnBlur.value) handleTogglePin();
 
   const localPath = currentConfig.value.webdav?.localChatPath;
+  const storage = currentConversationStorage.value;
   if (!localPath) {
     showDismissibleMessage.error('请先在设置中配置本地对话路径');
     return;
   }
-  if (!defaultConversationName.value) {
+  if (!storage?.conversationId) {
     showDismissibleMessage.warning('当前对话尚未保存，无法重命名');
     return;
   }
+  if (conversationReadOnly.value) {
+    showDismissibleMessage.warning('当前会话为只读模式，无法重命名');
+    return;
+  }
 
-  const oldBaseName = defaultConversationName.value;
-  const oldFilename = `${oldBaseName}.json`;
-  // 简单拼接路径，electron/node 环境下通常能正确处理
-  const oldFilePath = `${localPath}/${oldFilename}`;
-  const inputValue = ref(oldBaseName);
+  const oldTitle = defaultConversationName.value || storage.title || '';
+  const inputValue = ref(oldTitle);
   const isAutoNaming = ref(false);
   const handleManualAutoNaming = createManualAutoNamingHandler({
     inputValue,
-    uniqueDirPath: localPath,
+    uniqueDirPath: '',
     isAutoNaming,
-    fallbackBasename: oldBaseName
+    fallbackBasename: oldTitle
   });
-
   const projectsData = await loadProjectsForScope('local');
-  const originalProjectId = findProjectIdByFilename(projectsData, oldFilename);
+  const originalProjectId = (projectsData.projects || []).find((project) =>
+    (project.conversationIds || []).includes(storage.conversationId)
+  )?.id || '';
   const selectedProjectId = ref(originalProjectId);
 
   try {
     await ElMessageBox({
       title: '重命名对话',
       message: () => h('div', null, [
-        renderFilenamePromptTitleRow({
-          text: '请输入新的会话名称',
-          isAutoNaming,
-          onClick: handleManualAutoNaming
-        }),
+        renderFilenamePromptTitleRow({ text: '请输入新的会话名称', isAutoNaming, onClick: handleManualAutoNaming }),
         h(ElInput, {
           modelValue: inputValue.value,
           'onUpdate:modelValue': (val) => { inputValue.value = val; },
           placeholder: '会话名称',
-          ref: (elInputInstance) => {
-            if (elInputInstance) {
-              setTimeout(() => elInputInstance.focus(), 100);
-            }
-          },
+          ref: (instance) => { if (instance) setTimeout(() => instance.focus(), 100); },
           onKeydown: (event) => {
             if (event.key === 'Enter') {
               event.preventDefault();
@@ -7129,124 +7506,44 @@ const handleRenameSession = async () => {
       cancelButtonText: '取消',
       customClass: 'filename-prompt-dialog',
       beforeClose: async (action, instance, done) => {
-        if (action !== 'confirm') {
-          done();
-          return;
-        }
-
-        let newBaseName = (inputValue.value || '').trim();
-        if (!newBaseName) {
+        if (action !== 'confirm') return done();
+        const nextTitle = String(inputValue.value || '').trim();
+        if (!nextTitle) {
           showDismissibleMessage.error('名称不能为空');
           return;
         }
-        if (/[\\/:*?"<>|]/.test(newBaseName)) {
-          showDismissibleMessage.error('文件名包含非法字符');
-          return;
-        }
-        if (newBaseName.toLowerCase().endsWith('.json')) newBaseName = newBaseName.slice(0, -5);
-        if (!newBaseName) {
-          showDismissibleMessage.error('名称不能为空');
-          return;
-        }
-
-        const projectChanged = selectedProjectId.value !== originalProjectId;
-        if (newBaseName === oldBaseName) {
-          // 名称未变，仅在项目归属变化时更新 projects.yaml
-          if (projectChanged) {
-            instance.confirmButtonLoading = true;
-            try {
-              const projectName = projectsData.projects.find((p) => p.id === selectedProjectId.value)?.name || '';
-              await reassignLocalProject({
-                projectId: selectedProjectId.value,
-                projectName,
-                addFilename: oldFilename,
-                removeFilenames: []
-              });
-              showDismissibleMessage.success('项目归属已更新');
-            } catch (projectError) {
-              console.warn('[projects] 更新本地项目归属失败:', projectError);
-              showDismissibleMessage.error('更新项目归属失败');
-            } finally {
-              instance.confirmButtonLoading = false;
-            }
-          }
-          done();
-          return;
-        }
-
-        const newFilename = `${newBaseName}.json`;
-        const newFilePath = `${localPath}/${newFilename}`;
-
-        // 检查本地是否存在同名文件
-        const files = await window.api.listJsonFiles(localPath);
-        if (files.some(f => f.basename === newFilename)) {
-          showDismissibleMessage.error(`文件名 "${newFilename}" 已存在，操作取消`);
-          return;
-        }
-
         instance.confirmButtonLoading = true;
         try {
-          // 执行本地重命名
-          await window.api.renameLocalFile(oldFilePath, newFilePath);
-          defaultConversationName.value = newBaseName;
-          // 同步更新项目归属：移除旧名，新名按所选项目归属
-          try {
-            const projectName = projectsData.projects.find((p) => p.id === selectedProjectId.value)?.name || '';
-            await reassignLocalProject({
-              projectId: selectedProjectId.value,
-              projectName,
-              addFilename: newFilename,
-              removeFilenames: [oldFilename]
+          if (nextTitle !== oldTitle) {
+            const renamed = await window.api.renameConversation({
+              dirPath: localPath,
+              conversationId: storage.conversationId,
+              title: nextTitle
             });
-          } catch (projectError) {
-            console.warn('[projects] 重命名后更新本地项目归属失败:', projectError);
+            defaultConversationName.value = renamed.title;
+            currentConversationStorage.value = {
+              ...storage,
+              title: renamed.title,
+              dbFile: storage.dbFile,
+              revision: Number(renamed.revision) || storage.revision
+            };
           }
-          showDismissibleMessage.success('本地重命名成功');
-          done();
 
-          // 尝试同步重命名云端文件
-          const { url, username, password, data_path } = currentConfig.value.webdav || {};
-          if (url && data_path) {
-            try {
-              const remoteDir = data_path.endsWith('/') ? data_path.slice(0, -1) : data_path;
-              const webdavConfig = {
-                url,
-                username,
-                password,
-                path: remoteDir
-              };
-              const remoteSourceFile = await window.api.readWebdavBackup({
-                webdavConfig,
-                filename: oldFilename
-              });
-
-              if (remoteSourceFile?.ok === false) {
-                if (remoteSourceFile.reason === 'webdav_file_not_found') {
-                  return;
-                }
-                throw new Error(remoteSourceFile.message || '检查云端会话文件失败');
-              }
-
-              await ElMessageBox.confirm(
-                '云端也存在同名文件，是否同步重命名？',
-                '同步操作提示',
-                { confirmButtonText: '是', cancelButtonText: '否', type: 'info' }
-              );
-              const moveResult = await window.api.moveWebdavFile({
-                webdavConfig,
-                fromFilename: oldFilename,
-                toFilename: newFilename
-              });
-              if (moveResult?.ok === false) {
-                throw new Error(moveResult.message || '云端同步重命名失败');
-              }
-              showDismissibleMessage.success('云端同步重命名成功');
-            } catch (e) {
-              if (e !== 'cancel' && e !== 'close') {
-                console.warn('Cloud rename skipped:', e);
-              }
+          if (selectedProjectId.value !== originalProjectId) {
+            const data = normalizeWindowProjects(await window.api.readLocalProjects(localPath));
+            let projects = data.projects.map((project) => ({
+              ...project,
+              conversationIds: (project.conversationIds || []).filter((id) => id !== storage.conversationId)
+            }));
+            if (selectedProjectId.value) {
+              projects = projects.map((project) => project.id === selectedProjectId.value
+                ? { ...project, conversationIds: [...project.conversationIds, storage.conversationId] }
+                : project);
             }
+            await window.api.writeLocalProjects(localPath, { ...data, projects });
           }
+          showDismissibleMessage.success('会话名称已更新');
+          done();
         } catch (error) {
           showDismissibleMessage.error(`操作失败: ${error.message}`);
         } finally {
@@ -7255,9 +7552,7 @@ const handleRenameSession = async () => {
       }
     });
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close') {
-      showDismissibleMessage.error(`操作失败: ${error.message}`);
-    }
+    if (error !== 'cancel' && error !== 'close') showDismissibleMessage.error(`操作失败: ${error.message}`);
   }
 };
 
@@ -8475,7 +8770,7 @@ const askAI = async (forceSend = false) => {
       // --- 为本次请求创建临时消息列表 ---
       // 发送前自愈：若 tool 结果只在 chat_show.assistant.tool_calls.result 中，补回 history
       rehydrateHistoryToolsIfNeeded();
-      let messagesForThisRequest = JSON.parse(JSON.stringify(history.value));
+      let messagesForThisRequest = await buildRequestHistoryForCurrentConversation();
 
       messagesForThisRequest = messagesForThisRequest.filter(msg => {
         if (msg.role === 'system' && (!msg.content || msg.content.trim() === '')) {
@@ -9234,39 +9529,43 @@ const askAI = async (forceSend = false) => {
 
     if (currentTaskConfig.value) {
       let savedFileName = '未保存';
+      let savedConversationId = '';
       try {
         if (currentTaskConfig.value.autoSave && currentConfig.value.webdav?.localChatPath) {
-          // 构造文件名：任务名-时间
           const timeStr = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[\/ :]/g, '-').replace(/,/g, '');
           defaultConversationName.value = `定时任务-${currentTaskConfig.value.name}-${timeStr}`;
-          const sessionData = getSessionDataAsObject();
-          const jsonString = JSON.stringify(sessionData, null, 2);
-
-          const separator = currentOS.value === 'win' ? '\\' : '/';
-          const filePath = `${currentConfig.value.webdav.localChatPath}${separator}${defaultConversationName.value}.json`;
-
-          await window.api.writeLocalFile(filePath, jsonString);
-          savedFileName = `${defaultConversationName.value}.json`;
-
-          try {
-            const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(currentConfig.value.webdav.localChatPath));
-            const taskProjectId = typeof currentTaskConfig.value.autoSaveProjectId === 'string' ? currentTaskConfig.value.autoSaveProjectId : '';
-            const projectName = localProjects.projects.find((p) => p.id === taskProjectId)?.name || '';
-            await reassignLocalProject({
+          const dirPath = currentConfig.value.webdav.localChatPath;
+          const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(dirPath));
+          const taskProjectId = typeof currentTaskConfig.value.autoSaveProjectId === 'string' ? currentTaskConfig.value.autoSaveProjectId : '';
+          const projectName = localProjects.projects.find((p) => p.id === taskProjectId)?.name || '';
+          if (!currentConversationStorage.value?.conversationId) {
+            const created = await window.api.createConversation({
+              dirPath,
+              title: defaultConversationName.value,
+              sessionData: getSessionDataAsObject(),
               projectId: taskProjectId,
-              projectName,
-              addFilename: savedFileName,
-              removeFilenames: []
+              projectName
             });
-          } catch (projectError) {
-            console.warn('[projects] task auto-save local project assignment failed:', projectError);
+            currentConversationStorage.value = {
+              format: 'sqlite',
+              conversationId: created.descriptor.conversationId,
+              dbFile: created.descriptor.dbFile,
+              title: created.descriptor.title,
+              revision: Number(created.descriptor.revision) || 0,
+              dirPath,
+              storageMode: 'local'
+            };
+          } else {
+            await executeAutoSaveRequest({ reason: 'scheduled-task-finalized', force: true, version: ++sessionMutationVersion });
           }
+          savedFileName = defaultConversationName.value;
+          savedConversationId = currentConversationStorage.value?.conversationId || '';
         }
-        // 将历史记录写入主配置
         await window.api.addTaskHistory(currentTaskConfig.value.id, {
           time: Date.now(),
           status: 'success',
-          file: savedFileName
+          file: savedFileName,
+          conversationId: savedConversationId
         });
 
         // 自动关闭窗口
@@ -9357,6 +9656,11 @@ const cancelAskAI = () => {
 };
 const copyText = async (content, index) => { if (loading.value && index === chat_show.value.length - 1) return; await window.api.copyText(content); };
 const reaskAI = async (assistantMessageId = null) => {
+  if (conversationReadOnly.value) {
+    showDismissibleMessage.warning('当前会话为只读模式，无法重新请求');
+    return;
+  }
+
   if (loading.value || isReasking) return;
   if (isMcpLoading.value || compacting.value || isPreparingSend.value) {
     showDismissibleMessage.warning(isMcpLoading.value ? '工具加载中，暂不可重新请求' : '当前状态暂不可重新请求');
@@ -9416,6 +9720,11 @@ const reaskAI = async (assistantMessageId = null) => {
 };
 
 const deleteMessage = (index) => {
+  if (conversationReadOnly.value) {
+    showDismissibleMessage.warning('当前会话为只读模式，无法删除消息');
+    return;
+  }
+
   if (loading.value || compacting.value) {
     showDismissibleMessage.warning(compacting.value ? '压缩进行中，暂不可编辑历史' : '请等待当前回复完成后再操作');
     return;
@@ -9497,6 +9806,11 @@ const deleteMessage = (index) => {
 };
 
 const clearHistory = async () => {
+  if (conversationReadOnly.value) {
+    showDismissibleMessage.warning('当前会话为只读模式，无法清空历史');
+    return;
+  }
+
   if (loading.value) {
     return;
   }
@@ -9530,6 +9844,9 @@ const clearHistory = async () => {
   conversationOwnerId.value = '';
   ensureConversationOwnerId();
   cancelAutoNamingRequest();
+  await releaseCurrentConversationLease();
+  currentConversationStorage.value = null;
+  conversationReadOnly.value = false;
   defaultConversationName.value = "";
   chatInputRef.value?.focus({ cursor: 'end' });
   showDismissibleMessage.success('历史记录已清除');

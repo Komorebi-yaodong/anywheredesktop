@@ -493,6 +493,9 @@ function stringifyRemoteContent(content) {
   if (Buffer.isBuffer(content)) return content
   if (content instanceof Uint8Array) return Buffer.from(content)
   if (content instanceof ArrayBuffer) return Buffer.from(content)
+  if (content && typeof content === 'object' && content.encoding === 'base64' && typeof content.data === 'string') {
+    return Buffer.from(content.data, 'base64')
+  }
   return typeof content === 'string' ? content : JSON.stringify(content ?? {}, null, 2)
 }
 

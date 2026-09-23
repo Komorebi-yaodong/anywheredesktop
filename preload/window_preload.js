@@ -478,6 +478,39 @@ const api = {
   listWebdavDirectory: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listDirectory', input),
   readWebdavBackupBinary: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:readBackupBinary', input),
   deleteWebdavDirectoryContents: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteDirectoryContents', input),
+  listLocalConversations: (dirPath = '') => invokeOrThrow('conversation:listLocal', dirPath),
+  migrateJsonConversation: (input = {}) => invokeOrThrow('conversation:migrateJson', toPlainPayload(input)),
+  createConversation: (input = {}) => invokeOrThrow('conversation:create', toPlainPayload(input)),
+  openConversation: (input = {}) => invokeOrThrow('conversation:open', toPlainPayload(input)),
+  loadConversationPage: (input = {}) => invokeOrThrow('conversation:loadPage', toPlainPayload(input)),
+  getConversationRequestMessages: (input = {}) => invokeOrThrow('conversation:getRequestMessages', toPlainPayload(input)),
+
+  saveConversationSnapshot: (input = {}) => invokeOrThrow('conversation:saveSnapshot', toPlainPayload(input)),
+  saveConversationState: (input = {}) => invokeOrThrow('conversation:saveState', toPlainPayload(input)),
+  appendConversationMessages: (input = {}) => invokeOrThrow('conversation:appendMessages', toPlainPayload(input)),
+  updateConversationMessage: (input = {}) => invokeOrThrow('conversation:updateMessage', toPlainPayload(input)),
+  truncateConversationMessages: (input = {}) => invokeOrThrow('conversation:truncateMessages', toPlainPayload(input)),
+  deleteConversationMessages: (input = {}) => invokeOrThrow('conversation:deleteMessages', toPlainPayload(input)),
+  replaceActiveConversationMessages: (input = {}) => invokeOrThrow('conversation:replaceActiveMessages', toPlainPayload(input)),
+  restoreConversationCompaction: (input = {}) => invokeOrThrow('conversation:restoreCompaction', toPlainPayload(input)),
+
+  renameConversation: (input = {}) => invokeOrThrow('conversation:rename', toPlainPayload(input)),
+  deleteConversation: (input = {}) => invokeOrThrow('conversation:delete', toPlainPayload(input)),
+  acquireConversationWriteLease: (input = {}) => invokeOrThrow('conversation:acquireLease', toPlainPayload(input)),
+  heartbeatConversationWriteLease: (input = {}) => invokeOrThrow('conversation:heartbeatLease', toPlainPayload(input)),
+  releaseConversationWriteLease: (input = {}) => invokeOrThrow('conversation:releaseLease', toPlainPayload(input)),
+  createConversationSnapshot: (input = {}) => invokeOrThrow('conversation:createSnapshot', toPlainPayload(input)),
+  createCloudConversationWorktree: (input = {}) => invokeOrThrow('conversation:createCloudWorktree', toPlainPayload(input)),
+  uploadCloudConversationRemote: (input = {}) => invokeOrThrow('conversation:uploadCloudRemote', toPlainPayload(input)),
+
+
+  openCloudConversationSnapshot: (input = {}) => invokeOrThrow('conversation:openCloudSnapshot', toPlainPayload(input)),
+
+  readConversationSnapshot: (input = {}) => invokeOrThrow('conversation:readSnapshot', toPlainPayload(input)),
+  importConversationSnapshot: (input = {}) => invokeOrThrow('conversation:importSnapshot', toPlainPayload(input)),
+
+  getConversationDescriptor: (input = {}) => invokeOrThrow('conversation:getDescriptor', toPlainPayload(input)),
+
   readLocalProjects: (dirPath = '') => invokeOrThrow('projects:readLocal', dirPath),
   writeLocalProjects: (dirPath = '', data = {}) =>
     invokeOrThrow('projects:writeLocal', dirPath, toPlainPayload(data)),

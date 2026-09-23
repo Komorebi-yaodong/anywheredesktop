@@ -1,4 +1,5 @@
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
 import { runTaskById } from './core/task_runner.js'
@@ -116,6 +117,7 @@ export function registerIpcHandlers({
   fileApi,
   webdavApi,
   projectsApi,
+  conversationApi,
   chatApi,
   mcpApi,
   skillApi,
@@ -1221,6 +1223,195 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
   handleInvoke('webdav:deleteBackups', async (_event, input = {}) => {
     return webdavApi.deleteBackups(input)
   })
+
+  handleInvoke('conversation:listLocal', async (_event, dirPath = '') => {
+    return conversationApi.listLocalConversations(dirPath)
+  })
+
+  handleInvoke('conversation:migrateJson', async (_event, input = {}) => {
+    return conversationApi.migrateJsonConversation(input)
+  })
+
+  handleInvoke('conversation:create', async (_event, input = {}) => {
+    return conversationApi.createConversation(input)
+  })
+
+  handleInvoke('conversation:open', async (_event, input = {}) => {
+    return conversationApi.openConversation(input)
+  })
+
+  handleInvoke('conversation:loadPage', async (_event, input = {}) => {
+    return conversationApi.loadConversationPage(input)
+  })
+
+  handleInvoke('conversation:getRequestMessages', async (_event, input = {}) => {
+    return conversationApi.getConversationRequestMessages(input)
+  })
+
+
+  handleInvoke('conversation:saveSnapshot', async (_event, input = {}) => {
+    return conversationApi.saveConversationSnapshot(input)
+  })
+
+  handleInvoke('conversation:saveState', async (_event, input = {}) => {
+    return conversationApi.saveConversationState(input)
+  })
+
+  handleInvoke('conversation:appendMessages', async (_event, input = {}) => {
+    return conversationApi.appendMessages(input)
+  })
+
+  handleInvoke('conversation:updateMessage', async (_event, input = {}) => {
+    return conversationApi.updateMessage(input)
+  })
+
+  handleInvoke('conversation:truncateMessages', async (_event, input = {}) => {
+    return conversationApi.truncateMessages(input)
+  })
+
+  handleInvoke('conversation:deleteMessages', async (_event, input = {}) => {
+    return conversationApi.deleteMessages(input)
+  })
+
+  handleInvoke('conversation:replaceActiveMessages', async (_event, input = {}) => {
+    return conversationApi.replaceActiveMessages(input)
+  })
+
+
+  handleInvoke('conversation:restoreCompaction', async (_event, input = {}) => {
+    return conversationApi.restoreConversationCompaction(input)
+  })
+
+
+  handleInvoke('conversation:rename', async (_event, input = {}) => {
+    return conversationApi.renameConversation(input)
+  })
+
+  handleInvoke('conversation:delete', async (_event, input = {}) => {
+    return conversationApi.deleteConversation(input)
+  })
+
+  handleInvoke('conversation:acquireLease', async (_event, input = {}) => {
+    return conversationApi.acquireWriteLease(input)
+  })
+
+  handleInvoke('conversation:heartbeatLease', async (_event, input = {}) => {
+    return conversationApi.heartbeatWriteLease(input)
+  })
+
+  handleInvoke('conversation:releaseLease', async (_event, input = {}) => {
+    return conversationApi.releaseWriteLease(input)
+  })
+
+  handleInvoke('conversation:createSnapshot', async (_event, input = {}) => {
+    return conversationApi.createConversationSnapshot(input)
+  })
+
+  handleInvoke('conversation:createCloudWorktree', async (_event, input = {}) => {
+    const conversationId = String(input?.conversationId || crypto.randomUUID()).trim()
+    const worktreeDir = path.join(app.getPath('userData'), 'cloud-worktrees', conversationId)
+    const created = await conversationApi.createConversation({
+      dirPath: worktreeDir,
+      title: input?.title,
+      sessionData: input?.sessionData,
+      storageMode: 'cloud'
+    })
+    return { ...created, worktreeDir, storageMode: 'cloud' }
+  })
+
+
+  handleInvoke('conversation:uploadCloudRemote', async (_event, input = {}) => {
+    const descriptorResult = await conversationApi.getConversationDescriptor({
+      dirPath: input?.dirPath,
+      reference: input?.conversationId
+    })
+    const descriptor = descriptorResult?.descriptor
+    if (!descriptor) throw new Error('conversation_descriptor_missing')
+
+    const snapshot = await conversationApi.readConversationSnapshot({
+      dirPath: input?.dirPath,
+      conversationId: descriptor.conversationId
+    })
+    const result = await webdavApi.writeBackup({
+      ...(input?.remote || {}),
+      filename: descriptor.dbFile,
+      content: snapshot.content,
+      overwrite: true,
+      ensureDirectory: true,
+      useChatMetadata: false
+    })
+    if (!result || result.ok === false) throw new Error(result?.reason || 'webdav_write_failed')
+    return { ok: true, descriptor }
+  })
+
+  handleInvoke('conversation:importCloudRemote', async (_event, input = {}) => {
+    const descriptor = input?.descriptor
+    const result = await webdavApi.readBackupBinary({
+      ...(input?.remote || {}),
+      filename: descriptor?.dbFile
+    })
+    if (!result || result.ok === false) throw new Error(result?.reason || 'webdav_read_failed')
+    return conversationApi.importConversationSnapshot({
+      dirPath: input?.dirPath,
+      descriptor,
+      content: result.content
+    })
+  })
+
+  handleInvoke('conversation:openCloudRemote', async (_event, input = {}) => {
+    const descriptor = input?.descriptor
+    const conversationId = String(descriptor?.conversationId || '').trim()
+    if (!conversationId) throw new Error('conversation_descriptor_invalid')
+
+    const result = await webdavApi.readBackupBinary({
+      ...(input?.remote || {}),
+      filename: descriptor.dbFile
+    })
+    if (!result || result.ok === false) throw new Error(result?.reason || 'webdav_read_failed')
+
+    const worktreeDir = path.join(app.getPath('userData'), 'cloud-worktrees', conversationId)
+    await conversationApi.importConversationSnapshot({
+      dirPath: worktreeDir,
+      descriptor: { ...descriptor, storageMode: 'cloud' },
+      content: result.content
+    })
+    const opened = await conversationApi.openConversation({
+      dirPath: worktreeDir,
+      reference: conversationId,
+      activeOnly: true
+    })
+    return { ...opened, worktreeDir, storageMode: 'cloud' }
+  })
+
+
+
+  handleInvoke('conversation:openCloudSnapshot', async (_event, input = {}) => {
+    const conversationId = String(input?.descriptor?.conversationId || '').trim()
+    if (!conversationId) throw new Error('conversation_descriptor_invalid')
+    const worktreeDir = path.join(app.getPath('userData'), 'cloud-worktrees', conversationId)
+    await conversationApi.importConversationSnapshot({
+      dirPath: worktreeDir,
+      descriptor: { ...input.descriptor, storageMode: 'cloud' },
+      content: input.content
+    })
+    const opened = await conversationApi.openConversation({ dirPath: worktreeDir, reference: conversationId, activeOnly: true })
+    return { ...opened, worktreeDir, storageMode: 'cloud' }
+  })
+
+
+  handleInvoke('conversation:readSnapshot', async (_event, input = {}) => {
+    return conversationApi.readConversationSnapshot(input)
+  })
+
+  handleInvoke('conversation:importSnapshot', async (_event, input = {}) => {
+    return conversationApi.importConversationSnapshot(input)
+  })
+
+
+  handleInvoke('conversation:getDescriptor', async (_event, input = {}) => {
+    return conversationApi.getConversationDescriptor(input)
+  })
+
 
   handleInvoke('projects:readLocal', async (_event, dirPath = '') => {
     return projectsApi.readLocalProjects(dirPath)

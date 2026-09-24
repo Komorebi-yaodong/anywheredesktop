@@ -16,13 +16,14 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "test:conversation-lease": "node tests/conversation-lease.test.mjs",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm run build && electron-builder --dir --publish never",
     "build:win": "pnpm run build && electron-builder --win nsis --publish never",
-    "build:mac": "pnpm run build && electron-builder --mac zip --publish never",
+    "build:mac": "pnpm run build && electron-builder --mac dmg zip --publish never",
     "build:linux": "pnpm run build && electron-builder --linux AppImage --publish never",
     "release:win": "pnpm run build && electron-builder --win nsis --publish always",
-    "release:mac": "pnpm run build && electron-builder --mac zip --publish always",
+    "release:mac": "pnpm run build && electron-builder --mac dmg zip --publish always",
     "release:linux": "pnpm run build && electron-builder --linux AppImage --publish always"
   },
   "dependencies": {

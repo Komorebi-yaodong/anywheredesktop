@@ -760,7 +760,7 @@ const flushPendingWindowPayloadQueue = async () => {
 
 
 const handleAppendMessageEvent = async (data, options = {}) => {
-  if (!data) return;
+  if (!data || !ensureConversationWriteAccess(true)) return;
 
   if (!options.deferSend && (loading.value || isPreparingSend.value)) {
     pendingAppendBuffer.value.push({
@@ -2215,10 +2215,7 @@ const handleRestoreCompact = async (payload = null) => {
 
   const storage = currentConversationStorage.value;
   if (storage?.format === 'sqlite' && storage?.conversationId && storage?.dirPath) {
-    if (conversationReadOnly.value) {
-      showDismissibleMessage.warning('当前会话为只读模式，无法恢复压缩');
-      return;
-    }
+    if (!ensureConversationWriteAccess(true)) return;
     try {
       const restored = await window.api.restoreConversationCompaction({
         dirPath: storage.dirPath,
@@ -2580,6 +2577,7 @@ const collapsedMessages = ref(new Set());
 const defaultConversationName = ref("");
 const currentConversationStorage = ref(null);
 const conversationReadOnly = ref(false);
+const conversationLeasePending = ref(false);
 const conversationLease = ref(null);
 const conversationInstanceId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
   ? crypto.randomUUID()
@@ -2608,39 +2606,67 @@ const releaseCurrentConversationLease = async () => {
   }).catch(() => {});
 };
 
+const ensureConversationWriteAccess = (message = '') => {
+  const storage = currentConversationStorage.value;
+  if (!storage?.conversationId) return true;
+  if (conversationLeasePending.value) {
+    if (message) showDismissibleMessage.warning('正在确认会话编辑权，请稍后再试');
+    return false;
+  }
+  if (conversationReadOnly.value || !conversationLease.value?.leaseEpoch) {
+    if (message) showDismissibleMessage.warning('当前会话正在其他客户端编辑，本窗口为只读模式');
+    return false;
+  }
+  return true;
+};
+
 const acquireCurrentConversationLease = async () => {
   stopConversationLeaseHeartbeat();
   const storage = currentConversationStorage.value;
-  const dirPath = currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
-  if (!storage?.conversationId || !dirPath) return;
-  const lease = await window.api.acquireConversationWriteLease({
-    dirPath,
-    conversationId: storage.conversationId,
-    holderInstanceId: conversationInstanceId,
-    holderApp: 'desktop'
-  });
-  conversationReadOnly.value = lease?.readonly === true || lease?.ok === false;
-  conversationLease.value = lease?.ok ? lease : null;
-  if (conversationReadOnly.value) {
-    showDismissibleMessage.warning(`该会话正在由${lease?.holderApp || '另一个客户端'}编辑，当前以只读模式打开`);
+  const dirPath = storage?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
+  if (!storage?.conversationId || !dirPath) {
+    conversationLeasePending.value = false;
     return;
   }
-  conversationLeaseHeartbeatTimer = setInterval(async () => {
-    const currentLease = conversationLease.value;
-    const currentStorage = currentConversationStorage.value;
-    if (!currentLease?.leaseEpoch || !currentStorage?.conversationId) return;
-    const result = await window.api.heartbeatConversationWriteLease({
-      dirPath: currentStorage.dirPath || currentConfig.value?.webdav?.localChatPath || '',
-      conversationId: currentStorage.conversationId,
+  conversationLeasePending.value = true;
+  conversationLease.value = null;
+  try {
+    const lease = await window.api.acquireConversationWriteLease({
+      dirPath,
+      conversationId: storage.conversationId,
       holderInstanceId: conversationInstanceId,
-      leaseEpoch: currentLease.leaseEpoch
-    }).catch(() => ({ ok: false }));
-    if (!result?.ok) {
-      conversationReadOnly.value = true;
-      stopConversationLeaseHeartbeat();
-      showDismissibleMessage.warning('会话编辑权已失效，已切换为只读模式');
+      holderApp: 'desktop'
+    });
+    conversationReadOnly.value = lease?.readonly === true || lease?.ok === false;
+    conversationLease.value = lease?.ok ? lease : null;
+    if (conversationReadOnly.value) {
+      showDismissibleMessage.warning(`该会话正在由${lease?.holderApp || '另一个客户端'}编辑，当前以只读模式打开`);
+      return;
     }
-  }, 5000);
+    conversationLeaseHeartbeatTimer = setInterval(async () => {
+      const currentLease = conversationLease.value;
+      const currentStorage = currentConversationStorage.value;
+      if (!currentLease?.leaseEpoch || !currentStorage?.conversationId) return;
+      const result = await window.api.heartbeatConversationWriteLease({
+        dirPath: currentStorage.dirPath || currentConfig.value?.webdav?.localChatPath || '',
+        conversationId: currentStorage.conversationId,
+        holderInstanceId: conversationInstanceId,
+        leaseEpoch: currentLease.leaseEpoch
+      }).catch(() => ({ ok: false }));
+      if (!result?.ok) {
+        conversationReadOnly.value = true;
+        conversationLease.value = null;
+        stopConversationLeaseHeartbeat();
+        showDismissibleMessage.warning('会话编辑权已失效，已切换为只读模式');
+      }
+    }, 5000);
+  } catch (error) {
+    conversationReadOnly.value = true;
+    conversationLease.value = null;
+    showDismissibleMessage.warning(`确认会话编辑权失败，当前以只读模式打开: ${error?.message || error}`);
+  } finally {
+    conversationLeasePending.value = false;
+  }
 };
 const selectedVoice = ref(null);
 const tempReasoningEffort = ref('default');
@@ -2922,6 +2948,7 @@ const drainBufferIntoHistory = async () => {
 const flushAppendBuffer = async () => {
   // A buffered turn may begin only after the previous turn has fully released ownership.
   // isMcpLoading is deliberately declared before this function.
+  if (!ensureConversationWriteAccess(false)) return;
   if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value) return;
   isFlushingAppendBuffer = true;
   try {
@@ -4600,10 +4627,7 @@ const onAvatarClick = async (role, event) => {
 };
 
 const handleSubmit = () => {
-  if (conversationReadOnly.value) {
-    showDismissibleMessage.warning('当前会话正在其他客户端编辑，本窗口为只读模式');
-    return;
-  }
+  if (!ensureConversationWriteAccess(true)) return;
 
   if (compacting.value) {
     showDismissibleMessage.warning('压缩进行中，暂不可发送');
@@ -4637,6 +4661,7 @@ const handleUpload = async ({ fileList: newFiles }) => {
 const handleOpenMcpDialog = () => toggleMcpDialog();
 
 const handleSendAudio = async (audioFile) => {
+  if (!ensureConversationWriteAccess(true)) return;
   fileList.value = [];
   await file2fileList(audioFile, 0);
   await askAI(false);
@@ -4911,10 +4936,7 @@ const handleDownloadImageFromViewer = async (url) => {
 };
 
 const handleEditMessage = (index, newContent) => {
-  if (conversationReadOnly.value) {
-    showDismissibleMessage.warning('当前会话为只读模式，无法编辑消息');
-    return false;
-  }
+  if (!ensureConversationWriteAccess(true)) return false;
 
   if (compacting.value) {
     showDismissibleMessage.warning('压缩进行中，暂不可编辑历史');
@@ -5413,6 +5435,9 @@ onMounted(async () => {
       basic_msg.value = { code: data.code, type: data.type, payload: data.payload };
       if (data.conversation?.descriptor && data.conversation?.sessionData) {
         const descriptor = data.conversation.descriptor;
+        conversationLeasePending.value = true;
+        conversationReadOnly.value = false;
+        conversationLease.value = null;
         currentConversationStorage.value = {
           format: 'sqlite',
           conversationId: descriptor.conversationId,
@@ -6519,7 +6544,7 @@ const autoSaveSession = async (force = false, { skipProjectAssignment = false, v
 
   // 6. 执行数据库增量快照写入；物理 dbFile 永远不参与会话标题。
   try {
-    if (conversationReadOnly.value) return false;
+    if (!ensureConversationWriteAccess(false)) return false;
     let storage = currentConversationStorage.value;
     const dirPath = storage?.dirPath || currentConfig.value.webdav.localChatPath;
     const sessionData = getSessionDataAsObject();
@@ -6869,7 +6894,15 @@ const saveSessionToCloud = async () => {
               currentConversationStorage.value = storage;
               await acquireCurrentConversationLease();
             } else if (finalBasename !== storage.title) {
-              const renamed = await window.api.renameConversation({ dirPath: storage.dirPath, conversationId: storage.conversationId, title: finalBasename });
+              if (!ensureConversationWriteAccess(true)) return;
+              const renamed = await window.api.renameConversation({
+                dirPath: storage.dirPath,
+                conversationId: storage.conversationId,
+                title: finalBasename,
+                expectedRevision: storage.revision,
+                holderInstanceId: conversationInstanceId,
+                leaseEpoch: conversationLease.value?.leaseEpoch
+              });
               storage = { ...storage, title: renamed.title, revision: Number(renamed.revision) || storage.revision };
               currentConversationStorage.value = storage;
             }
@@ -7484,14 +7517,20 @@ const saveSessionAsJson = async () => {
             if (localChatPath) {
               const projectName = projectsData.projects.find((p) => p.id === selectedProjectId.value)?.name || '';
               if (currentConversationStorage.value?.conversationId) {
-                await window.api.renameConversation({
-                  dirPath: localChatPath,
-                  conversationId: currentConversationStorage.value.conversationId,
-                  title: finalBasename
+                if (!ensureConversationWriteAccess(true)) return;
+                const storage = currentConversationStorage.value;
+                const renamed = await window.api.renameConversation({
+                  dirPath: storage.dirPath || localChatPath,
+                  conversationId: storage.conversationId,
+                  title: finalBasename,
+                  expectedRevision: storage.revision,
+                  holderInstanceId: conversationInstanceId,
+                  leaseEpoch: conversationLease.value?.leaseEpoch
                 });
                 currentConversationStorage.value = {
-                  ...currentConversationStorage.value,
-                  title: finalBasename
+                  ...storage,
+                  title: renamed.title,
+                  revision: Number(renamed.revision) || storage.revision
                 };
                 defaultConversationName.value = finalBasename;
                 await executeAutoSaveRequest({ reason: 'manual-save', force: true, version: ++sessionMutationVersion });
@@ -7556,10 +7595,7 @@ const handleRenameSession = async () => {
     showDismissibleMessage.warning('当前对话尚未保存，无法重命名');
     return;
   }
-  if (conversationReadOnly.value) {
-    showDismissibleMessage.warning('当前会话为只读模式，无法重命名');
-    return;
-  }
+  if (!ensureConversationWriteAccess(true)) return;
 
   const oldTitle = defaultConversationName.value || storage.title || '';
   const inputValue = ref(oldTitle);
@@ -8446,6 +8482,9 @@ const buildAgentToolContentList = async ({ text, filePaths, source = 'agent_tool
 };
 
 const sendAgentToolMessage = async ({ text, filePaths, source = 'agent_tool' } = {}) => {
+  if (!ensureConversationWriteAccess(false)) {
+    return Promise.reject('Error: This conversation is read-only or its write lease is still being confirmed.');
+  }
   if (loading.value) {
     return Promise.reject("Error: This agent is currently busy generating a response. Please wait until it becomes Idle.");
   }
@@ -8755,6 +8794,7 @@ const appendCurrentInputToHistory = async () => {
 };
 
 const askAI = async (forceSend = false) => {
+  if (!ensureConversationWriteAccess(true)) return;
   if (loading.value || isPreparingSend.value || compacting.value) return;
   if (isMcpLoading.value) {
     showDismissibleMessage.info('正在加载工具，请稍后再试...');
@@ -9764,10 +9804,7 @@ const cancelAskAI = () => {
 };
 const copyText = async (content, index) => { if (loading.value && index === chat_show.value.length - 1) return; await window.api.copyText(content); };
 const reaskAI = async (assistantMessageId = null) => {
-  if (conversationReadOnly.value) {
-    showDismissibleMessage.warning('当前会话为只读模式，无法重新请求');
-    return;
-  }
+  if (!ensureConversationWriteAccess(true)) return;
 
   if (loading.value || isReasking) return;
   if (isMcpLoading.value || compacting.value || isPreparingSend.value) {
@@ -9828,10 +9865,7 @@ const reaskAI = async (assistantMessageId = null) => {
 };
 
 const deleteMessage = (index) => {
-  if (conversationReadOnly.value) {
-    showDismissibleMessage.warning('当前会话为只读模式，无法删除消息');
-    return;
-  }
+  if (!ensureConversationWriteAccess(true)) return;
 
   if (loading.value || compacting.value) {
     showDismissibleMessage.warning(compacting.value ? '压缩进行中，暂不可编辑历史' : '请等待当前回复完成后再操作');
@@ -9914,10 +9948,7 @@ const deleteMessage = (index) => {
 };
 
 const clearHistory = async () => {
-  if (conversationReadOnly.value) {
-    showDismissibleMessage.warning('当前会话为只读模式，无法清空历史');
-    return;
-  }
+  if (!ensureConversationWriteAccess(true)) return;
 
   if (loading.value) {
     return;
@@ -9955,6 +9986,7 @@ const clearHistory = async () => {
   await releaseCurrentConversationLease();
   currentConversationStorage.value = null;
   conversationReadOnly.value = false;
+  conversationLeasePending.value = false;
   defaultConversationName.value = "";
   chatInputRef.value?.focus({ cursor: 'end' });
   showDismissibleMessage.success('历史记录已清除');
@@ -10362,7 +10394,7 @@ const scrollToMessageByIndex = async (index) => {
         </div>
 
         <ChatInput ref="chatInputRef" v-model:prompt="prompt" v-model:fileList="fileList"
-          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting"
+          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting" :write-locked="conversationReadOnly || conversationLeasePending"
           :ctrlEnterToSend="currentConfig.CtrlEnterToSend" :layout="inputLayout" :voiceList="currentConfig.voiceList"
           :is-mcp-active="isMcpActive" :all-mcp-servers="availableMcpServers" :active-mcp-ids="sessionMcpServerIds"
           :active-skill-ids="sessionSkillIds" :all-skills="allSkillsList"

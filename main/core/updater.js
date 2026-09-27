@@ -362,7 +362,9 @@ export async function clearDownloadedUpdateCache() {
 export function installDownloadedUpdate() {
   try {
     configureAutoUpdater()
-    autoUpdater.quitAndInstall(false, true)
+    // Keep the assisted NSIS package for manual installs, but run update installs
+    // silently so Windows does not expose a second installer taskbar item.
+    autoUpdater.quitAndInstall(true, true)
     return {
       ok: true,
       state: 'installing',

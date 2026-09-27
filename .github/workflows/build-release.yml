@@ -101,6 +101,7 @@ jobs:
             artifact_name: anywhere-macos
             artifact_glob: |
               dist/*-mac.zip
+              dist/*-mac.dmg
               dist/latest*.yml
               dist/*.blockmap
 
@@ -195,6 +196,7 @@ jobs:
             artifact_name: anywhere-macos
             artifact_glob: |
               dist/*-mac.zip
+              dist/*-mac.dmg
               dist/latest*.yml
               dist/*.blockmap
 
@@ -271,6 +273,7 @@ jobs:
 
 
   publish-release-assets:
+    # The validation script is checked out from the same tag that produced the artifacts.
     if: github.event_name == 'workflow_dispatch'
     needs:
       - prepare-release
@@ -278,6 +281,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout release validation script
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare-release.outputs.tag }}
+
       - name: Download Windows artifacts
         uses: actions/download-artifact@v5
         with:
@@ -295,6 +303,9 @@ jobs:
         with:
           name: anywhere-macos-release-${{ needs.prepare-release.outputs.version }}
           path: release-assets/macos
+
+      - name: Verify update metadata references uploaded assets
+        run: node scripts/verify-release-assets.mjs release-assets
 
       - name: Create or reuse GitHub release
         shell: bash

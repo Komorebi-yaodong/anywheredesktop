@@ -4,6 +4,7 @@ import crypto from 'node:crypto'
 import { DatabaseSync, backup as sqliteBackup } from 'node:sqlite'
 
 import {
+  assignConversationProject,
   findConversation,
   findProjectByBasename,
   readLocalProjects,
@@ -1266,6 +1267,7 @@ export async function renameConversation({
   dirPath,
   conversationId,
   title,
+  projectId,
   expectedRevision,
   holderInstanceId = '',
   leaseEpoch = null
@@ -1292,7 +1294,9 @@ export async function renameConversation({
         .run(nextTitle, updatedAt, revision, conversationId)
     })
   } finally { db.close() }
-  await writeLocalProjects(dirPath, updateConversation(projects, conversationId, { title: nextTitle, revision, updatedAt }))
+  const assignedProjects = assignConversationProject(projects, conversationId, projectId)
+  const nextProjects = updateConversation(assignedProjects, conversationId, { title: nextTitle, revision, updatedAt })
+  await writeLocalProjects(dirPath, nextProjects)
   return { ok: true, conversationId, title: nextTitle, dbFile: descriptor.dbFile, revision, updatedAt }
 }
 
@@ -1449,6 +1453,18 @@ export async function importConversationSnapshot({ dirPath, descriptor: rawDescr
     } finally { db.close() }
     await fs.rm(finalPath, { force: true })
     await fs.rename(downloadPath, finalPath)
+
+    const importedDb = openDatabase(finalPath)
+    try {
+      const importedRow = getConversationRow(importedDb)
+      const importedTitle = normalizeText(rawDescriptor.title).trim() || importedRow.title
+      const importedUpdatedAt = normalizeText(rawDescriptor.updatedAt).trim() || importedRow.updated_at
+      const importedRevision = Math.max(Number(importedRow.revision) || 0, Number(rawDescriptor.revision) || 0)
+      importedDb.prepare('UPDATE conversation SET title = ?, updated_at = ?, revision = ? WHERE conversation_id = ?')
+        .run(importedTitle, importedUpdatedAt, importedRevision, conversationId)
+    } finally {
+      importedDb.close()
+    }
     const descriptor = {
       conversationId,
       dbFile,

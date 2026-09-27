@@ -664,7 +664,7 @@ async function syncDesktopRuntimeFromConfig() {
 }
 
 app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('com.anywhere.desktop')
+  electronApp.setAppUserModelId('com.komorebi.anywhere.desktop')
 
   installRequestHeaderBridge()
 

@@ -2875,6 +2875,8 @@ const toolCallControllers = ref(new Map());
 let activeAssistantTurnMeta = null;
 // Must be initialized before reask/buffer guards and MCP completion watchers reference it.
 const isMcpLoading = ref(false);
+
+const isModelIterationConfigLocked = ref(false);
 let isFlushingAppendBuffer = false;
 let isReasking = false;
 const tempSessionMcpServerIds = ref([]);
@@ -2888,6 +2890,22 @@ const taskPanelVisible = ref(false);
 // --- 追加消息缓冲区：loading 期间发送的消息暂存于此，本轮结束后自动追加并续请求 ---
 const pendingAppendBuffer = ref([]);
 
+
+const normalizePendingInputBuffer = (items) => (Array.isArray(items) ? items : [])
+  .filter((item) => item?.kind === 'input')
+  .map((item) => {
+    const text = typeof item.text === 'string' ? item.text : '';
+    const files = Array.isArray(item.files) ? item.files.filter((file) => file && typeof file === 'object') : [];
+    if (!text.trim() && files.length === 0) return null;
+    return {
+      kind: 'input',
+      text,
+      files: files.slice(),
+      preview: typeof item.preview === 'string' && item.preview ? item.preview : (text || `[${files.length} 个文件]`)
+    };
+  })
+  .filter(Boolean);
+
 const enqueueInputToBuffer = () => {
   const text = prompt.value.trim();
   const files = Array.isArray(fileList.value) ? fileList.value.slice() : [];
@@ -2900,12 +2918,14 @@ const enqueueInputToBuffer = () => {
   });
   prompt.value = "";
   fileList.value = [];
+  scheduleAutoSave({ reason: 'append-buffer-enqueued', immediate: true });
   showDismissibleMessage.info('正在生成，消息已加入缓冲区，将在本轮结束后自动发送');
 };
 
 const removeBufferedMessage = (index) => {
   if (index >= 0 && index < pendingAppendBuffer.value.length) {
     pendingAppendBuffer.value.splice(index, 1);
+    scheduleAutoSave({ reason: 'append-buffer-removed', immediate: true });
   }
 };
 
@@ -6680,6 +6700,13 @@ const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false
   }, delay);
 };
 
+
+watch([selectedVoice, tempReasoningEffort, sessionMcpServerIds, sessionSkillIds], () => {
+  if (isRestoringSessionSnapshot) return;
+  scheduleAutoSave({ reason: 'session-request-config', immediate: true });
+}, { deep: true });
+
+
 const scheduleInputDraftAutoSave = (reason = 'input-draft') => {
   scheduleAutoSave({ reason, delay: AUTO_SAVE_INPUT_DEBOUNCE_MS });
 };
@@ -6808,6 +6835,7 @@ const getSessionDataAsObject = (options = {}) => {
     selectedVoice: selectedVoice.value,
     promptDraft: prompt.value,
     draftFileList: fileList.value,
+    pendingAppendBuffer: normalizePendingInputBuffer(pendingAppendBuffer.value),
     activeMcpServerIds: sessionMcpServerIds.value || [],
     activeSkillIds: sessionSkillIds.value || [],
     isAutoApproveTools: isAutoApproveTools.value,
@@ -8081,7 +8109,7 @@ const loadSession = async (jsonData) => {
   focusedMessageIndex.value = null;
   taskList.value = Array.isArray(jsonData.taskList) ? normalizeTaskList(jsonData.taskList) : [];
   taskPanelVisible.value = false;
-  pendingAppendBuffer.value = [];
+  pendingAppendBuffer.value = normalizePendingInputBuffer(jsonData.pendingAppendBuffer);
   conversationOwnerId.value = typeof jsonData.conversationOwnerId === 'string' && jsonData.conversationOwnerId.trim()
     ? jsonData.conversationOwnerId.trim()
     : '';
@@ -8278,6 +8306,9 @@ const loadSession = async (jsonData) => {
     syncAutoCloseOnBlurListener();
   } finally {
     isRestoringSessionSnapshot = false;
+    if (pendingAppendBuffer.value.length > 0) {
+      nextTick(() => { flushAppendBuffer(); });
+    }
   }
 };
 
@@ -8523,6 +8554,8 @@ const sendAgentToolMessage = async ({ text, filePaths, source = 'agent_tool' } =
 
 
 const isApplyMcpRunning = ref(false);
+
+let activeApplyMcpPromise = null;
 const pendingApplyMcpRequest = ref(null);
 
 const requestApplyMcpTools = async (show_none = true, reason = 'unknown') => {
@@ -8531,19 +8564,30 @@ const requestApplyMcpTools = async (show_none = true, reason = 'unknown') => {
     reason: typeof reason === 'string' && reason ? reason : 'unknown'
   };
 
-  if (isApplyMcpRunning.value) {
+  if (isModelIterationConfigLocked.value) {
     return;
   }
 
+  if (isApplyMcpRunning.value) {
+    return activeApplyMcpPromise;
+  }
+
   isApplyMcpRunning.value = true;
-  try {
-    while (pendingApplyMcpRequest.value) {
-      const currentRequest = pendingApplyMcpRequest.value;
-      pendingApplyMcpRequest.value = null;
-      await applyMcpTools(currentRequest.show_none, currentRequest.reason);
+  activeApplyMcpPromise = (async () => {
+    try {
+      while (pendingApplyMcpRequest.value) {
+        const currentRequest = pendingApplyMcpRequest.value;
+        pendingApplyMcpRequest.value = null;
+        await applyMcpTools(currentRequest.show_none, currentRequest.reason);
+      }
+    } finally {
+      isApplyMcpRunning.value = false;
     }
+  })();
+  try {
+    return await activeApplyMcpPromise;
   } finally {
-    isApplyMcpRunning.value = false;
+    activeApplyMcpPromise = null;
   }
 };
 
@@ -8898,8 +8942,6 @@ const askAI = async (forceSend = false) => {
   }
 
   const currentPromptConfig = currentConfig.value.prompts[CODE.value];
-  const isVoiceReply = !!selectedVoice.value;
-  let useStream = (currentPromptConfig?.stream ?? true) && !isVoiceReply;
   let tool_calls_count = 0;
 
   // 获取当前服务商的 API 类型
@@ -8909,6 +8951,21 @@ const askAI = async (forceSend = false) => {
   try {
     // --- 3. 开始工具调用循环 ---
     while (!isTurnAborted()) {
+
+      if (isApplyMcpRunning.value && activeApplyMcpPromise) {
+        await activeApplyMcpPromise;
+        throwIfTurnAborted();
+      }
+      if (pendingApplyMcpRequest.value) {
+        await requestApplyMcpTools(false, 'before-next-model-iteration');
+        throwIfTurnAborted();
+      }
+      const iterationReasoningEffort = tempReasoningEffort.value;
+      const iterationVoice = selectedVoice.value;
+      const iterationSkillIds = [...sessionSkillIds.value];
+      const isVoiceReply = !!iterationVoice;
+      let useStream = (currentPromptConfig?.stream ?? true) && !isVoiceReply;
+      isModelIterationConfigLocked.value = true;
       // chatInputRef.value?.focus({ cursor: 'end' });
 
       // --- 为本次请求创建临时消息列表 ---
@@ -8923,7 +8980,7 @@ const askAI = async (forceSend = false) => {
         return true;
       });
 
-      ensureAssistantReasoningContentForThinkingMode(messagesForThisRequest, tempReasoningEffort.value);
+      ensureAssistantReasoningContentForThinkingMode(messagesForThisRequest, iterationReasoningEffort);
 
       messagesForThisRequest.forEach(msg => {
         if (Array.isArray(msg.content)) {
@@ -8971,7 +9028,7 @@ const askAI = async (forceSend = false) => {
 
       // 准备 System Prompt 和 MCP 规则
       let mcpSystemPromptStr = "";
-      if (openaiFormattedTools.value.length > 0 || sessionSkillIds.value.length > 0) {
+      if (openaiFormattedTools.value.length > 0 || iterationSkillIds.length > 0) {
         mcpSystemPromptStr = generateMcpSystemPrompt();
         const systemMessageIndex = messagesForThisRequest.findIndex(m => m.role === 'system');
         if (systemMessageIndex !== -1) {
@@ -8997,17 +9054,17 @@ const askAI = async (forceSend = false) => {
       };
 
       if (currentPromptConfig?.isTemperature) requestParams.temperature = currentPromptConfig.temperature;
-      if (tempReasoningEffort.value && tempReasoningEffort.value !== 'default') requestParams.reasoning_effort = tempReasoningEffort.value;
+      if (iterationReasoningEffort && iterationReasoningEffort !== 'default') requestParams.reasoning_effort = iterationReasoningEffort;
 
       // --- 构建工具列表 (MCP + Skill) ---
       let activeTools = [...openaiFormattedTools.value];
 
-      if (sessionSkillIds.value.length > 0) {
+      if (iterationSkillIds.length > 0) {
         try {
           const runtimeSkillPath = await getRuntimeSkillPath();
           throwIfTurnAborted();
           if (runtimeSkillPath) {
-            const skillToolDef = await window.api.getSkillToolDefinition(runtimeSkillPath, sessionSkillIds.value);
+            const skillToolDef = await window.api.getSkillToolDefinition(runtimeSkillPath, iterationSkillIds);
             throwIfTurnAborted();
             if (skillToolDef) {
               activeTools.push(skillToolDef);
@@ -9027,7 +9084,7 @@ const askAI = async (forceSend = false) => {
         requestParams.stream = false;
         useStream = false;
         requestParams.modalities = ["text", "audio"];
-        requestParams.audio = { voice: selectedVoice.value.split('-')[0].trim(), format: "wav" };
+        requestParams.audio = { voice: iterationVoice.split('-')[0].trim(), format: "wav" };
       }
 
       throwIfTurnAborted();
@@ -9048,7 +9105,7 @@ const askAI = async (forceSend = false) => {
           id: assistantMessageId,
           role: "assistant", content: [], reasoning_content: "", status: "",
           aiName: modelMap.value[model.value] || model.value.split('|')[1],
-          voiceName: selectedVoice.value, tool_calls: [],
+          voiceName: iterationVoice, tool_calls: [],
           startTime: Date.now()
         });
         currentAssistantChatShowIndex = chat_show.value.length - 1;
@@ -9250,7 +9307,7 @@ const askAI = async (forceSend = false) => {
         responseMessage = {
           role: 'assistant',
           content: finalContentForHistory,
-          reasoning_content: aggregatedReasoningContent || (shouldBackfillAssistantReasoningContent(tempReasoningEffort.value) ? '' : null),
+          reasoning_content: aggregatedReasoningContent || (shouldBackfillAssistantReasoningContent(iterationReasoningEffort) ? '' : null),
           extra_content: aggregatedExtraContent
         };
 
@@ -9306,14 +9363,14 @@ const askAI = async (forceSend = false) => {
           responseMessage = {
             role: 'assistant',
             content: contentText || null,
-            reasoning_content: reasoningText || (shouldBackfillAssistantReasoningContent(tempReasoningEffort.value) ? '' : null),
+            reasoning_content: reasoningText || (shouldBackfillAssistantReasoningContent(iterationReasoningEffort) ? '' : null),
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
             tokenUsage: normalizeAssistantTokenUsage(response.usage)
           };
         } else {
           // Chat Completions
           if (isAsyncIterableResponse(response)) {
-            responseMessage = await collectChatCompletionStreamToMessage(response, tempReasoningEffort.value);
+            responseMessage = await collectChatCompletionStreamToMessage(response, iterationReasoningEffort);
             throwIfTurnAborted();
           } else {
             responseMessage = response.choices[0].message;
@@ -9332,7 +9389,7 @@ const askAI = async (forceSend = false) => {
 
       throwIfTurnAborted();
 
-      ensureAssistantReasoningContentForThinkingMode([responseMessage], tempReasoningEffort.value);
+      ensureAssistantReasoningContentForThinkingMode([responseMessage], iterationReasoningEffort);
       if (!responseMessage.tokenUsage) {
         delete responseMessage.tokenUsage;
       }
@@ -9572,6 +9629,8 @@ const askAI = async (forceSend = false) => {
           chat_show.value.push(...toolMediaMessages.map((message) => deepCloneSafe(message)));
         }
         scheduleAutoSave({ reason: 'tool-calls-completed', immediate: true });
+
+        isModelIterationConfigLocked.value = false;
         // 工具调用完成后，把缓冲区消息插入历史，使下一轮请求即可纳入
         throwIfTurnAborted();
         await drainBufferIntoHistory();
@@ -9582,6 +9641,7 @@ const askAI = async (forceSend = false) => {
         await maybeAutoCompactBeforeNextRequest({ reason: 'after-tool-results' });
         throwIfTurnAborted();
       } else {
+        isModelIterationConfigLocked.value = false;
         if (isVoiceReply && responseMessage.audio) {
           currentBubble.content = currentBubble.content || [];
 
@@ -9661,6 +9721,11 @@ const askAI = async (forceSend = false) => {
 
   } finally {
     cancelPendingStreamingDisplay?.();
+
+    isModelIterationConfigLocked.value = false;
+    if (pendingApplyMcpRequest.value && !isApplyMcpRunning.value) {
+      await requestApplyMcpTools(false, 'assistant-turn-finalized');
+    }
     cancelPendingStreamingDisplay = null;
     const stillOwnsTurn = activeAssistantTurnMeta === turnMeta;
     const stillOwnsSignal = signalController.value === requestAbortController;

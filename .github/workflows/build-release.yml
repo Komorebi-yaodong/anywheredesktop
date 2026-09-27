@@ -131,6 +131,8 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
       - name: Verify build icon assets
         shell: bash
@@ -151,6 +153,14 @@ jobs:
           echo "ARTIFACT_FLAVOR=$ARTIFACT_FLAVOR"
           echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR"
           echo "npm_config_electron_builder_binaries_mirror=$npm_config_electron_builder_binaries_mirror"
+
+      - name: Verify macOS DMG helper download environment
+        if: matrix.target == 'mac'
+        shell: bash
+        run: |
+          test -z "${ELECTRON_MIRROR:-}"
+          test -z "${npm_config_electron_mirror:-}"
+          echo "Electron runtime mirror is scoped to dependency installation; dmg-builder will use electron-builder-binaries."
 
       - name: Build package
         run: pnpm build:${{ matrix.target }}
@@ -231,6 +241,8 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
       - name: Verify build icon assets
         shell: bash
@@ -253,6 +265,14 @@ jobs:
           echo "RELEASE_TAG=$RELEASE_TAG"
           echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR"
           echo "npm_config_electron_builder_binaries_mirror=$npm_config_electron_builder_binaries_mirror"
+
+      - name: Verify macOS DMG helper download environment
+        if: matrix.target == 'mac'
+        shell: bash
+        run: |
+          test -z "${ELECTRON_MIRROR:-}"
+          test -z "${npm_config_electron_mirror:-}"
+          echo "Electron runtime mirror is scoped to dependency installation; dmg-builder will use electron-builder-binaries."
 
       - name: Build package
         run: pnpm build:${{ matrix.target }}

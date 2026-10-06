@@ -1048,6 +1048,10 @@ async function exportConfig() {
     if (configToExport.skillPath !== undefined) {
       delete configToExport.skillPath;
     }
+    // Remote listener settings are machine-local; paired-device secrets are never stored here.
+    if (configToExport.remote !== undefined) {
+      delete configToExport.remote;
+    }
 
     if (window.api && window.api.exportMemoryData) {
       const memories = await window.api.exportMemoryData();

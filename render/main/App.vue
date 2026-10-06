@@ -7,9 +7,10 @@ import Mcp from './components/Mcp.vue'
 import Setting from './components/Setting.vue'
 import Providers from './components/Providers.vue'
 import Skills from './components/Skills.vue'
+import RemoteConnections from './components/RemoteConnections.vue'
 
 import { useI18n } from 'vue-i18n'
-import { Collection, Bell, Document } from '@element-plus/icons-vue'
+import { Collection, Bell, Connection, Document } from '@element-plus/icons-vue'
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { ElBadge, ElMessage, ElMessageBox } from 'element-plus'; // 确保引入 ElBadge
@@ -19,7 +20,11 @@ const tab = ref(0);
 const header_text = ref(t('app.header.chats'));
 
 const config = ref(null);
+const remoteConnectionsRef = ref(null);
 
+function openRemoteConnections() {
+  remoteConnectionsRef.value?.openDialog?.();
+}
 
 const fallbackDefaultConfig = {
   defaultTaskModel: '',
@@ -973,6 +978,11 @@ watch(locale, () => {
               </el-badge>
             </el-button>
           </el-tooltip>
+          <el-tooltip content="手机远程" placement="bottom">
+            <el-button class="tab-button" text @click="openRemoteConnections">
+              <el-icon :size="20"><Connection /></el-icon>
+            </el-button>
+          </el-tooltip>
         </el-col>
 
         <el-col :span="12" class="header-title-col">
@@ -1088,6 +1098,9 @@ watch(locale, () => {
         <Setting v-else-if="tab === 6" key="settings" />
       </KeepAlive>
     </el-main>
+
+    <RemoteConnections ref="remoteConnectionsRef" />
+
 
     <!-- 帮助文档弹窗 -->
     <el-dialog v-model="showDocDialog" width="80%" :lock-scroll="false" class="doc-dialog">

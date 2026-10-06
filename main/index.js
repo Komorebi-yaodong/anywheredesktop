@@ -16,7 +16,7 @@
  */
 
 
-import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow } from 'electron'
+import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow, safeStorage } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
 import {
@@ -55,6 +55,7 @@ import * as skillApi from './core/skill.js'
 import * as screenshotApi from './core/screenshot.js'
 import * as updaterApi from './core/updater.js'
 import * as compactApi from './core/compact.js'
+import { createRemoteGateway } from './core/remote/index.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -62,6 +63,26 @@ import { startTaskScheduler } from './core/task_scheduler.js'
 
 let appTray = null
 let appQuitStarted = false
+
+const remoteGateway = createRemoteGateway({
+  app,
+  safeStorage,
+  dbStorageGetItem: dbApi.dbStorageGetItem,
+  dbStorageSetItem: dbApi.dbStorageSetItem,
+  getAppVersion: () => app.getVersion(),
+  onStatusChanged: (status) => {
+    for (const item of listWindows('main')) {
+      const win = getWindowByRef(item.id)
+      if (!win || win.isDestroyed()) continue
+      try {
+        win.webContents.send('remote:status-changed', status)
+      } catch {
+        // A renderer teardown must not interrupt gateway state changes.
+      }
+    }
+  }
+})
+
 
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -533,6 +554,9 @@ function beginAppQuit() {
   markAppQuitting(true)
   clearDesktopShortcuts()
   systemApi.stopClipboardWatcher()
+  remoteGateway.stop().catch((error) => {
+    console.error('remote-gateway:stop-failed', error?.message || error)
+  })
   dataApi.setWindowChannelNotifier(null)
 }
 
@@ -710,6 +734,7 @@ app.whenReady().then(async () => {
     mcpApi,
     skillApi,
     compactApi,
+    remoteGateway,
 
     updaterApi,
 
@@ -727,7 +752,10 @@ app.whenReady().then(async () => {
   systemApi.startClipboardWatcher()
   startTaskScheduler({ dataApi, openWindow })
 
-  await syncDesktopRuntimeFromConfig()
+  const initialRuntime = await syncDesktopRuntimeFromConfig()
+  await remoteGateway.configure(initialRuntime?.config || {}).catch((error) => {
+    console.error('remote-gateway:startup-failed', error?.message || error)
+  })
   ensureTray()
   await openWindow('main')
   setTimeout(() => {

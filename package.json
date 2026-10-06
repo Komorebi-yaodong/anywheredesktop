@@ -18,6 +18,10 @@
     "build": "electron-vite build",
     "test:conversation-lease": "node tests/conversation-lease.test.mjs",
     "test:conversation-time": "node tests/conversation-time.test.mjs",
+    "test:remote-crypto": "node tests/remote-crypto.test.mjs",
+    "test:remote-gateway": "node tests/remote-gateway.test.mjs",
+    "test:remote-config": "node tests/remote-config-local.test.mjs",
+    "test:remote": "pnpm run test:remote-crypto && pnpm run test:remote-gateway && pnpm run test:remote-config",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm run build && electron-builder --dir --publish never",
     "build:win": "pnpm run build && electron-builder --win nsis --publish never",
@@ -53,7 +57,10 @@
     "node-machine-id": "^1.1.12",
     "openai": "6.18.0",
     "pinyin-pro": "^3.28.0",
+    "qrcode": "1.5.4",
+    "selfsigned": "5.5.0",
     "webdav": "^5.9.0",
+    "ws": "8.21.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

@@ -67,6 +67,22 @@ const api = {
   }),
   
   getAppVersion: () => invokeOrThrow('app:getVersion'),
+  // ===== Remote v2: management-only surface. No gateway/device private key is exposed. =====
+  getRemoteStatus: () => invokeOrThrow('remote:getStatus'),
+  saveAndConfigureRemote: (settings = {}) =>
+    invokeOrThrow('remote:saveAndConfigure', toPlainPayload(settings) || {}),
+  createRemotePairing: () => invokeOrThrow('remote:createPairing'),
+  listRemoteDevices: () => invokeOrThrow('remote:listDevices'),
+  renameRemoteDevice: (deviceId = '', displayName = '') =>
+    invokeOrThrow('remote:renameDevice', deviceId, displayName),
+  revokeRemoteDevice: (deviceId = '') => invokeOrThrow('remote:revokeDevice', deviceId),
+  getRemoteAuditLog: () => invokeOrThrow('remote:getAuditLog'),
+  onRemoteStatusChanged: (callback) => {
+    if (typeof callback !== 'function') return () => {}
+    const listener = (_event, payload) => callback(payload)
+    electronAPI.ipcRenderer.on('remote:status-changed', listener)
+    return () => electronAPI.ipcRenderer.removeListener('remote:status-changed', listener)
+  },
   checkLatestVersion: () => electronAPI.ipcRenderer.invoke('app:checkLatestVersion'),
   getAppUpdateStatus: () => electronAPI.ipcRenderer.invoke('app:update:getStatus'),
   checkAppUpdate: () => electronAPI.ipcRenderer.invoke('app:update:check'),

@@ -484,14 +484,23 @@ function movePromptSelection(direction = '') {
   const currentIndex = list.findIndex((item) => item.key === selectedPromptKey.value)
   const safeIndex = currentIndex < 0 ? 0 : currentIndex
   const columnCount = getPromptGridColumnCount()
+  const columnIndex = safeIndex % columnCount
   let nextIndex = safeIndex
 
-  if (direction === 'left') nextIndex = safeIndex - 1
-  if (direction === 'right') nextIndex = safeIndex + 1
-  if (direction === 'up') nextIndex = safeIndex - columnCount
-  if (direction === 'down') nextIndex = safeIndex + columnCount
+  if (direction === 'left') {
+    nextIndex = (safeIndex - 1 + list.length) % list.length
+  } else if (direction === 'right') {
+    nextIndex = (safeIndex + 1) % list.length
+  } else if (direction === 'up') {
+    const previousRowIndex = safeIndex - columnCount
+    nextIndex = previousRowIndex >= 0
+      ? previousRowIndex
+      : columnIndex + Math.floor((list.length - 1 - columnIndex) / columnCount) * columnCount
+  } else if (direction === 'down') {
+    const nextRowIndex = safeIndex + columnCount
+    nextIndex = nextRowIndex < list.length ? nextRowIndex : columnIndex
+  }
 
-  nextIndex = Math.max(0, Math.min(list.length - 1, nextIndex))
   selectedPromptKey.value = list[nextIndex].key
   shouldShowSelection.value = true
 }
@@ -1047,7 +1056,13 @@ onMounted(async () => {
 
     if (data?.promptKey) {
       selectedPromptKey.value = data.promptKey
-      shouldShowSelection.value = Boolean(data.promptKey)
+      shouldShowSelection.value = true
+    } else if (!isAppendOnlyMode.value && candidateSections.value.length > 0) {
+      selectedPromptKey.value = candidateSections.value[0].key
+      shouldShowSelection.value = true
+    } else {
+      selectedPromptKey.value = ''
+      shouldShowSelection.value = false
     }
 
     requestAnimationFrame(() => {
@@ -1125,7 +1140,6 @@ onBeforeUnmount(() => {
           type="button"
           class="prompt-tile"
           :class="{ active: shouldShowSelection && selectedPromptKey === prompt.key }"
-          @mouseenter="selectedPromptKey = prompt.key; shouldShowSelection = true"
           @click="selectedPromptKey = prompt.key; shouldShowSelection = true; openPrompt(prompt)"
         >
           <div class="tile-icon-wrap">

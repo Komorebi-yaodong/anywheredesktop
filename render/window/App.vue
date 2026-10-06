@@ -2575,6 +2575,8 @@ const fileList = ref([]);
 const zoomLevel = ref(1);
 const collapsedMessages = ref(new Set());
 const defaultConversationName = ref("");
+
+const sessionCreatedAt = ref(new Date().toISOString());
 const currentConversationStorage = ref(null);
 const conversationReadOnly = ref(false);
 const conversationLeasePending = ref(false);
@@ -2837,6 +2839,25 @@ const normalizeSessionTimestamp = (value) => {
   return Number.isNaN(date.getTime()) || date.getTime() <= 0 ? '' : date.toISOString();
 };
 
+
+const resolveSessionCreatedAt = (sessionData) => {
+  const metadataCreatedAt = normalizeSessionTimestamp(sessionData?.sessionMetadata?.createdAt);
+  if (metadataCreatedAt) return metadataCreatedAt;
+
+  const timestamps = [];
+  [sessionData?.fullHistory, sessionData?.history, sessionData?.chat_show].forEach((messages) => {
+    if (!Array.isArray(messages)) return;
+    messages.forEach((message) => {
+      [message?.createdAt, message?.timestamp, message?.updatedAt, message?.completedTimestamp].forEach((candidate) => {
+        const normalized = normalizeSessionTimestamp(candidate);
+        if (normalized) timestamps.push(normalized);
+      });
+    });
+  });
+  timestamps.sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+  return timestamps[0] || '';
+};
+
 const getConversationDisplayName = () => {
   const normalizedTitle = typeof defaultConversationName.value === 'string' ? defaultConversationName.value.trim() : '';
   if (normalizedTitle) return normalizedTitle;
@@ -2857,8 +2878,13 @@ const getConversationDisplayName = () => {
 };
 
 const getSessionMetadata = () => {
+  const updatedAt = new Date().toISOString();
+  const createdAt = normalizeSessionTimestamp(sessionCreatedAt.value) || updatedAt;
+  sessionCreatedAt.value = createdAt;
   return {
-    title: getConversationDisplayName()
+    title: getConversationDisplayName(),
+    createdAt,
+    updatedAt
   };
 };
 
@@ -6827,7 +6853,7 @@ const getSessionDataAsObject = (options = {}) => {
   return {
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
     autoCloseOnBlur: autoCloseOnBlur.value, model: model.value,
-    sessionMetadata: { title: explicitTitle || getSessionMetadata().title },
+    sessionMetadata: { ...getSessionMetadata(), ...(explicitTitle ? { title: explicitTitle } : {}) },
     currentPromptConfig: currentPromptConfig,
     fullHistory: fullHistory.value,
     history: historyToSave,
@@ -8103,6 +8129,7 @@ const handleSaveAction = async () => {
 
 const loadSession = async (jsonData) => {
   loading.value = true;
+  sessionCreatedAt.value = resolveSessionCreatedAt(jsonData) || sessionCreatedAt.value;
   isRestoringSessionSnapshot = true;
   collapsedMessages.value.clear();
   messageRefs.clear();

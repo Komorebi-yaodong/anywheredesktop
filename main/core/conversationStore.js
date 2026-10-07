@@ -326,6 +326,145 @@ function hydrateAttachments(db, value) {
   return value
 }
 
+const REMOTE_REDACTED_KEYS = new Set([
+  'path',
+  'filepath',
+  'file_path',
+  'dirpath',
+  'dir_path',
+  'dbfile',
+  'db_file',
+  'legacyjson',
+  'legacy_json',
+  'worktreedir',
+  'worktree_dir',
+  'localchatpath',
+  'local_chat_path',
+  'api_key',
+  'apikey',
+  'password',
+  'authorization',
+  'token',
+  'headers',
+  'env'
+])
+
+function createRemoteAttachmentResolver(db) {
+  const statement = db.prepare(`
+    SELECT attachment_id, sha256, mime_type, original_name, byte_size
+    FROM attachments WHERE attachment_id = ?
+  `)
+  const cache = new Map()
+  return (attachmentId, nameHint = '') => {
+    if (!cache.has(attachmentId)) cache.set(attachmentId, statement.get(attachmentId) || null)
+    const row = cache.get(attachmentId)
+    if (!row) {
+      return {
+        type: 'attachment',
+        attachmentId,
+        unavailable: true
+      }
+    }
+    return {
+      type: 'attachment',
+      attachmentId: row.attachment_id,
+      mimeType: normalizeText(row.mime_type, 'application/octet-stream'),
+      name: normalizeText(nameHint || row.original_name).trim(),
+      byteSize: Math.max(0, Number(row.byte_size) || 0),
+      sha256: normalizeText(row.sha256).trim()
+    }
+  }
+}
+
+function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
+  if (typeof value === 'string') {
+    const parsed = parseDataUrl(value)
+    if (parsed) {
+      return {
+        type: 'inline-attachment',
+        mimeType: parsed.mimeType,
+        byteSize: parsed.byteSize,
+        sha256: parsed.sha256
+      }
+    }
+    if (/^file:/i.test(value)) return '[local-file-hidden]'
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeRemotePayload(item, resolveAttachment, context))
+  }
+  if (value && typeof value === 'object') {
+    const attachmentId = normalizeText(value[ATTACHMENT_REF_KEY]).trim()
+    if (attachmentId && Object.keys(value).length === 1) {
+      return resolveAttachment(attachmentId, context.nameHint)
+    }
+    if (value.type === 'input_audio' && value.input_audio && typeof value.input_audio === 'object') {
+      const encoded = normalizeText(value.input_audio.data).replace(/\s+/g, '')
+      return {
+        type: 'audio',
+        format: normalizeText(value.input_audio.format, 'wav'),
+        byteSize: encoded ? Math.max(0, Math.floor(encoded.length * 3 / 4)) : 0,
+        available: Boolean(encoded)
+      }
+    }
+    const nameHint = normalizeText(value.filename || value.file_name || value.name || context.nameHint).trim()
+    const next = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (REMOTE_REDACTED_KEYS.has(String(key).toLowerCase())) continue
+      next[key] = sanitizeRemotePayload(item, resolveAttachment, { nameHint })
+    }
+    return next
+  }
+  return value
+}
+
+function sanitizeRemoteToolCalls(toolCalls = []) {
+  return (Array.isArray(toolCalls) ? toolCalls : [])
+    .map((call) => ({
+      id: normalizeText(call?.id).trim(),
+      name: normalizeText(call?.name || call?.function?.name).trim(),
+      status: normalizeText(call?.approvalStatus || call?.status).trim()
+    }))
+    .filter((call) => call.id || call.name)
+}
+
+function toRemoteUiMessage(db, row, resolveAttachment) {
+  let payload = {}
+  try {
+    payload = JSON.parse(row.payload_json)
+  } catch {
+    payload = { role: row.role_code, content: '[invalid-message-payload]' }
+  }
+  const role = normalizeText(row.role_code || payload?.role, 'user')
+  const remotePayload = {
+    content: sanitizeRemotePayload(payload.content, resolveAttachment),
+    reasoningContent: normalizeText(payload.reasoning_content),
+    summary: normalizeText(payload.summary),
+    summaryPrefix: normalizeText(payload.summaryPrefix),
+    timestamp: normalizeText(payload.timestamp || payload.createdAt),
+    completedTimestamp: normalizeText(payload.completedTimestamp || payload.updatedAt),
+    aiName: normalizeText(payload.aiName),
+    voiceName: normalizeText(payload.voiceName),
+    status: normalizeText(payload.status),
+    toolCalls: sanitizeRemoteToolCalls(payload.tool_calls)
+  }
+  if (role === 'compaction') {
+    remotePayload.compaction = {
+      snapshotId: normalizeText(payload.snapshotId || payload.id),
+      coveredCount: Math.max(0, Number(payload.coveredCount) || 0),
+      tokenCount: Math.max(0, Number(payload.tokenCount) || 0),
+      canRestore: payload.canRestore === true
+    }
+  }
+  return {
+    messageId: row.message_uuid || row.ui_uuid,
+    uiMessageId: row.ui_uuid,
+    role,
+    order: Number(row.ui_order) || 0,
+    payload: remotePayload
+  }
+}
+
 function messageSignature(message = {}) {
   const content = message?.content
   return JSON.stringify({
@@ -942,6 +1081,93 @@ export async function getConversationRequestMessages({ dirPath, conversationId }
   try {
     return { ok: true, messages: loadMessages(db, { activeOnly: true }) }
   } finally { db.close() }
+}
+
+/**
+ * Remote-safe, read-only history page. It never acquires a write lease, never
+ * migrates legacy JSON, and never hydrates attachment data URLs into memory.
+ */
+export async function loadRemoteConversationPage({
+  dirPath,
+  conversationId,
+  beforeUiOrder = null,
+  pageSize = 50
+} = {}) {
+  const rawDir = normalizeText(dirPath).trim()
+  if (!rawDir) throw new Error('conversation_local_dir_required')
+  const normalizedDir = path.resolve(rawDir)
+  const normalizedConversationId = normalizeText(conversationId).trim()
+  if (!normalizedDir) throw new Error('conversation_local_dir_required')
+  if (!normalizedConversationId) throw new Error('conversation_id_required')
+
+  const projects = await readLocalProjects(normalizedDir)
+  const descriptor = findConversation(projects, normalizedConversationId)
+  if (!descriptor) throw new Error('conversation_not_found')
+  const db = openDatabase(resolveDatabasePath(normalizedDir, descriptor.dbFile), { readOnly: true })
+  try {
+    const row = getConversationRow(db)
+    const limit = Math.min(100, Math.max(1, Math.floor(Number(pageSize) || 50)))
+    const safeBefore = beforeUiOrder !== null && beforeUiOrder !== undefined && beforeUiOrder !== ''
+      && Number.isFinite(Number(beforeUiOrder))
+      ? Number(beforeUiOrder)
+      : null
+    const pageRows = safeBefore == null
+      ? db.prepare(`
+          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json FROM (
+            SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
+            FROM ui_messages WHERE role_code NOT IN ('system', 'tool')
+            ORDER BY ui_order DESC LIMIT ?
+          ) ORDER BY ui_order
+        `).all(limit)
+      : db.prepare(`
+          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json FROM (
+            SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
+            FROM ui_messages WHERE role_code NOT IN ('system', 'tool') AND ui_order < ?
+            ORDER BY ui_order DESC LIMIT ?
+          ) ORDER BY ui_order
+        `).all(safeBefore, limit)
+    const systemRows = safeBefore == null
+      ? db.prepare(`
+          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
+          FROM ui_messages WHERE role_code = 'system' ORDER BY ui_order
+        `).all()
+      : []
+    const rows = [...systemRows, ...pageRows]
+    const resolveAttachment = createRemoteAttachmentResolver(db)
+    const messages = rows
+      .filter((item) => item.role_code !== 'tool')
+      .map((item) => toRemoteUiMessage(db, item, resolveAttachment))
+    const oldestOrder = pageRows.length > 0
+      ? Math.min(...pageRows.map((item) => Number(item.ui_order) || 0))
+      : 0
+    const hasMore = oldestOrder > 0 && Boolean(
+      db.prepare(`
+        SELECT 1 AS value FROM ui_messages
+        WHERE role_code NOT IN ('system', 'tool') AND ui_order < ? LIMIT 1
+      `).get(oldestOrder)?.value
+    )
+    const project = projects.projects.find((item) => item.conversationIds.includes(normalizedConversationId)) || null
+
+    return {
+      ok: true,
+      conversation: {
+        conversationId: row.conversation_id,
+        title: row.title,
+        revision: Number(row.revision) || 0,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        project: project ? { projectId: project.id, name: project.name } : null
+      },
+      messages,
+      page: {
+        pageSize: limit,
+        nextBeforeUiOrder: hasMore ? oldestOrder : null,
+        hasMore
+      }
+    }
+  } finally {
+    db.close()
+  }
 }
 
 

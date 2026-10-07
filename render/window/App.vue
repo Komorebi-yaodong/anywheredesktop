@@ -2586,6 +2586,48 @@ const conversationInstanceId = (typeof crypto !== 'undefined' && typeof crypto.r
   : `window_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 let conversationLeaseHeartbeatTimer = null;
 
+let conversationStatusSyncTimer = null;
+let lastConversationStatusFingerprint = '';
+
+const buildConversationWindowStatus = () => ({
+  conversationId: typeof currentConversationStorage.value?.conversationId === 'string'
+    ? currentConversationStorage.value.conversationId
+    : '',
+  title: typeof defaultConversationName.value === 'string' ? defaultConversationName.value : '',
+  revision: Math.max(0, Number(currentConversationStorage.value?.revision) || 0),
+  busy: loading.value || compacting.value || isPreparingSend.value,
+  generating: loading.value,
+  compacting: compacting.value,
+  readOnly: conversationReadOnly.value,
+  leasePending: conversationLeasePending.value
+});
+
+const scheduleConversationWindowStatusSync = () => {
+  if (!isWindowBootstrapped.value || !window.api?.updateConversationWindowStatus) return;
+  if (conversationStatusSyncTimer) clearTimeout(conversationStatusSyncTimer);
+  conversationStatusSyncTimer = setTimeout(() => {
+    conversationStatusSyncTimer = null;
+    const nextStatus = buildConversationWindowStatus();
+    const fingerprint = JSON.stringify(nextStatus);
+    if (fingerprint === lastConversationStatusFingerprint) return;
+    lastConversationStatusFingerprint = fingerprint;
+    window.api.updateConversationWindowStatus(nextStatus).catch(() => {});
+  }, 80);
+};
+
+watch([
+  isWindowBootstrapped,
+  () => currentConversationStorage.value?.conversationId,
+  () => currentConversationStorage.value?.revision,
+  defaultConversationName,
+  loading,
+  compacting,
+  isPreparingSend,
+  conversationReadOnly,
+  conversationLeasePending
+], scheduleConversationWindowStatusSync, { immediate: true });
+
+
 const stopConversationLeaseHeartbeat = () => {
   if (conversationLeaseHeartbeatTimer) {
     clearInterval(conversationLeaseHeartbeatTimer);
@@ -6749,7 +6791,10 @@ const scheduleLoadingAutoSave = (reason = 'loading-progress') => {
 
 onBeforeUnmount(() => {
   void releaseCurrentConversationLease();
-
+  if (conversationStatusSyncTimer) {
+    clearTimeout(conversationStatusSyncTimer);
+    conversationStatusSyncTimer = null;
+  }
 
   if (tailBubbleRecoveryRafId !== null) {
     cancelAnimationFrame(tailBubbleRecoveryRafId);

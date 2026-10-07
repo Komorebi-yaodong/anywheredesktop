@@ -172,6 +172,8 @@ const multiStore = new Map()
 const multiTypeIndex = new Map()
 const windowMetadataStore = new Map()
 const webContentsToWindowRef = new Map()
+let windowMetadataNotifier = null
+
 const WINDOW_INIT_CHANNEL = 'window:init'
 const WINDOW_POSITION_OVERFLOW_ALLOWANCE = 10
 const WINDOW_OVERLAP_OFFSET_STEP = 30
@@ -473,6 +475,13 @@ function resolvePromptDisplayName(payload = null, promptCode = '__DEFAULT__') {
   if (filename) return filename
 
   return 'AI'
+function normalizeConversationMetadataId(value = '') {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  if (!/^[A-Za-z0-9._:-]{16,160}$/.test(normalized)) return ''
+  return normalized
+}
+
+
 }
 
 function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, promptCode = '__DEFAULT__', promptConfig = null) {
@@ -481,13 +490,26 @@ function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, pr
       ? promptConfig
       : resolvePromptConfig(fullConfig, payload, promptCode)
 
+  const conversationDescriptor = payload?.conversation?.descriptor && typeof payload.conversation.descriptor === 'object'
+    ? payload.conversation.descriptor
+    : null
   return {
     id: windowRef,
     type: 'window',
     promptCode,
     displayName: resolvePromptDisplayName(payload, promptCode),
     icon: typeof resolvedPromptConfig?.icon === 'string' ? resolvedPromptConfig.icon : '',
-    openType: typeof payload?.type === 'string' && payload.type ? payload.type : 'over'
+    openType: typeof payload?.type === 'string' && payload.type ? payload.type : 'over',
+    conversationId: normalizeConversationMetadataId(conversationDescriptor?.conversationId),
+    conversationTitle: typeof conversationDescriptor?.title === 'string'
+      ? conversationDescriptor.title
+      : typeof payload?.conversationTitle === 'string' ? payload.conversationTitle : '',
+    conversationRevision: Math.max(0, Number(conversationDescriptor?.revision) || 0),
+    busy: false,
+    generating: false,
+    compacting: false,
+    readOnly: false,
+    leasePending: Boolean(conversationDescriptor?.conversationId)
   }
 }
 
@@ -1167,11 +1189,13 @@ const dynamicBaseConfig =
   const set = multiTypeIndex.get(targetType) || new Set()
   set.add(id)
   multiTypeIndex.set(targetType, set)
+  if (targetType === 'window') notifyWindowMetadataChanged('opened', id)
 
   win.on('closed', () => {
     unbindWindowRefByWebContentsId(webContentsId)
     multiStore.delete(id)
     windowMetadataStore.delete(id)
+    if (targetType === 'window') notifyWindowMetadataChanged('closed', id)
 
     const indexSet = multiTypeIndex.get(targetType)
     if (indexSet) {
@@ -1530,6 +1554,50 @@ export function listWindows(type = '') {
   }
 
   return enrichWindowListWithPromptOrdinals(items)
+}
+
+export function setWindowMetadataNotifier(notifier) {
+  windowMetadataNotifier = typeof notifier === 'function' ? notifier : null
+}
+
+function notifyWindowMetadataChanged(reason = 'updated', windowRef = '') {
+  if (typeof windowMetadataNotifier !== 'function') return
+  try {
+    windowMetadataNotifier({
+      reason,
+      windowRef: typeof windowRef === 'string' ? windowRef : '',
+      windows: listWindows('window')
+    })
+  } catch {
+    // metadata observers cannot interrupt window lifecycle
+  }
+}
+
+export function updateConversationWindowMetadata(windowRef = '', input = {}) {
+  const normalizedRef = typeof windowRef === 'string' ? windowRef.trim() : ''
+  const current = windowMetadataStore.get(normalizedRef)
+  const win = multiStore.get(normalizedRef)
+  if (!normalizedRef || !current || !win || win.isDestroyed()) {
+    return { ok: false, error: 'window_not_found' }
+  }
+
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
+  const conversationId = normalizeConversationMetadataId(source.conversationId)
+  const title = typeof source.title === 'string' ? source.title.trim().slice(0, 240) : ''
+  const next = {
+    ...current,
+    conversationId,
+    conversationTitle: title,
+    conversationRevision: Math.max(0, Math.floor(Number(source.revision) || 0)),
+    busy: source.busy === true,
+    generating: source.generating === true,
+    compacting: source.compacting === true,
+    readOnly: source.readOnly === true,
+    leasePending: source.leasePending === true
+  }
+  windowMetadataStore.set(normalizedRef, next)
+  notifyWindowMetadataChanged('updated', normalizedRef)
+  return { ok: true, metadata: { ...next } }
 }
 
 export function getWindowRefByWebContentsId(webContentsId) {

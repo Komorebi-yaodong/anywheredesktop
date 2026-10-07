@@ -233,6 +233,8 @@ const api = {
   showMainWindow: () => electronAPI.ipcRenderer.invoke('window:showMain'),
   hideMainWindow: () => electronAPI.ipcRenderer.invoke('window:hideMain'),
   listWindows: (type = '') => electronAPI.ipcRenderer.invoke('window:list', type),
+  updateConversationWindowStatus: (input = {}) =>
+    electronAPI.ipcRenderer.invoke('window:conversationStatus', toPlainPayload(input) || {}),
   emitWindowEvent: (input) => electronAPI.ipcRenderer.invoke('window:event:emit', input),
   onWindowEvent: (callback) => {
     if (typeof callback !== 'function') return

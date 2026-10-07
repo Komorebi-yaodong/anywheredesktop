@@ -158,6 +158,17 @@ function run() {
     result: { running: true }
   })
 
+  // A rejected oversize send must not consume a sequence number.
+  const sequenceConnection = createConnectedSessions({
+    rootSecret: fixture.deviceResponse.rootSecret,
+    deviceId,
+    desktopId: fixture.context.desktopId
+  })
+  expectCode(() => sequenceConnection.deviceSession.encrypt({ content: 'x'.repeat(300 * 1024) }), 'remote_payload_size_invalid')
+  const postFailureFrame = sequenceConnection.deviceSession.encrypt({ kind: 'request', method: 'remote.ping', requestId: 'request-sequence-safe-0001' })
+  assert.equal(postFailureFrame.sequence, 1)
+  assert.equal(sequenceConnection.accepted.session.decrypt(postFailureFrame).method, 'remote.ping')
+
   // A fresh WSS connection uses new ephemeral key material even for the same paired device.
   const nextConnection = createConnectedSessions({
     rootSecret: fixture.deviceResponse.rootSecret,

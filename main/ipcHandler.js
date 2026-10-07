@@ -132,6 +132,7 @@ export function registerIpcHandlers({
   toggleAlwaysOnTop,
   handleFastInputWindowEvent,
   appendPayloadToWindow,
+  updateConversationWindowMetadata,
   startScreenshotPromptWorkflow,
   confirmScreenshotPromptWorkflow,
   cancelScreenshotPromptWorkflow
@@ -187,6 +188,12 @@ export function registerIpcHandlers({
       },
       { getWindowByRef, listWindows }
     )
+
+  handleInvoke('window:conversationStatus', async (event, input = {}) => {
+    const sourceId = getWindowRefByWebContentsId(event.sender.id)
+    return updateConversationWindowMetadata(sourceId || '', input)
+  })
+
   })
 
   handleInvoke('window:appendToWindow', async (event, input = {}) => {

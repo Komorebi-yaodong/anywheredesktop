@@ -205,6 +205,7 @@ export function createRemoteGateway({
   dbStorageGetItem,
   dbStorageSetItem,
   getAppVersion = () => '',
+  conversationReadService = null,
   onStatusChanged = null,
   onPairingCreated = null,
   logger = console
@@ -257,6 +258,14 @@ export function createRemoteGateway({
     const next = pairingQueue.then(operation, operation)
     pairingQueue = next.catch(() => {})
     return next
+  }
+
+  function getCapabilities() {
+    const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get']
+    if (conversationReadService) {
+      capabilities.push('conversation.list', 'conversation.messages.list', 'conversation.windows.list')
+    }
+    return capabilities
   }
 
   function assertSecureStorage() {
@@ -501,6 +510,25 @@ export function createRemoteGateway({
       return false
     }
   }
+
+  function broadcastEncryptedEvent(event, payload = {}) {
+    const eventName = typeof event === 'string' ? event.trim().slice(0, 120) : ''
+    if (!eventName) return { ok: false, sent: 0 }
+    let sent = 0
+    for (const sockets of activeSocketsByDeviceId.values()) {
+      for (const socket of [...sockets]) {
+        const context = socketContexts.get(socket)
+        if (!context?.authenticated || !context.session || !isOpen(socket)) continue
+        if (sendEncrypted(socket, context, { kind: 'event', event: eventName, payload })) {
+          sent += 1
+        } else {
+          safeSocketClose(socket, 1011, 'encrypted_event_send_failed')
+        }
+      }
+    }
+    return { ok: true, sent }
+  }
+
 
   function sendEncrypted(socket, context, payload) {
     if (!isOpen(socket) || !context?.session) return false
@@ -792,32 +820,62 @@ export function createRemoteGateway({
     const requestId = normalizeIdentifier(request.requestId, 'requestId', { minLength: 8, maxLength: 160 })
     const method = typeof request.method === 'string' ? request.method.trim() : ''
     const params = request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {}
-    // Validate the payload shape even though the phase-1 methods currently have no parameters.
-    void params
 
-    let result
-    switch (method) {
-      case 'remote.ping':
-        result = { at: nowIso() }
-        break
-      case 'remote.status.get':
-        result = {
-          status: getStatus(),
-          device: publicDevice(context.device),
-          capabilities: ['remote.ping', 'remote.status.get', 'remote.device.self.get']
-        }
-        break
-      case 'remote.device.self.get':
-        result = { device: publicDevice(context.device) }
-        break
-      default:
-        throw remoteError('remote_method_unavailable')
-    }
+    try {
+      let result
+      switch (method) {
+        case 'remote.ping':
+          result = { at: nowIso() }
+          break
+        case 'remote.status.get':
+          result = {
+            status: getStatus(),
+            device: publicDevice(context.device),
+            capabilities: getCapabilities()
+          }
+          break
+        case 'remote.device.self.get':
+          result = { device: publicDevice(context.device) }
+          break
+        case 'conversation.list':
+          if (!conversationReadService) throw remoteError('remote_method_unavailable')
+          result = await conversationReadService.listConversations(params)
+          break
+        case 'conversation.messages.list':
+          if (!conversationReadService) throw remoteError('remote_method_unavailable')
+          result = await conversationReadService.listMessages(params)
+          break
+        case 'conversation.windows.list':
+          if (!conversationReadService) throw remoteError('remote_method_unavailable')
+          result = conversationReadService.getWindows(params)
+          break
+        default:
+          throw remoteError('remote_method_unavailable')
+      }
 
-    if (!sendEncrypted(socket, context, { kind: 'response', requestId, ok: true, result })) {
-      safeSocketClose(socket, 1011, 'response_send_failed')
+      if (!sendEncrypted(socket, context, { kind: 'response', requestId, ok: true, result })) {
+        safeSocketClose(socket, 1011, 'response_send_failed')
+        return
+      }
+      await appendAudit('remote.rpc', { deviceId: context.device.deviceId, result: 'ok', meta: { method } })
+    } catch (error) {
+      const rawCode = typeof error?.code === 'string' ? error.code : typeof error?.message === 'string' ? error.message : ''
+      const code = rawCode.startsWith('remote_')
+        ? rawCode
+        : rawCode === 'conversation_not_found'
+          ? 'remote_conversation_not_found'
+          : 'remote_request_failed'
+      if (!sendEncrypted(socket, context, {
+        kind: 'response',
+        requestId,
+        ok: false,
+        error: { code }
+      })) {
+        safeSocketClose(socket, 1011, 'error_response_send_failed')
+        return
+      }
+      await appendAudit('remote.rpc', { deviceId: context.device.deviceId, result: code, meta: { method } })
     }
-    await appendAudit('remote.rpc', { deviceId: context.device.deviceId, result: 'ok', meta: { method } })
   }
 
   async function authenticateSocket(socket, context, hello) {
@@ -875,7 +933,7 @@ export function createRemoteGateway({
           protocolVersion: REMOTE_PROTOCOL_VERSION,
           desktopId: identity.desktopId,
           device: publicDevice(device),
-          capabilities: ['remote.ping', 'remote.status.get', 'remote.device.self.get']
+          capabilities: getCapabilities()
         }
       })) {
         throw remoteError('remote_welcome_send_failed')
@@ -1159,6 +1217,7 @@ export function createRemoteGateway({
     stop: () => queue(() => stopNow({ clearEnabled: false })),
     getStatus,
     getPublicSettings: () => sanitizeRemoteSettingsForConfig(configuredSettings),
+    broadcastEvent: (event, payload = {}) => broadcastEncryptedEvent(event, payload),
     createPairing: () => queue(() => createPairing()),
     listDevices,
     revokeDevice: (deviceId) => queue(() => revokeDevice(deviceId)),

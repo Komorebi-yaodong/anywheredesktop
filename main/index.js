@@ -35,6 +35,8 @@ import {
   handleFastInputWindowEvent,
   appendPayloadToWindow,
   setMainWindowCloseBehavior,
+  setWindowMetadataNotifier,
+  updateConversationWindowMetadata,
   markAppQuitting,
   isSingletonWindowVisible
 } from './windowManager.js'
@@ -56,6 +58,7 @@ import * as screenshotApi from './core/screenshot.js'
 import * as updaterApi from './core/updater.js'
 import * as compactApi from './core/compact.js'
 import { createRemoteGateway } from './core/remote/index.js'
+import { createRemoteConversationReadService } from './core/remote/conversationRead.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -63,6 +66,15 @@ import { startTaskScheduler } from './core/task_scheduler.js'
 
 let appTray = null
 let appQuitStarted = false
+const remoteConversationReadService = createRemoteConversationReadService({
+  getConfig: dataApi.getConfig,
+  listLocalConversations: conversationApi.listLocalConversations,
+  readLocalProjects: projectsApi.readLocalProjects,
+  loadRemoteConversationPage: conversationApi.loadRemoteConversationPage,
+  listWindows
+})
+
+
 
 const remoteGateway = createRemoteGateway({
   app,
@@ -70,6 +82,7 @@ const remoteGateway = createRemoteGateway({
   dbStorageGetItem: dbApi.dbStorageGetItem,
   dbStorageSetItem: dbApi.dbStorageSetItem,
   getAppVersion: () => app.getVersion(),
+  conversationReadService: remoteConversationReadService,
   onStatusChanged: (status) => {
     for (const item of listWindows('main')) {
       const win = getWindowByRef(item.id)
@@ -82,6 +95,29 @@ const remoteGateway = createRemoteGateway({
     }
   }
 })
+
+setWindowMetadataNotifier((change = {}) => {
+  const windows = (Array.isArray(change.windows) ? change.windows : [])
+    .filter((item) => typeof item?.conversationId === 'string' && item.conversationId)
+    .map((item) => ({
+      windowId: typeof item.id === 'string' ? item.id : '',
+      conversationId: item.conversationId,
+      title: typeof item.conversationTitle === 'string' ? item.conversationTitle : '',
+      revision: Math.max(0, Number(item.conversationRevision) || 0),
+      visible: item.visible === true,
+      busy: item.busy === true,
+      generating: item.generating === true,
+      compacting: item.compacting === true,
+      readOnly: item.readOnly === true,
+      leasePending: item.leasePending === true
+    }))
+  remoteGateway.broadcastEvent('conversation.windows.changed', {
+    reason: typeof change.reason === 'string' ? change.reason : 'updated',
+    windows,
+    updatedAt: new Date().toISOString()
+  })
+})
+
 
 
 
@@ -744,6 +780,7 @@ app.whenReady().then(async () => {
     toggleAlwaysOnTop,
     handleFastInputWindowEvent,
     appendPayloadToWindow,
+    updateConversationWindowMetadata,
     startScreenshotPromptWorkflow,
     confirmScreenshotPromptWorkflow,
     cancelScreenshotPromptWorkflow

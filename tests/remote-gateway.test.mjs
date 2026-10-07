@@ -128,8 +128,14 @@ async function connectEncrypted({ endpoint, rootSecret, deviceId, desktopId }) {
   const welcomeFrame = await waitForMessage(socket, (message) => message.type === 'remote.encrypted')
   const welcome = session.decrypt(welcomeFrame)
   assert.equal(welcome.kind, 'event')
-  assert.equal(welcome.event, 'remote.welcome')
-  return { socket, session }
+  assert.equal(welcome.event, 'remote.welcome', JSON.stringify(welcome))
+  return { socket, session, welcome }
+}
+
+async function sendEncryptedRequest({ socket, session, requestId, method, params = {} }) {
+  const responsePromise = waitForMessage(socket, (message) => message.type === 'remote.encrypted')
+  socket.send(JSON.stringify(session.encrypt({ kind: 'request', requestId, method, params })))
+  return session.decrypt(await responsePromise)
 }
 
 async function main() {
@@ -140,11 +146,64 @@ async function main() {
     getName: () => 'Anywhere Remote Test'
   }
   let observedPairing = null
+  const conversationCalls = []
+  const conversationReadService = {
+    async listConversations(params = {}) {
+      conversationCalls.push({ method: 'conversation.list', params: structuredClone(params) })
+      if (Object.hasOwn(params, 'dirPath')) {
+        const error = new Error('remote_path_parameter_forbidden')
+        error.code = 'remote_path_parameter_forbidden'
+        throw error
+      }
+      return {
+        ok: true,
+        configured: true,
+        conversations: [{
+          conversationId: 'conversation-gateway-fixture-0001',
+          title: 'Gateway Fixture',
+          revision: 3,
+          format: 'sqlite'
+        }],
+        projects: [],
+        page: { hasMore: false, nextCursor: null }
+      }
+    },
+    async listMessages(params = {}) {
+      conversationCalls.push({ method: 'conversation.messages.list', params: structuredClone(params) })
+      return {
+        ok: true,
+        conversation: { conversationId: params.conversationId, title: 'Gateway Fixture', revision: 3 },
+        messages: [{ messageId: 'message-1', role: 'user', order: 1, payload: { content: 'hello' } }],
+        page: { hasMore: false, nextBeforeUiOrder: null }
+      }
+    },
+    getWindows() {
+      conversationCalls.push({ method: 'conversation.windows.list', params: {} })
+      return {
+        ok: true,
+        windows: [{
+          windowId: 'window-fixture',
+          conversationId: 'conversation-gateway-fixture-0001',
+          title: 'Gateway Fixture',
+          revision: 3,
+          visible: true,
+          busy: false,
+          generating: false,
+          compacting: false,
+          readOnly: false,
+          leasePending: false,
+          promptCode: 'AI'
+        }]
+      }
+    }
+  }
+
   const gateway = createRemoteGateway({
     app,
     safeStorage: createMemorySecureStorage(),
     dbStorageGetItem: storage.get,
     dbStorageSetItem: storage.set,
+    conversationReadService,
     onPairingCreated: (payload) => { observedPairing = payload },
     logger: { log() {}, warn() {}, error() {} }
   })
@@ -273,19 +332,90 @@ async function main() {
     assert.equal(devices.devices.length, 1)
     assert.equal(devices.devices[0].deviceId, deviceId)
 
-    const { socket, session } = await connectEncrypted({
+    const { socket, session, welcome } = await connectEncrypted({
       endpoint,
       rootSecret: mobilePairing2.rootSecret,
       deviceId,
       desktopId: qr2.desktopId
     })
-    const requestId = 'request-remote-gateway-status-0001'
-    socket.send(JSON.stringify(session.encrypt({ kind: 'request', requestId, method: 'remote.status.get', params: {} })))
-    const responseFrame = await waitForMessage(socket, (message) => message.type === 'remote.encrypted')
-    const response = session.decrypt(responseFrame)
-    assert.equal(response.kind, 'response')
-    assert.equal(response.requestId, requestId)
-    assert.equal(response.result.device.deviceId, deviceId)
+    assert.ok(welcome.payload.capabilities.includes('conversation.list'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.messages.list'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.windows.list'))
+
+    const statusResponse = await sendEncryptedRequest({
+      socket,
+      session,
+      requestId: 'request-remote-gateway-status-0001',
+      method: 'remote.status.get'
+    })
+    assert.equal(statusResponse.kind, 'response')
+    assert.equal(statusResponse.result.device.deviceId, deviceId)
+    assert.ok(statusResponse.result.capabilities.includes('conversation.list'))
+
+    const listResponse = await sendEncryptedRequest({
+      socket,
+      session,
+      requestId: 'request-conversation-list-0001',
+      method: 'conversation.list',
+      params: { limit: 20 }
+    })
+    assert.equal(listResponse.ok, true)
+    assert.equal(listResponse.result.conversations[0].conversationId, 'conversation-gateway-fixture-0001')
+
+    const messagesResponse = await sendEncryptedRequest({
+      socket,
+      session,
+      requestId: 'request-conversation-messages-0001',
+      method: 'conversation.messages.list',
+      params: { conversationId: 'conversation-gateway-fixture-0001', pageSize: 25 }
+    })
+    assert.equal(messagesResponse.ok, true)
+    assert.equal(messagesResponse.result.messages[0].payload.content, 'hello')
+
+    const windowsResponse = await sendEncryptedRequest({
+      socket,
+      session,
+      requestId: 'request-conversation-windows-0001',
+      method: 'conversation.windows.list'
+    })
+    assert.equal(windowsResponse.ok, true)
+    assert.equal(windowsResponse.result.windows[0].windowId, 'window-fixture')
+
+    const forbiddenResponse = await sendEncryptedRequest({
+      socket,
+      session,
+      requestId: 'request-conversation-forbidden-0001',
+      method: 'conversation.list',
+      params: { dirPath: 'C:/attacker' }
+    })
+    assert.equal(forbiddenResponse.ok, false)
+    assert.equal(forbiddenResponse.error.code, 'remote_path_parameter_forbidden')
+
+    const pingAfterError = await sendEncryptedRequest({
+      socket,
+      session,
+      requestId: 'request-ping-after-error-0001',
+      method: 'remote.ping'
+    })
+    assert.equal(pingAfterError.ok, true)
+
+    const eventPromise = waitForMessage(socket, (message) => message.type === 'remote.encrypted')
+    const broadcast = gateway.broadcastEvent('conversation.windows.changed', {
+      reason: 'updated',
+      windows: [{ windowId: 'window-fixture', conversationId: 'conversation-gateway-fixture-0001', busy: true }]
+    })
+    assert.equal(broadcast.sent, 1)
+    const windowEvent = session.decrypt(await eventPromise)
+    assert.equal(windowEvent.kind, 'event')
+    assert.equal(windowEvent.event, 'conversation.windows.changed')
+    assert.equal(windowEvent.payload.windows[0].busy, true)
+
+    assert.deepEqual(conversationCalls.map((item) => item.method), [
+      'conversation.list',
+      'conversation.messages.list',
+      'conversation.windows.list',
+      'conversation.list'
+    ])
 
     const revoked = await gateway.revokeDevice(deviceId)
     assert.equal(revoked.removed, true)

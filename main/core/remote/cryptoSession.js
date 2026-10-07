@@ -572,16 +572,17 @@ export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, send
     encrypt(payload) {
       assertOpen()
       const sequence = nextSendSequence
-      nextSendSequence += 1
       const plaintext = canonicalBuffer(payload)
       if (plaintext.length > REMOTE_MAX_FRAME_BYTES) throw remoteError('remote_payload_size_invalid')
       const aad = buildFrameAad({ sessionId: safeSessionId, sequence, direction: sendDirection })
+      const encrypted = encryptAead({ key: sendKey, plaintext, aad })
+      nextSendSequence += 1
       return {
         v: REMOTE_PROTOCOL_VERSION,
         type: 'remote.encrypted',
         sessionId: safeSessionId,
         sequence,
-        ...encryptAead({ key: sendKey, plaintext, aad })
+        ...encrypted
       }
     },
     decrypt(frame) {

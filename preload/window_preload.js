@@ -235,6 +235,8 @@ const api = {
   listWindows: (type = '') => electronAPI.ipcRenderer.invoke('window:list', type),
   updateConversationWindowStatus: (input = {}) =>
     electronAPI.ipcRenderer.invoke('window:conversationStatus', toPlainPayload(input) || {}),
+  emitRemoteRendererEvent: (input = {}) =>
+    electronAPI.ipcRenderer.invoke('remote:rendererEvent', toPlainPayload(input) || {}),
   emitWindowEvent: (input) => electronAPI.ipcRenderer.invoke('window:event:emit', input),
   onWindowEvent: (callback) => {
     if (typeof callback !== 'function') return
@@ -337,6 +339,8 @@ const api = {
   pruneCompactCache: (enabledModels = []) => electronAPI.ipcRenderer.invoke('compact:pruneCache', toPlainPayload(enabledModels) || []),
   estimateCompactTokens: (messages = []) => electronAPI.ipcRenderer.invoke('compact:estimateTokens', toPlainPayload(messages) || []),
   shouldAutoCompact: (input = {}) => electronAPI.ipcRenderer.invoke('compact:shouldAuto', toPlainPayload(input) || {}),
+
+  selectCompactionCut: (input = {}) => electronAPI.ipcRenderer.invoke('compact:selectCut', toPlainPayload(input) || {}),
   runConversationCompact: async (input = {}, options = {}) => {
     const signal = options?.signal || input?.signal || null
     const onProgress = typeof options?.onProgress === 'function'

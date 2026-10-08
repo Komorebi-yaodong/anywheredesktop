@@ -188,13 +188,19 @@ export function registerIpcHandlers({
       },
       { getWindowByRef, listWindows }
     )
+  })
 
   handleInvoke('window:conversationStatus', async (event, input = {}) => {
     const sourceId = getWindowRefByWebContentsId(event.sender.id)
     return updateConversationWindowMetadata(sourceId || '', input)
   })
 
+  handleInvoke('remote:rendererEvent', async (event, input = {}) => {
+    const windowRef = getWindowRefByWebContentsId(event.sender.id)
+    if (!windowRef) return { ok: false, error: 'remote_renderer_window_not_found' }
+    return remoteGateway.handleRendererEvent({ windowRef, payload: input })
   })
+
 
   handleInvoke('window:appendToWindow', async (event, input = {}) => {
     const sourceId = getWindowRefByWebContentsId(event.sender.id)
@@ -587,6 +593,11 @@ handleInvoke('data:getUser', async () => {
       ok: true,
       should: compactApi.shouldAutoCompact(input || {})
     }
+  })
+
+
+  handleInvoke('compact:selectCut', async (_event, input = {}) => {
+    return compactApi.selectCompactionCut(input && typeof input === 'object' ? input : {})
   })
 
   handleInvoke('compact:run', async (event, input = {}, meta = {}) => {

@@ -1,16 +1,170 @@
 import { encode } from 'gpt-tokenizer'
-import { fetchWithProxy } from './net.js'
-import { createChatCompletion } from './chat.js'
-import {
-  get as dbGet,
-  put as dbPut,
-  createDocIfMissing
-} from './db.js'
 
 const COMPACT_CACHE_DOC_ID = 'conversation_compact_cache'
 const DEFAULT_CONTEXT_LENGTH = 256 * 1024
 const DEFAULT_TRIGGER_RATIO = 0.9
 const DEFAULT_KEEP_RECENT_ROUNDS = 3
+
+const DEFAULT_COMPACT_TOTAL_TIMEOUT_MS = 10 * 60 * 1000
+const DEFAULT_COMPACT_STREAM_IDLE_TIMEOUT_MS = 2 * 60 * 1000
+
+function getToolCallIds(message = {}) {
+  if (message?.role !== 'assistant' || !Array.isArray(message?.tool_calls)) return []
+  return message.tool_calls
+    .map((call) => String(call?.id || call?.tool_call_id || '').trim())
+    .filter(Boolean)
+}
+
+function selectNearestCut(candidates = [], { minTokens = -Infinity, maxTokens = Infinity, preferLower = true } = {}) {
+  let selected = null
+  for (const candidate of candidates) {
+    if (candidate.tokens < minTokens || candidate.tokens > maxTokens) continue
+    if (!selected) {
+      selected = candidate
+      continue
+    }
+    const isBetter = preferLower
+      ? candidate.tokens < selected.tokens || (candidate.tokens === selected.tokens && candidate.cutIndex < selected.cutIndex)
+      : candidate.tokens > selected.tokens || (candidate.tokens === selected.tokens && candidate.cutIndex > selected.cutIndex)
+    if (isBetter) selected = candidate
+  }
+  return selected
+}
+
+/**
+ * Select a protocol-safe compaction boundary.
+ * User-round boundaries and `keepRecentRounds` are preferred, but cannot prevent
+ * compaction forever when a single user instruction grows through tool iterations.
+ */
+export function selectCompactionCut({
+  systemMessages = [],
+  windowMessages = [],
+  thresholdTokens = 0,
+  preferredMaxTokens = 0,
+  keepRecentRounds = 0,
+  fixedOverheadTokens = 0,
+  includeCandidates = false
+} = {}) {
+  const system = Array.isArray(systemMessages) ? systemMessages : []
+  const window = Array.isArray(windowMessages) ? windowMessages : []
+  const threshold = Math.max(1, Math.floor(Number(thresholdTokens) || 0))
+  const preferredMax = Math.max(threshold, Math.floor(Number(preferredMaxTokens) || threshold))
+  if (window.length < 2 || threshold <= 0) return { cutIndex: 0, strategy: 'none', candidates: [] }
+
+  const userStarts = window
+    .map((message, index) => (message?.role === 'user' && index > 0 ? index : -1))
+    .filter((index) => index > 0)
+  const allUserStarts = window
+    .map((message, index) => (message?.role === 'user' ? index : -1))
+    .filter((index) => index >= 0)
+  // An AI unit starts with an assistant message. When it contains tool calls, the
+  // safe-cut scan below guarantees the unit keeps every paired tool result intact.
+  const aiUnitStarts = window
+    .map((message, index) => (message?.role === 'assistant' && index > 0 ? index : -1))
+    .filter((index) => index > 0)
+  const requestedKeepRounds = Math.max(0, Math.floor(Number(keepRecentRounds) || 0))
+  const hasEnoughUserRounds = requestedKeepRounds === 0 || allUserStarts.length >= requestedKeepRounds
+  const retainedUnitStarts = hasEnoughUserRounds ? allUserStarts : aiUnitStarts
+  const preserveFrom = requestedKeepRounds > 0 && retainedUnitStarts.length >= requestedKeepRounds
+    ? retainedUnitStarts[retainedUnitStarts.length - requestedKeepRounds]
+    : 0
+  const retentionKind = hasEnoughUserRounds ? 'user' : 'ai'
+
+  const userStartSet = new Set(userStarts)
+  const pendingToolCallIds = new Set()
+  const baseTokens = estimateMessagesTokens(system) + Math.max(0, Number(fixedOverheadTokens) || 0)
+  let prefixTokens = baseTokens
+  const candidates = []
+  for (let cutIndex = 1; cutIndex < window.length; cutIndex += 1) {
+    const previousMessage = window[cutIndex - 1]
+    prefixTokens += estimateMessagesTokens([previousMessage])
+    for (const toolCallId of getToolCallIds(previousMessage)) pendingToolCallIds.add(toolCallId)
+    if (previousMessage?.role === 'tool') {
+      const toolCallId = String(previousMessage?.tool_call_id || previousMessage?.toolCallId || '').trim()
+      if (toolCallId) pendingToolCallIds.delete(toolCallId)
+    }
+    if (pendingToolCallIds.size > 0 || window[cutIndex]?.role === 'tool') continue
+    candidates.push({
+      cutIndex,
+      tokens: prefixTokens,
+      isUserRoundBoundary: userStartSet.has(cutIndex),
+      preservesRequestedRounds: preserveFrom > 0 && cutIndex <= preserveFrom,
+      retentionKind
+    })
+  }
+  if (!candidates.length) return { cutIndex: 0, strategy: 'none', candidates: [] }
+
+  const pickWithin = (items, minTokens, maxTokens, strategy, preferLower) => {
+    const matching = selectNearestCut(items, { minTokens, maxTokens, preferLower })
+    return matching ? { ...matching, strategy } : null
+  }
+  const preferredRounds = candidates.filter((candidate) => candidate.isUserRoundBoundary && candidate.preservesRequestedRounds)
+  const userRound = candidates.filter((candidate) => candidate.isUserRoundBoundary)
+  const preservedSafe = candidates.filter((candidate) => candidate.preservesRequestedRounds)
+  const retainedUnitLabel = retentionKind === 'user' ? 'user_round' : 'ai_unit'
+
+  // The configured threshold window is authoritative. Keeping recent units only ranks
+  // candidates inside it; it cannot force a much earlier cut when a safe 80~90%/90~95% cut exists.
+  const selected = retentionKind === 'user'
+    ? (
+        pickWithin(preferredRounds, threshold, preferredMax, 'user_round_keep', true)
+        || pickWithin(userRound, threshold, preferredMax, 'user_round_adaptive', true)
+        || pickWithin(preservedSafe, threshold, preferredMax, 'safe_keep', true)
+        || pickWithin(candidates, threshold, preferredMax, 'safe_adaptive', true)
+        || pickWithin(preferredRounds, -Infinity, threshold, 'user_round_keep_threshold_fallback', false)
+        || pickWithin(userRound, -Infinity, threshold, 'user_round_adaptive_threshold_fallback', false)
+        || pickWithin(preservedSafe, -Infinity, threshold, 'safe_keep_threshold_fallback', false)
+        || pickWithin(candidates, -Infinity, threshold, 'safe_adaptive_threshold_fallback', false)
+      )
+    : (
+        pickWithin(preservedSafe, threshold, preferredMax, `${retainedUnitLabel}_keep`, true)
+        || pickWithin(candidates, threshold, preferredMax, 'safe_adaptive', true)
+        || pickWithin(preservedSafe, -Infinity, threshold, `${retainedUnitLabel}_keep_threshold_fallback`, false)
+        || pickWithin(candidates, -Infinity, threshold, 'safe_adaptive_threshold_fallback', false)
+      )
+  return selected
+    ? { ...selected, ...(includeCandidates ? { candidates } : {}) }
+    : { cutIndex: 0, strategy: 'none', ...(includeCandidates ? { candidates } : {}) }
+}
+
+export function createCompactionTimeoutContext(upstreamSignal = null, {
+  totalTimeoutMs = DEFAULT_COMPACT_TOTAL_TIMEOUT_MS,
+  idleTimeoutMs = DEFAULT_COMPACT_STREAM_IDLE_TIMEOUT_MS
+} = {}) {
+  const controller = new AbortController()
+  let timeoutCode = ''
+  let totalTimer = null
+  let idleTimer = null
+  const abortWith = (code, reason = null) => {
+    if (controller.signal.aborted) return
+    timeoutCode = code || ''
+    try { controller.abort(reason || new Error(code)) } catch { controller.abort() }
+  }
+  const forwardAbort = () => abortWith('', upstreamSignal?.reason)
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) forwardAbort()
+    else upstreamSignal.addEventListener('abort', forwardAbort, { once: true })
+  }
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    const timeout = Math.max(1, Number(idleTimeoutMs) || DEFAULT_COMPACT_STREAM_IDLE_TIMEOUT_MS)
+    idleTimer = setTimeout(() => abortWith('compact_stream_idle_timeout', new Error(`compact_stream_idle_timeout_${timeout}ms`)), timeout)
+  }
+  const total = Math.max(1, Number(totalTimeoutMs) || DEFAULT_COMPACT_TOTAL_TIMEOUT_MS)
+  totalTimer = setTimeout(() => abortWith('compact_request_timeout', new Error(`compact_request_timeout_${total}ms`)), total)
+  armIdle()
+  return {
+    signal: controller.signal,
+    touch: armIdle,
+    getTimeoutCode: () => timeoutCode,
+    cleanup: () => {
+      if (totalTimer) clearTimeout(totalTimer)
+      if (idleTimer) clearTimeout(idleTimer)
+      if (upstreamSignal) upstreamSignal.removeEventListener('abort', forwardAbort)
+    }
+  }
+}
+
 // Structured handoff prompt adapted from local compact skill + Codex-style continuation needs.
 const DEFAULT_COMPACT_PROMPT = [
   'You are performing CONTEXT CHECKPOINT COMPACTION for the same conversation thread.',
@@ -213,6 +367,7 @@ function defaultModelCacheEntry(modelKey = '', patch = {}) {
 }
 
 async function readCompactCacheDoc() {
+  const { get: dbGet, createDocIfMissing } = await import('./db.js')
   await createDocIfMissing(COMPACT_CACHE_DOC_ID, { models: {} })
   const result = await dbGet(COMPACT_CACHE_DOC_ID)
   const doc = result?.ok && result.doc ? result.doc : { _id: COMPACT_CACHE_DOC_ID, models: {} }
@@ -221,6 +376,7 @@ async function readCompactCacheDoc() {
 }
 
 async function writeCompactCacheDoc(doc) {
+  const { put: dbPut } = await import('./db.js')
   return dbPut(doc)
 }
 
@@ -568,6 +724,7 @@ export async function resolveModelContextLength(modelInput = '', options = {}) {
   if (queryModel.trim()) {
     try {
       const endpoint = `${MODEL_RESOLVE_URL}?model=${encodeURIComponent(queryModel.trim())}`
+      const { fetchWithProxy } = await import('./net.js')
       const response = await fetchWithProxy(endpoint, {
         method: 'GET',
         headers: {
@@ -734,40 +891,52 @@ async function requestSummaryOnce({
     }
   })
 
-  const response = await createChatCompletion({
-    baseUrl: provider?.url || provider?.baseUrl || '',
-    apiKey: provider?.api_key || provider?.apiKey || '',
-    model: modelName,
-    apiType: apiType || provider?.apiType || 'chat_completions',
-    headers: provider?.headers || {},
-    retryCount: Number.isInteger(provider?.retryCount) ? provider.retryCount : 3,
-    messages: promptMessages,
-    stream,
-    signal
-  })
+  const timeoutContext = createCompactionTimeoutContext(signal)
+  try {
+    const { createChatCompletion } = await import('./chat.js')
+    const response = await createChatCompletion({
+      baseUrl: provider?.url || provider?.baseUrl || '',
+      apiKey: provider?.api_key || provider?.apiKey || '',
+      model: modelName,
+      apiType: apiType || provider?.apiType || 'chat_completions',
+      headers: provider?.headers || {},
+      retryCount: Number.isInteger(provider?.retryCount) ? provider.retryCount : 3,
+      messages: promptMessages,
+      stream,
+      signal: timeoutContext.signal
+    })
+    timeoutContext.touch()
 
-  if (response && typeof response[Symbol.asyncIterator] === 'function') {
-    let text = ''
-    for await (const part of response) {
-      throwIfAborted(signal)
-      const delta = part?.choices?.[0]?.delta
-      if (typeof delta?.content === 'string') {
-        text += delta.content
-      } else if (Array.isArray(delta?.content)) {
-        text += delta.content
-          .filter((item) => item?.type === 'text')
-          .map((item) => String(item.text || ''))
-          .join('')
-      } else if (typeof part?.delta === 'string') {
-        text += part.delta
-      } else if (typeof part?.output_text === 'string') {
-        text += part.output_text
+    if (response && typeof response[Symbol.asyncIterator] === 'function') {
+      let text = ''
+      for await (const part of response) {
+        timeoutContext.touch()
+        throwIfAborted(timeoutContext.signal)
+        const delta = part?.choices?.[0]?.delta
+        if (typeof delta?.content === 'string') {
+          text += delta.content
+        } else if (Array.isArray(delta?.content)) {
+          text += delta.content
+            .filter((item) => item?.type === 'text')
+            .map((item) => String(item.text || ''))
+            .join('')
+        } else if (typeof part?.delta === 'string') {
+          text += part.delta
+        } else if (typeof part?.output_text === 'string') {
+          text += part.output_text
+        }
       }
+      return text.trim()
     }
-    return text.trim()
-  }
 
-  return extractAssistantTextFromCompletion(response, apiType || provider?.apiType || 'chat_completions')
+    return extractAssistantTextFromCompletion(response, apiType || provider?.apiType || 'chat_completions')
+  } catch (error) {
+    const timeoutCode = timeoutContext.getTimeoutCode()
+    if (timeoutCode) throw new Error(timeoutCode)
+    throw error
+  } finally {
+    timeoutContext.cleanup()
+  }
 }
 
 /**

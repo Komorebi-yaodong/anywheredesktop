@@ -172,6 +172,10 @@ export function registerIpcHandlers({
   })
 
   handleInvoke('window:event:emit', async (event, input = {}) => {
+    if (input?.event === 'remote:command') {
+      return { ok: false, error: 'remote_command_channel_reserved' }
+    }
+
     const sourceId = getWindowRefByWebContentsId(event.sender.id)
 
     if (input?.event === 'fast-input:cancel-request') {

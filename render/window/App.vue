@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick, watch, h, computed, defineAsyncComponent } from 'vue';
+import { ref, shallowRef, onMounted, onBeforeUnmount, nextTick, watch, h, computed, defineAsyncComponent } from 'vue';
 import { ElContainer, ElMain, ElDialog, ElImageViewer, ElMessage, ElMessageBox, ElInput, ElButton, ElCheckbox, ElButtonGroup, ElTag, ElTooltip, ElIcon, ElAvatar, ElSwitch, ElSelect, ElOption } from 'element-plus';
 import { DocumentCopy, QuestionFilled, Download, Search, Tools, CaretRight, Collection, Warning, Cpu, ArrowUp, ArrowDown, Refresh } from '@element-plus/icons-vue';
 
@@ -446,6 +446,7 @@ const STICKY_SCROLL_GUARD_MS = 220;
 const USER_SCROLL_INTENT_MS = 260;
 
 const AUTO_SAVE_INPUT_DEBOUNCE_MS = 800;
+const AUTO_SAVE_REQUEST_CONFIG_DEBOUNCE_MS = 250;
 const AUTO_SAVE_LOADING_THROTTLE_MS = 2500;
 let autoSaveTimer = null;
 let scheduledAutoSaveRequest = null;
@@ -491,7 +492,13 @@ const getMessageViewportOffset = (container, messageElement) => (
   messageElement.getBoundingClientRect().top - container.getBoundingClientRect().top
 );
 
-const nextAnimationFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+const nextAnimationFrame = () => new Promise((resolve) => {
+  // Hidden Remote writers may have no compositor frame; never block model execution on paint.
+  if (document.visibilityState === 'hidden') { setTimeout(resolve, 0); return; }
+  let frame = null;
+  const timer = setTimeout(() => { if (frame !== null) cancelAnimationFrame(frame); resolve(); }, 100);
+  frame = requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
+});
 
 
 const getLastMessageElement = () => {
@@ -727,6 +734,7 @@ const currentTaskConfig = ref(null);
 const isClosingWindow = ref(false);
 const isSavingWindowSettings = ref(false);
 const isWindowBootstrapped = ref(false);
+const remoteCommandAdapterReady = ref(false);
 const pendingWindowPayloadQueue = [];
 
 
@@ -1745,7 +1753,7 @@ const estimateCompactHistoryTokens = async (messages = []) => {
 
 const splitFullHistoryPrefixAndTail = async (
   messages = fullHistory.value,
-  { maxPrefixTokens = 0, keepRecentRounds = 0 } = {}
+  { maxPrefixTokens = 0, preferredMaxTokens = maxPrefixTokens, keepRecentRounds = 0 } = {}
 ) => {
   const list = Array.isArray(messages) ? messages : [];
   let windowStart = 0;
@@ -1762,55 +1770,39 @@ const splitFullHistoryPrefixAndTail = async (
 
   const systemMessages = list.filter((message) => message?.role === 'system');
   const windowMessages = list.slice(windowStart);
-  const userStartIndexes = [];
-  windowMessages.forEach((message, index) => {
-    if (isUserAuthoredMessage(message) && index > 0) userStartIndexes.push(index);
+  const dynamicOverheadTokens = await estimateCurrentDynamicRequestOverhead();
+  if (!window.api?.selectCompactionCut || windowMessages.length < 2 || !Number.isFinite(Number(maxPrefixTokens)) || maxPrefixTokens <= 0) {
+    return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]) + dynamicOverheadTokens, maxPrefixTokens: Math.max(0, Number(maxPrefixTokens) || 0), tailStartUserOrdinal: 0, strategy: 'none' };
+  }
+
+  const selected = await window.api.selectCompactionCut({
+    systemMessages,
+    windowMessages,
+    thresholdTokens: Math.floor(Number(maxPrefixTokens)),
+    preferredMaxTokens: Math.floor(Math.max(Number(maxPrefixTokens), Number(preferredMaxTokens) || 0)),
+    keepRecentRounds,
+    fixedOverheadTokens: dynamicOverheadTokens
   });
-  if (userStartIndexes.length === 0 || !Number.isFinite(Number(maxPrefixTokens)) || maxPrefixTokens <= 0) {
-    return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]), maxPrefixTokens: Math.max(0, Number(maxPrefixTokens) || 0), tailStartUserOrdinal: 0 };
+  const cutIndex = Math.max(0, Math.min(windowMessages.length, Number(selected?.cutIndex) || 0));
+  if (!cutIndex) {
+    return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]) + dynamicOverheadTokens, maxPrefixTokens: Math.floor(Number(maxPrefixTokens)), tailStartUserOrdinal: 0, strategy: selected?.strategy || 'none' };
   }
-
-  const budget = Math.floor(Number(maxPrefixTokens));
-  const estimatePrefixAt = async (cutIndex) => estimateCompactHistoryTokens([...systemMessages, ...windowMessages.slice(0, cutIndex)]);
-  let low = 0;
-  let high = userStartIndexes.length - 1;
-  let bestCandidate = -1;
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const candidate = userStartIndexes[middle];
-    const tokens = await estimatePrefixAt(candidate);
-    if (tokens <= budget) {
-      bestCandidate = middle;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
-  if (bestCandidate < 0) {
-    return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]), maxPrefixTokens: budget, tailStartUserOrdinal: 0 };
-  }
-
-  const thresholdCutIndex = userStartIndexes[bestCandidate];
-  const requestedKeepRounds = Math.max(0, Math.floor(Number(keepRecentRounds) || 0));
-  // Move the threshold cut backwards by N complete user rounds to keep them verbatim.
-  const tailStartUserOrdinal = Math.max(0, bestCandidate - requestedKeepRounds);
-  let cutIndex = userStartIndexes[tailStartUserOrdinal] ?? thresholdCutIndex;
-  // Never summarize only an existing compaction marker: that would not reduce history.
-  const hasRealPrefixMessage = windowMessages
-    .slice(0, cutIndex)
-    .some((message) => message?.role && message.role !== 'system' && message.role !== 'compaction');
-  if (!hasRealPrefixMessage) cutIndex = thresholdCutIndex;
 
   const prefix = windowMessages.slice(0, cutIndex);
   const tail = windowMessages.slice(cutIndex);
+  const userStarts = windowMessages
+    .map((message, index) => (isUserAuthoredMessage(message) ? index : -1))
+    .filter((index) => index >= 0);
+  const tailStartUserOrdinal = Math.max(0, userStarts.findIndex((index) => index >= cutIndex));
   return {
     insertIndex: windowStart + cutIndex,
     prefix,
     tail,
-    prefixTokens: await estimateCompactHistoryTokens([...systemMessages, ...prefix]),
-    tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...tail]),
-    maxPrefixTokens: budget,
-    tailStartUserOrdinal: Math.max(0, userStartIndexes.indexOf(cutIndex))
+    prefixTokens: await estimateCompactHistoryTokens([...systemMessages, ...prefix]) + dynamicOverheadTokens,
+    tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...tail]) + dynamicOverheadTokens,
+    maxPrefixTokens: Math.floor(Number(maxPrefixTokens)),
+    tailStartUserOrdinal,
+    strategy: selected?.strategy || 'safe_adaptive'
   };
 };
 
@@ -2111,28 +2103,22 @@ const findAiWindowStartIndex = (list = []) => {
  * 在「AI 可见窗口」内切 prefix/tail。
  * UI 不删除 prefix，只在 prefix 后插入 summary。
  */
-const splitAiWindowPrefixAndTail = (messages = [], tailStartUserOrdinal = 0) => {
+// Map a protocol-safe full-history cut to the owning chat bubbles. Full history keeps
+// tool results as rows; chat_show keeps those results inside the assistant bubble.
+// Counting only renderable non-system/non-tool rows keeps user and AI-unit cuts identical.
+const splitChatShowPrefixAtFullCut = (messages = [], fullPrefix = []) => {
   const list = Array.isArray(messages) ? messages : [];
   if (list.length === 0) return { windowStart: 0, insertIndex: 0, prefix: [], tail: [] };
-
   const windowStart = findAiWindowStartIndex(list);
-  const windowMsgs = list.slice(windowStart);
-  const userStartIndexes = [];
-  windowMsgs.forEach((message, index) => {
-    if (isUserAuthoredMessage(message) && index > 0) userStartIndexes.push(index);
-  });
-  if (userStartIndexes.length === 0) return { windowStart, insertIndex: list.length, prefix: [], tail: windowMsgs };
-
-  const safeOrdinal = Math.min(
-    Math.max(0, Math.floor(Number(tailStartUserOrdinal) || 0)),
-    userStartIndexes.length - 1
-  );
-  const cutInWindow = userStartIndexes[safeOrdinal];
+  const visiblePrefixCount = (Array.isArray(fullPrefix) ? fullPrefix : [])
+    .filter((message) => message?.role && message.role !== 'system' && message.role !== 'tool')
+    .length;
+  const insertIndex = Math.max(windowStart, Math.min(list.length, windowStart + visiblePrefixCount));
   return {
     windowStart,
-    insertIndex: windowStart + cutInWindow,
-    prefix: windowMsgs.slice(0, cutInWindow),
-    tail: windowMsgs.slice(cutInWindow)
+    insertIndex,
+    prefix: list.slice(windowStart, insertIndex),
+    tail: list.slice(insertIndex)
   };
 };
 
@@ -2232,7 +2218,7 @@ const handleRestoreCompact = async (payload = null) => {
       chat_show.value = Array.isArray(sessionData.chat_show) ? sessionData.chat_show : [];
       compactArchives.value = Array.isArray(sessionData.compactArchives)
         ? sessionData.compactArchives
-        : compactArchives.value.filter((item) => item?.id !== outermost.snapshotId);
+        : compactArchives.value.filter((item) => item?.id !== (restored?.restoredSnapshotId || outermost.snapshotId));
       currentConversationStorage.value = {
         ...storage,
         title: restored?.descriptor?.title || storage.title,
@@ -2303,6 +2289,8 @@ const runConversationCompact = async ({
   syncHistoryFromFullHistory();
 
   compacting.value = true;
+
+  syncAutoCloseOnBlurListener();
   compactProgress.value = { percent: 2, message: '准备级联压缩…', stage: 'prepare' };
   compactAbortController = new AbortController();
   // 发送区仅 loading 时用户不易感知原因；气泡提示当前在做会话压缩
@@ -2338,20 +2326,18 @@ const runConversationCompact = async ({
         break;
       }
 
-      const maxPrefixTokens = Math.floor(
-        Number(compactConfig.value.contextLength || 0)
-        * Number(compactConfig.value.triggerRatio || 0)
-      );
+      const contextLength = Math.max(0, Number(compactConfig.value.contextLength) || 0);
+      const triggerRatio = Math.min(0.99, Math.max(0.1, Number(compactConfig.value.triggerRatio) || 0));
+      const maxPrefixTokens = Math.floor(contextLength * triggerRatio);
+      // Prefer safe boundaries in the first half of the remaining window: 80% → 80~90%, 90% → 90~95%.
+      const preferredMaxTokens = Math.floor(contextLength * (triggerRatio + ((1 - triggerRatio) * 0.5)));
       const fullSplit = await splitFullHistoryPrefixAndTail(fullHistory.value, {
         maxPrefixTokens,
+        preferredMaxTokens,
         keepRecentRounds: compactConfig.value.keepRecentRounds
       });
-      const {
-        insertIndex: fullInsertIndex,
-        prefix,
-        tailStartUserOrdinal
-      } = fullSplit;
-      const uiSplit = splitAiWindowPrefixAndTail(chat_show.value, tailStartUserOrdinal);
+      const { insertIndex: fullInsertIndex, prefix } = fullSplit;
+      const uiSplit = splitChatShowPrefixAtFullCut(chat_show.value, prefix);
       if (!prefix.length) {
         if (manual && steps === 1 && !quiet) {
           showDismissibleMessage.info('可压缩前缀不足，已跳过');
@@ -2431,12 +2417,10 @@ const runConversationCompact = async ({
     }
 
     autoCompactSuppressedForTurn.value = false;
-    if (hydratedPagedConversation) {
-      await executeAutoSaveRequest({ reason: 'conversation-compacted', force: true, version: ++sessionMutationVersion });
-      await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 });
-    } else {
-      scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
-    }
+    // The database is authoritative after a cascade. Await one full snapshot then reload
+    // the active window so a multi-layer UI projection can never diverge until reopening.
+    await executeAutoSaveRequest({ reason: 'conversation-compacted', force: true, version: ++sessionMutationVersion });
+    await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 });
     if (!quiet) {
       showDismissibleMessage.success(manual ? `手动级联压缩完成（${steps} 步）` : `自动级联压缩完成（${steps} 步）`);
     }
@@ -2456,6 +2440,8 @@ const runConversationCompact = async ({
       await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 }).catch(() => {});
     }
     compacting.value = false;
+
+    syncAutoCloseOnBlurListener();
     compactAbortController = null;
     compactProgress.value = { percent: 0, message: '', stage: '' };
   }
@@ -2599,7 +2585,8 @@ const buildConversationWindowStatus = () => ({
   generating: loading.value,
   compacting: compacting.value,
   readOnly: conversationReadOnly.value,
-  leasePending: conversationLeasePending.value
+  leasePending: conversationLeasePending.value,
+  rendererReady: remoteCommandAdapterReady.value && isWindowBootstrapped.value
 });
 
 const scheduleConversationWindowStatusSync = () => {
@@ -2617,6 +2604,7 @@ const scheduleConversationWindowStatusSync = () => {
 
 watch([
   isWindowBootstrapped,
+  remoteCommandAdapterReady,
   () => currentConversationStorage.value?.conversationId,
   () => currentConversationStorage.value?.revision,
   defaultConversationName,
@@ -2626,6 +2614,177 @@ watch([
   conversationReadOnly,
   conversationLeasePending
 ], scheduleConversationWindowStatusSync, { immediate: true });
+
+const activeRemoteCommand = shallowRef(null);
+let remoteCommandExecutionPromise = null;
+const remoteHiddenWriter = ref(false);
+
+const emitRemoteRendererEvent = (event, command = {}, payload = {}) => {
+  if (!window.api?.emitRemoteRendererEvent) return;
+  const conversationId = typeof currentConversationStorage.value?.conversationId === 'string'
+    ? currentConversationStorage.value.conversationId
+    : '';
+  const requestId = typeof command?.requestId === 'string' ? command.requestId : '';
+  if (!conversationId || !requestId) return;
+  window.api.emitRemoteRendererEvent({
+    event,
+    requestId,
+    conversationId,
+    payload
+  }).catch(() => {});
+};
+
+const finalizeRemoteCommand = (event, command = activeRemoteCommand.value, payload = {}) => {
+  if (!command || command !== activeRemoteCommand.value) return false;
+  emitRemoteRendererEvent(event, command, payload);
+  activeRemoteCommand.value = null;
+  return true;
+};
+
+const extractRemoteText = (content) => {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((item) => item?.type === 'text' && typeof item.text === 'string')
+    .map((item) => item.text)
+    .join('');
+};
+
+const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = '', reasoning = '', status = '', segmentId = '') => {
+  if (!command || command !== activeRemoteCommand.value) return;
+  const safeSegmentId = String(segmentId || 'assistant');
+  if (command.__remoteSegmentId !== safeSegmentId) {
+    command.__remoteSegmentId = safeSegmentId;
+    command.__remoteTextOffset = 0;
+    command.__remoteReasoningOffset = 0;
+  }
+  const emitChunks = (value, key, offsetKey) => {
+    const safeValue = typeof value === 'string' ? value : '';
+    let offset = Math.min(Number(command[offsetKey]) || 0, safeValue.length);
+    while (offset < safeValue.length) {
+      const nextOffset = Math.min(safeValue.length, offset + 12 * 1024);
+      emitRemoteRendererEvent('assistant.delta', command, {
+        [key]: safeValue.slice(offset, nextOffset), segmentId: safeSegmentId,
+        status: typeof status === 'string' ? status.slice(0, 80) : ''
+      });
+      offset = nextOffset;
+    }
+    command[offsetKey] = safeValue.length;
+  };
+  emitChunks(text, 'textDelta', '__remoteTextOffset');
+  emitChunks(reasoning, 'reasoningDelta', '__remoteReasoningOffset');
+};
+
+const normalizeRemoteCommand = (input = {}) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const type = typeof input.type === 'string' ? input.type.trim() : '';
+  const requestId = typeof input.requestId === 'string' ? input.requestId.trim() : '';
+  const conversationId = typeof input.conversationId === 'string' ? input.conversationId.trim() : '';
+  if (!type || !conversationId) return null;
+  return {
+    type,
+    requestId,
+    conversationId,
+    text: typeof input.text === 'string' ? input.text : '',
+    autoApproveTools: input.autoApproveTools === true,
+    targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : ''
+  };
+};
+
+const persistRemoteTranscript = async (reason) => {
+  clearScheduledAutoSave();
+  const version = ++sessionMutationVersion;
+  const request = { reason, force: true, version };
+  let saved = await executeAutoSaveRequest(request);
+  if (lastPersistedSessionVersion < version) saved = await executeAutoSaveRequest(request);
+  return saved && lastPersistedSessionVersion >= version;
+};
+
+
+const runRemoteConversationCommand = async (input = {}) => {
+  const command = normalizeRemoteCommand(input);
+  if (!command) return;
+  const activeConversationId = currentConversationStorage.value?.conversationId || '';
+  if (command.conversationId !== activeConversationId) return;
+
+  if (command.type === 'remote.revealed') {
+    remoteHiddenWriter.value = false;
+    return;
+  }
+  if (command.type === 'remote.shutdown') {
+    if (activeRemoteCommand.value && loading.value) cancelAskAI();
+    await remoteCommandExecutionPromise;
+    if (remoteHiddenWriter.value) {
+      if (await persistRemoteTranscript('remote-shutdown')) await closePage(true);
+    }
+    return;
+  }
+  if (!isWindowBootstrapped.value || !command.requestId) {
+    emitRemoteRendererEvent('assistant.failed', command, { code: 'remote_renderer_not_ready' });
+    return;
+  }
+  if (command.type === 'conversation.cancel') {
+    if (!activeRemoteCommand.value || activeRemoteCommand.value.requestId !== command.targetRequestId) return;
+    activeRemoteCommand.value.__remoteCancelled = true;
+    if (loading.value) cancelAskAI();
+    return;
+  }
+  if (command.type !== 'conversation.send') return;
+  const text = command.text;
+  if (!text.trim() || text.length > 128 * 1024) {
+    emitRemoteRendererEvent('assistant.failed', command, { code: 'remote_message_invalid' });
+    return;
+  }
+  if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
+    emitRemoteRendererEvent('assistant.failed', command, { code: 'remote_conversation_busy' });
+    return;
+  }
+  activeRemoteCommand.value = command;
+  emitRemoteRendererEvent('conversation.command.acknowledged', command, { hidden: remoteHiddenWriter.value });
+  remoteCommandExecutionPromise = (async () => {
+    let terminalEvent = 'assistant.completed';
+    let terminalPayload = {};
+    try {
+      appendFullHistory({ role: 'user', content: text });
+      chat_show.value.push({
+        id: messageIdCounter.value++, role: 'user', content: [{ type: 'text', text }],
+        timestamp: new Date().toLocaleString('sv-SE')
+      });
+      const userSaved = await persistRemoteTranscript('remote-user-message');
+      if (!userSaved) throw new Error('remote_conversation_save_failed');
+      if (!command.__remoteCancelled) await askAI(true, command);
+      terminalEvent = command.__remoteCancelled ? 'assistant.cancelled' : command.__remoteTerminalEvent || terminalEvent;
+      terminalPayload = command.__remoteTerminalPayload || {};
+
+      if (!command.__remoteCancelled && !command.__remoteStarted) {
+        terminalEvent = 'assistant.failed'; terminalPayload = { code: 'remote_assistant_not_started' };
+      }
+
+    } catch {
+      terminalEvent = 'assistant.failed';
+      terminalPayload = { code: 'remote_conversation_save_or_send_failed' };
+    } finally {
+      // A terminal event promises that the current transcript has been persisted by its lease owner.
+      try {
+        const saved = await persistRemoteTranscript('remote-turn-finalized');
+        if (!saved) { terminalEvent = 'assistant.failed'; terminalPayload = { code: 'remote_conversation_save_failed' }; }
+      } catch {
+        terminalEvent = 'assistant.failed'; terminalPayload = { code: 'remote_conversation_save_failed' };
+      }
+      finalizeRemoteCommand(terminalEvent, command, {
+        completedAt: new Date().toISOString(), revision: currentConversationStorage.value?.revision || 0,
+        ...terminalPayload
+      });
+    }
+  })();
+  try { await remoteCommandExecutionPromise; }
+  finally {
+    remoteCommandExecutionPromise = null;
+    syncAutoCloseOnBlurListener();
+    await flushAppendBuffer();
+  }
+};
+
 
 
 const stopConversationLeaseHeartbeat = () => {
@@ -2974,7 +3133,7 @@ const normalizePendingInputBuffer = (items) => (Array.isArray(items) ? items : [
   })
   .filter(Boolean);
 
-const enqueueInputToBuffer = () => {
+const enqueueInputToBuffer = (notice = '正在生成，消息已加入缓冲区，将在本轮结束后自动发送') => {
   const text = prompt.value.trim();
   const files = Array.isArray(fileList.value) ? fileList.value.slice() : [];
   if (!text && files.length === 0) return;
@@ -2987,7 +3146,7 @@ const enqueueInputToBuffer = () => {
   prompt.value = "";
   fileList.value = [];
   scheduleAutoSave({ reason: 'append-buffer-enqueued', immediate: true });
-  showDismissibleMessage.info('正在生成，消息已加入缓冲区，将在本轮结束后自动发送');
+  showDismissibleMessage.info(notice);
 };
 
 const removeBufferedMessage = (index) => {
@@ -3037,7 +3196,7 @@ const flushAppendBuffer = async () => {
   // A buffered turn may begin only after the previous turn has fully released ownership.
   // isMcpLoading is deliberately declared before this function.
   if (!ensureConversationWriteAccess(false)) return;
-  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value) return;
+  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeRemoteCommand.value) return;
   isFlushingAppendBuffer = true;
   try {
     const appendedAny = await drainBufferIntoHistory();
@@ -4537,7 +4696,7 @@ const handleChangeModel = (chosenModel) => {
 const handleAutoCloseOnBlur = () => closePage(false);
 const syncAutoCloseOnBlurListener = () => {
   window.removeEventListener('blur', handleAutoCloseOnBlur);
-  if (autoCloseOnBlur.value && !loading.value) {
+  if (autoCloseOnBlur.value && !loading.value && !compacting.value && !remoteHiddenWriter.value && !activeRemoteCommand.value) {
     window.addEventListener('blur', handleAutoCloseOnBlur);
   }
 };
@@ -4717,12 +4876,8 @@ const onAvatarClick = async (role, event) => {
 const handleSubmit = () => {
   if (!ensureConversationWriteAccess(true)) return;
 
-  if (compacting.value) {
-    showDismissibleMessage.warning('压缩进行中，暂不可发送');
-    return;
-  }
-  if (loading.value || isPreparingSend.value) {
-    enqueueInputToBuffer();
+  if (compacting.value || loading.value || isPreparingSend.value) {
+    enqueueInputToBuffer(compacting.value ? '正在压缩，消息已加入缓冲区，将在压缩结束后自动发送' : '正在生成，消息已加入缓冲区，将在本轮结束后自动发送');
     return;
   }
   askAI(false);
@@ -5520,7 +5675,13 @@ onMounted(async () => {
     }
 
     if (data) {
-      basic_msg.value = { code: data.code, type: data.type, payload: data.payload };
+      remoteHiddenWriter.value = data.remoteHidden === true;
+      basic_msg.value = {
+        code: data.code,
+        type: data.type,
+        payload: data.payload,
+        remoteHidden: remoteHiddenWriter.value
+      };
       if (data.conversation?.descriptor && data.conversation?.sessionData) {
         const descriptor = data.conversation.descriptor;
         conversationLeasePending.value = true;
@@ -5754,6 +5915,11 @@ onMounted(async () => {
     // 优先接桌面端事件总线，同时保留原插件 preload 回退
   if (window.api && typeof window.api.onWindowEvent === 'function') {
     window.api.onWindowEvent(async (envelope) => {
+      if (envelope?.event === 'remote:command') {
+        if (envelope.sourceId !== 'remote-session-manager') return;
+        await runRemoteConversationCommand(envelope.payload);
+        return;
+      }
       const payload = normalizeWindowEventPayload(envelope);
       if (payload && typeof payload === 'object' && payload.type) {
         if (!isWindowBootstrapped.value) {
@@ -5763,6 +5929,8 @@ onMounted(async () => {
         await handleAppendMessageEvent(payload);
       }
     });
+    remoteCommandAdapterReady.value = true;
+    scheduleConversationWindowStatusSync();
   }
 
   if (window.preload && typeof window.preload.onAppendMessage === 'function') {
@@ -6689,6 +6857,60 @@ const autoSaveSession = async (force = false, { skipProjectAssignment = false, v
   }
 };
 
+const getSessionRequestConfigStatePatch = () => {
+  const currentPromptConfig = {
+    ...(currentConfig.value.prompts?.[CODE.value] || {}),
+    ...(sourcePromptConfig.value || {}),
+    reasoning_effort: tempReasoningEffort.value || 'default',
+    voice: selectedVoice.value || null
+  };
+  sourcePromptConfig.value = { ...currentPromptConfig };
+  return {
+    currentPromptConfig,
+    selectedVoice: selectedVoice.value || '',
+    activeMcpServerIds: [...(sessionMcpServerIds.value || [])],
+    activeSkillIds: [...(sessionSkillIds.value || [])]
+  };
+};
+
+const autoSaveSessionRequestConfig = async (force = false, { version = sessionMutationVersion } = {}) => {
+  const storage = currentConversationStorage.value;
+  if (!storage?.conversationId) {
+    // A new conversation still needs one full snapshot to create its SQLite transcript.
+    return autoSaveSession(force, { version });
+  }
+  if (!force && !shouldPersistCurrentSessionAutomatically()) return false;
+  if (!ensureConversationWriteAccess(false)) return false;
+
+  try {
+    const saved = await window.api.saveConversationState({
+      dirPath: storage.dirPath || currentConfig.value.webdav?.localChatPath || '',
+      conversationId: storage.conversationId,
+      expectedRevision: storage.revision,
+      holderInstanceId: conversationInstanceId,
+      leaseEpoch: conversationLease.value?.leaseEpoch,
+      title: defaultConversationName.value,
+      state: getSessionRequestConfigStatePatch()
+    });
+    currentConversationStorage.value = {
+      ...storage,
+      title: saved.title || storage.title,
+      revision: Number(saved.revision) || storage.revision
+    };
+    lastPersistedSessionVersion = Math.max(lastPersistedSessionVersion, Number(version) || 0);
+    lastAutoSaveAt = Date.now();
+    return true;
+  } catch (error) {
+    if (/conversation_(revision_conflict|write_lease_lost)/.test(String(error?.message || ''))) {
+      conversationReadOnly.value = true;
+      showDismissibleMessage.warning('会话已在其他客户端更新，当前窗口已切换为只读模式');
+    }
+    console.error('Request-config state save failed:', error);
+    return false;
+  }
+};
+
+
 const clearScheduledAutoSave = () => {
   if (autoSaveTimer) {
     clearTimeout(autoSaveTimer);
@@ -6715,17 +6937,22 @@ const executeAutoSaveRequest = async (request = {}) => {
       force: queuedAutoSaveRequest?.force || request.force || false,
       reason: request.reason || queuedAutoSaveRequest?.reason || 'queued',
       version: Math.max(Number(queuedAutoSaveRequest?.version) || 0, Number(request.version) || sessionMutationVersion),
-      skipProjectAssignment: Boolean(queuedAutoSaveRequest?.skipProjectAssignment && request.skipProjectAssignment)
+      skipProjectAssignment: Boolean(queuedAutoSaveRequest?.skipProjectAssignment && request.skipProjectAssignment),
+      // Any normal snapshot supersedes a state-only patch so drafts/messages cannot be skipped.
+      stateOnly: request.stateOnly === true && queuedAutoSaveRequest?.stateOnly !== false
     };
     return autoSaveExecutionPromise;
   }
 
   autoSaveExecutionPromise = (async () => {
     try {
-      return await autoSaveSession(Boolean(request.force), {
+      const saveOptions = {
         skipProjectAssignment: request.skipProjectAssignment === true,
         version: Number(request.version) || sessionMutationVersion
-      });
+      };
+      return request.stateOnly === true
+        ? await autoSaveSessionRequestConfig(Boolean(request.force), saveOptions)
+        : await autoSaveSession(Boolean(request.force), saveOptions);
     } finally {
       autoSaveExecutionPromise = null;
       if (queuedAutoSaveRequest) {
@@ -6739,12 +6966,14 @@ const executeAutoSaveRequest = async (request = {}) => {
   return autoSaveExecutionPromise;
 };
 
-const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false, delay = 0 } = {}) => {
+const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false, delay = 0, stateOnly = false } = {}) => {
   if (!force && !shouldPersistCurrentSessionAutomatically()) {
     return;
   }
 
-  const request = { reason, force, version: ++sessionMutationVersion };
+  const request = { reason, force, stateOnly: Boolean(stateOnly), version: ++sessionMutationVersion };
+  // Do not downgrade a pending full snapshot to a state-only patch.
+  if (scheduledAutoSaveRequest && !scheduledAutoSaveRequest.stateOnly) request.stateOnly = false;
 
   if (immediate || force || delay <= 0) {
     clearScheduledAutoSave();
@@ -6771,7 +7000,12 @@ const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false
 
 watch([selectedVoice, tempReasoningEffort, sessionMcpServerIds, sessionSkillIds], () => {
   if (isRestoringSessionSnapshot) return;
-  scheduleAutoSave({ reason: 'session-request-config', immediate: true });
+  // Request configuration is state only; never rescan or rewrite the full transcript for it.
+  scheduleAutoSave({
+    reason: 'session-request-config',
+    delay: AUTO_SAVE_REQUEST_CONFIG_DEBOUNCE_MS,
+    stateOnly: true
+  });
 }, { deep: true });
 
 
@@ -6883,7 +7117,12 @@ const getSessionDataAsObject = (options = {}) => {
     if (message && typeof message === 'object' && !message.uiStorageId) message.uiStorageId = createStorageId();
   });
 
-  const currentPromptConfig = currentConfig.value.prompts[CODE.value] || {};
+  const currentPromptConfig = {
+    ...(currentConfig.value.prompts?.[CODE.value] || {}),
+    ...(sourcePromptConfig.value || {}),
+    reasoning_effort: tempReasoningEffort.value || 'default',
+    voice: selectedVoice.value || null
+  };
   const explicitTitle = typeof options?.title === 'string' ? options.title.trim() : '';
   // Persist the complete API transcript and derive the current request window from it.
   // Keep the request projection current, but do not rebuild the UI cache while serializing.
@@ -8915,7 +9154,8 @@ const appendCurrentInputToHistory = async () => {
   return false;
 };
 
-const askAI = async (forceSend = false) => {
+const askAI = async (forceSend = false, remoteCommand = null) => {
+  if (activeRemoteCommand.value && activeRemoteCommand.value !== remoteCommand) return;
   if (!ensureConversationWriteAccess(true)) return;
   if (loading.value || isPreparingSend.value || compacting.value) return;
   if (isMcpLoading.value) {
@@ -8939,6 +9179,12 @@ const askAI = async (forceSend = false) => {
   // This bubble is deliberately absent from fullHistory until a real assistant result exists.
   loading.value = true;
   syncAutoCloseOnBlurListener();
+  const turnRemoteCommand = activeRemoteCommand.value;
+  const autoApproveThisTurn = () => turnRemoteCommand?.autoApproveTools === true || isAutoApproveTools.value;
+  if (turnRemoteCommand) {
+    turnRemoteCommand.__remoteStarted = true;
+    emitRemoteRendererEvent('assistant.started', turnRemoteCommand, { startedAt: new Date().toISOString() });
+  }
   const turnId = activeAssistantTurnId.value + 1;
   activeAssistantTurnId.value = turnId;
   signalController.value = new AbortController();
@@ -8977,6 +9223,7 @@ const askAI = async (forceSend = false) => {
   let currentAssistantChatShowIndex = chat_show.value.length - 1;
   let hasReusedPreparingBubble = false;
   let cancelPendingStreamingDisplay = null;
+  if (turnRemoteCommand) turnRemoteCommand.__remoteTerminalEvent = 'assistant.completed';
 
   // Yield a DOM tick and paint frame before token estimation / compaction work.
   await nextTick();
@@ -9223,6 +9470,11 @@ const askAI = async (forceSend = false) => {
             chat_show.value[currentAssistantChatShowIndex].reasoning_content = aggregatedReasoningContent;
           }
           lastUpdateTime = Date.now();
+          emitRemoteAssistantDelta(
+            turnRemoteCommand, aggregatedContent, aggregatedReasoningContent,
+            chat_show.value[currentAssistantChatShowIndex].status,
+            chat_show.value[currentAssistantChatShowIndex].id
+          );
           syncStickyScrollAfterRender();
           scheduleLoadingAutoSave('assistant-stream');
         };
@@ -9234,6 +9486,12 @@ const askAI = async (forceSend = false) => {
         };
         cancelPendingStreamingDisplay = cancelScheduledStreamingDisplay;
         const scheduleStreamingDisplay = () => {
+
+          if (remoteHiddenWriter.value || document.visibilityState === 'hidden') {
+            flushStreamingDisplay();
+            return;
+          }
+
           if (streamingDisplayRafId !== null) return;
           streamingDisplayRafId = requestAnimationFrame(() => {
             streamingDisplayRafId = null;
@@ -9499,6 +9757,11 @@ const askAI = async (forceSend = false) => {
         // 关键：非流式下如果存在思考内容，必须将 status 设为 end 才能正确显示
         currentBubble.status = 'end';
       }
+      emitRemoteAssistantDelta(
+        turnRemoteCommand, extractRemoteText(currentBubble.content),
+        typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
+        currentBubble.status, currentBubble.id
+      );
 
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
         tool_calls_count++;
@@ -9507,7 +9770,7 @@ const askAI = async (forceSend = false) => {
           name: tc.function.name,
           args: tc.function.arguments,
           result: '等待批准...',
-          approvalStatus: isAutoApproveTools.value ? 'approved' : 'waiting'
+          approvalStatus: autoApproveThisTurn() ? 'approved' : 'waiting'
         }));
 
         await nextTick();
@@ -9538,7 +9801,7 @@ const askAI = async (forceSend = false) => {
               return { tool_call_id: toolCall.id, role: "tool", name: toolCall.function.name, content: toolContent };
             }
 
-            if (!isAutoApproveTools.value) {
+            if (!autoApproveThisTurn()) {
               try {
                 const isApproved = await new Promise((resolve) => {
                   pendingToolApprovals.value.set(toolCall.id, resolve);
@@ -9796,6 +10059,10 @@ const askAI = async (forceSend = false) => {
       });
     }
     scheduleAutoSave({ reason: aborted ? 'assistant-cancelled-error' : 'assistant-error', immediate: true });
+    if (turnRemoteCommand) {
+      turnRemoteCommand.__remoteTerminalEvent = aborted ? 'assistant.cancelled' : 'assistant.failed';
+      turnRemoteCommand.__remoteTerminalPayload = aborted ? {} : { code: 'remote_assistant_failed' };
+    }
 
   } finally {
     cancelPendingStreamingDisplay?.();
@@ -9885,7 +10152,7 @@ const askAI = async (forceSend = false) => {
       activeAssistantTurnMeta = null;
       loading.value = false;
       syncAutoCloseOnBlurListener();
-      await flushAppendBuffer();
+      if (!turnRemoteCommand) await flushAppendBuffer();
     }
   }
 };

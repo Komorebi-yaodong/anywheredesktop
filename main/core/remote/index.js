@@ -206,6 +206,7 @@ export function createRemoteGateway({
   dbStorageSetItem,
   getAppVersion = () => '',
   conversationReadService = null,
+  sessionManager = null,
   onStatusChanged = null,
   onPairingCreated = null,
   logger = console
@@ -226,6 +227,8 @@ export function createRemoteGateway({
   const pairingAttempts = new Map()
   const socketContexts = new WeakMap()
   const activeSocketsByDeviceId = new Map()
+  let activeSessionManager = sessionManager
+
   const seenSessionHelloNonces = new Map()
   let unauthenticatedSocketCount = 0
 
@@ -264,6 +267,9 @@ export function createRemoteGateway({
     const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get']
     if (conversationReadService) {
       capabilities.push('conversation.list', 'conversation.messages.list', 'conversation.windows.list')
+    }
+    if (activeSessionManager) {
+      capabilities.push('conversation.send', 'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get')
     }
     return capabilities
   }
@@ -540,6 +546,25 @@ export function createRemoteGateway({
     }
   }
 
+  function sendEncryptedEventToDevice(deviceId = '', event, payload = {}) {
+    const normalizedDeviceId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
+    const eventName = typeof event === 'string' ? event.trim().slice(0, 120) : ''
+    if (!eventName) return { ok: false, sent: 0 }
+    const sockets = activeSocketsByDeviceId.get(normalizedDeviceId)
+    let sent = 0
+    for (const socket of sockets ? [...sockets] : []) {
+      const context = socketContexts.get(socket)
+      if (!context?.authenticated || !context.session || !isOpen(socket)) continue
+      if (sendEncrypted(socket, context, { kind: 'event', event: eventName, payload })) {
+        sent += 1
+      } else {
+        safeSocketClose(socket, 1011, 'encrypted_event_send_failed')
+      }
+    }
+    return { ok: true, sent }
+  }
+
+
   function getStatus() {
     const devicesOnline = [...activeSocketsByDeviceId.values()].filter((sockets) => sockets.size > 0).length
     return {
@@ -760,6 +785,9 @@ export function createRemoteGateway({
     }
     zeroPairingAttempt(attempt)
     closeDeviceSockets(nextDevice.deviceId, 4002, 'device_repaired')
+
+    activeSessionManager?.authorizeDevice?.(nextDevice.deviceId)
+
     await appendAudit('remote.device.paired', { deviceId: nextDevice.deviceId, result: 'ok' })
     notifyStatus()
 
@@ -849,6 +877,31 @@ export function createRemoteGateway({
           if (!conversationReadService) throw remoteError('remote_method_unavailable')
           result = conversationReadService.getWindows(params)
           break
+        case 'conversation.send':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.send({
+            deviceId: context.device.deviceId,
+            requestId,
+            params
+          })
+          break
+        case 'conversation.cancel':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.cancel({
+            deviceId: context.device.deviceId,
+            requestId,
+            params
+          })
+          break
+        case 'conversation.request.get':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = activeSessionManager.getRequest({ deviceId: context.device.deviceId, params })
+          break
+
+        case 'conversation.showOnDesktop':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = activeSessionManager.showOnDesktop({ params })
+          break
         default:
           throw remoteError('remote_method_unavailable')
       }
@@ -914,6 +967,7 @@ export function createRemoteGateway({
       if (!sendPlain(socket, accepted.accept)) throw remoteError('remote_session_accept_send_failed')
 
       if (context.handshakeTimer) clearTimeout(context.handshakeTimer)
+
       context.authenticated = true
       context.device = device
       context.session = accepted.session
@@ -1066,6 +1120,7 @@ export function createRemoteGateway({
 
     server = nextServer
     webSocketServer = nextWebSocketServer
+    activeSessionManager?.resume?.()
     runtime = {
       running: true,
       enabled: true,
@@ -1091,6 +1146,15 @@ export function createRemoteGateway({
     pairingAttempts.clear()
 
     for (const deviceId of [...activeSocketsByDeviceId.keys()]) closeDeviceSockets(deviceId, 4000, 'gateway_stopped')
+    // Invalidate pending commands before waiting for writer cleanup. Socket disconnect alone
+    // must not stop accepted turns, but explicit gateway shutdown must cancel them.
+    try {
+      await activeSessionManager?.closeAll?.()
+    } catch (error) {
+      activeSessionManager?.resume?.()
+      throw error
+    }
+
     const closingWss = webSocketServer
     const closingServer = server
     webSocketServer = null
@@ -1129,14 +1193,23 @@ export function createRemoteGateway({
 
   async function configureNow(config = {}) {
     const settings = normalizeRemoteSettings(config)
+    const previousSettings = configuredSettings
     configuredSettings = { ...settings }
     const sameListener = runtime.running && runtime.host === settings.host && runtime.port === settings.port
     if (!settings.enabled) {
-      await stopNow({ clearEnabled: true })
+      try {
+        await stopNow({ clearEnabled: true })
+      } catch (error) {
+        configuredSettings = previousSettings
+        throw error
+      }
       return getStatus()
     }
 
     if (sameListener) {
+
+      activeSessionManager?.resume?.()
+
       runtime = {
         ...runtime,
         enabled: true,
@@ -1184,6 +1257,9 @@ export function createRemoteGateway({
     if (removed) {
       await writeDevices({ version: REMOTE_PROTOCOL_VERSION, devices: nextDevices })
       closeDeviceSockets(normalizedId, 4001, 'device_revoked')
+
+      await activeSessionManager?.revokeDevice?.(normalizedId)
+
       await appendAudit('remote.device.revoked', { deviceId: normalizedId, result: 'ok' })
       notifyStatus()
     }
@@ -1218,6 +1294,13 @@ export function createRemoteGateway({
     getStatus,
     getPublicSettings: () => sanitizeRemoteSettingsForConfig(configuredSettings),
     broadcastEvent: (event, payload = {}) => broadcastEncryptedEvent(event, payload),
+    sendEventToDevice: (deviceId, event, payload = {}) => sendEncryptedEventToDevice(deviceId, event, payload),
+    setSessionManager: (nextSessionManager = null) => {
+      activeSessionManager = nextSessionManager && typeof nextSessionManager === 'object' ? nextSessionManager : null
+      return { ok: true, capabilities: getCapabilities() }
+    },
+    handleRendererEvent: (input = {}) => activeSessionManager?.handleRendererEvent(input) || { ok: false, error: 'remote_session_manager_unavailable' },
+    handleWindowClosed: (windowRef = '') => activeSessionManager?.handleWindowClosed(windowRef) || { ok: true },
     createPairing: () => queue(() => createPairing()),
     listDevices,
     revokeDevice: (deviceId) => queue(() => revokeDevice(deviceId)),

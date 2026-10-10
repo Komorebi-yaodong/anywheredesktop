@@ -4,6 +4,7 @@ import https from 'node:https'
 import { once } from 'node:events'
 import { WebSocket } from 'ws'
 import { createRemoteGateway } from '../main/core/remote/index.js'
+import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
 import {
   completeDevicePairing,
   completeSessionHello,
@@ -133,9 +134,25 @@ async function connectEncrypted({ endpoint, rootSecret, deviceId, desktopId }) {
 }
 
 async function sendEncryptedRequest({ socket, session, requestId, method, params = {} }) {
-  const responsePromise = waitForMessage(socket, (message) => message.type === 'remote.encrypted')
+  const events = []
+  const response = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { cleanup(); reject(new Error('rpc_timeout')) }, 5000)
+    const onMessage = (raw) => {
+      try {
+        const frame = JSON.parse(raw.toString())
+        if (frame.type !== 'remote.encrypted') return
+        const message = session.decrypt(frame)
+        if (message.kind === 'response' && message.requestId === requestId) { cleanup(); resolve(message) }
+        else events.push(message)
+      } catch (error) { cleanup(); reject(error) }
+    }
+    const cleanup = () => { clearTimeout(timer); socket.off('message', onMessage) }
+    socket.on('message', onMessage)
+  })
   socket.send(JSON.stringify(session.encrypt({ kind: 'request', requestId, method, params })))
-  return session.decrypt(await responsePromise)
+  const result = await response
+  result.events = events
+  return result
 }
 
 async function main() {
@@ -207,6 +224,30 @@ async function main() {
     onPairingCreated: (payload) => { observedPairing = payload },
     logger: { log() {}, warn() {}, error() {} }
   })
+
+  const writerCommands = []
+  const writerWindows = [{ id: 'window-fixture', type: 'window', conversationId: 'conversation-gateway-fixture-0001', rendererReady: true, remoteHidden: false }]
+  const sessionManager = createRemoteSessionManager({
+    getConfig: async () => ({ config: {} }),
+    openConversation: async () => { throw new Error('existing_writer_expected') },
+    openWindow: async () => { throw new Error('existing_writer_expected') },
+    listWindows: () => writerWindows,
+    getWindowByRef: () => ({ isDestroyed: () => false }),
+    revealRemoteConversationWindow: () => ({ ok: true }),
+    broadcastToDevice: (deviceId, event, payload) => gateway.sendEventToDevice(deviceId, event, payload),
+    dispatchRemoteCommandToWindow: async (windowRef, command) => {
+      writerCommands.push(command)
+      if (command.type === 'conversation.cancel') {
+        sessionManager.handleRendererEvent({ windowRef, payload: {
+          conversationId: command.conversationId, requestId: command.targetRequestId,
+          event: 'assistant.cancelled', payload: { revision: 4 }
+        } })
+      }
+      return { ok: true }
+    }
+  })
+  gateway.setSessionManager(sessionManager)
+
 
   try {
     const started = await gateway.configure({ remote: { enabled: true, host: '127.0.0.1', port } })
@@ -417,11 +458,45 @@ async function main() {
       'conversation.list'
     ])
 
+    assert.ok(welcome.payload.capabilities.includes('conversation.request.get'))
+    const remoteRequestId = 'request-send-gateway-fixture'
+    const sendInput = { conversationId: 'conversation-gateway-fixture-0001', text: 'Synthetic message only' }
+    const sent = await sendEncryptedRequest({ socket, session, requestId: remoteRequestId, method: 'conversation.send', params: sendInput })
+    assert.equal(sent.ok, true)
+    assert.equal(sent.events[0].event, 'conversation.command.accepted')
+    assert.equal(writerCommands[0].text, sendInput.text)
+    const deltaPromise = waitForMessage(socket, (frame) => frame.type === 'remote.encrypted')
+    gateway.handleRendererEvent({ windowRef: 'window-fixture', payload: {
+      event: 'assistant.delta', requestId: remoteRequestId, conversationId: sendInput.conversationId,
+      payload: { textDelta: 'Fixture reply', segmentId: 'bubble-1' }
+    } })
+    assert.equal(session.decrypt(await deltaPromise).payload.textDelta, 'Fixture reply')
+    const disconnected = once(socket, 'close')
+    socket.close()
+    await disconnected
+    session.close()
+    // Accepted work continues without a transport; recovery state is owned by this paired device.
+    gateway.handleRendererEvent({ windowRef: 'window-fixture', payload: {
+      event: 'assistant.completed', requestId: remoteRequestId, conversationId: sendInput.conversationId,
+      payload: { revision: 4 }
+    } })
+    const reconnected = await connectEncrypted({ endpoint, rootSecret: mobilePairing2.rootSecret, deviceId, desktopId: qr2.desktopId })
+    const recovered = await sendEncryptedRequest({ ...reconnected, requestId: 'request-recover-fixture', method: 'conversation.request.get', params: { requestId: remoteRequestId } })
+    assert.equal(recovered.result.terminal, true)
+    assert.equal(recovered.result.text, 'Fixture reply')
+    const retry = await sendEncryptedRequest({ ...reconnected, requestId: remoteRequestId, method: 'conversation.send', params: sendInput })
+    assert.equal(retry.result.duplicate, true)
+    assert.equal(writerCommands.filter((command) => command.type === 'conversation.send').length, 1)
+    await sendEncryptedRequest({ ...reconnected, requestId: 'request-revoke-active', method: 'conversation.send', params: sendInput })
+
+
+    const revokedClose = once(reconnected.socket, 'close')
     const revoked = await gateway.revokeDevice(deviceId)
     assert.equal(revoked.removed, true)
-    const [closeCode] = await once(socket, 'close')
+    const [closeCode] = await revokedClose
     assert.equal(closeCode, 4001)
-    session.close()
+    reconnected.session.close()
+    assert.equal(writerCommands.at(-1).type, 'conversation.cancel')
 
     const audit = await gateway.getAuditLog()
     assert.ok(audit.entries.some((entry) => entry.type === 'remote.device.paired'))

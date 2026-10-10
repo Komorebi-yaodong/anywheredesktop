@@ -116,7 +116,9 @@ function run() {
   })
   assert.equal(openedPairStart.pairingCode, '123456')
   assert.equal(openedPairStart.device.deviceId, 'device-remote-v2-fixture-0001')
-  const tamperedPairStart = { ...pairStart, tag: `${pairStart.tag.slice(0, -1)}${pairStart.tag.endsWith('A') ? 'B' : 'A'}` }
+  const tamperedTag = Buffer.from(pairStart.tag, 'base64url')
+  tamperedTag[0] ^= 0x01
+  const tamperedPairStart = { ...pairStart, tag: tamperedTag.toString('base64url') }
   expectCode(() => openDesktopPairingStart({
     desktopPrivateKey: fixture.desktop.privateKey,
     desktopPublicKey: fixture.desktop.publicKey,
@@ -185,7 +187,9 @@ function run() {
     desktopId: fixture.context.desktopId
   })
   const tampered = failureConnection.deviceSession.encrypt({ kind: 'request', method: 'remote.status.get', requestId: 'request-tampered-0001' })
-  tampered.tag = `${tampered.tag.slice(0, -1)}${tampered.tag.endsWith('A') ? 'B' : 'A'}`
+  const tamperedFrameTag = Buffer.from(tampered.tag, 'base64url')
+  tamperedFrameTag[0] ^= 0x01
+  tampered.tag = tamperedFrameTag.toString('base64url')
   expectCode(() => failureConnection.accepted.session.decrypt(tampered), 'remote_frame_auth_failed')
   const nextFrame = failureConnection.deviceSession.encrypt({ kind: 'request', method: 'remote.status.get', requestId: 'request-after-tamper-0001' })
   expectCode(() => failureConnection.accepted.session.decrypt(nextFrame), 'remote_frame_out_of_order')

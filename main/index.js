@@ -34,6 +34,8 @@ import {
   toggleAlwaysOnTop,
   handleFastInputWindowEvent,
   appendPayloadToWindow,
+  dispatchRemoteCommandToWindow,
+  revealRemoteConversationWindow,
   setMainWindowCloseBehavior,
   setWindowMetadataNotifier,
   updateConversationWindowMetadata,
@@ -59,6 +61,7 @@ import * as updaterApi from './core/updater.js'
 import * as compactApi from './core/compact.js'
 import { createRemoteGateway } from './core/remote/index.js'
 import { createRemoteConversationReadService } from './core/remote/conversationRead.js'
+import { createRemoteSessionManager } from './core/remote/sessionManager.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -66,6 +69,10 @@ import { startTaskScheduler } from './core/task_scheduler.js'
 
 let appTray = null
 let appQuitStarted = false
+
+let remoteShutdownPromise = null
+let remoteShutdownCompleted = false
+
 const remoteConversationReadService = createRemoteConversationReadService({
   getConfig: dataApi.getConfig,
   listLocalConversations: conversationApi.listLocalConversations,
@@ -96,7 +103,23 @@ const remoteGateway = createRemoteGateway({
   }
 })
 
+const remoteSessionManager = createRemoteSessionManager({
+  getConfig: dataApi.getConfig,
+  openConversation: conversationApi.openConversation,
+  listWindows,
+  openWindow,
+  getWindowByRef,
+  dispatchRemoteCommandToWindow,
+  revealRemoteConversationWindow,
+  broadcastToDevice: (deviceId, event, payload) => remoteGateway.sendEventToDevice(deviceId, event, payload)
+})
+remoteGateway.setSessionManager(remoteSessionManager)
+
+
 setWindowMetadataNotifier((change = {}) => {
+  if (change.reason === 'closed' && typeof change.windowRef === 'string' && change.windowRef) {
+    remoteGateway.handleWindowClosed(change.windowRef)
+  }
   const windows = (Array.isArray(change.windows) ? change.windows : [])
     .filter((item) => typeof item?.conversationId === 'string' && item.conversationId)
     .map((item) => ({
@@ -109,7 +132,9 @@ setWindowMetadataNotifier((change = {}) => {
       generating: item.generating === true,
       compacting: item.compacting === true,
       readOnly: item.readOnly === true,
-      leasePending: item.leasePending === true
+      leasePending: item.leasePending === true,
+      rendererReady: item.rendererReady === true,
+      hidden: item.remoteHidden === true
     }))
   remoteGateway.broadcastEvent('conversation.windows.changed', {
     reason: typeof change.reason === 'string' ? change.reason : 'updated',
@@ -585,15 +610,20 @@ async function triggerPromptShortcut(promptKey = '') {
 
 
 function beginAppQuit() {
-  if (appQuitStarted) return
+  if (appQuitStarted) return remoteShutdownPromise
   appQuitStarted = true
-  markAppQuitting(true)
-  clearDesktopShortcuts()
-  systemApi.stopClipboardWatcher()
-  remoteGateway.stop().catch((error) => {
-    console.error('remote-gateway:stop-failed', error?.message || error)
+  remoteShutdownPromise = remoteGateway.stop().then(() => {
+    remoteShutdownCompleted = true
+    markAppQuitting(true)
+    clearDesktopShortcuts()
+    systemApi.stopClipboardWatcher()
+    dataApi.setWindowChannelNotifier(null)
+  }).catch(() => {
+    console.error('remote-gateway:stop-failed')
+    // No global runtime teardown happened yet; the app stays fully usable for a retry.
+    appQuitStarted = false
   })
-  dataApi.setWindowChannelNotifier(null)
+  return remoteShutdownPromise
 }
 
 function buildTrayMenu() {
@@ -809,8 +839,11 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (remoteShutdownCompleted) return
+  event.preventDefault()
   beginAppQuit()
+  remoteShutdownPromise?.then(() => { if (remoteShutdownCompleted) app.quit() })
 })
 
 app.on('window-all-closed', () => {

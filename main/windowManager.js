@@ -475,13 +475,12 @@ function resolvePromptDisplayName(payload = null, promptCode = '__DEFAULT__') {
   if (filename) return filename
 
   return 'AI'
+}
+
 function normalizeConversationMetadataId(value = '') {
   const normalized = typeof value === 'string' ? value.trim() : ''
   if (!/^[A-Za-z0-9._:-]{16,160}$/.test(normalized)) return ''
   return normalized
-}
-
-
 }
 
 function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, promptCode = '__DEFAULT__', promptConfig = null) {
@@ -509,7 +508,9 @@ function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, pr
     generating: false,
     compacting: false,
     readOnly: false,
-    leasePending: Boolean(conversationDescriptor?.conversationId)
+    leasePending: Boolean(conversationDescriptor?.conversationId),
+    remoteHidden: payload?.remoteHidden === true,
+    rendererReady: false
   }
 }
 
@@ -747,7 +748,10 @@ function avoidDialogWindowOverlap(bounds) {
 function resolveDialogWindowConfig(baseConfig, fullConfig = {}, payload = null) {
   const promptCode = resolvePromptCode(payload)
   const promptConfig = resolvePromptConfig(fullConfig, payload, promptCode)
-  const placement = avoidDialogWindowOverlap(calculateDialogWindowBounds(fullConfig, payload, promptCode, promptConfig))
+  const remoteHidden = payload?.remoteHidden === true
+  const placement = remoteHidden
+    ? calculateDialogWindowBounds(fullConfig, payload, promptCode, promptConfig)
+    : avoidDialogWindowOverlap(calculateDialogWindowBounds(fullConfig, payload, promptCode, promptConfig))
   const isDarkMode = resolveEffectiveDarkMode(fullConfig)
   const backgroundColor = isDarkMode ? 'rgba(33, 33, 33, 1)' : 'rgba(255, 255, 253, 1)'
   const alwaysOnTop =
@@ -774,7 +778,14 @@ function resolveDialogWindowConfig(baseConfig, fullConfig = {}, payload = null) 
         transparent: false,
         hasShadow: true,
         backgroundColor,
-        alwaysOnTop
+        alwaysOnTop,
+        ...(remoteHidden
+          ? {
+              skipTaskbar: true,
+              alwaysOnTop: false,
+              focusable: false
+            }
+          : {})
       }
     }
   }
@@ -812,6 +823,7 @@ async function buildWindowInitMessage(payload = {}, senderId = '', fullConfig = 
         ? payload.tempPromptConfig
         : null,
     senderId,
+    remoteHidden: payload?.remoteHidden === true,
     isAlwaysOnTop: payload?.isAlwaysOnTop ?? promptConfig?.isAlwaysOnTop ?? true
   }
 }
@@ -864,6 +876,8 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   win.__didFinishLoad = false
   win.__readyToShow = false
   win.__preloadOnly = Boolean(initMessage?.preloadOnly)
+  win.__remoteHidden = Boolean(initMessage?.remoteHidden)
+  if (win.__remoteHidden) win.webContents.setBackgroundThrottling(false)
 
   win.on('ready-to-show', () => {
     win.__readyToShow = true
@@ -873,7 +887,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
       // ignore suppress blur mark failure during ready-to-show
     }
 
-    if (win.__preloadOnly === true) {
+    if (win.__preloadOnly === true || win.__remoteHidden === true) {
       return
     }
 
@@ -1369,6 +1383,56 @@ export async function appendPayloadToWindow(windowRef = '', payload = null, opti
   }
 }
 
+export async function dispatchRemoteCommandToWindow(windowRef = '', command = {}) {
+  const resolved = resolveActionWindow(windowRef)
+  if (!resolved.ok) return { ok: false, error: resolved.error, windowRef: resolved.windowRef }
+  if (!command || typeof command !== 'object' || Array.isArray(command)) {
+    return { ok: false, error: 'remote_command_required', windowRef: resolved.windowRef }
+  }
+  const isReady = await waitForWindowReady(resolved.windowRef, 5000)
+  if (!isReady || resolved.win.isDestroyed()) {
+    return { ok: false, error: 'window_not_ready', windowRef: resolved.windowRef }
+  }
+  try {
+    resolved.win.webContents.send(WINDOW_EVENT_CHANNEL, {
+      sourceId: 'remote-session-manager',
+      target: resolved.windowRef,
+      event: 'remote:command',
+      payload: command,
+      timestamp: Date.now()
+    })
+    return { ok: true, windowRef: resolved.windowRef }
+  } catch {
+    return { ok: false, error: 'target_send_failed', windowRef: resolved.windowRef }
+  }
+}
+
+export function revealRemoteConversationWindow(windowRef = '') {
+  const resolved = resolveActionWindow(windowRef)
+  if (!resolved.ok) return { ok: false, error: resolved.error, windowRef: resolved.windowRef }
+  try {
+    resolved.win.__remoteHidden = false
+
+    resolved.win.webContents.send(WINDOW_EVENT_CHANNEL, {
+      sourceId: 'remote-session-manager', target: resolved.windowRef, event: 'remote:command',
+      payload: { type: 'remote.revealed', conversationId: windowMetadataStore.get(resolved.windowRef)?.conversationId || '' },
+      timestamp: Date.now()
+    })
+
+    resolved.win.setSkipTaskbar?.(false)
+    resolved.win.setFocusable?.(true)
+    activateWindow(resolved.win)
+    const metadata = windowMetadataStore.get(resolved.windowRef)
+    if (metadata) {
+      windowMetadataStore.set(resolved.windowRef, { ...metadata, remoteHidden: false })
+      notifyWindowMetadataChanged('revealed', resolved.windowRef)
+    }
+    return { ok: true, windowRef: resolved.windowRef, visible: resolved.win.isVisible() }
+  } catch {
+    return { ok: false, error: 'remote_window_reveal_failed', windowRef: resolved.windowRef }
+  }
+}
+
 export function minimizeWindow(windowRef = '') {
   const resolved = resolveActionWindow(windowRef)
   if (!resolved.ok) {
@@ -1593,7 +1657,8 @@ export function updateConversationWindowMetadata(windowRef = '', input = {}) {
     generating: source.generating === true,
     compacting: source.compacting === true,
     readOnly: source.readOnly === true,
-    leasePending: source.leasePending === true
+    leasePending: source.leasePending === true,
+    rendererReady: source.rendererReady === true
   }
   windowMetadataStore.set(normalizedRef, next)
   notifyWindowMetadataChanged('updated', normalizedRef)

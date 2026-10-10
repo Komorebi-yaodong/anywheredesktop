@@ -237,6 +237,19 @@ async function main() {
     broadcastToDevice: (deviceId, event, payload) => gateway.sendEventToDevice(deviceId, event, payload),
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       writerCommands.push(command)
+      if (command.type === 'conversation.config.get' || command.type === 'conversation.config.patch') {
+        sessionManager.handleRendererEvent({ windowRef, payload: {
+          conversationId: command.conversationId, requestId: command.requestId,
+          event: 'conversation.config.result',
+          payload: {
+            revision: 6,
+            patched: command.patch ? Object.keys(command.patch) : [],
+            config: { model: command.patch?.model || 'provider|model-a', reasoningEffort: command.patch?.reasoningEffort || 'default', voice: '', mcpServerIds: [], skillIds: [], systemPrompt: command.patch?.systemPrompt || 'session prompt', compact: { triggerRatio: 0.8 } },
+            options: { models: [{ value: 'provider|model-a', label: 'Model A', api_key: 'MUST_NOT_LEAK' }], reasoningEfforts: ['default', 'high'], voices: [], mcpServers: [], skills: [] }
+          }
+        } })
+      }
+
       if (command.type === 'conversation.message.edit') {
         sessionManager.handleRendererEvent({ windowRef, payload: {
           conversationId: command.conversationId, requestId: command.requestId,
@@ -495,6 +508,30 @@ async function main() {
     const retry = await sendEncryptedRequest({ ...reconnected, requestId: remoteRequestId, method: 'conversation.send', params: sendInput })
     assert.equal(retry.result.duplicate, true)
     assert.equal(writerCommands.filter((command) => command.type === 'conversation.send').length, 1)
+    assert.ok(welcome.payload.capabilities.includes('conversation.config.get'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.config.patch'))
+    const configGetId = 'request-config-get-gateway'
+    const configGet = await sendEncryptedRequest({
+      ...reconnected, requestId: configGetId, method: 'conversation.config.get', params: { conversationId: sendInput.conversationId }
+    })
+    assert.equal(configGet.ok, true)
+    const configGetState = await sendEncryptedRequest({
+      ...reconnected, requestId: 'request-config-get-state', method: 'conversation.request.get', params: { requestId: configGetId }
+    })
+    assert.equal(configGetState.result.result.config.model, 'provider|model-a')
+    assert.equal(JSON.stringify(configGetState).includes('MUST_NOT_LEAK'), false)
+    const configPatchId = 'request-config-patch-gateway'
+    await sendEncryptedRequest({
+      ...reconnected, requestId: configPatchId, method: 'conversation.config.patch',
+      params: { conversationId: sendInput.conversationId, patch: { model: 'provider|model-a', reasoningEffort: 'high', systemPrompt: 'session only' } }
+    })
+    const configPatchState = await sendEncryptedRequest({
+      ...reconnected, requestId: 'request-config-patch-state', method: 'conversation.request.get', params: { requestId: configPatchId }
+    })
+    assert.equal(configPatchState.result.result.config.reasoningEffort, 'high')
+    assert.equal(configPatchState.result.result.config.systemPrompt, 'session only')
+
+
     assert.ok(welcome.payload.capabilities.includes('conversation.message.edit'))
     assert.ok(welcome.payload.capabilities.includes('conversation.message.delete'))
     assert.ok(welcome.payload.capabilities.includes('conversation.message.reask'))

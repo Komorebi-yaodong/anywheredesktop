@@ -6,7 +6,7 @@ const MAX_REQUESTS = 256
 const MAX_RECOVERY_CHARS = 64 * 1024
 const TERMINAL_EVENTS = new Set([
   'assistant.completed', 'assistant.cancelled', 'assistant.failed',
-  'conversation.operation.completed', 'conversation.operation.failed'
+  'conversation.operation.completed', 'conversation.operation.failed', 'conversation.config.result'
 ])
 const RENDERER_EVENTS = new Set([
   'conversation.command.acknowledged', 'assistant.started', 'assistant.delta', ...TERMINAL_EVENTS
@@ -28,6 +28,90 @@ function parameters(input, allowedKeys) {
   return input
 }
 
+const CONFIG_PATCH_KEYS = new Set(['model', 'reasoningEffort', 'voice', 'mcpServerIds', 'skillIds', 'systemPrompt', 'compact'])
+const COMPACT_PATCH_KEYS = new Set(['autoCompactEnabled', 'triggerRatio', 'contextLength', 'keepRecentRounds', 'hideCompactedMessages', 'compactPrompt'])
+
+function stringArray(value, field) {
+  if (!Array.isArray(value) || value.length > 128) throw remoteError('remote_session_config_invalid')
+  const list = value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
+  if (list.some((item) => item.length > 160)) throw remoteError('remote_session_config_invalid')
+  return [...new Set(list)]
+}
+
+function normalizeConfigPatch(value) {
+  const source = object(value)
+  for (const key of Object.keys(source)) {
+    if (!CONFIG_PATCH_KEYS.has(key)) throw remoteError('remote_parameter_unknown')
+  }
+  const patch = {}
+  if (Object.hasOwn(source, 'model')) patch.model = text(source.model, 320).trim()
+  if (Object.hasOwn(source, 'reasoningEffort')) patch.reasoningEffort = text(source.reasoningEffort, 32).trim()
+  if (Object.hasOwn(source, 'voice')) patch.voice = source.voice == null ? '' : text(source.voice, 160).trim()
+  if (Object.hasOwn(source, 'mcpServerIds')) patch.mcpServerIds = stringArray(source.mcpServerIds, 'mcpServerIds')
+  if (Object.hasOwn(source, 'skillIds')) patch.skillIds = stringArray(source.skillIds, 'skillIds')
+  if (Object.hasOwn(source, 'systemPrompt')) {
+    if (typeof source.systemPrompt !== 'string' || source.systemPrompt.length > 256 * 1024) throw remoteError('remote_session_config_invalid')
+    patch.systemPrompt = source.systemPrompt
+  }
+  if (Object.hasOwn(source, 'compact')) {
+    const compact = object(source.compact)
+    for (const key of Object.keys(compact)) if (!COMPACT_PATCH_KEYS.has(key)) throw remoteError('remote_parameter_unknown')
+    patch.compact = {}
+    if (Object.hasOwn(compact, 'autoCompactEnabled')) patch.compact.autoCompactEnabled = compact.autoCompactEnabled === true
+    if (Object.hasOwn(compact, 'hideCompactedMessages')) patch.compact.hideCompactedMessages = compact.hideCompactedMessages === true
+    if (Object.hasOwn(compact, 'triggerRatio')) {
+      const number = Number(compact.triggerRatio)
+      if (!Number.isFinite(number) || number < 0.1 || number > 0.99) throw remoteError('remote_session_config_invalid')
+      patch.compact.triggerRatio = number
+    }
+    if (Object.hasOwn(compact, 'contextLength')) {
+      const number = Math.floor(Number(compact.contextLength))
+      if (!Number.isFinite(number) || number < 4096 || number > 10_000_000) throw remoteError('remote_session_config_invalid')
+      patch.compact.contextLength = number
+    }
+    if (Object.hasOwn(compact, 'keepRecentRounds')) {
+      const number = Math.floor(Number(compact.keepRecentRounds))
+      if (!Number.isFinite(number) || number < 0 || number > 100) throw remoteError('remote_session_config_invalid')
+      patch.compact.keepRecentRounds = number
+    }
+    if (Object.hasOwn(compact, 'compactPrompt')) {
+      if (typeof compact.compactPrompt !== 'string' || compact.compactPrompt.length > 128 * 1024) throw remoteError('remote_session_config_invalid')
+      patch.compact.compactPrompt = compact.compactPrompt
+    }
+  }
+  if (!Object.keys(patch).length) throw remoteError('remote_session_config_patch_empty')
+  return patch
+}
+
+function sanitizeConfigResult(source = {}) {
+  const config = object(source.config)
+  const options = object(source.options)
+  return {
+    revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
+    patched: stringArray(Array.isArray(source.patched) ? source.patched : [], 'patched'),
+    config: {
+      model: text(config.model, 320), reasoningEffort: text(config.reasoningEffort, 32), voice: text(config.voice, 160),
+      mcpServerIds: stringArray(config.mcpServerIds || [], 'mcpServerIds'), skillIds: stringArray(config.skillIds || [], 'skillIds'),
+      systemPrompt: text(config.systemPrompt, 256 * 1024), compact: {
+        autoCompactEnabled: config.compact?.autoCompactEnabled !== false,
+        triggerRatio: Number(config.compact?.triggerRatio) || 0.9,
+        contextLength: Math.max(0, Math.floor(Number(config.compact?.contextLength) || 0)),
+        keepRecentRounds: Math.max(0, Math.floor(Number(config.compact?.keepRecentRounds) || 0)),
+        hideCompactedMessages: config.compact?.hideCompactedMessages !== false,
+        compactPrompt: text(config.compact?.compactPrompt, 128 * 1024)
+      }
+    },
+    options: {
+      models: (Array.isArray(options.models) ? options.models : []).slice(0, 1000).map((item) => ({ value: text(item?.value, 320), label: text(item?.label, 240) })),
+      reasoningEfforts: stringArray(options.reasoningEfforts || [], 'reasoningEfforts'),
+      voices: stringArray(options.voices || [], 'voices'),
+      mcpServers: (Array.isArray(options.mcpServers) ? options.mcpServers : []).slice(0, 256).map((item) => ({ id: text(item?.id, 160), name: text(item?.name, 240) })),
+      skills: (Array.isArray(options.skills) ? options.skills : []).slice(0, 512).map((item) => ({ id: text(item?.id, 160), name: text(item?.name, 240) }))
+    }
+  }
+}
+
+
 function sanitizeEvent(event, payload) {
   const source = object(payload)
   if (event === 'assistant.delta') return {
@@ -40,6 +124,7 @@ function sanitizeEvent(event, payload) {
     code: /^remote_[a-z0-9_]+$/.test(source.code) ? source.code : 'remote_operation_failed'
   }
   if (event === 'assistant.started') return { startedAt: text(source.startedAt, 80) }
+  if (event === 'conversation.config.result') return sanitizeConfigResult(source)
   if (TERMINAL_EVENTS.has(event)) return {
     completedAt: text(source.completedAt, 80), revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
     operation: text(source.operation, 40), uiMessageId: text(source.uiMessageId, 160)
@@ -324,6 +409,63 @@ export function createRemoteSessionManager({
   }
 
 
+  async function configCommand({ deviceId, requestId, params = {}, operation } = {}) {
+    const allowed = operation === 'conversation.config.patch' ? ['conversationId', 'patch'] : ['conversationId']
+    parameters(params, allowed)
+    const conversationId = id(params.conversationId, 'conversationId')
+    if (/\.(json|db)$/i.test(conversationId)) throw remoteError('remote_conversation_id_invalid')
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const safeRequestId = id(requestId, 'requestId')
+    const patch = operation === 'conversation.config.patch' ? normalizeConfigPatch(params.patch) : null
+    const epoch = generation
+    const check = () => assertActive(epoch, safeDeviceId)
+    check()
+    const key = requestKey(safeDeviceId, safeRequestId)
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation, conversationId, patch })).digest('hex')
+    const previous = requests.get(key)
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
+      return { ...(await previous.dispatched), duplicate: true }
+    }
+    pruneRequests()
+    const record = {
+      deviceId: safeDeviceId, requestId: safeRequestId, conversationId, fingerprint,
+      event: 'conversation.command.pending', eventSequence: 0, terminal: false,
+      text: '', reasoning: '', truncated: false, updatedAtMs: Date.now(), windowRef: ''
+    }
+    requests.set(key, record)
+    record.dispatched = serialize(conversationId, async () => {
+      try {
+        const hadSession = Boolean(existingSession(conversationId))
+        const session = await ensureSession(conversationId, check)
+        check()
+        const item = windowItem(session.windowRef)
+        if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
+        session.activeRequestId = safeRequestId
+        session.activeDeviceId = safeDeviceId
+        record.windowRef = session.windowRef
+        const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+          type: operation, requestId: safeRequestId, deviceId: safeDeviceId,
+          conversationId, ...(patch ? { patch } : {})
+        })
+        if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+        const result = { ok: true, operation, conversationId, windowId: session.windowRef, hidden: session.hidden, created: !hadSession }
+        record.result = result
+        if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
+        return result
+      } catch (error) {
+        const session = sessions.get(conversationId)
+        if (session?.activeRequestId === safeRequestId && session.activeDeviceId === safeDeviceId) {
+          session.activeRequestId = ''; session.activeDeviceId = ''
+        }
+        publish(record, 'conversation.operation.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
+        throw error
+      }
+    })
+    return record.dispatched
+  }
+
+
   async function cancel({ deviceId, requestId, params = {} } = {}) {
     parameters(params, ['conversationId'])
     const conversationId = id(params.conversationId, 'conversationId')
@@ -440,6 +582,8 @@ export function createRemoteSessionManager({
     editMessage: (input) => mutate({ ...input, operation: 'conversation.message.edit' }),
     deleteMessage: (input) => mutate({ ...input, operation: 'conversation.message.delete' }),
     reaskMessage: (input) => mutate({ ...input, operation: 'conversation.message.reask' }),
+    getConfig: (input) => configCommand({ ...input, operation: 'conversation.config.get' }),
+    patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),
     cancel, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
     resume: () => { enabled = true },

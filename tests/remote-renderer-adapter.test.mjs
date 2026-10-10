@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import vm from 'node:vm'
-import { shallowRef, ref } from 'vue'
+import { shallowRef, ref, computed } from 'vue'
 
 const source = await fs.readFile(new URL('../render/window/App.vue', import.meta.url), 'utf8')
 const block = source.slice(source.indexOf('const activeRemoteCommand ='), source.indexOf('const stopConversationLeaseHeartbeat ='))
 assert.ok(block.includes('persistRemoteTranscript'))
 const events = [], actions = []
 const context = {
-  shallowRef, ref, console, setTimeout, clearTimeout,
+  shallowRef, ref, computed, console, setTimeout, clearTimeout,
   window: { api: { emitRemoteRendererEvent: async (event) => { events.push(structuredClone(event)); actions.push(event.event) } } },
   currentConversationStorage: ref({ conversationId: 'conversation-renderer-fixture', revision: 0 }),
   isWindowBootstrapped: ref(true), isClosingWindow: ref(false), loading: ref(false), compacting: ref(false),
-  isPreparingSend: ref(false), isMcpLoading: ref(false), chat_show: ref([]), messageIdCounter: ref(1),
+  isPreparingSend: ref(false), isMcpLoading: ref(false), chat_show: ref([]),
   sessionMutationVersion: 0, lastPersistedSessionVersion: 0,
   ensureConversationWriteAccess: () => true,
   clearScheduledAutoSave: () => {},
@@ -20,6 +20,24 @@ const context = {
   flushAppendBuffer: async () => actions.push('buffer-flush'),
   syncAutoCloseOnBlurListener: () => {},
   closePage: async () => actions.push('window-close'),
+  model: ref('provider|model-a'), modelMap: ref({ 'provider|model-a': {}, 'provider|model-b': {} }),
+  modelList: ref([{ value: 'provider|model-a', label: 'Model A' }, { value: 'provider|model-b', label: 'Model B' }]),
+  tempReasoningEffort: ref('default'), selectedVoice: ref(''),
+  sessionMcpServerIds: ref(['mcp-a']), tempSessionMcpServerIds: ref(['mcp-a']),
+  sessionSkillIds: ref(['Skill A']), tempSessionSkillIds: ref(['Skill A']),
+  currentSystemPrompt: ref('Old system'), sourcePromptConfig: ref({ prompt: 'Old system' }),
+  compactConfig: ref({ autoCompactEnabled: true, triggerRatio: 0.9, contextLength: 262144, keepRecentRounds: 3, hideCompactedMessages: true, compactPrompt: '' }),
+  currentConfig: ref({ voiceList: ['Voice A'], mcpServers: { 'mcp-a': { isActive: true, name: 'MCP A' }, 'mcp-b': { isActive: true, name: 'MCP B' } } }),
+  availableMcpServers: computed(() => [{ id: 'mcp-a', name: 'MCP A' }, { id: 'mcp-b', name: 'MCP B' }]),
+  allSkillsList: ref([{ id: 'skill-a', name: 'Skill A' }, { id: 'skill-b', name: 'Skill B' }]),
+  fullHistory: ref([{ role: 'system', content: 'Old system' }]),
+  messageIdCounter: ref(20),
+  syncHistoryFromFullHistory: () => {},
+  handleChangeModel: (value) => { context.model.value = value },
+  applyNormalizedSkillSelection: (values) => { context.sessionSkillIds.value = values.map((item) => item === 'skill-b' ? 'Skill B' : item); context.tempSessionSkillIds.value = [...context.sessionSkillIds.value]; return context.sessionSkillIds.value },
+  requestApplyMcpTools: async () => {},
+  normalizeCompactConfigState: (value) => ({ ...value }),
+
   cancelAskAI: () => { context.loading.value = false; actions.push('cancel') }
 }
 context.executeAutoSaveRequest = async (request) => {
@@ -116,6 +134,33 @@ await adapter.runRemoteConversationCommand({
 })
 assert.equal(events.at(-1).event, 'assistant.completed')
 assert.ok(events.some((item) => item.requestId === 'renderer-reask-last' && item.event === 'assistant.delta' && item.payload.textDelta === 'reasked'))
+
+
+const saveCountBeforeConfigGet = actions.filter((item) => item === 'remote-turn-finalized' || item === 'remote-config-patch').length
+await adapter.runRemoteConversationCommand({ type: 'conversation.config.get', conversationId: command.conversationId, requestId: 'renderer-config-get' })
+assert.equal(events.at(-1).event, 'conversation.config.result')
+assert.equal(events.at(-1).payload.config.model, 'provider|model-a')
+assert.equal(actions.filter((item) => item === 'remote-turn-finalized' || item === 'remote-config-patch').length, saveCountBeforeConfigGet)
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-config-patch',
+  patch: { model: 'provider|model-b', reasoningEffort: 'high', voice: 'Voice A', mcpServerIds: ['mcp-b'], skillIds: ['skill-b'], systemPrompt: 'Session prompt only', compact: { triggerRatio: 0.8, keepRecentRounds: 4 } }
+})
+assert.equal(events.at(-1).event, 'conversation.config.result')
+assert.equal(context.model.value, 'provider|model-b')
+assert.equal(context.currentSystemPrompt.value, 'Session prompt only')
+assert.equal(context.fullHistory.value[0].content, 'Session prompt only')
+assert.deepEqual(Array.from(context.sessionMcpServerIds.value), ['mcp-b'])
+assert.deepEqual(Array.from(context.sessionSkillIds.value), ['Skill B'])
+assert.equal(context.compactConfig.value.triggerRatio, 0.8)
+assert.equal(events.at(-1).payload.config.systemPrompt, 'Session prompt only')
+assert.equal(JSON.stringify(events.at(-1).payload).includes('api_key'), false)
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-config-invalid',
+  patch: { model: 'provider|missing' }
+})
+assert.equal(events.at(-1).event, 'conversation.operation.failed')
+assert.equal(events.at(-1).payload.code, 'remote_model_unavailable')
+assert.equal(context.model.value, 'provider|model-b', 'invalid patch rolls back')
 
 
 adapter.remoteHiddenWriter.value = true

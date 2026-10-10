@@ -113,6 +113,37 @@ async function run() {
   } })
 
 
+  const configFixture = fixture({ existing: true })
+  await assert.rejects(configFixture.manager.patchConfig({ deviceId: DEVICE, requestId: 'request-config-bad-1', params: {
+    conversationId: CID, patch: { compact: { unknown: true } }
+  } }), { code: 'remote_parameter_unknown' })
+  await assert.rejects(configFixture.manager.patchConfig({ deviceId: DEVICE, requestId: 'request-config-bad-2', params: {
+    conversationId: CID, patch: { compact: { triggerRatio: 2 } }
+  } }), { code: 'remote_session_config_invalid' })
+  const configAccepted = await configFixture.manager.patchConfig({ deviceId: DEVICE, requestId: 'request-config-patch', params: {
+    conversationId: CID,
+    patch: { model: 'provider|model', reasoningEffort: 'high', voice: '', mcpServerIds: ['mcp-1'], skillIds: ['Skill One'], systemPrompt: 'Session only', compact: { triggerRatio: 0.8, keepRecentRounds: 4 } }
+  } })
+  assert.equal(configAccepted.operation, 'conversation.config.patch')
+  assert.equal(configFixture.commands.at(-1).patch.systemPrompt, 'Session only')
+  configFixture.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-config-patch', event: 'conversation.config.result', payload: {
+      revision: 10, patched: ['model', 'systemPrompt'],
+      config: { model: 'provider|model', reasoningEffort: 'high', voice: '', mcpServerIds: ['mcp-1'], skillIds: ['Skill One'], systemPrompt: 'Session only', compact: { triggerRatio: 0.8, keepRecentRounds: 4, secret: 'NO' } },
+      options: { models: [{ value: 'provider|model', label: 'Model', api_key: 'NO' }], reasoningEfforts: ['default', 'high'], voices: [], mcpServers: [{ id: 'mcp-1', name: 'MCP', env: { SECRET: 'NO' } }], skills: [{ id: 'skill-1', name: 'Skill One', path: 'NO' }] }
+    }
+  } })
+  const configState = configFixture.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-config-patch' } })
+  assert.equal(configState.result.config.systemPrompt, 'Session only')
+  assert.equal(JSON.stringify(configState).includes('NO'), false)
+  await configFixture.manager.getConfig({ deviceId: DEVICE, requestId: 'request-config-get', params: { conversationId: CID } })
+  assert.equal(configFixture.commands.at(-1).type, 'conversation.config.get')
+  configFixture.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-config-get', event: 'conversation.config.result',
+    payload: { revision: 10, config: {}, options: {} }
+  } })
+
+
   const reused = fixture({ existing: true })
   await send(reused.manager)
   assert.equal(reused.opens.length, 0)

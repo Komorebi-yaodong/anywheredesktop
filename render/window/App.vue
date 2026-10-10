@@ -2688,10 +2688,53 @@ const normalizeRemoteCommand = (input = {}) => {
     text: typeof input.text === 'string' ? input.text : '',
     content: typeof input.content === 'string' ? input.content : '',
     uiMessageId: typeof input.uiMessageId === 'string' ? input.uiMessageId.trim() : '',
+    patch: input.patch && typeof input.patch === 'object' && !Array.isArray(input.patch) ? input.patch : null,
     autoApproveTools: input.autoApproveTools === true,
     targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : ''
   };
 };
+
+const REMOTE_REASONING_EFFORTS = ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max'];
+const getRemoteSessionConfigSnapshot = (patched = []) => ({
+  revision: currentConversationStorage.value?.revision || 0,
+  patched,
+  config: {
+    model: model.value || '',
+    reasoningEffort: tempReasoningEffort.value || 'default',
+    voice: selectedVoice.value || '',
+    mcpServerIds: [...sessionMcpServerIds.value],
+    skillIds: [...sessionSkillIds.value],
+    systemPrompt: currentSystemPrompt.value || '',
+    compact: {
+      autoCompactEnabled: compactConfig.value.autoCompactEnabled !== false,
+      triggerRatio: Number(compactConfig.value.triggerRatio) || 0.9,
+      contextLength: Number(compactConfig.value.contextLength) || 262144,
+      keepRecentRounds: Number(compactConfig.value.keepRecentRounds) || 0,
+      hideCompactedMessages: compactConfig.value.hideCompactedMessages !== false,
+      compactPrompt: compactConfig.value.compactPrompt || ''
+    }
+  },
+  options: {
+    models: modelList.value.map((item) => ({ value: item.value, label: item.label || item.value })),
+    reasoningEfforts: [...REMOTE_REASONING_EFFORTS],
+    voices: (currentConfig.value.voiceList || []).filter((item) => typeof item === 'string'),
+    mcpServers: availableMcpServers.value.map((item) => ({ id: item.id, name: item.name || item.id })),
+    skills: allSkillsList.value.map((item) => ({ id: item.id || item.name, name: item.name }))
+  }
+});
+
+const setSessionSystemPromptOnly = (nextPrompt) => {
+  currentSystemPrompt.value = nextPrompt;
+  const fullIndex = fullHistory.value.findIndex((item) => item?.role === 'system');
+  if (fullIndex >= 0) fullHistory.value[fullIndex].content = nextPrompt;
+  else fullHistory.value.unshift({ role: 'system', content: nextPrompt });
+  const uiIndex = chat_show.value.findIndex((item) => item?.role === 'system');
+  if (uiIndex >= 0) chat_show.value[uiIndex].content = nextPrompt;
+  else chat_show.value.unshift({ role: 'system', content: nextPrompt, id: messageIdCounter.value++ });
+  sourcePromptConfig.value = { ...(sourcePromptConfig.value || {}), prompt: nextPrompt };
+  syncHistoryFromFullHistory();
+};
+
 
 const persistRemoteTranscript = async (reason) => {
   clearScheduledAutoSave();
@@ -2731,6 +2774,80 @@ const runRemoteConversationCommand = async (input = {}) => {
     if (loading.value) cancelAskAI();
     return;
   }
+  if (['conversation.config.get', 'conversation.config.patch'].includes(command.type)) {
+    if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
+      emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
+      return;
+    }
+    activeRemoteCommand.value = command;
+    emitRemoteRendererEvent('conversation.command.acknowledged', command, { hidden: remoteHiddenWriter.value });
+    remoteCommandExecutionPromise = (async () => {
+      let terminalEvent = 'conversation.config.result';
+      let terminalPayload = getRemoteSessionConfigSnapshot();
+      const rollback = {
+        model: model.value, reasoningEffort: tempReasoningEffort.value, voice: selectedVoice.value,
+        mcpServerIds: [...sessionMcpServerIds.value], skillIds: [...sessionSkillIds.value],
+        systemPrompt: currentSystemPrompt.value, compact: { ...compactConfig.value }
+      };
+      try {
+        if (command.type === 'conversation.config.patch') {
+          const patch = command.patch && typeof command.patch === 'object' ? command.patch : {};
+          const patched = Object.keys(patch);
+          if (Object.hasOwn(patch, 'model')) {
+            if (!patch.model || !modelMap.value[patch.model]) throw new Error('remote_model_unavailable');
+            handleChangeModel(patch.model);
+          }
+          if (Object.hasOwn(patch, 'reasoningEffort')) {
+            if (!REMOTE_REASONING_EFFORTS.includes(patch.reasoningEffort)) throw new Error('remote_reasoning_effort_invalid');
+            tempReasoningEffort.value = patch.reasoningEffort;
+          }
+          if (Object.hasOwn(patch, 'voice')) {
+            const voices = currentConfig.value.voiceList || [];
+            if (patch.voice && !voices.includes(patch.voice)) throw new Error('remote_voice_unavailable');
+            selectedVoice.value = patch.voice || '';
+          }
+          if (Object.hasOwn(patch, 'skillIds')) {
+            const known = new Set(allSkillsList.value.flatMap((item) => [item.id, item.name]).filter(Boolean));
+            if (patch.skillIds.some((item) => !known.has(item))) throw new Error('remote_skill_unavailable');
+            applyNormalizedSkillSelection(patch.skillIds);
+          }
+          if (Object.hasOwn(patch, 'mcpServerIds')) {
+            const known = new Set(availableMcpServers.value.map((item) => item.id));
+            if (patch.mcpServerIds.some((item) => !known.has(item))) throw new Error('remote_mcp_unavailable');
+            sessionMcpServerIds.value = [...patch.mcpServerIds];
+            tempSessionMcpServerIds.value = [...patch.mcpServerIds];
+            await requestApplyMcpTools(false, 'remote-config-patch');
+            if (patch.mcpServerIds.some((item) => !sessionMcpServerIds.value.includes(item))) throw new Error('remote_mcp_apply_failed');
+          }
+          if (Object.hasOwn(patch, 'systemPrompt')) setSessionSystemPromptOnly(patch.systemPrompt);
+          if (Object.hasOwn(patch, 'compact')) compactConfig.value = normalizeCompactConfigState({ ...compactConfig.value, ...patch.compact });
+          const saved = await persistRemoteTranscript('remote-config-patch');
+          if (!saved) throw new Error('remote_conversation_save_failed');
+          terminalPayload = getRemoteSessionConfigSnapshot(patched);
+        }
+      } catch (error) {
+        if (rollback.model && modelMap.value[rollback.model]) handleChangeModel(rollback.model);
+        else model.value = rollback.model;
+        tempReasoningEffort.value = rollback.reasoningEffort;
+        selectedVoice.value = rollback.voice;
+        applyNormalizedSkillSelection(rollback.skillIds);
+        sessionMcpServerIds.value = [...rollback.mcpServerIds];
+        tempSessionMcpServerIds.value = [...rollback.mcpServerIds];
+        compactConfig.value = { ...rollback.compact };
+        setSessionSystemPromptOnly(rollback.systemPrompt);
+        await requestApplyMcpTools(false, 'remote-config-rollback').catch(() => {});
+        terminalEvent = 'conversation.operation.failed';
+        terminalPayload = { code: error?.message?.startsWith('remote_') ? error.message : 'remote_session_config_apply_failed' };
+      } finally {
+        finalizeRemoteCommand(terminalEvent, command, terminalPayload);
+      }
+    })();
+    try { await remoteCommandExecutionPromise; }
+    finally { remoteCommandExecutionPromise = null; syncAutoCloseOnBlurListener(); await flushAppendBuffer(); }
+    return;
+  }
+
+
   if (['conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask'].includes(command.type)) {
     const targetIndex = chat_show.value.findIndex((message) => message?.uiStorageId === command.uiMessageId);
     const target = targetIndex >= 0 ? chat_show.value[targetIndex] : null;

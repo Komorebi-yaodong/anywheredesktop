@@ -2686,6 +2686,8 @@ const normalizeRemoteCommand = (input = {}) => {
     requestId,
     conversationId,
     text: typeof input.text === 'string' ? input.text : '',
+    content: typeof input.content === 'string' ? input.content : '',
+    uiMessageId: typeof input.uiMessageId === 'string' ? input.uiMessageId.trim() : '',
     autoApproveTools: input.autoApproveTools === true,
     targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : ''
   };
@@ -2729,6 +2731,66 @@ const runRemoteConversationCommand = async (input = {}) => {
     if (loading.value) cancelAskAI();
     return;
   }
+  if (['conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask'].includes(command.type)) {
+    const targetIndex = chat_show.value.findIndex((message) => message?.uiStorageId === command.uiMessageId);
+    const target = targetIndex >= 0 ? chat_show.value[targetIndex] : null;
+    if (!target || ['system', 'tool', 'compaction'].includes(target.role)) {
+      emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_message_not_found' });
+      return;
+    }
+    if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
+      emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
+      return;
+    }
+    if (command.type === 'conversation.message.reask') {
+      const latestAssistantIndex = chat_show.value.findLastIndex((message) => message?.role === 'assistant');
+      const latestVisibleIndex = chat_show.value.findLastIndex((message) => message?.role === 'user' || message?.role === 'assistant');
+      if (target.role !== 'assistant' || targetIndex !== latestAssistantIndex || targetIndex !== latestVisibleIndex) {
+        emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_reask_latest_assistant_required' });
+        return;
+      }
+    }
+    if (command.type === 'conversation.message.edit' && (!command.content.trim() || command.content.length > 128 * 1024)) {
+      emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_message_invalid' });
+      return;
+    }
+    activeRemoteCommand.value = command;
+    emitRemoteRendererEvent('conversation.command.acknowledged', command, { hidden: remoteHiddenWriter.value });
+    remoteCommandExecutionPromise = (async () => {
+      let terminalEvent = 'conversation.operation.completed';
+      let terminalPayload = { operation: command.type, uiMessageId: command.uiMessageId };
+      try {
+        if (command.type === 'conversation.message.edit') {
+          if (!handleEditMessage(targetIndex, command.content)) throw new Error('remote_message_state_changed');
+        } else if (command.type === 'conversation.message.delete') {
+          if (!deleteMessage(targetIndex)) throw new Error('remote_message_state_changed');
+        } else {
+          await reaskAI(target.id, command);
+          terminalEvent = command.__remoteTerminalEvent || 'assistant.completed';
+          terminalPayload = command.__remoteTerminalPayload || {};
+          if (!command.__remoteStarted) { terminalEvent = 'assistant.failed'; terminalPayload = { code: 'remote_assistant_not_started' }; }
+        }
+      } catch (error) {
+        terminalEvent = command.type === 'conversation.message.reask' ? 'assistant.failed' : 'conversation.operation.failed';
+        terminalPayload = { code: error?.message?.startsWith('remote_') ? error.message : 'remote_message_operation_failed' };
+      } finally {
+        const saved = await persistRemoteTranscript('remote-message-operation').catch(() => false);
+        if (!saved) {
+          terminalEvent = command.type === 'conversation.message.reask' ? 'assistant.failed' : 'conversation.operation.failed';
+          terminalPayload = { code: 'remote_conversation_save_failed' };
+        }
+        finalizeRemoteCommand(terminalEvent, command, {
+          completedAt: new Date().toISOString(), revision: currentConversationStorage.value?.revision || 0,
+          ...terminalPayload
+        });
+      }
+    })();
+    try { await remoteCommandExecutionPromise; }
+    finally { remoteCommandExecutionPromise = null; syncAutoCloseOnBlurListener(); await flushAppendBuffer(); }
+    return;
+  }
+
+
   if (command.type !== 'conversation.send') return;
   const text = command.text;
   if (!text.trim() || text.length > 128 * 1024) {
@@ -10213,7 +10275,7 @@ const cancelAskAI = () => {
   focusChatInputIfSafe({ cursor: 'end' });
 };
 const copyText = async (content, index) => { if (loading.value && index === chat_show.value.length - 1) return; await window.api.copyText(content); };
-const reaskAI = async (assistantMessageId = null) => {
+const reaskAI = async (assistantMessageId = null, remoteCommand = null) => {
   if (!ensureConversationWriteAccess(true)) return;
 
   if (loading.value || isReasking) return;
@@ -10268,25 +10330,25 @@ const reaskAI = async (assistantMessageId = null) => {
     }
 
     collapsedMessages.value.clear();
-    await askAI(true);
+    await askAI(true, remoteCommand);
   } finally {
     isReasking = false;
   }
 };
 
 const deleteMessage = (index) => {
-  if (!ensureConversationWriteAccess(true)) return;
+  if (!ensureConversationWriteAccess(true)) return false;
 
   if (loading.value || compacting.value) {
     showDismissibleMessage.warning(compacting.value ? '压缩进行中，暂不可编辑历史' : '请等待当前回复完成后再操作');
-    return;
+    return false;
   }
-  if (index < 0 || index >= chat_show.value.length) return;
+  if (index < 0 || index >= chat_show.value.length) return false;
 
   const msgToDeleteInShow = chat_show.value[index];
   if (msgToDeleteInShow?.role === 'system') {
     showDismissibleMessage.info('系统提示词不能被删除');
-    return;
+    return false;
   }
 
   // 级联压缩后：chat_show 是完整 UI 真源，history 只是 AI 投影（更短）。
@@ -10355,6 +10417,7 @@ const deleteMessage = (index) => {
 
   focusedMessageIndex.value = null;
   scheduleAutoSave({ reason: 'message-deleted', immediate: true });
+  return true;
 };
 
 const clearHistory = async () => {

@@ -4,7 +4,10 @@ import { normalizeIdentifier, remoteError } from './protocol.js'
 const REQUEST_TTL_MS = 30 * 60 * 1000
 const MAX_REQUESTS = 256
 const MAX_RECOVERY_CHARS = 64 * 1024
-const TERMINAL_EVENTS = new Set(['assistant.completed', 'assistant.cancelled', 'assistant.failed'])
+const TERMINAL_EVENTS = new Set([
+  'assistant.completed', 'assistant.cancelled', 'assistant.failed',
+  'conversation.operation.completed', 'conversation.operation.failed'
+])
 const RENDERER_EVENTS = new Set([
   'conversation.command.acknowledged', 'assistant.started', 'assistant.delta', ...TERMINAL_EVENTS
 ])
@@ -33,10 +36,13 @@ function sanitizeEvent(event, payload) {
     segmentId: text(source.segmentId, 80),
     status: text(source.status, 80)
   }
-  if (event === 'assistant.failed') return { code: /^remote_[a-z0-9_]+$/.test(source.code) ? source.code : 'remote_assistant_failed' }
+  if (event === 'assistant.failed' || event === 'conversation.operation.failed') return {
+    code: /^remote_[a-z0-9_]+$/.test(source.code) ? source.code : 'remote_operation_failed'
+  }
   if (event === 'assistant.started') return { startedAt: text(source.startedAt, 80) }
   if (TERMINAL_EVENTS.has(event)) return {
-    completedAt: text(source.completedAt, 80), revision: Math.max(0, Math.floor(Number(source.revision) || 0))
+    completedAt: text(source.completedAt, 80), revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
+    operation: text(source.operation, 40), uiMessageId: text(source.uiMessageId, 160)
   }
   return { hidden: source.hidden === true, created: source.created === true }
 }
@@ -255,6 +261,69 @@ export function createRemoteSessionManager({
     return record.dispatched
   }
 
+  async function mutate({ deviceId, requestId, params = {}, operation } = {}) {
+    const allowed = operation === 'conversation.message.edit'
+      ? ['conversationId', 'uiMessageId', 'content']
+      : ['conversationId', 'uiMessageId']
+    parameters(params, allowed)
+    const conversationId = id(params.conversationId, 'conversationId')
+    if (/\.(json|db)$/i.test(conversationId)) throw remoteError('remote_conversation_id_invalid')
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const safeRequestId = id(requestId, 'requestId')
+    const uiMessageId = id(params.uiMessageId, 'uiMessageId')
+    const content = operation === 'conversation.message.edit' && typeof params.content === 'string' ? params.content : ''
+    if (operation === 'conversation.message.edit' && (!content.trim() || content.length > 128 * 1024)) {
+      throw remoteError('remote_message_invalid')
+    }
+    const epoch = generation
+    const check = () => assertActive(epoch, safeDeviceId)
+    check()
+    const key = requestKey(safeDeviceId, safeRequestId)
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation, conversationId, uiMessageId, content })).digest('hex')
+    const previous = requests.get(key)
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
+      return { ...(await previous.dispatched), duplicate: true }
+    }
+    pruneRequests()
+    const record = {
+      deviceId: safeDeviceId, requestId: safeRequestId, conversationId, fingerprint,
+      event: 'conversation.command.pending', eventSequence: 0, terminal: false,
+      text: '', reasoning: '', truncated: false, updatedAtMs: Date.now(), windowRef: ''
+    }
+    requests.set(key, record)
+    record.dispatched = serialize(conversationId, async () => {
+      try {
+        const hadSession = Boolean(existingSession(conversationId))
+        const session = await ensureSession(conversationId, check)
+        check()
+        const item = windowItem(session.windowRef)
+        if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
+        session.activeRequestId = safeRequestId
+        session.activeDeviceId = safeDeviceId
+        record.windowRef = session.windowRef
+        const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+          type: operation, requestId: safeRequestId, deviceId: safeDeviceId,
+          conversationId, uiMessageId, ...(operation === 'conversation.message.edit' ? { content } : {})
+        })
+        if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+        const result = { ok: true, operation, conversationId, uiMessageId, windowId: session.windowRef, hidden: session.hidden, created: !hadSession }
+        record.result = result
+        if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
+        return result
+      } catch (error) {
+        const session = sessions.get(conversationId)
+        if (session?.activeRequestId === safeRequestId && session.activeDeviceId === safeDeviceId) {
+          session.activeRequestId = ''; session.activeDeviceId = ''
+        }
+        publish(record, 'conversation.operation.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
+        throw error
+      }
+    })
+    return record.dispatched
+  }
+
+
   async function cancel({ deviceId, requestId, params = {} } = {}) {
     parameters(params, ['conversationId'])
     const conversationId = id(params.conversationId, 'conversationId')
@@ -367,7 +436,11 @@ export function createRemoteSessionManager({
   }
 
   return {
-    send, cancel, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
+    send,
+    editMessage: (input) => mutate({ ...input, operation: 'conversation.message.edit' }),
+    deleteMessage: (input) => mutate({ ...input, operation: 'conversation.message.delete' }),
+    reaskMessage: (input) => mutate({ ...input, operation: 'conversation.message.reask' }),
+    cancel, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
     resume: () => { enabled = true },
     authorizeDevice: (deviceId) => { revokedDevices.delete(deviceId) },

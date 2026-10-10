@@ -66,6 +66,58 @@ assert.equal(adapter.activeRemoteCommand.value.requestId, 'renderer-cancel', 'ke
 release()
 await pending
 assert.equal(events.at(-1).event, 'assistant.cancelled')
+context.executeAutoSaveRequest = async (request) => {
+  actions.push(request.reason)
+  context.lastPersistedSessionVersion = request.version
+  context.currentConversationStorage.value.revision += 1
+  return true
+}
+
+context.chat_show.value = [
+  { id: 10, uiStorageId: 'ui-user-00000001', role: 'user', content: 'before' },
+  { id: 11, uiStorageId: 'ui-assistant-old-01', role: 'assistant', content: 'old' },
+  { id: 12, uiStorageId: 'ui-user-00000002', role: 'user', content: 'latest user' },
+  { id: 13, uiStorageId: 'ui-assistant-last01', role: 'assistant', content: 'latest assistant' }
+]
+context.handleEditMessage = (index, content) => { context.chat_show.value[index].content = content; actions.push(`edit:${index}`); return true }
+context.deleteMessage = (index) => { context.chat_show.value.splice(index, 1); actions.push(`delete:${index}`); return true }
+context.reaskAI = async (_id, remoteCommand) => {
+  remoteCommand.__remoteStarted = true
+  remoteCommand.__remoteTerminalEvent = 'assistant.completed'
+  adapter.emitRemoteAssistantDelta(remoteCommand, 'reasked', '', 'end', 'reask-bubble')
+}
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.message.edit', conversationId: command.conversationId, requestId: 'renderer-edit-1',
+  uiMessageId: 'ui-user-00000001', content: 'after'
+})
+assert.equal(context.chat_show.value[0].content, 'after')
+assert.equal(events.at(-1).event, 'conversation.operation.completed')
+assert.ok(actions.indexOf('edit:0') < actions.lastIndexOf('remote-message-operation'))
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.message.delete', conversationId: command.conversationId, requestId: 'renderer-delete-1',
+  uiMessageId: 'ui-user-00000002'
+})
+assert.equal(context.chat_show.value.some((item) => item.uiStorageId === 'ui-user-00000002'), false)
+assert.equal(events.at(-1).event, 'conversation.operation.completed')
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.message.edit', conversationId: command.conversationId, requestId: 'renderer-missing-1',
+  uiMessageId: 'ui-missing-0000001', content: 'no'
+})
+assert.equal(events.at(-1).event, 'conversation.operation.failed')
+assert.equal(events.at(-1).payload.code, 'remote_message_not_found')
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.message.reask', conversationId: command.conversationId, requestId: 'renderer-reask-old',
+  uiMessageId: 'ui-assistant-old-01'
+})
+assert.equal(events.at(-1).payload.code, 'remote_reask_latest_assistant_required')
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.message.reask', conversationId: command.conversationId, requestId: 'renderer-reask-last',
+  uiMessageId: 'ui-assistant-last01'
+})
+assert.equal(events.at(-1).event, 'assistant.completed')
+assert.ok(events.some((item) => item.requestId === 'renderer-reask-last' && item.event === 'assistant.delta' && item.payload.textDelta === 'reasked'))
+
+
 adapter.remoteHiddenWriter.value = true
 await adapter.runRemoteConversationCommand({ type: 'remote.revealed', conversationId: command.conversationId })
 assert.equal(adapter.remoteHiddenWriter.value, false)

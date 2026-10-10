@@ -269,7 +269,10 @@ export function createRemoteGateway({
       capabilities.push('conversation.list', 'conversation.messages.list', 'conversation.windows.list')
     }
     if (activeSessionManager) {
-      capabilities.push('conversation.send', 'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get')
+      capabilities.push(
+        'conversation.send', 'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
+        'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask'
+      )
     }
     return capabilities
   }
@@ -893,6 +896,19 @@ export function createRemoteGateway({
             params
           })
           break
+        case 'conversation.message.edit':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.editMessage({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'conversation.message.delete':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.deleteMessage({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'conversation.message.reask':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.reaskMessage({ deviceId: context.device.deviceId, requestId, params })
+          break
+
         case 'conversation.request.get':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')
           result = activeSessionManager.getRequest({ deviceId: context.device.deviceId, params })

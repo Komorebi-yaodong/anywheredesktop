@@ -77,6 +77,42 @@ async function run() {
   assert.equal(f.commands.filter((command) => command.type === 'remote.shutdown').length, 0, 'revealed window belongs to Desktop')
   await assert.rejects(send(f.manager, 'request-stopped'), { code: 'remote_gateway_stopped' })
 
+  const mutations = fixture({ existing: true })
+  const edited = await mutations.manager.editMessage({ deviceId: DEVICE, requestId: 'request-edit-fixture', params: {
+    conversationId: CID, uiMessageId: 'ui-message-fixture-0001', content: 'Edited text'
+  } })
+  assert.equal(edited.operation, 'conversation.message.edit')
+  assert.equal(mutations.commands.at(-1).content, 'Edited text')
+  mutations.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-edit-fixture', event: 'conversation.operation.completed',
+    payload: { operation: 'conversation.message.edit', uiMessageId: 'ui-message-fixture-0001', revision: 8 }
+  } })
+  assert.equal(mutations.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-edit-fixture' } }).terminal, true)
+  assert.equal((await mutations.manager.editMessage({ deviceId: DEVICE, requestId: 'request-edit-fixture', params: {
+    conversationId: CID, uiMessageId: 'ui-message-fixture-0001', content: 'Edited text'
+  } })).duplicate, true)
+  await assert.rejects(mutations.manager.editMessage({ deviceId: DEVICE, requestId: 'request-edit-fixture', params: {
+    conversationId: CID, uiMessageId: 'ui-message-fixture-0001', content: 'Conflict'
+  } }), { code: 'remote_request_id_conflict' })
+  await mutations.manager.deleteMessage({ deviceId: DEVICE, requestId: 'request-delete-fixture', params: {
+    conversationId: CID, uiMessageId: 'ui-message-fixture-0002'
+  } })
+  assert.equal(mutations.commands.at(-1).type, 'conversation.message.delete')
+  mutations.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-delete-fixture', event: 'conversation.operation.completed', payload: { revision: 9 }
+  } })
+  await mutations.manager.reaskMessage({ deviceId: DEVICE, requestId: 'request-reask-fixture', params: {
+    conversationId: CID, uiMessageId: 'ui-message-fixture-0003'
+  } })
+  assert.equal(mutations.commands.at(-1).type, 'conversation.message.reask')
+  await assert.rejects(mutations.manager.deleteMessage({ deviceId: DEVICE, requestId: 'request-index-forbidden', params: {
+    conversationId: CID, uiMessageId: 'ui-message-fixture-0003', index: 2
+  } }), { code: 'remote_parameter_unknown' })
+  mutations.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-reask-fixture', event: 'assistant.failed', payload: { code: 'remote_test_failure' }
+  } })
+
+
   const reused = fixture({ existing: true })
   await send(reused.manager)
   assert.equal(reused.opens.length, 0)

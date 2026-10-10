@@ -237,6 +237,14 @@ async function main() {
     broadcastToDevice: (deviceId, event, payload) => gateway.sendEventToDevice(deviceId, event, payload),
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       writerCommands.push(command)
+      if (command.type === 'conversation.message.edit') {
+        sessionManager.handleRendererEvent({ windowRef, payload: {
+          conversationId: command.conversationId, requestId: command.requestId,
+          event: 'conversation.operation.completed',
+          payload: { operation: command.type, uiMessageId: command.uiMessageId, revision: 5 }
+        } })
+      }
+
       if (command.type === 'conversation.cancel') {
         sessionManager.handleRendererEvent({ windowRef, payload: {
           conversationId: command.conversationId, requestId: command.targetRequestId,
@@ -487,6 +495,24 @@ async function main() {
     const retry = await sendEncryptedRequest({ ...reconnected, requestId: remoteRequestId, method: 'conversation.send', params: sendInput })
     assert.equal(retry.result.duplicate, true)
     assert.equal(writerCommands.filter((command) => command.type === 'conversation.send').length, 1)
+    assert.ok(welcome.payload.capabilities.includes('conversation.message.edit'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.message.delete'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.message.reask'))
+    const editRequestId = 'request-edit-gateway-fixture'
+    const editResponse = await sendEncryptedRequest({
+      ...reconnected, requestId: editRequestId, method: 'conversation.message.edit',
+      params: { conversationId: sendInput.conversationId, uiMessageId: 'ui-message-gateway-0001', content: 'Edited over E2EE' }
+    })
+    assert.equal(editResponse.ok, true)
+    assert.equal(writerCommands.at(-1).type, 'conversation.message.edit')
+    assert.equal(writerCommands.at(-1).content, 'Edited over E2EE')
+    const editState = await sendEncryptedRequest({
+      ...reconnected, requestId: 'request-edit-state-fixture', method: 'conversation.request.get', params: { requestId: editRequestId }
+    })
+    assert.equal(editState.result.terminal, true)
+    assert.equal(editState.result.result.operation, 'conversation.message.edit')
+
+
     await sendEncryptedRequest({ ...reconnected, requestId: 'request-revoke-active', method: 'conversation.send', params: sendInput })
 
 

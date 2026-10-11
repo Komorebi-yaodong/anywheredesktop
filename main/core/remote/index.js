@@ -208,6 +208,7 @@ export function createRemoteGateway({
   conversationReadService = null,
   sessionManager = null,
   uploadManager = null,
+  businessConfigService = null,
   onStatusChanged = null,
   onPairingCreated = null,
   logger = console
@@ -278,6 +279,7 @@ export function createRemoteGateway({
       )
     }
     if (uploadManager) capabilities.push('attachment.begin', 'attachment.chunk', 'attachment.complete', 'attachment.abort')
+    if (businessConfigService) capabilities.push('business.config.get', 'business.config.replace')
     return capabilities
   }
 
@@ -872,6 +874,16 @@ export function createRemoteGateway({
         case 'remote.device.self.get':
           result = { device: publicDevice(context.device) }
           break
+        case 'business.config.get':
+          if (!businessConfigService) throw remoteError('remote_method_unavailable')
+          result = await businessConfigService.get({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'business.config.replace':
+          if (!businessConfigService) throw remoteError('remote_method_unavailable')
+          result = await businessConfigService.replace({ deviceId: context.device.deviceId, requestId, params })
+          break
+
+
         case 'attachment.begin':
           if (!uploadManager) throw remoteError('remote_method_unavailable')
           result = await uploadManager.begin({ deviceId: context.device.deviceId, requestId, params })

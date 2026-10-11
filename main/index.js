@@ -64,6 +64,7 @@ import { createRemoteGateway } from './core/remote/index.js'
 import { createRemoteConversationReadService } from './core/remote/conversationRead.js'
 import { createRemoteSessionManager } from './core/remote/sessionManager.js'
 import { createRemoteUploadManager } from './core/remote/uploadManager.js'
+import { createRemoteBusinessConfigService } from './core/remote/businessConfig.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -74,6 +75,12 @@ let appQuitStarted = false
 
 let remoteShutdownPromise = null
 let remoteShutdownCompleted = false
+
+const remoteBusinessConfigService = createRemoteBusinessConfigService({
+  getConfig: dataApi.getConfig,
+  updateConfig: dataApi.updateConfigWithoutFeatures
+})
+
 
 const remoteUploadManager = createRemoteUploadManager({
   getTempRoot: () => path.join(app.getPath('temp'), 'anywhere-remote-v2-uploads')
@@ -98,6 +105,7 @@ const remoteGateway = createRemoteGateway({
   getAppVersion: () => app.getVersion(),
   conversationReadService: remoteConversationReadService,
   uploadManager: remoteUploadManager,
+  businessConfigService: remoteBusinessConfigService,
   onStatusChanged: (status) => {
     for (const item of listWindows('main')) {
       const win = getWindowByRef(item.id)

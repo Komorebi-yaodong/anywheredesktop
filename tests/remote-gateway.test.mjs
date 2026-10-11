@@ -9,6 +9,7 @@ import { WebSocket } from 'ws'
 import { createRemoteGateway } from '../main/core/remote/index.js'
 import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
 import { createRemoteUploadManager } from '../main/core/remote/uploadManager.js'
+import { createRemoteBusinessConfigService } from '../main/core/remote/businessConfig.js'
 import {
   completeDevicePairing,
   completeSessionHello,
@@ -164,6 +165,21 @@ async function main() {
   const port = await findFreePort()
   const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-remote-gateway-test-'))
   const uploadManager = createRemoteUploadManager({ tempRoot: path.join(sandbox, 'uploads') })
+
+  let businessConfig = {
+    language: 'zh',
+    remote: { enabled: true, host: '127.0.0.1', port },
+    skillPath: 'E:/PRIVATE_SKILLS',
+    webdav: { url: 'https://dav.fixture', username: 'user', password: 'WEBDAV_SECRET', localChatPath: 'E:/PRIVATE_CHATS' },
+    providers: { p1: { name: 'Provider', api_key: 'PROVIDER_SECRET', headers: { Authorization: 'HEADER_SECRET' } } },
+    prompts: { AI: { prompt: 'Fixture prompt' } },
+    mcpServers: { m1: { name: 'MCP', env: { TOKEN: 'MCP_SECRET' } } },
+    tasks: {}
+  }
+  const businessConfigService = createRemoteBusinessConfigService({
+    getConfig: async () => ({ config: structuredClone(businessConfig) }),
+    updateConfig: async ({ config }) => { businessConfig = structuredClone(config); return { success: true, config: structuredClone(config) } }
+  })
   const app = {
     getPath: () => process.cwd(),
     getName: () => 'Anywhere Remote Test'
@@ -228,6 +244,7 @@ async function main() {
     dbStorageSetItem: storage.set,
     conversationReadService,
     uploadManager,
+    businessConfigService,
     onPairingCreated: (payload) => { observedPairing = payload },
     logger: { log() {}, warn() {}, error() {} }
   })
@@ -440,6 +457,55 @@ async function main() {
     assert.ok(welcome.payload.capabilities.includes('attachment.chunk'))
     assert.ok(welcome.payload.capabilities.includes('attachment.complete'))
     assert.ok(welcome.payload.capabilities.includes('attachment.abort'))
+
+    assert.ok(welcome.payload.capabilities.includes('business.config.get'))
+    assert.ok(welcome.payload.capabilities.includes('business.config.replace'))
+
+    const businessManifest = await sendEncryptedRequest({
+      socket, session,
+      requestId: 'request-business-manifest',
+      method: 'business.config.get',
+      params: {}
+    })
+    assert.deepEqual(businessManifest.result.sections.map((item) => item.name), ['general', 'providers', 'prompts', 'mcpServers', 'tasks'])
+    const businessGeneral = await sendEncryptedRequest({
+      socket, session,
+      requestId: 'request-business-general',
+      method: 'business.config.get',
+      params: { section: 'general' }
+    })
+    assert.equal(businessGeneral.result.value.webdav.password, 'WEBDAV_SECRET')
+    assert.equal(JSON.stringify(businessGeneral.result).includes('PRIVATE_CHATS'), false)
+    assert.equal(JSON.stringify(businessGeneral.result).includes('PRIVATE_SKILLS'), false)
+    assert.equal(Object.hasOwn(businessGeneral.result.value, 'remote'), false)
+    const businessProviders = await sendEncryptedRequest({
+      socket, session,
+      requestId: 'request-business-providers',
+      method: 'business.config.get',
+      params: { section: 'providers' }
+    })
+    assert.equal(businessProviders.result.value.p1.api_key, 'PROVIDER_SECRET')
+    const businessProviderReplacement = {
+      p2: { name: 'Remote Provider', api_key: 'REMOTE_PROVIDER_SECRET', headers: { Authorization: 'REMOTE_HEADER' } }
+    }
+    const businessReplaced = await sendEncryptedRequest({
+      socket, session,
+      requestId: 'request-business-replace',
+      method: 'business.config.replace',
+      params: { section: 'providers', expectedRevision: businessProviders.result.revision, value: businessProviderReplacement }
+    })
+    assert.equal(businessReplaced.result.value.p2.api_key, 'REMOTE_PROVIDER_SECRET')
+    assert.equal(businessConfig.remote.port, port)
+    assert.equal(businessConfig.skillPath, 'E:/PRIVATE_SKILLS')
+    assert.equal(businessConfig.webdav.localChatPath, 'E:/PRIVATE_CHATS')
+    const businessStale = await sendEncryptedRequest({
+      socket, session,
+      requestId: 'request-business-stale',
+      method: 'business.config.replace',
+      params: { section: 'providers', expectedRevision: businessProviders.result.revision, value: businessProviderReplacement }
+    })
+    assert.equal(businessStale.ok, false)
+    assert.equal(businessStale.error.code, 'remote_business_config_revision_conflict')
 
     const statusResponse = await sendEncryptedRequest({
       socket,

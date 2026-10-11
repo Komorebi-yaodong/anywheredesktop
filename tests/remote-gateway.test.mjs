@@ -233,7 +233,10 @@ async function main() {
   })
 
   const writerCommands = []
-  const writerWindows = [{ id: 'window-fixture', type: 'window', conversationId: 'conversation-gateway-fixture-0001', rendererReady: true, remoteHidden: false }]
+  const writerWindows = [
+    { id: 'window-fixture', type: 'window', conversationId: 'conversation-gateway-fixture-0001', rendererReady: true, remoteHidden: false },
+    { id: 'window-fixture-revoke', type: 'window', conversationId: 'conversation-gateway-fixture-0002', rendererReady: true, remoteHidden: false }
+  ]
   const sessionManager = createRemoteSessionManager({
     getConfig: async () => ({ config: {} }),
     openConversation: async () => { throw new Error('existing_writer_expected') },
@@ -274,6 +277,16 @@ async function main() {
           conversationId: command.conversationId, requestId: command.requestId,
           event: 'conversation.operation.completed',
           payload: { operation: command.type, uiMessageId: command.uiMessageId, revision: 5 }
+        } })
+      }
+
+      if (command.type === 'conversation.rename' || command.type === 'conversation.delete') {
+        sessionManager.handleRendererEvent({ windowRef, payload: {
+          conversationId: command.conversationId, requestId: command.requestId,
+          event: 'conversation.operation.completed',
+          payload: command.type === 'conversation.rename'
+            ? { operation: command.type, title: command.title, revision: 8 }
+            : { operation: command.type, deleted: true, revision: 8 }
         } })
       }
 
@@ -674,7 +687,67 @@ async function main() {
     assert.equal(editState.result.result.operation, 'conversation.message.edit')
 
 
-    await sendEncryptedRequest({ ...reconnected, requestId: 'request-revoke-active', method: 'conversation.send', params: sendInput })
+    assert.ok(welcome.payload.capabilities.includes('conversation.rename'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.delete'))
+    const renameConversationId = 'request-rename-conversation-gateway'
+    const renameConversationResponse = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: renameConversationId,
+      method: 'conversation.rename',
+      params: { conversationId: sendInput.conversationId, title: 'Remote renamed conversation' }
+    })
+    assert.equal(renameConversationResponse.ok, true)
+    assert.equal(writerCommands.at(-1).type, 'conversation.rename')
+    assert.equal(writerCommands.at(-1).title, 'Remote renamed conversation')
+    const renameConversationState = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-rename-conversation-state',
+      method: 'conversation.request.get',
+      params: { requestId: renameConversationId }
+    })
+    assert.equal(renameConversationState.result.result.title, 'Remote renamed conversation')
+    assert.equal(renameConversationState.result.result.revision, 8)
+
+    const unconfirmedDelete = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-delete-conversation-unconfirmed',
+      method: 'conversation.delete',
+      params: { conversationId: sendInput.conversationId, confirmed: false }
+    })
+    assert.equal(unconfirmedDelete.ok, false)
+    assert.equal(unconfirmedDelete.error.code, 'remote_confirmation_required')
+    const deleteConversationRequestId = 'request-delete-conversation-gateway'
+    const deleteConversationResponse = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: deleteConversationRequestId,
+      method: 'conversation.delete',
+      params: { conversationId: sendInput.conversationId, confirmed: true }
+    })
+    assert.equal(deleteConversationResponse.ok, true)
+    assert.equal(writerCommands.at(-1).type, 'conversation.delete')
+    const deleteConversationState = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-delete-conversation-state',
+      method: 'conversation.request.get',
+      params: { requestId: deleteConversationRequestId }
+    })
+    assert.equal(deleteConversationState.result.result.deleted, true)
+    const afterDelete = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-after-conversation-delete',
+      method: 'conversation.send',
+      params: sendInput
+    })
+    assert.equal(afterDelete.ok, false)
+    assert.equal(afterDelete.error.code, 'remote_conversation_not_found')
+
+
+    await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-revoke-active',
+      method: 'conversation.send',
+      params: { conversationId: 'conversation-gateway-fixture-0002', text: 'Revoke this active turn' }
+    })
 
     const pendingRevokePayload = Buffer.from('pending revoke')
     const pendingRevokeUpload = await sendEncryptedRequest({

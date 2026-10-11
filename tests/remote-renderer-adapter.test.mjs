@@ -14,14 +14,27 @@ const context = {
     consumeRemoteUpload: async (input) => {
       consumedUploads.push(structuredClone(input))
       return { uploadId: input.uploadId, content: { type: 'image_url', image_url: { url: 'data:image/png;base64,UE5HREFUQQ==' } } }
+    },
+    renameConversation: async (input) => {
+      actions.push(`rename-conversation:${input.title}`)
+      return { ok: true, title: input.title, revision: Number(input.expectedRevision) + 1 }
+    },
+    deleteConversation: async (input) => {
+      actions.push(`delete-conversation:${input.conversationId}`)
+      return { ok: true, removed: true }
     }
   } },
-  currentConversationStorage: ref({ conversationId: 'conversation-renderer-fixture', revision: 0 }),
+  currentConversationStorage: ref({ conversationId: 'conversation-renderer-fixture', revision: 0, dirPath: 'fixture-dir' }),
+  conversationLease: ref({ leaseEpoch: 4 }),
+  conversationInstanceId: 'renderer-instance-fixture',
   isWindowBootstrapped: ref(true), isClosingWindow: ref(false), loading: ref(false), compacting: ref(false),
   isPreparingSend: ref(false), isMcpLoading: ref(false), chat_show: ref([]),
   sessionMutationVersion: 0, lastPersistedSessionVersion: 0,
   ensureConversationWriteAccess: () => true,
   clearScheduledAutoSave: () => {},
+  queuedAutoSaveRequest: null,
+  autoSaveExecutionPromise: null,
+  stopConversationLeaseHeartbeat: () => actions.push('lease-heartbeat-stop'),
   appendFullHistory: (message) => { appendedMessages.push(structuredClone(message)); actions.push(`user:${message.content}`) },
   flushAppendBuffer: async () => actions.push('buffer-flush'),
   syncAutoCloseOnBlurListener: () => {},
@@ -32,6 +45,7 @@ const context = {
   sessionMcpServerIds: ref(['mcp-a']), tempSessionMcpServerIds: ref(['mcp-a']),
   sessionSkillIds: ref(['Skill A']), tempSessionSkillIds: ref(['Skill A']),
   currentSystemPrompt: ref('Old system'), sourcePromptConfig: ref({ prompt: 'Old system' }),
+  defaultConversationName: ref('Fixture conversation'),
   compactConfig: ref({ autoCompactEnabled: true, triggerRatio: 0.9, contextLength: 262144, keepRecentRounds: 3, hideCompactedMessages: true, compactPrompt: '' }),
   currentConfig: ref({ voiceList: ['Voice A'], mcpServers: { 'mcp-a': { isActive: true, name: 'MCP A' }, 'mcp-b': { isActive: true, name: 'MCP B' } } }),
   availableMcpServers: computed(() => [{ id: 'mcp-a', name: 'MCP A' }, { id: 'mcp-b', name: 'MCP B' }]),
@@ -233,6 +247,19 @@ adapter.activeRemoteCommand.value = null
 context.compacting.value = false
 
 
+const metadataEventStart = events.length
+const revisionBeforeRemoteRename = context.currentConversationStorage.value.revision
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.rename', conversationId: command.conversationId,
+  requestId: 'renderer-conversation-rename', title: 'Renamed conversation'
+})
+assert.equal(context.defaultConversationName.value, 'Renamed conversation')
+assert.equal(context.currentConversationStorage.value.title, 'Renamed conversation')
+assert.equal(context.currentConversationStorage.value.revision, revisionBeforeRemoteRename + 1)
+assert.equal(events.slice(metadataEventStart).at(-1).event, 'conversation.operation.completed')
+assert.equal(events.slice(metadataEventStart).at(-1).payload.title, 'Renamed conversation')
+assert.ok(actions.includes('rename-conversation:Renamed conversation'))
+
 adapter.remoteHiddenWriter.value = true
 await adapter.runRemoteConversationCommand({ type: 'remote.revealed', conversationId: command.conversationId })
 assert.equal(adapter.remoteHiddenWriter.value, false)
@@ -241,6 +268,26 @@ assert.equal(actions.includes('window-close'), false)
 adapter.remoteHiddenWriter.value = true
 await adapter.runRemoteConversationCommand({ type: 'remote.shutdown', conversationId: command.conversationId })
 assert.equal(actions.at(-1), 'window-close')
+
+
+const windowCloseCountBeforeDelete = actions.filter((item) => item === 'window-close').length
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.delete', conversationId: command.conversationId,
+  requestId: 'renderer-conversation-delete-unconfirmed', confirmed: false
+})
+assert.equal(events.at(-1).payload.code, 'remote_confirmation_required')
+
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.delete', conversationId: command.conversationId,
+  requestId: 'renderer-conversation-delete', confirmed: true
+})
+assert.equal(events.at(-1).event, 'conversation.operation.completed')
+assert.equal(events.at(-1).payload.deleted, true)
+assert.ok(actions.includes(`delete-conversation:${command.conversationId}`))
+assert.ok(actions.includes('lease-heartbeat-stop'))
+assert.equal(context.conversationLease.value, null)
+assert.equal(actions.at(-1), 'buffer-flush')
+assert.equal(actions.filter((item) => item === 'window-close').length, windowCloseCountBeforeDelete + 1)
 
 assert.match(source, /if \(!turnRemoteCommand\) await flushAppendBuffer\(\)/)
 assert.match(source, /approvalStatus: autoApproveThisTurn\(\)/)

@@ -114,6 +114,48 @@ async function run() {
   } })
 
 
+  const metadata = fixture({ existing: true })
+  await assert.rejects(metadata.manager.renameConversation({
+    deviceId: DEVICE, requestId: 'request-rename-empty', params: { conversationId: CID, title: '   ' }
+  }), { code: 'remote_conversation_title_invalid' })
+  await assert.rejects(metadata.manager.deleteConversation({
+    deviceId: DEVICE, requestId: 'request-delete-unconfirmed', params: { conversationId: CID, confirmed: false }
+  }), { code: 'remote_confirmation_required' })
+  const renamed = await metadata.manager.renameConversation({
+    deviceId: DEVICE, requestId: 'request-rename-conversation', params: { conversationId: CID, title: 'Renamed remotely' }
+  })
+  assert.equal(renamed.operation, 'conversation.rename')
+  assert.equal(metadata.commands.at(-1).title, 'Renamed remotely')
+  metadata.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-rename-conversation', event: 'conversation.operation.completed',
+    payload: { operation: 'conversation.rename', title: 'Renamed remotely', revision: 13, dbFile: 'MUST_NOT_LEAK' }
+  } })
+  const renameState = metadata.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-rename-conversation' } })
+  assert.equal(renameState.result.title, 'Renamed remotely')
+  assert.equal(renameState.result.revision, 13)
+  assert.equal(JSON.stringify(renameState).includes('MUST_NOT_LEAK'), false)
+  assert.equal((await metadata.manager.renameConversation({
+    deviceId: DEVICE, requestId: 'request-rename-conversation', params: { conversationId: CID, title: 'Renamed remotely' }
+  })).duplicate, true)
+  await assert.rejects(metadata.manager.renameConversation({
+    deviceId: DEVICE, requestId: 'request-rename-conversation', params: { conversationId: CID, title: 'Conflict' }
+  }), { code: 'remote_request_id_conflict' })
+
+  await metadata.manager.deleteConversation({
+    deviceId: DEVICE, requestId: 'request-delete-conversation', params: { conversationId: CID, confirmed: true }
+  })
+  assert.equal(metadata.commands.at(-1).type, 'conversation.delete')
+  assert.equal(metadata.commands.at(-1).confirmed, true)
+  metadata.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-delete-conversation', event: 'conversation.operation.completed',
+    payload: { operation: 'conversation.delete', deleted: true, revision: 13 }
+  } })
+  const deleteState = metadata.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-delete-conversation' } })
+  assert.equal(deleteState.result.deleted, true)
+  await assert.rejects(send(metadata.manager, 'request-after-delete'), { code: 'remote_conversation_not_found' })
+  assert.throws(() => metadata.manager.showOnDesktop({ params: { conversationId: CID } }), { code: 'remote_conversation_not_found' })
+
+
   const configFixture = fixture({ existing: true })
   await assert.rejects(configFixture.manager.patchConfig({ deviceId: DEVICE, requestId: 'request-config-bad-1', params: {
     conversationId: CID, patch: { compact: { unknown: true } }

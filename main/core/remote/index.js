@@ -273,6 +273,7 @@ export function createRemoteGateway({
       capabilities.push(
         'conversation.send', 'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
         'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask',
+        'conversation.rename', 'conversation.delete',
         'conversation.config.get', 'conversation.config.patch', 'conversation.compact', 'conversation.compact.cancel'
       )
     }
@@ -933,6 +934,16 @@ export function createRemoteGateway({
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')
           result = await activeSessionManager.patchConfig({ deviceId: context.device.deviceId, requestId, params })
           break
+
+        case 'conversation.rename':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.renameConversation({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'conversation.delete':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.deleteConversation({ deviceId: context.device.deviceId, requestId, params })
+          break
+
 
         case 'conversation.message.edit':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')

@@ -150,7 +150,8 @@ function sanitizeEvent(event, payload) {
   }
   if (TERMINAL_EVENTS.has(event)) return {
     completedAt: text(source.completedAt, 80), revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
-    operation: text(source.operation, 40), uiMessageId: text(source.uiMessageId, 160)
+    operation: text(source.operation, 40), uiMessageId: text(source.uiMessageId, 160),
+    title: text(source.title, 240), deleted: source.deleted === true
   }
   return { hidden: source.hidden === true, created: source.created === true }
 }
@@ -172,6 +173,7 @@ export function createRemoteSessionManager({
   const queues = new Map()
   const requests = new Map()
   const revokedDevices = new Set()
+  const deletedConversations = new Set()
   let enabled = true
   let generation = 0
   let closing = null
@@ -246,6 +248,7 @@ export function createRemoteSessionManager({
 
   async function ensureSession(conversationId, check) {
     check()
+    if (deletedConversations.has(conversationId)) throw remoteError('remote_conversation_not_found')
     let session = existingSession(conversationId)
     if (!session) {
       let creation = creations.get(conversationId)
@@ -452,6 +455,74 @@ export function createRemoteSessionManager({
   }
 
 
+  async function conversationMetadataCommand({ deviceId, requestId, params = {}, operation } = {}) {
+    const allowed = operation === 'conversation.rename'
+      ? ['conversationId', 'title']
+      : ['conversationId', 'confirmed']
+    parameters(params, allowed)
+    const conversationId = id(params.conversationId, 'conversationId')
+    if (/\.(json|db)$/i.test(conversationId)) throw remoteError('remote_conversation_id_invalid')
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const safeRequestId = id(requestId, 'requestId')
+    const title = operation === 'conversation.rename' ? text(params.title, 241).trim() : ''
+    if (operation === 'conversation.rename' && (!title || title.length > 240)) throw remoteError('remote_conversation_title_invalid')
+    if (operation === 'conversation.delete' && params.confirmed !== true) throw remoteError('remote_confirmation_required')
+    const epoch = generation
+    const check = () => assertActive(epoch, safeDeviceId)
+    check()
+    const key = requestKey(safeDeviceId, safeRequestId)
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation, conversationId, title, confirmed: params.confirmed === true })).digest('hex')
+    const previous = requests.get(key)
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
+      return { ...(await previous.dispatched), duplicate: true }
+    }
+    pruneRequests()
+    const record = {
+      deviceId: safeDeviceId, requestId: safeRequestId, conversationId, fingerprint,
+      event: 'conversation.command.pending', eventSequence: 0, terminal: false,
+      text: '', reasoning: '', truncated: false, updatedAtMs: Date.now(), windowRef: ''
+    }
+    requests.set(key, record)
+    record.dispatched = serialize(conversationId, async () => {
+      try {
+        const hadSession = Boolean(existingSession(conversationId))
+        const session = await ensureSession(conversationId, check)
+        check()
+        const item = windowItem(session.windowRef)
+        if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
+        session.activeRequestId = safeRequestId
+        session.activeDeviceId = safeDeviceId
+        session.activeOperation = operation
+        record.windowRef = session.windowRef
+        const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+          type: operation,
+          requestId: safeRequestId,
+          deviceId: safeDeviceId,
+          conversationId,
+          ...(operation === 'conversation.rename' ? { title } : { confirmed: true })
+        })
+        if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+        const result = { ok: true, operation, conversationId, windowId: session.windowRef, hidden: session.hidden, created: !hadSession }
+        record.result = result
+        if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
+        return result
+      } catch (error) {
+        const session = sessions.get(conversationId)
+        if (session?.activeRequestId === safeRequestId && session.activeDeviceId === safeDeviceId) {
+          session.activeRequestId = ''
+          session.activeDeviceId = ''
+          session.activeOperation = ''
+        }
+        publish(record, 'conversation.operation.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
+        throw error
+      }
+    })
+    return record.dispatched
+  }
+
+
+
   async function configCommand({ deviceId, requestId, params = {}, operation } = {}) {
     const allowed = operation === 'conversation.config.patch' ? ['conversationId', 'patch'] : ['conversationId']
     parameters(params, allowed)
@@ -597,6 +668,7 @@ export function createRemoteSessionManager({
     parameters(params, ['conversationId'])
     const conversationId = id(params.conversationId, 'conversationId')
     if (!enabled) throw remoteError('remote_gateway_stopped')
+    if (deletedConversations.has(conversationId)) throw remoteError('remote_conversation_not_found')
     const session = existingSession(conversationId)
     if (!session) throw remoteError('remote_conversation_window_not_found')
     if (!revealRemoteConversationWindow(session.windowRef)?.ok) throw remoteError('remote_window_reveal_failed')
@@ -626,8 +698,16 @@ export function createRemoteSessionManager({
     if (!session.activeRequestId || session.activeRequestId !== data.requestId) return { ok: false, error: 'remote_renderer_event_request_mismatch' }
     const record = requests.get(requestKey(session.activeDeviceId, data.requestId))
     if (!record || record.terminal) return { ok: false, error: 'remote_renderer_event_request_mismatch' }
-    publish(record, data.event, sanitizeEvent(data.event, data.payload))
-    if (record.terminal) { session.activeRequestId = ''; session.activeDeviceId = ''; session.activeOperation = '' }
+    const sanitizedPayload = sanitizeEvent(data.event, data.payload)
+    publish(record, data.event, sanitizedPayload)
+    if (record.terminal) {
+      if (session.activeOperation === 'conversation.delete' && data.event === 'conversation.operation.completed' && sanitizedPayload.deleted) {
+        deletedConversations.add(session.conversationId)
+      }
+      session.activeRequestId = ''
+      session.activeDeviceId = ''
+      session.activeOperation = ''
+    }
     return { ok: true }
   }
 
@@ -700,6 +780,8 @@ export function createRemoteSessionManager({
     editMessage: (input) => mutate({ ...input, operation: 'conversation.message.edit' }),
     deleteMessage: (input) => mutate({ ...input, operation: 'conversation.message.delete' }),
     reaskMessage: (input) => mutate({ ...input, operation: 'conversation.message.reask' }),
+    renameConversation: (input) => conversationMetadataCommand({ ...input, operation: 'conversation.rename' }),
+    deleteConversation: (input) => conversationMetadataCommand({ ...input, operation: 'conversation.delete' }),
     getConfig: (input) => configCommand({ ...input, operation: 'conversation.config.get' }),
     patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),
     compact,

@@ -2621,6 +2621,7 @@ watch([
 const activeRemoteCommand = shallowRef(null);
 let remoteCommandExecutionPromise = null;
 const remoteHiddenWriter = ref(false);
+const remoteConversationDeleted = ref(false);
 
 const emitRemoteRendererEvent = (event, command = {}, payload = {}) => {
   if (!window.api?.emitRemoteRendererEvent) return;
@@ -2636,6 +2637,17 @@ const emitRemoteRendererEvent = (event, command = {}, payload = {}) => {
     payload
   }).catch(() => {});
 };
+
+const emitRemoteRendererEventAndWait = async (event, command = {}, payload = {}) => {
+  if (!window.api?.emitRemoteRendererEvent) return null;
+  const conversationId = typeof currentConversationStorage.value?.conversationId === 'string'
+    ? currentConversationStorage.value.conversationId
+    : '';
+  const requestId = typeof command?.requestId === 'string' ? command.requestId : '';
+  if (!conversationId || !requestId) return null;
+  return window.api.emitRemoteRendererEvent({ event, requestId, conversationId, payload });
+};
+
 
 const finalizeRemoteCommand = (event, command = activeRemoteCommand.value, payload = {}) => {
   if (!command || command !== activeRemoteCommand.value) return false;
@@ -2691,6 +2703,8 @@ const normalizeRemoteCommand = (input = {}) => {
     text: typeof input.text === 'string' ? input.text : '',
     content: typeof input.content === 'string' ? input.content : '',
     uiMessageId: typeof input.uiMessageId === 'string' ? input.uiMessageId.trim() : '',
+    title: typeof input.title === 'string' ? input.title.trim() : '',
+    confirmed: input.confirmed === true,
     patch: input.patch && typeof input.patch === 'object' && !Array.isArray(input.patch) ? input.patch : null,
     uploadIds: Array.isArray(input.uploadIds)
       ? input.uploadIds.filter((item) => typeof item === 'string' && item.trim()).slice(0, 16)
@@ -2897,6 +2911,98 @@ const runRemoteConversationCommand = async (input = {}) => {
     finally { remoteCommandExecutionPromise = null; syncAutoCloseOnBlurListener(); await flushAppendBuffer(); }
     return;
   }
+
+
+  if (['conversation.rename', 'conversation.delete'].includes(command.type)) {
+    if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
+      emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
+      return;
+    }
+    if (command.type === 'conversation.rename' && (!command.title.trim() || command.title.length > 240)) {
+      emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_title_invalid' });
+      return;
+    }
+    if (command.type === 'conversation.delete' && command.confirmed !== true) {
+      emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_confirmation_required' });
+      return;
+    }
+    activeRemoteCommand.value = command;
+    emitRemoteRendererEvent('conversation.command.acknowledged', command, { hidden: remoteHiddenWriter.value });
+    remoteCommandExecutionPromise = (async () => {
+      let terminalEvent = 'conversation.operation.completed';
+      let terminalPayload = { operation: command.type };
+      let closeAfterDelete = false;
+      try {
+        if (autoSaveExecutionPromise) await autoSaveExecutionPromise;
+        const storage = currentConversationStorage.value;
+        const dirPath = storage?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
+        if (!storage?.conversationId || storage.conversationId !== command.conversationId || !dirPath) {
+          throw new Error('remote_conversation_not_found');
+        }
+        if (command.type === 'conversation.rename') {
+          const renamed = await window.api.renameConversation({
+            dirPath,
+            conversationId: storage.conversationId,
+            title: command.title,
+            expectedRevision: storage.revision,
+            holderInstanceId: conversationInstanceId,
+            leaseEpoch: conversationLease.value?.leaseEpoch
+          });
+          defaultConversationName.value = renamed.title;
+          currentConversationStorage.value = {
+            ...storage,
+            title: renamed.title,
+            revision: Number(renamed.revision) || storage.revision
+          };
+          terminalPayload = {
+            operation: command.type,
+            title: renamed.title,
+            revision: Number(renamed.revision) || storage.revision,
+            completedAt: new Date().toISOString()
+          };
+        } else {
+          clearScheduledAutoSave();
+          queuedAutoSaveRequest = null;
+          const deleted = await window.api.deleteConversation({
+            dirPath,
+            conversationId: storage.conversationId,
+            holderInstanceId: conversationInstanceId,
+            leaseEpoch: conversationLease.value?.leaseEpoch,
+            deleteLegacyJson: false
+          });
+          if (!deleted?.removed) throw new Error('remote_conversation_not_found');
+          remoteConversationDeleted.value = true;
+
+          stopConversationLeaseHeartbeat();
+          conversationLease.value = null;
+          terminalPayload = {
+            operation: command.type,
+            deleted: true,
+            revision: Number(storage.revision) || 0,
+            completedAt: new Date().toISOString()
+          };
+          closeAfterDelete = true;
+        }
+      } catch (error) {
+        terminalEvent = 'conversation.operation.failed';
+        terminalPayload = {
+          code: error?.message?.startsWith('remote_') ? error.message : 'remote_conversation_metadata_failed'
+        };
+      } finally {
+        if (closeAfterDelete && terminalEvent === 'conversation.operation.completed') {
+          await emitRemoteRendererEventAndWait(terminalEvent, command, terminalPayload).catch(() => null);
+          activeRemoteCommand.value = null;
+        } else {
+          finalizeRemoteCommand(terminalEvent, command, terminalPayload);
+        }
+      }
+      if (closeAfterDelete && terminalEvent === 'conversation.operation.completed') await closePage(false);
+    })();
+    try { await remoteCommandExecutionPromise; }
+    finally { remoteCommandExecutionPromise = null; syncAutoCloseOnBlurListener(); await flushAppendBuffer(); }
+    return;
+  }
+
 
 
   if (['conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask'].includes(command.type)) {
@@ -5605,7 +5711,7 @@ const closePage = async (force_save = false) => {
       console.warn('[Sub-Agent] Kill-on-close failed:', e);
     }
 
-    if ((currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath) && (defaultConversationName.value || shouldForceSave)) {
+    if (!remoteConversationDeleted.value && (currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath) && (defaultConversationName.value || shouldForceSave)) {
       try {
         const closeVersion = sessionMutationVersion;
         await executeAutoSaveRequest({

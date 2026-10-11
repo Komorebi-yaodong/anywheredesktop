@@ -2265,7 +2265,8 @@ const runConversationCompact = async ({
   manual = true,
   // 工具循环中：允许在 loading 时压缩，避免 tool 轮次撞上下文上限
   allowDuringLoading = false,
-  quiet = false
+  quiet = false,
+  throwOnError = false
 } = {}) => {
   let hydratedPagedConversation = false;
 
@@ -2431,9 +2432,11 @@ const runConversationCompact = async ({
     if (cancelledByUser) {
       if (!manual) autoCompactSuppressedForTurn.value = true;
       if (!quiet) showDismissibleMessage.info('已取消压缩');
+      if (throwOnError) throw createAbortError();
       return false;
     }
     if (!quiet) showDismissibleMessage.error(`压缩失败: ${error?.message || error}`);
+    if (throwOnError) throw error;
     return false;
   } finally {
     if (hydratedPagedConversation && currentConversationStorage.value?.isPaged === false) {
@@ -2689,6 +2692,9 @@ const normalizeRemoteCommand = (input = {}) => {
     content: typeof input.content === 'string' ? input.content : '',
     uiMessageId: typeof input.uiMessageId === 'string' ? input.uiMessageId.trim() : '',
     patch: input.patch && typeof input.patch === 'object' && !Array.isArray(input.patch) ? input.patch : null,
+    uploadIds: Array.isArray(input.uploadIds)
+      ? input.uploadIds.filter((item) => typeof item === 'string' && item.trim()).slice(0, 16)
+      : [],
     autoApproveTools: input.autoApproveTools === true,
     targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : ''
   };
@@ -2757,7 +2763,9 @@ const runRemoteConversationCommand = async (input = {}) => {
     return;
   }
   if (command.type === 'remote.shutdown') {
-    if (activeRemoteCommand.value && loading.value) cancelAskAI();
+    if (activeRemoteCommand.value) activeRemoteCommand.value.__remoteCancelled = true;
+    if (compacting.value) handleCancelCompact();
+    if (loading.value) cancelAskAI();
     await remoteCommandExecutionPromise;
     if (remoteHiddenWriter.value) {
       if (await persistRemoteTranscript('remote-shutdown')) await closePage(true);
@@ -2774,6 +2782,49 @@ const runRemoteConversationCommand = async (input = {}) => {
     if (loading.value) cancelAskAI();
     return;
   }
+  if (command.type === 'conversation.compact.cancel') {
+    if (activeRemoteCommand.value?.requestId === command.targetRequestId && compacting.value) handleCancelCompact();
+    return;
+  }
+  if (command.type === 'conversation.compact') {
+    if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
+      emitRemoteRendererEvent('conversation.compact.failed', command, { code: 'remote_conversation_busy' });
+      return;
+    }
+    activeRemoteCommand.value = command;
+    emitRemoteRendererEvent('conversation.command.acknowledged', command, { hidden: remoteHiddenWriter.value });
+    const stopProgress = watch(compactProgress, (progress) => {
+      emitRemoteRendererEvent('conversation.compact.progress', command, {
+        percent: progress?.percent || 0, stage: progress?.stage || '', message: progress?.message || ''
+      });
+    }, { deep: true });
+    remoteCommandExecutionPromise = (async () => {
+      let event = 'conversation.compact.completed';
+      let payload = { changed: false };
+      try {
+        const changed = await runConversationCompact({ manual: true, quiet: true, throwOnError: true });
+        const saved = changed ? await persistRemoteTranscript('remote-compact-finalized') : true;
+        if (!saved) throw new Error('remote_conversation_save_failed');
+        payload = { changed, completedAt: new Date().toISOString(), revision: currentConversationStorage.value?.revision || 0 };
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          event = 'conversation.compact.cancelled';
+          payload = { changed: false, completedAt: new Date().toISOString(), revision: currentConversationStorage.value?.revision || 0 };
+        } else {
+          event = 'conversation.compact.failed';
+          payload = { code: error?.message?.startsWith('remote_') ? error.message : 'remote_compact_failed' };
+        }
+      } finally {
+        stopProgress();
+        finalizeRemoteCommand(event, command, payload);
+      }
+    })();
+    try { await remoteCommandExecutionPromise; }
+    finally { remoteCommandExecutionPromise = null; syncAutoCloseOnBlurListener(); await flushAppendBuffer(); }
+    return;
+  }
+
+
   if (['conversation.config.get', 'conversation.config.patch'].includes(command.type)) {
     if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
       emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
@@ -2910,7 +2961,7 @@ const runRemoteConversationCommand = async (input = {}) => {
 
   if (command.type !== 'conversation.send') return;
   const text = command.text;
-  if (!text.trim() || text.length > 128 * 1024) {
+  if ((!text.trim() && command.uploadIds.length === 0) || text.length > 128 * 1024) {
     emitRemoteRendererEvent('assistant.failed', command, { code: 'remote_message_invalid' });
     return;
   }
@@ -2923,10 +2974,26 @@ const runRemoteConversationCommand = async (input = {}) => {
   remoteCommandExecutionPromise = (async () => {
     let terminalEvent = 'assistant.completed';
     let terminalPayload = {};
+    let attachmentsPrepared = command.uploadIds.length === 0;
     try {
-      appendFullHistory({ role: 'user', content: text });
+      const userContentList = [];
+      if (text.trim()) userContentList.push({ type: 'text', text });
+      for (const uploadId of command.uploadIds) {
+        if (command.__remoteCancelled) throw new Error('remote_request_cancelled');
+        const attachment = await window.api.consumeRemoteUpload({ requestId: command.requestId, uploadId });
+        if (command.__remoteCancelled) throw new Error('remote_request_cancelled');
+        if (!attachment?.content) throw new Error('remote_attachment_parse_failed');
+        userContentList.push(attachment.content);
+      }
+      attachmentsPrepared = true;
+      if (command.__remoteCancelled) throw new Error('remote_request_cancelled');
+      if (userContentList.length === 0) throw new Error('remote_message_invalid');
+      const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
+        ? userContentList[0].text
+        : userContentList;
+      appendFullHistory({ role: 'user', content: contentForHistory });
       chat_show.value.push({
-        id: messageIdCounter.value++, role: 'user', content: [{ type: 'text', text }],
+        id: messageIdCounter.value++, role: 'user', content: userContentList,
         timestamp: new Date().toLocaleString('sv-SE')
       });
       const userSaved = await persistRemoteTranscript('remote-user-message');
@@ -2939,9 +3006,19 @@ const runRemoteConversationCommand = async (input = {}) => {
         terminalEvent = 'assistant.failed'; terminalPayload = { code: 'remote_assistant_not_started' };
       }
 
-    } catch {
-      terminalEvent = 'assistant.failed';
-      terminalPayload = { code: 'remote_conversation_save_or_send_failed' };
+    } catch (error) {
+      if (command.__remoteCancelled || error?.message === 'remote_request_cancelled') {
+        terminalEvent = 'assistant.cancelled';
+        terminalPayload = {};
+      } else {
+        terminalEvent = 'assistant.failed';
+        const errorText = String(error?.message || '');
+        terminalPayload = {
+          code: !attachmentsPrepared
+            ? (errorText.includes('remote_upload_') ? 'remote_attachment_unavailable' : 'remote_attachment_parse_failed')
+            : 'remote_conversation_save_or_send_failed'
+        };
+      }
     } finally {
       // A terminal event promises that the current transcript has been persisted by its lease owner.
       try {

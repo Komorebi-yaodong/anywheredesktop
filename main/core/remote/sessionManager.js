@@ -6,10 +6,12 @@ const MAX_REQUESTS = 256
 const MAX_RECOVERY_CHARS = 64 * 1024
 const TERMINAL_EVENTS = new Set([
   'assistant.completed', 'assistant.cancelled', 'assistant.failed',
-  'conversation.operation.completed', 'conversation.operation.failed', 'conversation.config.result'
+  'conversation.operation.completed', 'conversation.operation.failed', 'conversation.config.result',
+  'conversation.compact.completed', 'conversation.compact.cancelled', 'conversation.compact.failed'
 ])
 const RENDERER_EVENTS = new Set([
-  'conversation.command.acknowledged', 'assistant.started', 'assistant.delta', ...TERMINAL_EVENTS
+  'conversation.command.acknowledged', 'assistant.started', 'assistant.delta',
+  'conversation.compact.progress', ...TERMINAL_EVENTS
 ])
 const PATH_KEYS = new Set([
   'path', 'filepath', 'file_path', 'dirpath', 'dir_path', 'dbfile', 'db_file',
@@ -18,6 +20,15 @@ const PATH_KEYS = new Set([
 const text = (value, limit = 160) => typeof value === 'string' ? value.slice(0, limit) : ''
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 const id = (value, field) => normalizeIdentifier(value, field, { minLength: field === 'requestId' ? 8 : 16, maxLength: 160 })
+
+
+function normalizeUploadIds(value) {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 16) throw remoteError('remote_upload_ids_invalid')
+  const uploadIds = value.map((item) => id(item, 'uploadId'))
+  if (new Set(uploadIds).size !== uploadIds.length) throw remoteError('remote_upload_ids_invalid')
+  return uploadIds
+}
 
 function parameters(input, allowedKeys) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw remoteError('remote_parameter_invalid')
@@ -125,6 +136,18 @@ function sanitizeEvent(event, payload) {
   }
   if (event === 'assistant.started') return { startedAt: text(source.startedAt, 80) }
   if (event === 'conversation.config.result') return sanitizeConfigResult(source)
+
+  if (event === 'conversation.compact.progress') return {
+    percent: Math.min(100, Math.max(0, Number(source.percent) || 0)),
+    stage: text(source.stage, 80), message: text(source.message, 240)
+  }
+  if (event === 'conversation.compact.failed') return {
+    code: /^remote_[a-z0-9_]+$/.test(source.code) ? source.code : 'remote_compact_failed'
+  }
+  if (event === 'conversation.compact.completed' || event === 'conversation.compact.cancelled') return {
+    completedAt: text(source.completedAt, 80), revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
+    changed: source.changed === true
+  }
   if (TERMINAL_EVENTS.has(event)) return {
     completedAt: text(source.completedAt, 80), revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
     operation: text(source.operation, 40), uiMessageId: text(source.uiMessageId, 160)
@@ -136,7 +159,7 @@ function sanitizeEvent(event, payload) {
 export function createRemoteSessionManager({
   getConfig, openConversation, listWindows, openWindow, getWindowByRef,
   dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice,
-  readinessTimeoutMs = 12000, onWindowClosed = null
+  uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null
 } = {}) {
   for (const [name, value] of Object.entries({
     getConfig, openConversation, listWindows, openWindow, getWindowByRef,
@@ -270,6 +293,9 @@ export function createRemoteSessionManager({
     if (TERMINAL_EVENTS.has(event)) {
       record.terminal = true
       record.terminalPayload = payload
+      uploadManager?.cleanupRequest?.({
+        deviceId: record.deviceId, requestId: record.requestId, windowRef: record.windowRef
+      })?.catch?.(() => {})
     }
     // Payload delivery failure/disconnect must never roll back or re-execute a Desktop command.
     try {
@@ -286,19 +312,21 @@ export function createRemoteSessionManager({
   }
 
   async function send({ deviceId, requestId, params = {} } = {}) {
-    parameters(params, ['conversationId', 'text'])
+    parameters(params, ['conversationId', 'text', 'uploadIds'])
     const conversationId = id(params.conversationId, 'conversationId')
     if (/\.(json|db)$/i.test(conversationId)) throw remoteError('remote_conversation_id_invalid')
 
     const safeDeviceId = id(deviceId, 'deviceId')
     const safeRequestId = id(requestId, 'requestId')
     const body = typeof params.text === 'string' ? params.text : ''
-    if (!body.trim() || body.length > 128 * 1024) throw remoteError('remote_message_invalid')
+    const uploadIds = normalizeUploadIds(params.uploadIds)
+    if ((!body.trim() && uploadIds.length === 0) || body.length > 128 * 1024) throw remoteError('remote_message_invalid')
+    if (uploadIds.length && !uploadManager?.authorizeForRequest) throw remoteError('remote_upload_unavailable')
     const epoch = generation
     const check = () => assertActive(epoch, safeDeviceId)
     check()
     const key = requestKey(safeDeviceId, safeRequestId)
-    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ conversationId, text: body })).digest('hex')
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ conversationId, text: body, uploadIds })).digest('hex')
     const previous = requests.get(key)
     if (previous) {
       if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
@@ -313,6 +341,7 @@ export function createRemoteSessionManager({
     }
     requests.set(key, record)
     record.dispatched = serialize(conversationId, async () => {
+      let authorizationWindowRef = ''
       try {
         check()
         const hadSession = Boolean(existingSession(conversationId))
@@ -320,12 +349,20 @@ export function createRemoteSessionManager({
         check()
         const item = windowItem(session.windowRef)
         if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
+        if (uploadIds.length) {
+          await uploadManager.authorizeForRequest({
+            deviceId: safeDeviceId, requestId: safeRequestId, windowRef: session.windowRef, uploadIds
+          })
+          authorizationWindowRef = session.windowRef
+        }
+        check()
         session.activeRequestId = safeRequestId
         session.activeDeviceId = safeDeviceId
+        session.activeOperation = 'conversation.send'
         record.windowRef = session.windowRef
         const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
           type: 'conversation.send', requestId: safeRequestId, deviceId: safeDeviceId,
-          conversationId, text: body, autoApproveTools: true
+          conversationId, text: body, uploadIds, autoApproveTools: true
         })
         if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
         const result = { ok: true, conversationId, windowId: session.windowRef, hidden: session.hidden, created: !hadSession }
@@ -334,10 +371,16 @@ export function createRemoteSessionManager({
         if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
         return result
       } catch (error) {
+        if (authorizationWindowRef) {
+          await uploadManager.releaseRequest({
+            deviceId: safeDeviceId, requestId: safeRequestId, windowRef: authorizationWindowRef
+          }).catch(() => {})
+        }
         const session = sessions.get(conversationId)
         if (session?.activeRequestId === safeRequestId && session.activeDeviceId === safeDeviceId) {
           session.activeRequestId = ''
           session.activeDeviceId = ''
+          session.activeOperation = ''
         }
         publish(record, 'assistant.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
         throw error
@@ -466,6 +509,75 @@ export function createRemoteSessionManager({
   }
 
 
+  async function compact({ deviceId, requestId, params = {} } = {}) {
+    parameters(params, ['conversationId'])
+    const conversationId = id(params.conversationId, 'conversationId')
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const safeRequestId = id(requestId, 'requestId')
+    const epoch = generation
+    const check = () => assertActive(epoch, safeDeviceId)
+    check()
+    const key = requestKey(safeDeviceId, safeRequestId)
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation: 'conversation.compact', conversationId })).digest('hex')
+    const previous = requests.get(key)
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
+      return { ...(await previous.dispatched), duplicate: true }
+    }
+    pruneRequests()
+    const record = {
+      deviceId: safeDeviceId, requestId: safeRequestId, conversationId, fingerprint,
+      event: 'conversation.command.pending', eventSequence: 0, terminal: false,
+      text: '', reasoning: '', truncated: false, updatedAtMs: Date.now(), windowRef: ''
+    }
+    requests.set(key, record)
+    record.dispatched = serialize(conversationId, async () => {
+      try {
+        const hadSession = Boolean(existingSession(conversationId))
+        const session = await ensureSession(conversationId, check)
+        check()
+        const item = windowItem(session.windowRef)
+        if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
+        session.activeRequestId = safeRequestId
+        session.activeDeviceId = safeDeviceId
+        session.activeOperation = 'conversation.compact'
+        record.windowRef = session.windowRef
+        const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+          type: 'conversation.compact', requestId: safeRequestId, deviceId: safeDeviceId, conversationId
+        })
+        if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+        const result = { ok: true, operation: 'conversation.compact', conversationId, windowId: session.windowRef, hidden: session.hidden, created: !hadSession }
+        record.result = result
+        if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
+        return result
+      } catch (error) {
+        const session = sessions.get(conversationId)
+        if (session?.activeRequestId === safeRequestId && session.activeDeviceId === safeDeviceId) {
+          session.activeRequestId = ''; session.activeDeviceId = ''; session.activeOperation = ''
+        }
+        publish(record, 'conversation.compact.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
+        throw error
+      }
+    })
+    return record.dispatched
+  }
+
+  async function cancelCompact({ deviceId, requestId, params = {} } = {}) {
+    parameters(params, ['conversationId'])
+    const conversationId = id(params.conversationId, 'conversationId')
+    assertActive(generation, deviceId)
+    const session = existingSession(conversationId)
+    if (!session?.activeRequestId || session.activeOperation !== 'conversation.compact') throw remoteError('remote_compact_not_running')
+    if (session.activeDeviceId !== deviceId) throw remoteError('remote_request_owner_mismatch')
+    const result = await dispatchRemoteCommandToWindow(session.windowRef, {
+      type: 'conversation.compact.cancel', requestId: id(requestId, 'requestId'),
+      targetRequestId: session.activeRequestId, conversationId
+    })
+    if (!result?.ok) throw remoteError('remote_renderer_dispatch_failed')
+    return { ok: true, conversationId, windowId: session.windowRef, targetRequestId: session.activeRequestId }
+  }
+
+
   async function cancel({ deviceId, requestId, params = {} } = {}) {
     parameters(params, ['conversationId'])
     const conversationId = id(params.conversationId, 'conversationId')
@@ -515,7 +627,7 @@ export function createRemoteSessionManager({
     const record = requests.get(requestKey(session.activeDeviceId, data.requestId))
     if (!record || record.terminal) return { ok: false, error: 'remote_renderer_event_request_mismatch' }
     publish(record, data.event, sanitizeEvent(data.event, data.payload))
-    if (record.terminal) { session.activeRequestId = ''; session.activeDeviceId = '' }
+    if (record.terminal) { session.activeRequestId = ''; session.activeDeviceId = ''; session.activeOperation = '' }
     return { ok: true }
   }
 
@@ -525,6 +637,7 @@ export function createRemoteSessionManager({
       finishClosed(session)
       sessions.delete(conversationId)
     }
+    uploadManager?.cleanupWindow?.(windowRef)?.catch?.(() => {})
     onWindowClosed?.(windowRef)
     return { ok: true }
   }
@@ -534,10 +647,13 @@ export function createRemoteSessionManager({
     for (const session of sessions.values()) {
       if (session.activeDeviceId !== deviceId || !session.activeRequestId) continue
       await dispatchRemoteCommandToWindow(session.windowRef, {
-        type: 'conversation.cancel', requestId: session.activeRequestId,
-        targetRequestId: session.activeRequestId, conversationId: session.conversationId
+        type: session.activeOperation === 'conversation.compact' ? 'conversation.compact.cancel' : 'conversation.cancel',
+        requestId: session.activeRequestId,
+        targetRequestId: session.activeRequestId,
+        conversationId: session.conversationId
       }).catch(() => {})
     }
+    await uploadManager?.cleanupDevice?.(deviceId)
   }
 
   function closeAll() {
@@ -558,8 +674,10 @@ export function createRemoteSessionManager({
           })
         } else if (session.activeRequestId) {
           await dispatchRemoteCommandToWindow(session.windowRef, {
-            type: 'conversation.cancel', requestId: session.activeRequestId,
-            targetRequestId: session.activeRequestId, conversationId: session.conversationId
+            type: session.activeOperation === 'conversation.compact' ? 'conversation.compact.cancel' : 'conversation.cancel',
+            requestId: session.activeRequestId,
+            targetRequestId: session.activeRequestId,
+            conversationId: session.conversationId
           })
         }
       }))
@@ -584,6 +702,8 @@ export function createRemoteSessionManager({
     reaskMessage: (input) => mutate({ ...input, operation: 'conversation.message.reask' }),
     getConfig: (input) => configCommand({ ...input, operation: 'conversation.config.get' }),
     patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),
+    compact,
+    cancelCompact,
     cancel, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
     resume: () => { enabled = true },

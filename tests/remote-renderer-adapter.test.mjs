@@ -1,22 +1,28 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import vm from 'node:vm'
-import { shallowRef, ref, computed } from 'vue'
+import { shallowRef, ref, computed, watch } from 'vue'
 
 const source = await fs.readFile(new URL('../render/window/App.vue', import.meta.url), 'utf8')
 const block = source.slice(source.indexOf('const activeRemoteCommand ='), source.indexOf('const stopConversationLeaseHeartbeat ='))
 assert.ok(block.includes('persistRemoteTranscript'))
-const events = [], actions = []
+const events = [], actions = [], consumedUploads = [], appendedMessages = []
 const context = {
-  shallowRef, ref, computed, console, setTimeout, clearTimeout,
-  window: { api: { emitRemoteRendererEvent: async (event) => { events.push(structuredClone(event)); actions.push(event.event) } } },
+  shallowRef, ref, computed, watch, console, setTimeout, clearTimeout,
+  window: { api: {
+    emitRemoteRendererEvent: async (event) => { events.push(structuredClone(event)); actions.push(event.event) },
+    consumeRemoteUpload: async (input) => {
+      consumedUploads.push(structuredClone(input))
+      return { uploadId: input.uploadId, content: { type: 'image_url', image_url: { url: 'data:image/png;base64,UE5HREFUQQ==' } } }
+    }
+  } },
   currentConversationStorage: ref({ conversationId: 'conversation-renderer-fixture', revision: 0 }),
   isWindowBootstrapped: ref(true), isClosingWindow: ref(false), loading: ref(false), compacting: ref(false),
   isPreparingSend: ref(false), isMcpLoading: ref(false), chat_show: ref([]),
   sessionMutationVersion: 0, lastPersistedSessionVersion: 0,
   ensureConversationWriteAccess: () => true,
   clearScheduledAutoSave: () => {},
-  appendFullHistory: (message) => actions.push(`user:${message.content}`),
+  appendFullHistory: (message) => { appendedMessages.push(structuredClone(message)); actions.push(`user:${message.content}`) },
   flushAppendBuffer: async () => actions.push('buffer-flush'),
   syncAutoCloseOnBlurListener: () => {},
   closePage: async () => actions.push('window-close'),
@@ -37,6 +43,11 @@ const context = {
   applyNormalizedSkillSelection: (values) => { context.sessionSkillIds.value = values.map((item) => item === 'skill-b' ? 'Skill B' : item); context.tempSessionSkillIds.value = [...context.sessionSkillIds.value]; return context.sessionSkillIds.value },
   requestApplyMcpTools: async () => {},
   normalizeCompactConfigState: (value) => ({ ...value }),
+
+  compactProgress: ref({ percent: 0, stage: '', message: '' }),
+  runConversationCompact: async () => { context.compacting.value = true; context.compactProgress.value = { percent: 55, stage: 'cascade', message: 'fixture' }; await Promise.resolve(); context.compacting.value = false; return true },
+  handleCancelCompact: () => { context.__compactAbort = true },
+
 
   cancelAskAI: () => { context.loading.value = false; actions.push('cancel') }
 }
@@ -62,6 +73,47 @@ assert.equal(events.at(-1).event, 'assistant.completed')
 assert.equal(events.filter((event) => event.event === 'assistant.delta').map((event) => event.payload.textDelta || '').join(''), 'first!second')
 assert.ok(actions.indexOf('remote-turn-finalized') < actions.indexOf('assistant.completed'))
 assert.equal(events.at(-1).payload.revision, 2)
+
+
+const attachmentCommand = {
+  ...command,
+  requestId: 'renderer-request-attachment',
+  text: 'With image',
+  uploadIds: ['upload-renderer-fixture-0001']
+}
+await adapter.runRemoteConversationCommand(attachmentCommand)
+assert.deepEqual(consumedUploads.at(-1), {
+  requestId: attachmentCommand.requestId,
+  uploadId: attachmentCommand.uploadIds[0]
+})
+assert.equal(appendedMessages.at(-1).content[0].text, 'With image')
+assert.equal(appendedMessages.at(-1).content[1].type, 'image_url')
+assert.equal(context.chat_show.value.at(-1).content[1].type, 'image_url')
+
+await adapter.runRemoteConversationCommand({
+  ...command,
+  requestId: 'renderer-request-attachment-only',
+  text: '',
+  uploadIds: ['upload-renderer-fixture-0002']
+})
+assert.equal(appendedMessages.at(-1).content.length, 1)
+assert.equal(appendedMessages.at(-1).content[0].type, 'image_url')
+
+const appendedBeforeAttachmentFailure = appendedMessages.length
+context.window.api.consumeRemoteUpload = async () => { throw new Error('remote_upload_not_authorized') }
+await adapter.runRemoteConversationCommand({
+  ...command,
+  requestId: 'renderer-request-attachment-fail',
+  uploadIds: ['upload-renderer-fixture-0003']
+})
+assert.equal(events.at(-1).event, 'assistant.failed')
+assert.equal(events.at(-1).payload.code, 'remote_attachment_unavailable')
+assert.equal(appendedMessages.length, appendedBeforeAttachmentFailure, 'failed attachment preparation must not append a partial user message')
+assert.doesNotMatch(block, /fileList\.value/, 'Remote commands must not mutate the Desktop draft attachment list')
+context.window.api.consumeRemoteUpload = async (input) => {
+  consumedUploads.push(structuredClone(input))
+  return { uploadId: input.uploadId, content: { type: 'image_url', image_url: { url: 'data:image/png;base64,UE5HREFUQQ==' } } }
+}
 
 context.executeAutoSaveRequest = async () => false
 await adapter.runRemoteConversationCommand({ ...command, requestId: 'renderer-fail-save' })
@@ -161,6 +213,24 @@ await adapter.runRemoteConversationCommand({
 assert.equal(events.at(-1).event, 'conversation.operation.failed')
 assert.equal(events.at(-1).payload.code, 'remote_model_unavailable')
 assert.equal(context.model.value, 'provider|model-b', 'invalid patch rolls back')
+
+
+const compactEventStart = events.length
+await adapter.runRemoteConversationCommand({ type: 'conversation.compact', conversationId: command.conversationId, requestId: 'renderer-compact' })
+const compactEvents = events.slice(compactEventStart)
+assert.ok(compactEvents.some((item) => item.event === 'conversation.compact.progress' && item.payload.percent === 55))
+assert.equal(compactEvents.at(-1).event, 'conversation.compact.completed')
+assert.equal(compactEvents.at(-1).payload.changed, true)
+context.runConversationCompact = async () => { const error = new Error('Aborted'); error.name = 'AbortError'; throw error }
+await adapter.runRemoteConversationCommand({ type: 'conversation.compact', conversationId: command.conversationId, requestId: 'renderer-compact-cancelled' })
+assert.equal(events.at(-1).event, 'conversation.compact.cancelled')
+context.activeRemoteCommand = adapter.activeRemoteCommand
+adapter.activeRemoteCommand.value = { type: 'conversation.compact', conversationId: command.conversationId, requestId: 'renderer-compact-active' }
+context.compacting.value = true
+await adapter.runRemoteConversationCommand({ type: 'conversation.compact.cancel', conversationId: command.conversationId, requestId: 'cancel-compact', targetRequestId: 'renderer-compact-active' })
+assert.equal(context.__compactAbort, true)
+adapter.activeRemoteCommand.value = null
+context.compacting.value = false
 
 
 adapter.remoteHiddenWriter.value = true

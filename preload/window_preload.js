@@ -237,6 +237,8 @@ const api = {
     electronAPI.ipcRenderer.invoke('window:conversationStatus', toPlainPayload(input) || {}),
   emitRemoteRendererEvent: (input = {}) =>
     electronAPI.ipcRenderer.invoke('remote:rendererEvent', toPlainPayload(input) || {}),
+  consumeRemoteUpload: (input = {}) =>
+    invokeOrThrow('remote:consumeUpload', toPlainPayload(input) || {}),
   emitWindowEvent: (input) => electronAPI.ipcRenderer.invoke('window:event:emit', input),
   onWindowEvent: (callback) => {
     if (typeof callback !== 'function') return

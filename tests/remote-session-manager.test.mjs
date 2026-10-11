@@ -3,7 +3,7 @@ import { createRemoteSessionManager } from '../main/core/remote/sessionManager.j
 
 const CID = 'conversation-session-fixture-0001'
 const DEVICE = 'device-session-fixture-0001'
-function fixture({ existing = false, dispatchFailure = false, stalled = false } = {}) {
+function fixture({ existing = false, dispatchFailure = false, stalled = false, uploadManager = null } = {}) {
   const items = existing ? [{ id: 'window-existing', type: 'window', conversationId: CID, rendererReady: true, leasePending: false, remoteHidden: false }] : []
   const commands = [], events = [], opens = []
   let blocked = null
@@ -30,6 +30,7 @@ function fixture({ existing = false, dispatchFailure = false, stalled = false } 
     },
     revealRemoteConversationWindow: (ref) => { items.find((item) => item.id === ref).remoteHidden = false; return { ok: true } },
     broadcastToDevice: (deviceId, event, payload) => events.push({ deviceId, event, payload }),
+    uploadManager,
     readinessTimeoutMs: 100
   })
   return { manager, items, commands, events, opens, unblock: () => blocked?.() }
@@ -144,6 +145,42 @@ async function run() {
   } })
 
 
+  const compactFixture = fixture({ existing: true })
+  await compactFixture.manager.compact({ deviceId: DEVICE, requestId: 'request-compact-fixture', params: { conversationId: CID } })
+  assert.equal(compactFixture.commands.at(-1).type, 'conversation.compact')
+  compactFixture.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-compact-fixture', event: 'conversation.compact.progress',
+    payload: { percent: 44, stage: 'cascade', message: 'fixture', secret: 'NO' }
+  } })
+  const compactState = compactFixture.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-compact-fixture' } })
+  assert.equal(compactState.event, 'conversation.compact.progress')
+  assert.equal(compactFixture.events.at(-1).payload.percent, 44)
+  assert.equal(JSON.stringify(compactFixture.events.at(-1)).includes('NO'), false)
+  await assert.rejects(compactFixture.manager.cancelCompact({ deviceId: 'device-other-fixture', requestId: 'cancel-compact-other', params: { conversationId: CID } }), { code: 'remote_request_owner_mismatch' })
+  await compactFixture.manager.cancelCompact({ deviceId: DEVICE, requestId: 'cancel-compact-fixture', params: { conversationId: CID } })
+  assert.equal(compactFixture.commands.at(-1).type, 'conversation.compact.cancel')
+  compactFixture.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-compact-fixture', event: 'conversation.compact.cancelled', payload: { revision: 11 }
+  } })
+  assert.equal(compactFixture.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-compact-fixture' } }).terminal, true)
+
+
+  const compactRevoked = fixture({ existing: true })
+  await compactRevoked.manager.compact({ deviceId: DEVICE, requestId: 'request-compact-revoke', params: { conversationId: CID } })
+  await compactRevoked.manager.revokeDevice(DEVICE)
+  assert.equal(compactRevoked.commands.at(-1).type, 'conversation.compact.cancel')
+
+  const compactShutdown = fixture({ existing: true })
+  await compactShutdown.manager.compact({ deviceId: DEVICE, requestId: 'request-compact-shutdown', params: { conversationId: CID } })
+  const compactClosing = compactShutdown.manager.closeAll()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(compactShutdown.commands.at(-1).type, 'conversation.compact.cancel')
+  compactShutdown.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-compact-shutdown', event: 'conversation.compact.cancelled', payload: { revision: 12 }
+  } })
+  await compactClosing
+
+
   const reused = fixture({ existing: true })
   await send(reused.manager)
   assert.equal(reused.opens.length, 0)
@@ -168,6 +205,57 @@ async function run() {
   await assert.rejects(pending, { code: 'remote_gateway_stopped' })
   await closing
   assert.equal(racing.commands.length, 0, 'stop invalidates a command waiting for repository')
+
+
+  const uploadCalls = []
+  const uploadManager = {
+    async authorizeForRequest(input) { uploadCalls.push({ method: 'authorize', ...structuredClone(input) }); return [] },
+    async releaseRequest(input) { uploadCalls.push({ method: 'release', ...structuredClone(input) }); return { ok: true } },
+    async cleanupRequest(input) { uploadCalls.push({ method: 'cleanupRequest', ...structuredClone(input) }); return { ok: true } },
+    async cleanupDevice(deviceId) { uploadCalls.push({ method: 'cleanupDevice', deviceId }); return { ok: true } },
+    async cleanupWindow(windowRef) { uploadCalls.push({ method: 'cleanupWindow', windowRef }); return { ok: true } }
+  }
+  const withUploads = fixture({ existing: true, uploadManager })
+  const uploadIds = ['upload-session-fixture-0001', 'upload-session-fixture-0002']
+  await withUploads.manager.send({
+    deviceId: DEVICE, requestId: 'request-upload-session-1',
+    params: { conversationId: CID, text: '', uploadIds }
+  })
+  assert.deepEqual(uploadCalls[0], {
+    method: 'authorize', deviceId: DEVICE, requestId: 'request-upload-session-1',
+    windowRef: 'window-existing', uploadIds
+  })
+  assert.deepEqual(withUploads.commands.at(-1).uploadIds, uploadIds)
+  assert.equal(withUploads.commands.at(-1).text, '')
+  assert.equal((await withUploads.manager.send({
+    deviceId: DEVICE, requestId: 'request-upload-session-1', params: { conversationId: CID, text: '', uploadIds }
+  })).duplicate, true)
+  await assert.rejects(withUploads.manager.send({
+    deviceId: DEVICE, requestId: 'request-upload-session-1', params: { conversationId: CID, text: '', uploadIds: [uploadIds[0]] }
+  }), { code: 'remote_request_id_conflict' })
+  withUploads.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
+    conversationId: CID, requestId: 'request-upload-session-1', event: 'assistant.completed', payload: { revision: 12 }
+  } })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.ok(uploadCalls.some((item) => item.method === 'cleanupRequest' && item.requestId === 'request-upload-session-1'))
+  await assert.rejects(withUploads.manager.send({
+    deviceId: DEVICE, requestId: 'request-upload-duplicate',
+    params: { conversationId: CID, text: 'duplicate', uploadIds: [uploadIds[0], uploadIds[0]] }
+  }), { code: 'remote_upload_ids_invalid' })
+
+  const uploadFailureCalls = []
+  const uploadFailureManager = {
+    ...uploadManager,
+    async authorizeForRequest(input) { uploadFailureCalls.push({ method: 'authorize', ...structuredClone(input) }); return [] },
+    async releaseRequest(input) { uploadFailureCalls.push({ method: 'release', ...structuredClone(input) }); return { ok: true } }
+  }
+  const uploadDispatchFailed = fixture({ existing: true, dispatchFailure: true, uploadManager: uploadFailureManager })
+  await assert.rejects(uploadDispatchFailed.manager.send({
+    deviceId: DEVICE, requestId: 'request-upload-dispatch-fail',
+    params: { conversationId: CID, text: 'retryable', uploadIds: [uploadIds[0]] }
+  }), { code: 'remote_renderer_dispatch_failed' })
+  assert.equal(uploadFailureCalls[0].method, 'authorize')
+  assert.equal(uploadFailureCalls[1].method, 'release')
 
   const failed = fixture({ dispatchFailure: true })
   await assert.rejects(send(failed.manager), { code: 'remote_renderer_dispatch_failed' })

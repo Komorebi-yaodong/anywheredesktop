@@ -16,6 +16,7 @@
  */
 
 
+import path from 'node:path'
 import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow, safeStorage } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
@@ -62,6 +63,7 @@ import * as compactApi from './core/compact.js'
 import { createRemoteGateway } from './core/remote/index.js'
 import { createRemoteConversationReadService } from './core/remote/conversationRead.js'
 import { createRemoteSessionManager } from './core/remote/sessionManager.js'
+import { createRemoteUploadManager } from './core/remote/uploadManager.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -72,6 +74,11 @@ let appQuitStarted = false
 
 let remoteShutdownPromise = null
 let remoteShutdownCompleted = false
+
+const remoteUploadManager = createRemoteUploadManager({
+  getTempRoot: () => path.join(app.getPath('temp'), 'anywhere-remote-v2-uploads')
+})
+
 
 const remoteConversationReadService = createRemoteConversationReadService({
   getConfig: dataApi.getConfig,
@@ -90,6 +97,7 @@ const remoteGateway = createRemoteGateway({
   dbStorageSetItem: dbApi.dbStorageSetItem,
   getAppVersion: () => app.getVersion(),
   conversationReadService: remoteConversationReadService,
+  uploadManager: remoteUploadManager,
   onStatusChanged: (status) => {
     for (const item of listWindows('main')) {
       const win = getWindowByRef(item.id)
@@ -111,6 +119,7 @@ const remoteSessionManager = createRemoteSessionManager({
   getWindowByRef,
   dispatchRemoteCommandToWindow,
   revealRemoteConversationWindow,
+  uploadManager: remoteUploadManager,
   broadcastToDevice: (deviceId, event, payload) => remoteGateway.sendEventToDevice(deviceId, event, payload)
 })
 remoteGateway.setSessionManager(remoteSessionManager)
@@ -801,6 +810,7 @@ app.whenReady().then(async () => {
     skillApi,
     compactApi,
     remoteGateway,
+    remoteUploadManager,
 
     updaterApi,
 

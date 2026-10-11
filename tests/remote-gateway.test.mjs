@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import https from 'node:https'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { once } from 'node:events'
 import { WebSocket } from 'ws'
 import { createRemoteGateway } from '../main/core/remote/index.js'
 import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
+import { createRemoteUploadManager } from '../main/core/remote/uploadManager.js'
 import {
   completeDevicePairing,
   completeSessionHello,
@@ -158,6 +162,8 @@ async function sendEncryptedRequest({ socket, session, requestId, method, params
 async function main() {
   const storage = createStorage()
   const port = await findFreePort()
+  const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-remote-gateway-test-'))
+  const uploadManager = createRemoteUploadManager({ tempRoot: path.join(sandbox, 'uploads') })
   const app = {
     getPath: () => process.cwd(),
     getName: () => 'Anywhere Remote Test'
@@ -221,6 +227,7 @@ async function main() {
     dbStorageGetItem: storage.get,
     dbStorageSetItem: storage.set,
     conversationReadService,
+    uploadManager,
     onPairingCreated: (payload) => { observedPairing = payload },
     logger: { log() {}, warn() {}, error() {} }
   })
@@ -234,9 +241,21 @@ async function main() {
     listWindows: () => writerWindows,
     getWindowByRef: () => ({ isDestroyed: () => false }),
     revealRemoteConversationWindow: () => ({ ok: true }),
+    uploadManager,
     broadcastToDevice: (deviceId, event, payload) => gateway.sendEventToDevice(deviceId, event, payload),
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       writerCommands.push(command)
+      if (command.type === 'conversation.compact') {
+        sessionManager.handleRendererEvent({ windowRef, payload: {
+          conversationId: command.conversationId, requestId: command.requestId,
+          event: 'conversation.compact.progress', payload: { percent: 50, stage: 'cascade', message: 'fixture' }
+        } })
+        sessionManager.handleRendererEvent({ windowRef, payload: {
+          conversationId: command.conversationId, requestId: command.requestId,
+          event: 'conversation.compact.completed', payload: { changed: true, revision: 7 }
+        } })
+      }
+
       if (command.type === 'conversation.config.get' || command.type === 'conversation.config.patch') {
         sessionManager.handleRendererEvent({ windowRef, payload: {
           conversationId: command.conversationId, requestId: command.requestId,
@@ -404,6 +423,11 @@ async function main() {
     assert.ok(welcome.payload.capabilities.includes('conversation.messages.list'))
     assert.ok(welcome.payload.capabilities.includes('conversation.windows.list'))
 
+    assert.ok(welcome.payload.capabilities.includes('attachment.begin'))
+    assert.ok(welcome.payload.capabilities.includes('attachment.chunk'))
+    assert.ok(welcome.payload.capabilities.includes('attachment.complete'))
+    assert.ok(welcome.payload.capabilities.includes('attachment.abort'))
+
     const statusResponse = await sendEncryptedRequest({
       socket,
       session,
@@ -508,6 +532,106 @@ async function main() {
     const retry = await sendEncryptedRequest({ ...reconnected, requestId: remoteRequestId, method: 'conversation.send', params: sendInput })
     assert.equal(retry.result.duplicate, true)
     assert.equal(writerCommands.filter((command) => command.type === 'conversation.send').length, 1)
+
+
+    const invalidAttachment = Buffer.from('invalid attachment payload')
+    const invalidBegin = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-attachment-invalid-begin',
+      method: 'attachment.begin',
+      params: {
+        name: 'invalid.txt', type: 'text/plain', size: invalidAttachment.length,
+        sha256: crypto.createHash('sha256').update('different').digest('base64url')
+      }
+    })
+    const invalidUploadId = invalidBegin.result.upload.uploadId
+    await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-attachment-invalid-chunk',
+      method: 'attachment.chunk',
+      params: { uploadId: invalidUploadId, index: 0, data: invalidAttachment.toString('base64url') }
+    })
+    const invalidComplete = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-attachment-invalid-complete',
+      method: 'attachment.complete',
+      params: { uploadId: invalidUploadId }
+    })
+    assert.equal(invalidComplete.ok, false)
+    assert.equal(invalidComplete.error.code, 'remote_upload_integrity_failed')
+    assert.equal(uploadManager.getUpload(invalidUploadId), null)
+
+    const attachmentPayload = Buffer.alloc(128 * 1024, 0x5a)
+    const attachmentBegin = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-attachment-begin',
+      method: 'attachment.begin',
+      params: {
+        name: 'remote-note.txt', type: 'text/plain', size: attachmentPayload.length,
+        sha256: crypto.createHash('sha256').update(attachmentPayload).digest('base64url')
+      }
+    })
+    const attachmentUploadId = attachmentBegin.result.upload.uploadId
+    assert.equal(JSON.stringify(attachmentBegin).includes(sandbox), false)
+    const attachmentChunk = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-attachment-chunk',
+      method: 'attachment.chunk',
+      params: { uploadId: attachmentUploadId, index: 0, data: attachmentPayload.toString('base64url') }
+    })
+    assert.equal(attachmentChunk.result.upload.receivedBytes, attachmentPayload.length)
+    const attachmentComplete = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-attachment-complete',
+      method: 'attachment.complete',
+      params: { uploadId: attachmentUploadId }
+    })
+    assert.equal(attachmentComplete.result.upload.state, 'completed')
+
+    const attachmentSendRequestId = 'request-send-attachment-gateway'
+    const attachmentSend = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: attachmentSendRequestId,
+      method: 'conversation.send',
+      params: { conversationId: sendInput.conversationId, text: '', uploadIds: [attachmentUploadId] }
+    })
+    assert.equal(attachmentSend.ok, true)
+    assert.deepEqual(writerCommands.at(-1).uploadIds, [attachmentUploadId])
+    assert.equal(writerCommands.at(-1).text, '')
+    const rendererAttachment = await uploadManager.consumeForRenderer({
+      windowRef: 'window-fixture', requestId: attachmentSendRequestId, uploadId: attachmentUploadId
+    })
+    assert.equal(rendererAttachment.base64, attachmentPayload.toString('base64'))
+    assert.equal(Object.hasOwn(rendererAttachment, 'path'), false)
+    assert.equal(Object.hasOwn(rendererAttachment, 'url'), false)
+    gateway.handleRendererEvent({ windowRef: 'window-fixture', payload: {
+      event: 'assistant.completed', requestId: attachmentSendRequestId, conversationId: sendInput.conversationId,
+      payload: { revision: 5 }
+    } })
+    const attachmentRetry = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: attachmentSendRequestId,
+      method: 'conversation.send',
+      params: { conversationId: sendInput.conversationId, text: '', uploadIds: [attachmentUploadId] }
+    })
+    assert.equal(attachmentRetry.result.duplicate, true)
+
+    assert.ok(welcome.payload.capabilities.includes('conversation.compact'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.compact.cancel'))
+    const compactRequestId = 'request-compact-gateway'
+    const compactResponse = await sendEncryptedRequest({
+      ...reconnected, requestId: compactRequestId, method: 'conversation.compact', params: { conversationId: sendInput.conversationId }
+    })
+    assert.equal(compactResponse.ok, true)
+    assert.ok(compactResponse.events.some((item) => item.event === 'conversation.compact.progress'))
+    const compactState = await sendEncryptedRequest({
+      ...reconnected, requestId: 'request-compact-state', method: 'conversation.request.get', params: { requestId: compactRequestId }
+    })
+    assert.equal(compactState.result.terminal, true)
+    assert.equal(compactState.result.result.changed, true)
+    assert.equal(compactState.result.result.revision, 7)
+
+
     assert.ok(welcome.payload.capabilities.includes('conversation.config.get'))
     assert.ok(welcome.payload.capabilities.includes('conversation.config.patch'))
     const configGetId = 'request-config-get-gateway'
@@ -552,6 +676,18 @@ async function main() {
 
     await sendEncryptedRequest({ ...reconnected, requestId: 'request-revoke-active', method: 'conversation.send', params: sendInput })
 
+    const pendingRevokePayload = Buffer.from('pending revoke')
+    const pendingRevokeUpload = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-attachment-pending-revoke',
+      method: 'attachment.begin',
+      params: {
+        name: 'pending.txt', type: 'text/plain', size: pendingRevokePayload.length,
+        sha256: crypto.createHash('sha256').update(pendingRevokePayload).digest('base64url')
+      }
+    })
+    const pendingRevokeUploadId = pendingRevokeUpload.result.upload.uploadId
+
 
     const revokedClose = once(reconnected.socket, 'close')
     const revoked = await gateway.revokeDevice(deviceId)
@@ -560,6 +696,8 @@ async function main() {
     assert.equal(closeCode, 4001)
     reconnected.session.close()
     assert.equal(writerCommands.at(-1).type, 'conversation.cancel')
+
+    assert.equal(uploadManager.getUpload(pendingRevokeUploadId), null, 'device revocation must delete pending uploads')
 
     const audit = await gateway.getAuditLog()
     assert.ok(audit.entries.some((entry) => entry.type === 'remote.device.paired'))
@@ -573,7 +711,9 @@ async function main() {
 
     console.log(JSON.stringify({ ok: true, suite: 'remote-gateway', protocolVersion: 2 }))
   } finally {
-    await gateway.stop()
+    await gateway.stop().catch(() => {})
+    await uploadManager.stop().catch(() => {})
+    await fs.rm(sandbox, { recursive: true, force: true })
   }
 }
 

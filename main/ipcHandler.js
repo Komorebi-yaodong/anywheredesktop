@@ -123,6 +123,7 @@ export function registerIpcHandlers({
   skillApi,
   compactApi,
   remoteGateway,
+  remoteUploadManager,
 
   updaterApi,
 
@@ -203,6 +204,25 @@ export function registerIpcHandlers({
     const windowRef = getWindowRefByWebContentsId(event.sender.id)
     if (!windowRef) return { ok: false, error: 'remote_renderer_window_not_found' }
     return remoteGateway.handleRendererEvent({ windowRef, payload: input })
+  })
+
+
+  handleInvoke('remote:consumeUpload', async (event, input = {}) => {
+    const windowRef = getWindowRefByWebContentsId(event.sender.id)
+    if (!windowRef) throw new Error('remote_renderer_window_not_found')
+    const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
+    const attachment = await remoteUploadManager.consumeForRenderer({
+      windowRef,
+      requestId: source.requestId,
+      uploadId: source.uploadId
+    })
+    const content = await fileApi.parseFileObject({
+      name: attachment.name,
+      size: attachment.size,
+      base64: attachment.base64
+    })
+    if (!content) throw new Error('remote_attachment_parse_failed')
+    return { uploadId: attachment.uploadId, content }
   })
 
 

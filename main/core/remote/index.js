@@ -207,6 +207,7 @@ export function createRemoteGateway({
   getAppVersion = () => '',
   conversationReadService = null,
   sessionManager = null,
+  uploadManager = null,
   onStatusChanged = null,
   onPairingCreated = null,
   logger = console
@@ -272,9 +273,10 @@ export function createRemoteGateway({
       capabilities.push(
         'conversation.send', 'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
         'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask',
-        'conversation.config.get', 'conversation.config.patch'
+        'conversation.config.get', 'conversation.config.patch', 'conversation.compact', 'conversation.compact.cancel'
       )
     }
+    if (uploadManager) capabilities.push('attachment.begin', 'attachment.chunk', 'attachment.complete', 'attachment.abort')
     return capabilities
   }
 
@@ -869,6 +871,23 @@ export function createRemoteGateway({
         case 'remote.device.self.get':
           result = { device: publicDevice(context.device) }
           break
+        case 'attachment.begin':
+          if (!uploadManager) throw remoteError('remote_method_unavailable')
+          result = await uploadManager.begin({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'attachment.chunk':
+          if (!uploadManager) throw remoteError('remote_method_unavailable')
+          result = await uploadManager.chunk({ deviceId: context.device.deviceId, params })
+          break
+        case 'attachment.complete':
+          if (!uploadManager) throw remoteError('remote_method_unavailable')
+          result = await uploadManager.complete({ deviceId: context.device.deviceId, params })
+          break
+        case 'attachment.abort':
+          if (!uploadManager) throw remoteError('remote_method_unavailable')
+          result = await uploadManager.abort({ deviceId: context.device.deviceId, params })
+          break
+
         case 'conversation.list':
           if (!conversationReadService) throw remoteError('remote_method_unavailable')
           result = await conversationReadService.listConversations(params)
@@ -897,6 +916,15 @@ export function createRemoteGateway({
             params
           })
           break
+        case 'conversation.compact':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.compact({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'conversation.compact.cancel':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.cancelCompact({ deviceId: context.device.deviceId, requestId, params })
+          break
+
         case 'conversation.config.get':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')
           result = await activeSessionManager.getConfig({ deviceId: context.device.deviceId, requestId, params })
@@ -1107,6 +1135,7 @@ export function createRemoteGateway({
   async function startServer(settings) {
     assertSecureStorage()
     const [identity, tls] = await Promise.all([getIdentity(), getTlsMaterial()])
+    await uploadManager?.initialize?.()
     const nextServer = https.createServer({ key: tls.key, cert: tls.cert }, handleHttp)
     const nextWebSocketServer = new WebSocketServer({
       noServer: true,
@@ -1176,6 +1205,7 @@ export function createRemoteGateway({
     // must not stop accepted turns, but explicit gateway shutdown must cancel them.
     try {
       await activeSessionManager?.closeAll?.()
+      await uploadManager?.stop?.()
     } catch (error) {
       activeSessionManager?.resume?.()
       throw error
@@ -1251,6 +1281,7 @@ export function createRemoteGateway({
     try {
       await startServer(settings)
     } catch (error) {
+      await uploadManager?.stop?.().catch?.(() => {})
       runtime = {
         ...createStoppedRuntime(),
         enabled: true,
@@ -1285,6 +1316,7 @@ export function createRemoteGateway({
       closeDeviceSockets(normalizedId, 4001, 'device_revoked')
 
       await activeSessionManager?.revokeDevice?.(normalizedId)
+      await uploadManager?.cleanupDevice?.(normalizedId)
 
       await appendAudit('remote.device.revoked', { deviceId: normalizedId, result: 'ok' })
       notifyStatus()

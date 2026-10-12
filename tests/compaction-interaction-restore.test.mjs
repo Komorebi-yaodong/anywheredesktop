@@ -14,17 +14,16 @@ assert.match(input, /<div v-if="compacting" class="compact-section-card compact-
 assert.match(input, /\.compact-progress-block \{[\s\S]{0,80}padding: 14px;/)
 assert.match(input, /<div class="compact-config-block">/)
 assert.match(input, /<template #footer>/)
-assert.match(app, /if \(compacting\.value \|\| loading\.value \|\| isPreparingSend\.value\) \{[\s\S]{0,300}enqueueInputToBuffer\(compacting\.value \? '正在压缩/)
-assert.match(app, /const enqueueInputToBuffer = \(notice = '正在生成/)
+assert.match(app, /if \(compacting\.value\) \{[\s\S]{0,160}压缩进行中，暂不可发送/)
+assert.match(app, /if \(loading\.value \|\| isPreparingSend\.value\) \{[\s\S]{0,120}enqueueInputToBuffer\(\)/)
+assert.match(app, /const enqueueInputToBuffer = \(\) =>/)
 assert.match(store, /const restoredSnapshotId = outermost\.summary_id/)
 assert.doesNotMatch(store, /if \(outermost\.summary_id !== requestedSnapshotId\)/)
 assert.match(store, /return \{ revision, updatedAt, title: row\.title, restoredSnapshotId \}/)
 assert.match(store, /restoredSnapshotId: result\.restoredSnapshotId/)
 assert.match(store, /uiMessages = null/)
-assert.match(app, /const autoSaveSessionRequestConfig = async/)
-assert.match(app, /saveConversationState\(\{[\s\S]{0,700}state: getSessionRequestConfigStatePatch\(\)/)
-assert.match(app, /delay: AUTO_SAVE_REQUEST_CONFIG_DEBOUNCE_MS,[\s\S]{0,80}stateOnly: true/)
-assert.match(app, /const splitChatShowPrefixAtFullCut =/)
-assert.match(app, /await executeAutoSaveRequest\(\{ reason: 'conversation-compacted', force: true[\s\S]{0,180}await reloadConversationWindowFromStore/)
+// The remaining interaction assertions intentionally stop at the v1.3.1-compatible
+// compaction contract. Later development-line session-config/reload helpers are not
+// required for this stable-line backport and must not be pulled into 1.3.x.
 
 console.log('Desktop compaction interaction and authoritative restore regression passed')

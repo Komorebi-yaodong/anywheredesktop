@@ -569,7 +569,9 @@ const preprocessKatex = (text) => {
 
   let processedText = preprocessKatexPlainText(protectedText);
   protectedMap.forEach((segment, placeholder) => {
-    processedText = processedText.replaceAll(placeholder, segment);
+    // Use a function replacement: protected code may contain `$&`, `$'`, `$$`, etc.
+    // A string replacement would expand those tokens and can grow content exponentially.
+    processedText = processedText.replaceAll(placeholder, () => segment);
   });
 
   return processedText;
@@ -598,7 +600,8 @@ const normalizeWindowsLocalMarkdownImagePaths = (markdown) => {
   });
 
   protectedMap.forEach((segment, placeholder) => {
-    protectedText = protectedText.replaceAll(placeholder, segment);
+    // Keep protected Markdown literally intact; never interpret replacement tokens.
+    protectedText = protectedText.replaceAll(placeholder, () => segment);
   });
   return protectedText;
 };

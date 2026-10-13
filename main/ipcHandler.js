@@ -1249,7 +1249,12 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
   })
 
 
-  handleInvoke('conversation:saveSnapshot', async (_event, input = {}) => {
+    handleInvoke('conversation:repairUiLinks', async (_event, input = {}) => {
+    return conversationApi.repairConversationUiLinks(input)
+  })
+
+
+handleInvoke('conversation:saveSnapshot', async (_event, input = {}) => {
     return conversationApi.saveConversationSnapshot(input)
   })
 

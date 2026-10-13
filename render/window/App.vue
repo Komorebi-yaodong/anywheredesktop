@@ -13,6 +13,7 @@ import defaultAiAvatarUrl from '../../resources/icon.png?asset';
 import defaultUserAvatarUrl from '../../build/user.png?asset';
 import TextSearchUI from './utils/TextSearchUI.js';
 import { formatTimestamp, sanitizeToolArgs, sanitizeToolFunctionName } from './utils/formatters.js';
+import { resolveSafeConversationMutationTarget } from './utils/conversationMessageTarget.js';
 import { completeConversationClose, createConversationMutationQueue, createConversationPersistenceTracker, mergeConversationMutationRequests as mergeAutoSaveRequests } from './utils/conversationMutationQueue.js';
 
 
@@ -2642,10 +2643,25 @@ const acquireCurrentConversationLease = async () => {
       holderApp: 'desktop'
     });
     conversationReadOnly.value = lease?.readonly === true || lease?.ok === false;
-    conversationLease.value = lease?.ok ? lease : null;
     if (conversationReadOnly.value) {
       showDismissibleMessage.warning(`该会话正在由${lease?.holderApp || '另一个客户端'}编辑，当前以只读模式打开`);
       return;
+    }
+    conversationLease.value = lease;
+    const repaired = await window.api.repairConversationUiLinks({
+      dirPath,
+      conversationId: storage.conversationId,
+      expectedRevision: storage.revision,
+      holderInstanceId: conversationInstanceId,
+      leaseEpoch: lease.leaseEpoch
+    });
+    if (Number(repaired?.changed) > 0) {
+      currentConversationStorage.value = {
+        ...storage,
+        revision: Number(repaired.revision) || storage.revision
+      };
+      await reloadConversationWindowFromStore({ activeOnly: true, pageSize: Number(storage.pageSize) || 200 });
+      showDismissibleMessage.info('已安全修复历史会话的消息索引映射');
     }
     conversationLeaseHeartbeatTimer = setInterval(async () => {
       const currentLease = conversationLease.value;
@@ -2665,9 +2681,18 @@ const acquireCurrentConversationLease = async () => {
       }
     }, 5000);
   } catch (error) {
+    const failedLease = conversationLease.value;
+    if (failedLease?.leaseEpoch) {
+      await window.api.releaseConversationWriteLease({
+        dirPath,
+        conversationId: storage.conversationId,
+        holderInstanceId: conversationInstanceId,
+        leaseEpoch: failedLease.leaseEpoch
+      }).catch(() => {});
+    }
     conversationReadOnly.value = true;
     conversationLease.value = null;
-    showDismissibleMessage.warning(`确认会话编辑权失败，当前以只读模式打开: ${error?.message || error}`);
+    showDismissibleMessage.warning(`确认或修复会话编辑状态失败，当前以只读模式打开: ${error?.message || error}`);
   } finally {
     conversationLeasePending.value = false;
   }
@@ -10170,12 +10195,14 @@ const deleteMessage = (index) => {
     show_delete_count = 1;
   }
 
-  // Map the UI item to the corresponding non-tool full-history item, then remove its tool results too.
-  const fullVisibleIndexes = fullHistory.value
-    .map((message, fullIndex) => (message?.role === 'tool' ? -1 : fullIndex))
-    .filter((fullIndex) => fullIndex >= 0);
-  const fullStartIndex = fullVisibleIndexes[show_start_idx];
-  if (Number.isInteger(fullStartIndex)) {
+  // A persisted UI cache can be out of sync with canonical history. Never delete by array position:
+  // require a verified storage link or one unique semantic anchor match.
+  const fullStartIndex = resolveSafeConversationMutationTarget(fullHistory.value, chat_show.value, show_start_idx);
+  if (fullStartIndex < 0) {
+    showDismissibleMessage.warning('消息索引未能安全匹配，已阻止删除；请重开会话后重试');
+    return;
+  }
+  {
     let fullDeleteCount = 1;
     if (fullHistory.value[fullStartIndex]?.role === 'assistant') {
       const calledIds = new Set((fullHistory.value[fullStartIndex]?.tool_calls || []).map((call) => call?.id).filter(Boolean));

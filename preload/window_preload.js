@@ -484,6 +484,7 @@ const api = {
   openConversation: (input = {}) => invokeOrThrow('conversation:open', toPlainPayload(input)),
   loadConversationPage: (input = {}) => invokeOrThrow('conversation:loadPage', toPlainPayload(input)),
   getConversationRequestMessages: (input = {}) => invokeOrThrow('conversation:getRequestMessages', toPlainPayload(input)),
+  repairConversationUiLinks: (input = {}) => invokeOrThrow('conversation:repairUiLinks', toPlainPayload(input)),
 
   saveConversationSnapshot: (input = {}) => invokeOrThrow('conversation:saveSnapshot', toPlainPayload(input)),
   saveConversationState: (input = {}) => invokeOrThrow('conversation:saveState', toPlainPayload(input)),

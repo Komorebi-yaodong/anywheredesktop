@@ -8,9 +8,33 @@ import {
   createConversationPersistenceTracker,
   mergeConversationMutationRequests
 } from '../render/window/utils/conversationMutationQueue.js'
+import { resolveSafeConversationMutationTarget } from '../render/window/utils/conversationMessageTarget.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const appSource = await fs.readFile(path.join(root, 'render', 'window', 'App.vue'), 'utf8')
+
+const canonicalForDelete = [
+  { role: 'user', content: 'first', storageId: 'canonical-first' },
+  { role: 'assistant', content: 'reply', storageId: 'canonical-reply' },
+  { role: 'user', content: 'second', storageId: 'canonical-second' }
+]
+assert.equal(resolveSafeConversationMutationTarget(canonicalForDelete, [
+  { role: 'user', content: 'first', storageId: 'canonical-first' }
+], 0), 0)
+assert.equal(resolveSafeConversationMutationTarget(canonicalForDelete, [
+  { role: 'user', content: 'first', storageId: 'canonical-second' },
+  { role: 'assistant', content: 'reply', storageId: 'canonical-reply' }
+], 0), 0, 'a stale UI storageId must rebind to the uniquely matching canonical message')
+assert.equal(resolveSafeConversationMutationTarget(canonicalForDelete, [
+  { role: 'user', content: 'missing', storageId: 'canonical-second' }
+], 0), -1, 'an unresolvable UI row must not delete its stale storage target')
+assert.equal(resolveSafeConversationMutationTarget([
+  { role: 'user', content: 'duplicate', storageId: 'canonical-a' },
+  { role: 'user', content: 'duplicate', storageId: 'canonical-b' }
+], [
+  { role: 'user', content: 'duplicate', storageId: 'stale-id' }
+], 0), -1, 'ambiguous stale UI rows must fail closed')
+
 
 const merged = mergeConversationMutationRequests(
   { reason: 'config', version: 2, stateOnly: true, force: false, skipProjectAssignment: true },
@@ -124,6 +148,10 @@ assert.match(appSource, /isRestoringSessionSnapshot \|\| conversationReadOnly\.v
 assert.match(appSource, /const hasUnpersistedSession = persistenceState\.hasUnpersistedMutations \|\| persistenceState\.hasUnpersistedFullSnapshot[\s\S]{0,450}conversation_unpersisted_changes_without_write_access/)
 assert.match(appSource, /conversationPersistenceTracker\.markPersisted\(\{ version, stateOnly: false \}\)/)
 assert.match(appSource, /conversationPersistenceTracker\.markPersisted\(\{ version, stateOnly: true \}\)/)
+
+assert.match(appSource, /acquireConversationWriteLease\(\{[\s\S]{0,700}repairConversationUiLinks\(\{[\s\S]{0,400}reloadConversationWindowFromStore/)
+assert.match(appSource, /const failedLease = conversationLease\.value;[\s\S]{0,500}releaseConversationWriteLease/)
+
 
 assert.match(appSource, /const waitForPendingWindowMutationsBeforeClose = async[\s\S]{0,900}activeApplyMcpPromise/)
 assert.match(appSource, /if \(isClosingWindow\.value \|\| !ensureConversationWriteAccess\(true\)\) return/)

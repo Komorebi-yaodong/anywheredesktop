@@ -6,7 +6,9 @@ out
 *.log*
 result.txt
 
+# AI Context & Local Progress
 进度.md
+项目AGENT.md
 .claude/*
 .agents/*
 CLAUDE.md

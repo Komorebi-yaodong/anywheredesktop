@@ -60,6 +60,71 @@ function session(round, patch = {}) {
   }
 }
 
+async function verifyRecoveredUiProjection(root) {
+  const fullHistory = [
+    { role: 'compaction', content: 'synthetic-summary', summary: 'synthetic-summary', snapshotId: 'projection-summary', storageId: 'projection-summary' },
+    { role: 'user', content: 'before-recovery', storageId: 'projection-before' },
+    { role: 'user', content: 'recovered-user', storageId: 'projection-recovered' },
+    { role: 'assistant', content: 'after-recovery', storageId: 'projection-after' },
+    { role: 'user', content: 'delete-user', storageId: 'projection-delete' },
+    { role: 'assistant', content: 'tail-assistant', storageId: 'projection-tail' }
+  ]
+  const chatShow = [
+    { ...fullHistory[0], id: 1, uiStorageId: 'ui-projection-summary' },
+    { ...fullHistory[1], id: 2, uiStorageId: 'ui-projection-before' },
+    { ...fullHistory[3], id: 3, uiStorageId: 'ui-projection-after' },
+    { ...fullHistory[4], id: 4, uiStorageId: 'ui-projection-delete' },
+    { ...fullHistory[5], id: 5, uiStorageId: 'ui-projection-tail' }
+  ]
+  const created = await store.createConversation({
+    dirPath: root,
+    title: 'recovered-ui-projection',
+    sessionData: {
+      anywhere_history: true,
+      sessionMetadata: { title: 'recovered-ui-projection' },
+      activeSkillIds: ['skill-enabled', 'skill-disabled'],
+      fullHistory,
+      history: [],
+      chat_show: chatShow
+    }
+  })
+  const conversationId = created.descriptor.conversationId
+  const holderInstanceId = 'desktop-recovered-ui-holder'
+  const lease = await store.acquireWriteLease({ dirPath: root, conversationId, holderInstanceId, holderApp: 'desktop-test' })
+  const opened = await store.openConversation({ dirPath: root, reference: conversationId, activeOnly: true, pageSize: 200 })
+  const edited = opened.sessionData
+  const recovered = edited.fullHistory.find((message) => message.storageId === 'projection-recovered')
+  edited.chat_show.splice(2, 0, { ...recovered, id: 99, uiStorageId: 'ui-projection-recovered' })
+  edited.fullHistory = edited.fullHistory.filter((message) => message.storageId !== 'projection-delete')
+  edited.chat_show = edited.chat_show.filter((message) => message.storageId !== 'projection-delete')
+  edited.activeSkillIds = ['skill-enabled']
+
+  const saved = await store.saveConversationSnapshot({
+    dirPath: root,
+    conversationId,
+    expectedRevision: opened.descriptor.revision,
+    holderInstanceId,
+    leaseEpoch: lease.leaseEpoch,
+    title: 'recovered-ui-projection',
+    sessionData: edited
+  })
+  assert.equal(saved.ok, true)
+
+  const reopened = await store.openConversation({ dirPath: root, reference: conversationId, activeOnly: true, pageSize: 200 })
+  assert.deepEqual(reopened.sessionData.chat_show.map((message) => message.storageId), [
+    'projection-summary',
+    'projection-before',
+    'projection-recovered',
+    'projection-after',
+    'projection-tail'
+  ])
+  assert.deepEqual(reopened.sessionData.chat_show.map((message) => message.uiStorageOrder), [1, 2, 3, 4, 5])
+  assert.equal(reopened.sessionData.fullHistory.some((message) => message.storageId === 'projection-delete'), false)
+  assert.deepEqual(reopened.sessionData.activeSkillIds, ['skill-enabled'])
+  await store.releaseWriteLease({ dirPath: root, conversationId, holderInstanceId, leaseEpoch: lease.leaseEpoch })
+}
+
+
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-desktop-persistence-'))
   try {
@@ -132,6 +197,9 @@ async function main() {
       assert.equal(opened.sessionData.isAutoApproveTools, statePatch.isAutoApproveTools)
       assert.deepEqual(opened.sessionData.sessionMcpToolOverrides, statePatch.sessionMcpToolOverrides)
     }
+
+    await verifyRecoveredUiProjection(root)
+
 
     const warning = await writeLocalProjectsBestEffort(root, { version: 2, conversations: {}, projects: [] }, async () => {
       throw new Error('synthetic_index_write_failure')

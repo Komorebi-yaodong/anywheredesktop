@@ -756,6 +756,13 @@ function resolveChatMetadataForUpload({ filename, content, chatMetadata, previou
   })
 }
 
+export async function ensureDirectory(input = {}) {
+  const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
+  await ensureRemoteDirectory(client, config.path)
+  return { ok: true, path: config.path }
+}
+
+
 export async function listBackups(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const remoteDir = config.path

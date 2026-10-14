@@ -232,6 +232,7 @@ getDroppedFilePath: (file) => {
   readRemoteText: (url, options = {}) => invokeOrThrow('file:readRemoteText', url, options),
   readRemoteBinary: (url, options = {}) => invokeOrThrow('file:readRemoteBinary', url, options),
 
+  ensureWebdavDirectory: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:ensureDirectory', input),
   listWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listBackups', input),
   writeWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackup', input),
 

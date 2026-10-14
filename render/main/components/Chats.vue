@@ -523,7 +523,7 @@ const uploadFilesToCloudInBatches = async (basenames, signal, options = {}) => {
                     overwrite: true,
                     ensureDirectory: true,
                     batchSize: CHAT_METADATA_BATCH_SIZE,
-                    concurrency: 3
+                    concurrency: 10
                 })
             ),
             'webdav_write_failed'
@@ -1453,7 +1453,7 @@ const mergeFileAssignmentLocal = (data, { basename, projectId, projectName }) =>
         }
         projects = projects.map((p) => (p.id === projectId ? { ...p, files: [...p.files, basename] } : p));
     }
-    return { version: data?.version || 1, projects };
+    return { ...data, version: data?.version || 1, projects };
 };
 
 // 渲染端镜像后端 mergeProjectAssignment：整项目 files 覆盖
@@ -1468,7 +1468,7 @@ const mergeProjectAssignmentLocal = (data, project) => {
         projects.push({ id: project.id, name: project.name, files: [] });
     }
     projects = projects.map((p) => (p.id === project.id ? { ...p, name: project.name, files: incoming } : p));
-    return { version: data?.version || 1, projects };
+    return { ...data, version: data?.version || 1, projects };
 };
 
 // 单文件同步后，把它的项目归属同步到对端 yaml
@@ -1634,11 +1634,11 @@ const buildCloudConversationFiles = (projectsData, directoryFiles = [], legacyFi
     return [...databaseFiles, ...remainingLegacy];
 };
 
-const uploadDatabaseConversation = async (file) => {
+const uploadDatabaseConversation = async (file, options = {}) => {
     const uploaded = await window.api.uploadCloudConversationRemote({
         dirPath: localChatPath.value,
         conversationId: file.conversationId,
-        remote: buildChatWebdavInput({ useChatMetadata: false })
+        remote: buildChatWebdavInput({ useChatMetadata: false, ensureDirectory: options.ensureDirectory !== false })
     });
     const descriptor = uploaded?.descriptor;
     if (!descriptor) throw new Error('conversation_descriptor_missing');
@@ -1683,6 +1683,94 @@ const commitDatabaseProjectDescriptors = async (descriptors) => {
         cloudProjects.value = normalizeProjectsResult(nextCloudData);
     }));
 };
+
+const reconcileUploadedCloudIndex = async ({ jsonBasenames = [], projectDescriptors = [] } = {}) => {
+    const normalizedJsonBasenames = Array.from(new Set(
+        (Array.isArray(jsonBasenames) ? jsonBasenames : [])
+            .map((basename) => getSafeString(basename))
+            .filter((basename) => basename.toLowerCase().endsWith('.json'))
+    ));
+    const uniqueDescriptors = Array.from(new Map(
+        (Array.isArray(projectDescriptors) ? projectDescriptors : [])
+            .filter((descriptor) => descriptor?.conversationId && descriptor?.dbFile)
+            .map((descriptor) => [descriptor.conversationId, descriptor])
+    ).values());
+
+    if (normalizedJsonBasenames.length === 0 && uniqueDescriptors.length === 0) return;
+
+    if (normalizedJsonBasenames.length > 0) {
+        const backups = ensureWebdavResult(
+            await window.api.listWebdavBackups(buildChatWebdavInput()),
+            'webdav_list_failed'
+        );
+        const cloudJsonNames = new Set((Array.isArray(backups.files) ? backups.files : [])
+            .map((file) => getSafeString(file?.basename || file?.filename))
+            .filter(Boolean));
+        const missingJson = normalizedJsonBasenames.filter((basename) => !cloudJsonNames.has(basename));
+        if (missingJson.length > 0) {
+            throw new Error(`uploaded_json_metadata_missing:${missingJson.length}`);
+        }
+    }
+
+    await enqueueCloudProjectsWrite(() => retryCloudProjectsWrite(async () => {
+        const cloudData = normalizeProjectsResult(await window.api.readCloudProjects(buildWebdavInput()));
+        let nextCloudData = cloudData;
+
+        for (const basename of normalizedJsonBasenames) {
+            const project = findProjectOfBasename(localProjects.value, basename);
+            nextCloudData = mergeFileAssignmentLocal(nextCloudData, {
+                basename,
+                projectId: project?.id || '',
+                projectName: project?.name || ''
+            });
+        }
+
+        const conversations = { ...nextCloudData.conversations };
+        let projects = nextCloudData.projects.map((project) => ({ ...project, conversationIds: [...(project.conversationIds || [])] }));
+        for (const descriptor of uniqueDescriptors) {
+            const localProject = (localProjects.value.projects || []).find((project) =>
+                (project.conversationIds || []).includes(descriptor.conversationId)
+                || (descriptor.legacyJson && (project.files || []).includes(descriptor.legacyJson))
+            );
+            projects = projects.map((project) => ({
+                ...project,
+                conversationIds: (project.conversationIds || []).filter((id) => id !== descriptor.conversationId)
+            }));
+            if (localProject) {
+                projects = projects.map((project) => project.id === localProject.id
+                    ? { ...project, conversationIds: [...project.conversationIds, descriptor.conversationId] }
+                    : project);
+            }
+            conversations[descriptor.conversationId] = descriptor;
+        }
+        nextCloudData = normalizeProjectsResult({ ...nextCloudData, conversations, projects });
+        await window.api.writeCloudProjects(buildWebdavInput(), nextCloudData);
+
+        const verified = normalizeProjectsResult(await window.api.readCloudProjects(buildWebdavInput()));
+        for (const basename of normalizedJsonBasenames) {
+            const expected = findProjectOfBasename(localProjects.value, basename)?.id || '';
+            const actual = findProjectOfBasename(verified, basename)?.id || '';
+            if (actual !== expected) throw new Error('uploaded_json_project_assignment_missing');
+        }
+        for (const descriptor of uniqueDescriptors) {
+            const actualDescriptor = verified.conversations?.[descriptor.conversationId];
+            if (!actualDescriptor || actualDescriptor.dbFile !== descriptor.dbFile) {
+                throw new Error('uploaded_database_descriptor_missing');
+            }
+            const expectedProject = (localProjects.value.projects || []).find((project) =>
+                (project.conversationIds || []).includes(descriptor.conversationId)
+                || (descriptor.legacyJson && (project.files || []).includes(descriptor.legacyJson))
+            )?.id || '';
+            const actualProject = (verified.projects || []).find((project) =>
+                (project.conversationIds || []).includes(descriptor.conversationId)
+            )?.id || '';
+            if (actualProject !== expectedProject) throw new Error('uploaded_database_project_assignment_missing');
+        }
+
+        cloudProjects.value = verified;
+    }));
+};
+
 
 const downloadDatabaseConversation = async (file) => {
     const cloudData = normalizeProjectsResult(cloudProjects.value);
@@ -2077,7 +2165,7 @@ const cancelSync = () => {
     }
 };
 
-async function runConcurrentTasks(tasks, signal, concurrencyLimit = 3) {
+async function runConcurrentTasks(tasks, signal, concurrencyLimit = 10) {
     const results = { completed: 0, failed: 0, failedFiles: [], completedFiles: [], projectDescriptors: [] };
     const queue = [...tasks];
     let cancelled = false;
@@ -2135,16 +2223,12 @@ async function intelligentUpload() {
             t('chats.alerts.syncConfirmUploadTitle'),
             { type: 'info' }
         );
+        ensureWebdavResult(await window.api.ensureWebdavDirectory(buildChatWebdavInput()));
         const syncResult = await executeSync(filesToUpload.map((file) => ({
             name: getConversationReference(file),
-            action: (signal) => forceSyncFile(getConversationReference(file), 'upload', signal, { syncProject: file.format !== 'sqlite' })
+            action: (signal) => forceSyncFile(getConversationReference(file), 'upload', signal, { syncProject: false, ensureDirectory: false })
         })), t('chats.alerts.syncConfirmUploadTitle'), { refreshAfter: false });
-        // 批量结束后统一把成功文件的项目归属合并进云端 yaml（避免并发读写竞争）
-        const uploadedBasenames = (Array.isArray(syncResult?.completedFiles) && syncResult.completedFiles.length > 0
-            ? syncResult.completedFiles
-            : filesToUpload.map((file) => file.basename))
-            .filter((basename) => String(basename).toLowerCase().endsWith('.json'));
-        await syncProjectsBulk(uploadedBasenames, 'upload');
+        // executeSync has already reconciled and verified every successful upload.
         await refreshData();
     } catch (error) {
         if (error === 'cancel' || error === 'close') return;
@@ -2208,9 +2292,14 @@ async function executeSync(tasks, title, options = {}) {
 
     try {
         const results = await runConcurrentTasks(tasks, syncAbortController.value.signal);
-        // Drain descriptors created by in-flight SQLite uploads even after cancellation.
-        // This prevents a successfully uploaded .db from becoming invisible in cloud history.
-        await commitDatabaseProjectDescriptors(results.projectDescriptors);
+        if (title === t('chats.alerts.syncConfirmUploadTitle')) {
+            // Drain and verify every successful upload before reporting success/cancellation.
+            // This prevents a successfully uploaded file from becoming an ungrouped cloud orphan.
+            await reconcileUploadedCloudIndex({
+                jsonBasenames: results.completedFiles,
+                projectDescriptors: results.projectDescriptors
+            });
+        }
         let message = title === t('chats.alerts.syncConfirmUploadTitle') ? t('chats.alerts.syncSuccessUpload', { count: results.completed }) : t('chats.alerts.syncSuccessDownload', { count: results.completed });
         if (results.failed > 0) message += ` ${t('chats.alerts.syncFailedPartially', { failedCount: results.failed })}`;
         if (results.cancelled) ElMessage.warning(t('chats.alerts.syncCancelled'));
@@ -2231,7 +2320,7 @@ async function executeSync(tasks, title, options = {}) {
 }
 
 async function forceSyncFile(basename, direction, signal, options = {}) {
-    const { syncProject = true } = options;
+    const { syncProject = true, ensureDirectory = true } = options;
     singleFileSyncing.value[basename] = true;
     try {
         const normalizedBasename = getSafeString(basename);
@@ -2239,7 +2328,7 @@ async function forceSyncFile(basename, direction, signal, options = {}) {
         const logicalFile = sourceList.find((file) => file.basename === normalizedBasename || file.conversationId === normalizedBasename);
         if (logicalFile?.format === 'sqlite' && logicalFile?.conversationId) {
             const result = direction === 'upload'
-                ? await uploadDatabaseConversation(logicalFile)
+                ? await uploadDatabaseConversation(logicalFile, { ensureDirectory })
                 : await downloadDatabaseConversation(logicalFile);
             return result;
         }
@@ -2253,7 +2342,7 @@ async function forceSyncFile(basename, direction, signal, options = {}) {
                         filename: normalizedBasename,
                         content: uploadPayload.content,
                         overwrite: true,
-                        ensureDirectory: true,
+                        ensureDirectory,
                         lastModified: uploadPayload.lastModified,
                         chatMetadata: uploadPayload.chatMetadata
                     })

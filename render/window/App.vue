@@ -2648,18 +2648,24 @@ const acquireCurrentConversationLease = async () => {
       return;
     }
     conversationLease.value = lease;
+    const authoritativeRevision = Number(lease.revision);
+    currentConversationStorage.value = {
+      ...storage,
+      revision: Number.isFinite(authoritativeRevision) ? authoritativeRevision : storage.revision
+    };
     const repaired = await window.api.repairConversationUiLinks({
       dirPath,
       conversationId: storage.conversationId,
-      expectedRevision: storage.revision,
+      expectedRevision: currentConversationStorage.value.revision,
       holderInstanceId: conversationInstanceId,
       leaseEpoch: lease.leaseEpoch
     });
+    const repairedRevision = Number(repaired?.revision);
+    currentConversationStorage.value = {
+      ...currentConversationStorage.value,
+      revision: Number.isFinite(repairedRevision) ? repairedRevision : currentConversationStorage.value.revision
+    };
     if (Number(repaired?.changed) > 0) {
-      currentConversationStorage.value = {
-        ...storage,
-        revision: Number(repaired.revision) || storage.revision
-      };
       await reloadConversationWindowFromStore({ activeOnly: true, pageSize: Number(storage.pageSize) || 200 });
       showDismissibleMessage.info('已安全修复历史会话的消息索引映射');
     }

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import * as store from '../main/core/conversationStore.js'
-import { writeLocalProjectsBestEffort } from '../main/core/projects.js'
+import { readLocalProjects, writeLocalProjects, writeLocalProjectsBestEffort } from '../main/core/projects.js'
 
 function session(round, patch = {}) {
   const selectedVoice = patch.selectedVoice ?? `voice-${round}`
@@ -193,6 +193,73 @@ async function verifyUiLinkRepair(root) {
 }
 
 
+async function verifyOrphanDatabaseIndexRecovery(root) {
+  const sourceRoot = path.join(root, 'orphan-source')
+  const orphanRoot = path.join(root, 'orphan-target')
+  await fs.mkdir(sourceRoot, { recursive: true })
+  await fs.mkdir(orphanRoot, { recursive: true })
+  const created = await store.createConversation({
+    dirPath: sourceRoot,
+    title: 'orphan-index-recovery',
+    sessionData: {
+      anywhere_history: true,
+      sessionMetadata: { title: 'orphan-index-recovery' },
+      fullHistory: [{ role: 'user', content: 'orphan-message', storageId: 'orphan-user' }],
+      history: [],
+      chat_show: [{ role: 'user', content: 'orphan-message', storageId: 'orphan-user', uiStorageId: 'ui-orphan-user' }]
+    }
+  })
+  const orphanDbFile = 'renamed-orphan.db'
+  await fs.copyFile(created.databasePath, path.join(orphanRoot, orphanDbFile))
+  const unrelated = new DatabaseSync(path.join(orphanRoot, 'unrelated.db'))
+  unrelated.exec('CREATE TABLE unrelated(value TEXT)')
+  unrelated.close()
+
+  assert.equal(await fs.access(path.join(orphanRoot, 'projects.yaml')).then(() => true, () => false), false)
+  const listed = await store.listLocalConversations(orphanRoot)
+  assert.equal(listed.length, 1)
+  assert.equal(listed[0].conversationId, created.descriptor.conversationId)
+  assert.equal(listed[0].basename, orphanDbFile)
+  let indexed = await readLocalProjects(orphanRoot)
+  assert.equal(indexed.conversations[created.descriptor.conversationId].dbFile, orphanDbFile)
+  assert.equal(indexed.conversations[created.descriptor.conversationId].revision, created.descriptor.revision)
+
+  indexed.projects = [{ id: 'kept-project', name: 'Kept Project', files: [], conversationIds: [created.descriptor.conversationId] }]
+  indexed.conversations[created.descriptor.conversationId].revision = created.descriptor.revision + 7
+  await writeLocalProjects(orphanRoot, indexed)
+  const opened = await store.openConversation({ dirPath: orphanRoot, reference: created.descriptor.conversationId, activeOnly: true, pageSize: 200 })
+  assert.equal(opened.descriptor.revision, created.descriptor.revision)
+  indexed = await readLocalProjects(orphanRoot)
+  assert.equal(indexed.conversations[created.descriptor.conversationId].revision, created.descriptor.revision)
+  assert.deepEqual(indexed.projects[0].conversationIds, [created.descriptor.conversationId])
+
+  const holderInstanceId = 'desktop-orphan-index-holder'
+  const lease = await store.acquireWriteLease({ dirPath: orphanRoot, conversationId: created.descriptor.conversationId, holderInstanceId, holderApp: 'desktop-test' })
+  assert.equal(lease.revision, created.descriptor.revision)
+  await store.releaseWriteLease({ dirPath: orphanRoot, conversationId: created.descriptor.conversationId, holderInstanceId, leaseEpoch: lease.leaseEpoch })
+
+  const replacement = await store.createConversation({
+    dirPath: sourceRoot,
+    title: 'replacement-index-identity',
+    sessionData: {
+      anywhere_history: true,
+      sessionMetadata: { title: 'replacement-index-identity' },
+      fullHistory: [{ role: 'user', content: 'replacement-message', storageId: 'replacement-user' }],
+      history: [],
+      chat_show: [{ role: 'user', content: 'replacement-message', storageId: 'replacement-user', uiStorageId: 'ui-replacement-user' }]
+    }
+  })
+  await fs.copyFile(replacement.databasePath, path.join(orphanRoot, orphanDbFile))
+  const replacedList = await store.listLocalConversations(orphanRoot)
+  assert.equal(replacedList.length, 1)
+  assert.equal(replacedList[0].conversationId, replacement.descriptor.conversationId)
+  indexed = await readLocalProjects(orphanRoot)
+  assert.equal(indexed.conversations[created.descriptor.conversationId], undefined)
+  assert.equal(indexed.conversations[replacement.descriptor.conversationId].dbFile, orphanDbFile)
+  assert.deepEqual(indexed.projects[0].conversationIds, [])
+}
+
+
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-desktop-persistence-'))
   try {
@@ -269,6 +336,8 @@ async function main() {
     await verifyRecoveredUiProjection(root)
 
     await verifyUiLinkRepair(root)
+
+    await verifyOrphanDatabaseIndexRecovery(root)
 
 
     const warning = await writeLocalProjectsBestEffort(root, { version: 2, conversations: {}, projects: [] }, async () => {

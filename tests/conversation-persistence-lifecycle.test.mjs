@@ -149,7 +149,10 @@ assert.match(appSource, /const hasUnpersistedSession = persistenceState\.hasUnpe
 assert.match(appSource, /conversationPersistenceTracker\.markPersisted\(\{ version, stateOnly: false \}\)/)
 assert.match(appSource, /conversationPersistenceTracker\.markPersisted\(\{ version, stateOnly: true \}\)/)
 
-assert.match(appSource, /acquireConversationWriteLease\(\{[\s\S]{0,700}repairConversationUiLinks\(\{[\s\S]{0,400}reloadConversationWindowFromStore/)
+assert.match(appSource, /acquireConversationWriteLease\(\{[\s\S]{0,700}const authoritativeRevision = Number\(lease\.revision\)/)
+assert.match(appSource, /repairConversationUiLinks\(\{[\s\S]{0,300}expectedRevision: currentConversationStorage\.value\.revision/)
+assert.match(appSource, /const repairedRevision = Number\(repaired\?\.revision\);[\s\S]{0,300}revision: Number\.isFinite\(repairedRevision\)/)
+assert.match(appSource, /if \(Number\(repaired\?\.changed\) > 0\)[\s\S]{0,300}reloadConversationWindowFromStore/)
 assert.match(appSource, /const failedLease = conversationLease\.value;[\s\S]{0,500}releaseConversationWriteLease/)
 
 

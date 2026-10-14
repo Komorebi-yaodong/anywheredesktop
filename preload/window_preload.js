@@ -333,7 +333,7 @@ const api = {
   applyAdvancedCompactConfigToAll: (patch = {}) => electronAPI.ipcRenderer.invoke('compact:applyAdvancedToAll', toPlainPayload(patch) || {}),
   resolveModelContext: (modelInput = '', options = {}) => electronAPI.ipcRenderer.invoke('compact:resolveContext', modelInput, options),
   pruneCompactCache: (enabledModels = []) => electronAPI.ipcRenderer.invoke('compact:pruneCache', toPlainPayload(enabledModels) || []),
-  estimateCompactTokens: (messages = []) => electronAPI.ipcRenderer.invoke('compact:estimateTokens', toPlainPayload(messages) || []),
+  estimateCompactTokens: (messages = [], options = {}) => electronAPI.ipcRenderer.invoke('compact:estimateTokens', toPlainPayload(messages) || [], toPlainPayload(options) || {}),
   shouldAutoCompact: (input = {}) => electronAPI.ipcRenderer.invoke('compact:shouldAuto', toPlainPayload(input) || {}),
   runConversationCompact: async (input = {}, options = {}) => {
     const signal = options?.signal || input?.signal || null

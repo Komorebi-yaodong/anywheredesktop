@@ -483,6 +483,7 @@ const onCopyImage = async () => {
 // 如果是最后一条消息 && 正在加载 && 没有正在进行的思考内容
 const preparingStatusText = computed(() => {
   if (props.message?.status === 'compacting') return '正在压缩上下文…';
+  if (props.message?.status === 'retrying') return props.message?.retryMessage || '网络异常，正在自动重试…';
   return props.message?.status === 'preparing' ? '正在检查上下文并准备请求…' : '';
 });
 
@@ -1096,7 +1097,7 @@ const truncateFilename = (filename, maxLength = 30) => {
             </template>
           </Thinking>
         </template>
-        <template #content v-if="hasContentToShow">
+        <template #content v-if="hasContentToShow || preparingStatusText">
           <div v-if="preparingStatusText" class="preparing-status-text">{{ preparingStatusText }}</div>
           <div v-else-if="!isEditing" ref="markdownRootRef" class="markdown-wrapper" :class="{ 'collapsed': isCollapsed }" @click.capture="handleMarkdownLinkClick">
             <XMarkdown :markdown="renderedMarkdownContent" :is-dark="isDarkMode" :enable-latex="true"

@@ -15,6 +15,7 @@ import TextSearchUI from './utils/TextSearchUI.js';
 import { formatTimestamp, sanitizeToolArgs, sanitizeToolFunctionName } from './utils/formatters.js';
 import { resolveSafeConversationMutationTarget } from './utils/conversationMessageTarget.js';
 import { completeConversationClose, createConversationMutationQueue, createConversationPersistenceTracker, mergeConversationMutationRequests as mergeAutoSaveRequests } from './utils/conversationMutationQueue.js';
+import { MAX_AUTOMATIC_NETWORK_RETRIES, createNetworkRetryingStream, runWithNetworkRetries } from './utils/conversationNetworkRetry.js';
 
 
 let gptTokenizerEncodePromise = null;
@@ -1742,7 +1743,7 @@ const projectUiToFullHistoryForLegacyMigration = (messages = []) => {
 
 const estimateCompactHistoryTokens = async (messages = []) => {
   if (!window.api?.estimateCompactTokens) return 0;
-  const estimate = await window.api.estimateCompactTokens(messages);
+  const estimate = await window.api.estimateCompactTokens(messages, { modelInput: model.value });
   return Math.max(0, Number(estimate?.tokens) || 0);
 };
 
@@ -2010,14 +2011,14 @@ const estimateCurrentDynamicToolPrompt = async () => {
     if (compactToolSchemaTokenCache.has(schemaText)) {
       schemaTokens = compactToolSchemaTokenCache.get(schemaText);
     } else {
-      const estimate = await window.api.estimateCompactTokens([{ role: 'system', content: schemaText }]);
+      const estimate = await window.api.estimateCompactTokens([{ role: 'system', content: schemaText }], { modelInput: model.value });
       schemaTokens = Math.max(0, Number(estimate?.tokens) || 0);
       compactToolSchemaTokenCache.clear();
       compactToolSchemaTokenCache.set(schemaText, schemaTokens);
     }
   }
   const promptEstimate = overheadMessages.length
-    ? await window.api.estimateCompactTokens(overheadMessages)
+    ? await window.api.estimateCompactTokens(overheadMessages, { modelInput: model.value })
     : { tokens: 0 };
   const systemPromptTokens = Math.max(0, Number(promptEstimate?.tokens) || 0);
   return {
@@ -2038,8 +2039,8 @@ const refreshPromptTokenBreakdown = async () => {
     const systemMessages = requestMessages.filter((message) => message?.role === 'system');
     const conversationMessages = requestMessages.filter((message) => message?.role !== 'system');
     const [systemEstimate, conversationEstimate, toolPrompt] = await Promise.all([
-      window.api.estimateCompactTokens(systemMessages),
-      window.api.estimateCompactTokens(conversationMessages),
+      window.api.estimateCompactTokens(systemMessages, { modelInput: model.value }),
+      window.api.estimateCompactTokens(conversationMessages, { modelInput: model.value }),
       estimateCurrentDynamicToolPrompt()
     ]);
     const systemTokens = Math.max(0, Number(systemEstimate?.tokens) || 0);
@@ -2069,7 +2070,7 @@ const getCompactTokenSnapshot = async (messagesForAi = history.value) => {
   // 避免沿用压缩前 assistant.tokenUsage.total_tokens 导致立刻二次压缩。
   let localTokens = 0;
   if (window.api?.estimateCompactTokens) {
-    const estimate = await window.api.estimateCompactTokens(messagesForAi);
+    const estimate = await window.api.estimateCompactTokens(messagesForAi, { modelInput: model.value });
     localTokens = Math.max(0, Number(estimate?.tokens) || 0);
   }
   const requestOverheadTokens = await estimateCurrentDynamicRequestOverhead();
@@ -2434,12 +2435,10 @@ const runConversationCompact = async ({
     }
 
     autoCompactSuppressedForTurn.value = false;
-    if (hydratedPagedConversation) {
-      await executeAutoSaveRequest({ reason: 'conversation-compacted', force: true, version: ++sessionMutationVersion });
-      await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 });
-    } else {
-      scheduleAutoSave({ reason: 'conversation-compacted', immediate: true });
-    }
+    // Persist first, then always reload only the active SQLite window. Canonical compressed prefixes
+    // stay untouched in SQLite but no longer remain reactive in this renderer after compaction.
+    await executeAutoSaveRequest({ reason: 'conversation-compacted', force: true, version: ++sessionMutationVersion });
+    await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 });
     if (!quiet) {
       showDismissibleMessage.success(manual ? `手动级联压缩完成（${steps} 步）` : `自动级联压缩完成（${steps} 步）`);
     }
@@ -2465,7 +2464,7 @@ const runConversationCompact = async ({
 };
 
 // 工具循环内：tool 结果写回后、下一轮 AI 请求前检测并压缩
-const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request', onCompacting } = {}) => {
+const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request', onCompacting, requestMessages = null } = {}) => {
   if (autoCompactSuppressedForTurn.value) {
     autoCompactSuppressedForTurn.value = false;
     return false;
@@ -2473,9 +2472,13 @@ const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request', onCom
   if (compacting.value) return false;
   if (compactConfig.value.autoCompactEnabled === false) return false;
   try {
-    rehydrateHistoryToolsIfNeeded();
-    // 不在这里 sync 掉内存 history 的 tool 细节；rehydrate 已保证 tool 完整
-    const need = await shouldCompactNow(await buildRequestHistoryForCurrentConversation());
+    // The first user request already has an immutable, canonical request DTO. Tool-loop
+    // continuations still rehydrate before projection because their tool result may be new.
+    if (!Array.isArray(requestMessages)) rehydrateHistoryToolsIfNeeded();
+    const messagesForCheck = Array.isArray(requestMessages)
+      ? requestMessages
+      : await buildRequestHistoryForCurrentConversation();
+    const need = await shouldCompactNow(messagesForCheck);
     if (!need) return false;
     onCompacting?.();
     const ok = await runConversationCompact({
@@ -2588,6 +2591,11 @@ const conversationInstanceId = (typeof crypto !== 'undefined' && typeof crypto.r
   ? crypto.randomUUID()
   : `window_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 let conversationLeaseHeartbeatTimer = null;
+
+const createConversationStorageId = () => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+  ? crypto.randomUUID()
+  : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+
 
 const stopConversationLeaseHeartbeat = () => {
   if (conversationLeaseHeartbeatTimer) {
@@ -3060,6 +3068,19 @@ const createAbortError = () => {
   return error;
 };
 
+
+const hasMeaningfulAssistantStreamOutput = (part) => {
+  const delta = part?.choices?.[0]?.delta;
+  if (delta && (delta.content || delta.reasoning_content || delta.reasoning || delta.tool_calls?.length || delta.extra_content || delta.thought_signature)) return true;
+  return Boolean(
+    (part?.type === 'response.output_text.delta' && part.delta)
+    || (part?.type === 'response.reasoning_summary_text.delta' && part.delta)
+    || (part?.type === 'response.output_item.added' && part.item?.type === 'function_call')
+    || (part?.type === 'response.function_call_arguments.delta' && part.delta)
+  );
+};
+
+
 const normalizeAssistantMessageContent = (content) => {
   if (Array.isArray(content)) return content.filter(part => part && typeof part === 'object');
   if (typeof content === 'string') {
@@ -3162,6 +3183,7 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   if (assistantBubbleIndex === -1) {
     chat_show.value.push({
       id: messageIdCounter.value++,
+      storageId: createConversationStorageId(),
       role: 'assistant',
       content: [],
       reasoning_content: "",
@@ -3178,6 +3200,7 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   }
 
   const currentBubble = chat_show.value[assistantBubbleIndex];
+  currentBubble.storageId = currentBubble.storageId || createConversationStorageId();
   delete currentBubble.isPreparing;
   const finalContent = appendTerminalNoticeToAssistantContent(currentBubble.content, ASSISTANT_CANCELLED_NOTICE_MARKDOWN);
   const finalReasoningContent = typeof currentBubble.reasoning_content === 'string'
@@ -3198,6 +3221,7 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
     }
     appendFullHistory({
       role: 'assistant',
+      storageId: currentBubble.storageId || createConversationStorageId(),
       content: finalContent,
       reasoning_content: finalReasoningContent || null
     });
@@ -3233,6 +3257,7 @@ const getViewPdfPayload = (result) => {
   return {
     dataUrl: `data:application/pdf;base64,${encodedBytes}`,
     fileName,
+    pageCount: Math.max(1, Number(result?.pdf?.pageCount) || 1),
     displayText: typeof result?.display?.text === 'string' ? result.display.text : 'Local PDF loaded as complete document context.'
   };
 };
@@ -3265,7 +3290,7 @@ const createViewPdfMessage = (toolCallId, payload) => ({
   timestamp: new Date().toLocaleString('sv-SE'),
   content: [
     { type: 'text', text: 'The PDF returned by the view_pdf tool is attached below. Use the complete document as context to continue the task.' },
-    { type: 'file', file: { filename: payload.fileName, file_data: payload.dataUrl } }
+    { type: 'file', file: { filename: payload.fileName, file_data: payload.dataUrl, tokenEstimate: { pageCount: payload.pageCount } } }
   ]
 });
 
@@ -6689,6 +6714,12 @@ const serializeSessionMcpToolOverrides = () => Object.fromEntries(
     .filter(([, tools]) => tools.length > 0)
 );
 
+const getSessionTransientStatePatch = () => ({
+  promptDraft: prompt.value,
+  draftFileList: fileList.value,
+  pendingAppendBuffer: normalizePendingInputBuffer(pendingAppendBuffer.value)
+});
+
 const getSessionRequestConfigStatePatch = () => {
   const currentPromptConfig = {
     ...(currentConfig.value.prompts?.[CODE.value] || {}),
@@ -6817,7 +6848,10 @@ const autoSaveSessionRequestConfig = async (force = false, { version = sessionMu
       holderInstanceId: conversationInstanceId,
       leaseEpoch: conversationLease.value?.leaseEpoch,
       title: defaultConversationName.value,
-      state: getSessionRequestConfigStatePatch()
+      state: {
+        ...getSessionRequestConfigStatePatch(),
+        ...getSessionTransientStatePatch()
+      }
     });
     currentConversationStorage.value = {
       ...storage,
@@ -6909,7 +6943,8 @@ watch([model, selectedVoice, tempReasoningEffort, sessionMcpServerIds, sessionSk
 
 
 const scheduleInputDraftAutoSave = (reason = 'input-draft') => {
-  scheduleAutoSave({ reason, delay: AUTO_SAVE_INPUT_DEBOUNCE_MS });
+  // Draft-only changes belong in session_state and must not rebuild the full transcript/UI snapshot.
+  scheduleAutoSave({ reason, delay: AUTO_SAVE_INPUT_DEBOUNCE_MS, stateOnly: true });
 };
 
 const scheduleLoadingAutoSave = (reason = 'loading-progress') => {
@@ -7003,9 +7038,7 @@ const saveWindowSize = async () => {
 }
 
 const getSessionDataAsObject = (options = {}) => {
-  const createStorageId = () => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-    ? crypto.randomUUID()
-    : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+  const createStorageId = createConversationStorageId;
   fullHistory.value.forEach((message) => {
     if (message && typeof message === 'object' && !message.storageId) message.storageId = createStorageId();
   });
@@ -9108,8 +9141,10 @@ const askAI = async (forceSend = false) => {
   };
 
   const preparingAssistantMessageId = messageIdCounter.value++;
+  const assistantStorageId = createConversationStorageId();
   chat_show.value.push({
     id: preparingAssistantMessageId,
+    storageId: assistantStorageId,
     role: 'assistant',
     content: [],
     reasoning_content: '',
@@ -9137,17 +9172,22 @@ const askAI = async (forceSend = false) => {
     return;
   }
 
-  // 用户消息写入后、进入 AI 请求前：若已超阈值，先压缩再开跑。
-  // The UI bubble remains visual-only while this asynchronous preflight is running.
+  // User-message preflight reads the SQLite request window once. If no compaction runs,
+  // that same DTO is reused by the first model iteration below.
+  let firstRequestMessages = null;
   try {
-    await maybeAutoCompactBeforeNextRequest({
+    firstRequestMessages = await buildRequestHistoryForCurrentConversation();
+    const compacted = await maybeAutoCompactBeforeNextRequest({
       reason: 'before-askAI',
+      requestMessages: firstRequestMessages,
       onCompacting: () => {
         const preparingBubble = chat_show.value.find((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
         if (preparingBubble) preparingBubble.status = 'compacting';
       }
     });
+    if (compacted) firstRequestMessages = null;
   } catch (error) {
+    firstRequestMessages = null;
     console.warn('[compact] before-askAI compact failed:', error);
   }
   const preparingBubble = chat_show.value.find((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
@@ -9194,9 +9234,11 @@ const askAI = async (forceSend = false) => {
       // chatInputRef.value?.focus({ cursor: 'end' });
 
       // --- 为本次请求创建临时消息列表 ---
-      // 发送前自愈：若 tool 结果只在 chat_show.assistant.tool_calls.result 中，补回 history
-      rehydrateHistoryToolsIfNeeded();
-      let messagesForThisRequest = await buildRequestHistoryForCurrentConversation();
+      // The first turn reuses the preflight DTO; tool continuations must rehydrate fresh history.
+      const reusableRequestMessages = firstRequestMessages;
+      firstRequestMessages = null;
+      if (!reusableRequestMessages) rehydrateHistoryToolsIfNeeded();
+      let messagesForThisRequest = reusableRequestMessages || await buildRequestHistoryForCurrentConversation();
 
       messagesForThisRequest = messagesForThisRequest.filter(msg => {
         if (msg.role === 'system' && (!msg.content || msg.content.trim() === '')) {
@@ -9317,17 +9359,22 @@ const askAI = async (forceSend = false) => {
         ? -1
         : chat_show.value.findIndex((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
       let assistantMessageId;
+      let currentAssistantStorageId;
       if (preparingIndex >= 0) {
         currentAssistantChatShowIndex = preparingIndex;
         assistantMessageId = preparingAssistantMessageId;
         const preparingBubble = chat_show.value[preparingIndex];
+        currentAssistantStorageId = preparingBubble.storageId || assistantStorageId;
+        preparingBubble.storageId = currentAssistantStorageId;
         delete preparingBubble.isPreparing;
         preparingBubble.status = '';
         hasReusedPreparingBubble = true;
       } else {
         assistantMessageId = messageIdCounter.value++;
+        currentAssistantStorageId = createConversationStorageId();
         chat_show.value.push({
           id: assistantMessageId,
+          storageId: currentAssistantStorageId,
           role: "assistant", content: [], reasoning_content: "", status: "",
           aiName: modelMap.value[model.value] || model.value.split('|')[1],
           voiceName: iterationVoice, tool_calls: [],
@@ -9343,7 +9390,21 @@ const askAI = async (forceSend = false) => {
 
       if (useStream) {
         // --- 流式处理 ---
-        const stream = await window.api.createChatCompletion(requestParams);
+        const stream = createNetworkRetryingStream(
+          () => window.api.createChatCompletion(requestParams),
+          {
+            maxRetries: MAX_AUTOMATIC_NETWORK_RETRIES,
+            signal: requestSignal,
+            isMeaningfulChunk: hasMeaningfulAssistantStreamOutput,
+            onRetry: ({ retryAttempt, maxRetries }) => {
+              const bubble = chat_show.value[currentAssistantChatShowIndex];
+              if (bubble && !isTurnAborted()) {
+                bubble.status = 'retrying';
+                bubble.retryMessage = `网络异常，正在自动重试（${retryAttempt}/${maxRetries}）`;
+              }
+            }
+          }
+        );
 
         let aggregatedReasoningContent = "";
         let aggregatedContent = "";
@@ -9389,6 +9450,10 @@ const askAI = async (forceSend = false) => {
         };
 
         for await (const part of stream) {
+          if (chat_show.value[currentAssistantChatShowIndex]?.status === 'retrying' && hasMeaningfulAssistantStreamOutput(part)) {
+            chat_show.value[currentAssistantChatShowIndex].status = '';
+            delete chat_show.value[currentAssistantChatShowIndex].retryMessage;
+          }
           if (isTurnAborted()) {
             break;
           }
@@ -9544,7 +9609,20 @@ const askAI = async (forceSend = false) => {
         }
       } else {
         // --- 非流式处理 ---
-        const response = await window.api.createChatCompletion(requestParams);
+        const response = await runWithNetworkRetries(
+          () => window.api.createChatCompletion(requestParams),
+          {
+            maxRetries: MAX_AUTOMATIC_NETWORK_RETRIES,
+            signal: requestSignal,
+            onRetry: ({ retryAttempt, maxRetries }) => {
+              const bubble = chat_show.value[currentAssistantChatShowIndex];
+              if (bubble && !isTurnAborted()) {
+                bubble.status = 'retrying';
+                bubble.retryMessage = `网络异常，正在自动重试（${retryAttempt}/${maxRetries}）`;
+              }
+            }
+          }
+        );
         throwIfTurnAborted();
 
         if (apiType === 'responses' || apiType === 'codex') {
@@ -9621,12 +9699,15 @@ const askAI = async (forceSend = false) => {
 
 
 
+      responseMessage.storageId = currentAssistantStorageId;
       appendFullHistory(responseMessage);
 
       throwIfTurnAborted();
 
       // --- 更新 UI 气泡 ---
       const currentBubble = chat_show.value[currentAssistantChatShowIndex];
+      delete currentBubble.retryMessage;
+      if (currentBubble.status === 'retrying') currentBubble.status = '';
       applyTokenUsageToAssistantMessage(currentAssistantChatShowIndex, responseMessage.tokenUsage);
 
 
@@ -9912,13 +9993,15 @@ const askAI = async (forceSend = false) => {
     const errorBubbleIndex = currentAssistantChatShowIndex > -1 ? currentAssistantChatShowIndex : chat_show.value.length;
     if (currentAssistantChatShowIndex === -1) {
       chat_show.value.push({
-        id: messageIdCounter.value++, role: "assistant", content: [], reasoning_content: "", status: "",
+        id: messageIdCounter.value++, storageId: createConversationStorageId(), role: "assistant", content: [], reasoning_content: "", status: "",
         aiName: modelMap.value[model.value] || model.value.split('|')[1], voiceName: selectedVoice.value
       });
     }
 
     const currentBubble = chat_show.value[errorBubbleIndex];
+    currentBubble.storageId = currentBubble.storageId || createConversationStorageId();
     delete currentBubble.isPreparing;
+    delete currentBubble.retryMessage;
     let finalContent;
     let finalReasoningContent;
     if (aborted) {
@@ -9938,6 +10021,7 @@ const askAI = async (forceSend = false) => {
 
       appendFullHistory({
         role: 'assistant',
+        storageId: currentBubble.storageId || createConversationStorageId(),
         content: finalContent,
         reasoning_content: finalReasoningContent || null
       });

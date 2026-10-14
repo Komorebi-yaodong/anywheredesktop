@@ -525,8 +525,8 @@ handleInvoke('data:getUser', async () => {
     return compactApi.pruneCompactCacheByEnabledModels(enabledModels)
   })
 
-  handleInvoke('compact:estimateTokens', async (_event, messages = []) => {
-    const tokens = compactApi.estimateMessagesTokens(messages)
+  handleInvoke('compact:estimateTokens', async (_event, messages = [], options = {}) => {
+    const tokens = compactApi.estimateMessagesTokens(messages, options)
     return { ok: true, tokens }
   })
 

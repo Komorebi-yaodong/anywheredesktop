@@ -138,6 +138,33 @@ const syncProgress = ref(0);
 const syncStatusText = ref('');
 const syncAbortController = ref(null);
 
+let cloudProjectsWriteQueue = Promise.resolve();
+
+const enqueueCloudProjectsWrite = (task) => {
+    const run = cloudProjectsWriteQueue.then(task, task);
+    cloudProjectsWriteQueue = run.catch(() => {});
+    return run;
+};
+
+const retryCloudProjectsWrite = async (task) => {
+    const delays = [200, 500, 1000];
+    let lastError;
+    for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+        try {
+            return await task();
+        } catch (error) {
+            lastError = error;
+            const message = formatSyncError(error, '').toLowerCase();
+            const status = Number(error?.status ?? error?.statusCode ?? error?.response?.status ?? error?.response?.statusCode);
+            const retryable = status === 423 || message.includes('423') || message.includes('locked') || message.includes('aborted');
+            if (!retryable || attempt === delays.length) throw error;
+            await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+        }
+    }
+    throw lastError;
+};
+
+
 // --- 自动清理功能状态 ---
 const showCleanDialog = ref(false);
 const cleanDaysOption = ref(30); 
@@ -354,6 +381,21 @@ const formatBytes = (bytes, decimals = 2) => {
 const getSafeString = (value) => (typeof value === 'string' ? value : '');
 
 
+const formatSyncError = (error, fallback = '同步失败') => {
+    if (!error) return fallback;
+    if (typeof error === 'string') return error;
+    if (typeof error?.message === 'string' && error.message) return error.message;
+
+    const status = Number(error?.status ?? error?.statusCode ?? error?.response?.status ?? error?.response?.statusCode);
+    const statusText = [error?.statusText, error?.response?.statusText]
+        .find((value) => typeof value === 'string' && value.trim())?.trim() || '';
+    return Number.isInteger(status) && status >= 100 && status <= 599
+        ? `Invalid response: ${status}${statusText ? ` ${statusText}` : ''}`
+        : fallback;
+};
+
+
+
 const resolveFileBasename = (file) => {
     if (!file || typeof file !== 'object') return '';
 
@@ -481,7 +523,7 @@ const uploadFilesToCloudInBatches = async (basenames, signal, options = {}) => {
                     overwrite: true,
                     ensureDirectory: true,
                     batchSize: CHAT_METADATA_BATCH_SIZE,
-                    concurrency: CHAT_METADATA_BATCH_SIZE
+                    concurrency: 3
                 })
             ),
             'webdav_write_failed'
@@ -1601,28 +1643,45 @@ const uploadDatabaseConversation = async (file) => {
     const descriptor = uploaded?.descriptor;
     if (!descriptor) throw new Error('conversation_descriptor_missing');
 
-    const cloudData = normalizeProjectsResult(await window.api.readCloudProjects(buildWebdavInput()));
-    const localProject = (localProjects.value.projects || []).find((project) =>
-        (project.conversationIds || []).includes(descriptor.conversationId)
-        || (descriptor.legacyJson && (project.files || []).includes(descriptor.legacyJson))
-    );
-    let projects = cloudData.projects.map((project) => ({
-        ...project,
-        conversationIds: (project.conversationIds || []).filter((id) => id !== descriptor.conversationId)
+    // The database payload is now safely on WebDAV. Its shared projects.yaml
+    // mutation is committed by the batch-level serialized queue below.
+    return { completedFiles: [descriptor.dbFile], projectDescriptors: [descriptor] };
+};
+
+const commitDatabaseProjectDescriptors = async (descriptors) => {
+    const uniqueDescriptors = Array.from(new Map(
+        (Array.isArray(descriptors) ? descriptors : [])
+            .filter((descriptor) => descriptor?.conversationId && descriptor?.dbFile)
+            .map((descriptor) => [descriptor.conversationId, descriptor])
+    ).values());
+    if (uniqueDescriptors.length === 0) return;
+
+    await enqueueCloudProjectsWrite(() => retryCloudProjectsWrite(async () => {
+        const cloudData = normalizeProjectsResult(await window.api.readCloudProjects(buildWebdavInput()));
+        let projects = cloudData.projects.map((project) => ({ ...project, conversationIds: [...(project.conversationIds || [])] }));
+        const conversations = { ...cloudData.conversations };
+
+        for (const descriptor of uniqueDescriptors) {
+            const localProject = (localProjects.value.projects || []).find((project) =>
+                (project.conversationIds || []).includes(descriptor.conversationId)
+                || (descriptor.legacyJson && (project.files || []).includes(descriptor.legacyJson))
+            );
+            projects = projects.map((project) => ({
+                ...project,
+                conversationIds: (project.conversationIds || []).filter((id) => id !== descriptor.conversationId)
+            }));
+            if (localProject) {
+                projects = projects.map((project) => project.id === localProject.id
+                    ? { ...project, conversationIds: [...project.conversationIds, descriptor.conversationId] }
+                    : project);
+            }
+            conversations[descriptor.conversationId] = descriptor;
+        }
+
+        const nextCloudData = { ...cloudData, conversations, projects };
+        await window.api.writeCloudProjects(buildWebdavInput(), nextCloudData);
+        cloudProjects.value = normalizeProjectsResult(nextCloudData);
     }));
-    if (localProject) {
-        projects = projects.map((project) => project.id === localProject.id
-            ? { ...project, conversationIds: [...project.conversationIds, descriptor.conversationId] }
-            : project);
-    }
-    const nextCloudData = {
-        ...cloudData,
-        conversations: { ...cloudData.conversations, [descriptor.conversationId]: descriptor },
-        projects
-    };
-    await window.api.writeCloudProjects(buildWebdavInput(), nextCloudData);
-    cloudProjects.value = normalizeProjectsResult(nextCloudData);
-    return { completedFiles: [descriptor.dbFile] };
 };
 
 const downloadDatabaseConversation = async (file) => {
@@ -2019,18 +2078,25 @@ const cancelSync = () => {
 };
 
 async function runConcurrentTasks(tasks, signal, concurrencyLimit = 3) {
-    const results = { completed: 0, failed: 0, failedFiles: [], completedFiles: [] };
+    const results = { completed: 0, failed: 0, failedFiles: [], completedFiles: [], projectDescriptors: [] };
     const queue = [...tasks];
+    let cancelled = false;
 
     const worker = async () => {
         while (queue.length > 0) {
-            if (signal.aborted) throw new Error("Cancelled");
+            if (signal.aborted) {
+                cancelled = true;
+                break;
+            }
             const task = queue.shift();
             try {
                 const taskResult = await task.action(signal);
                 if (Array.isArray(taskResult?.completedFiles)) {
                     results.completed += taskResult.completedFiles.length;
                     results.completedFiles.push(...taskResult.completedFiles);
+                    if (Array.isArray(taskResult?.projectDescriptors)) {
+                        results.projectDescriptors.push(...taskResult.projectDescriptors);
+                    }
                 } else {
                     results.completed++;
                     if (typeof task.name === 'string' && task.name.trim()) {
@@ -2055,7 +2121,7 @@ async function runConcurrentTasks(tasks, signal, concurrencyLimit = 3) {
 
     const workers = Array(concurrencyLimit).fill(null).map(worker);
     await Promise.all(workers);
-    return results;
+    return { ...results, cancelled };
 }
 
 async function intelligentUpload() {
@@ -2082,7 +2148,7 @@ async function intelligentUpload() {
         await refreshData();
     } catch (error) {
         if (error === 'cancel' || error === 'close') return;
-        ElMessage.error(`${error.message}`);
+        ElMessage.error(formatSyncError(error));
     }
 }
 
@@ -2103,7 +2169,7 @@ async function intelligentDownload() {
         await refreshData();
     } catch (error) {
         if (error === 'cancel' || error === 'close') return;
-        ElMessage.error(`${error.message}`);
+        ElMessage.error(formatSyncError(error));
     }
 }
 
@@ -2142,16 +2208,20 @@ async function executeSync(tasks, title, options = {}) {
 
     try {
         const results = await runConcurrentTasks(tasks, syncAbortController.value.signal);
+        // Drain descriptors created by in-flight SQLite uploads even after cancellation.
+        // This prevents a successfully uploaded .db from becoming invisible in cloud history.
+        await commitDatabaseProjectDescriptors(results.projectDescriptors);
         let message = title === t('chats.alerts.syncConfirmUploadTitle') ? t('chats.alerts.syncSuccessUpload', { count: results.completed }) : t('chats.alerts.syncSuccessDownload', { count: results.completed });
         if (results.failed > 0) message += ` ${t('chats.alerts.syncFailedPartially', { failedCount: results.failed })}`;
-        ElMessage.success(message);
+        if (results.cancelled) ElMessage.warning(t('chats.alerts.syncCancelled'));
+        else ElMessage.success(message);
         if (refreshAfter) await refreshData();
         return results;
     } catch (error) {
-        if (error.message === 'Cancelled') {
+        if (formatSyncError(error) === 'Cancelled') {
             ElMessage.warning(t('chats.alerts.syncCancelled'));
         } else {
-            ElMessage.error(t('chats.alerts.syncFailed', { message: error.message }));
+            ElMessage.error(t('chats.alerts.syncFailed', { message: formatSyncError(error) }));
         }
         throw error;
     } finally {
@@ -2208,7 +2278,7 @@ async function forceSyncFile(basename, direction, signal, options = {}) {
         }
     } catch (error) {
         if (error.name === 'AbortError') throw new Error("Cancelled");
-        ElMessage.error(t('chats.alerts.syncFileFailed', { filename: basename, message: error.message }));
+        ElMessage.error(t('chats.alerts.syncFileFailed', { filename: basename, message: formatSyncError(error) }));
         throw error;
     } finally {
         singleFileSyncing.value[basename] = false;

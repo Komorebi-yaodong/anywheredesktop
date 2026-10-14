@@ -9,6 +9,12 @@ const CHAT_UPLOAD_BATCH_SIZE = 10
 const CHAT_UPLOAD_CONCURRENCY = 10
 const WEBDAV_METADATA_TIMEOUT_MS = 5000
 const WEBDAV_METADATA_CONCURRENCY = 4
+const WEBDAV_LOCK_RETRY_DELAYS_MS = [200, 500, 1000]
+
+// `chat-metadata.yaml` is shared by every history conversation. Keep its
+// read/merge/write lifecycle serialized inside this process so concurrent UI
+// uploads cannot overwrite each other or trigger a server-side DAV lock.
+let chatMetadataWriteQueue = Promise.resolve()
 
 function normalizeText(value, fallback = '') {
   if (typeof value === 'string') return value
@@ -59,11 +65,68 @@ function isChatJsonFilename(filename = '') {
   return normalizeText(filename).trim().toLowerCase().endsWith('.json')
 }
 
+function getWebdavErrorStatus(error) {
+  const candidates = [
+    error?.status,
+    error?.statusCode,
+    error?.response?.status,
+    error?.response?.statusCode,
+    error?.data?.status
+  ]
+
+  for (const candidate of candidates) {
+    const status = Number(candidate)
+    if (Number.isInteger(status) && status >= 100 && status <= 599) return status
+  }
+
+  const message = typeof error?.message === 'string' ? error.message : ''
+  const matched = message.match(/\b([1-5]\d{2})\b/)
+  return matched ? Number(matched[1]) : 0
+}
+
 function toErrorMessage(error, fallback = 'webdav_operation_failed') {
   if (!error) return fallback
   if (typeof error === 'string') return error
   if (typeof error?.message === 'string' && error.message) return error.message
+
+  const status = getWebdavErrorStatus(error)
+  const statusTextCandidates = [
+    error?.statusText,
+    error?.response?.statusText,
+    error?.data?.statusText
+  ]
+  const statusText = statusTextCandidates.find((value) => typeof value === 'string' && value.trim())?.trim() || ''
+  if (status) return `Invalid response: ${status}${statusText ? ` ${statusText}` : ''}`
+
   return fallback
+}
+
+function isWebdavLockedError(error) {
+  return getWebdavErrorStatus(error) === 423 || /\b423\b|\blocked\b/i.test(toErrorMessage(error, ''))
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function retryLockedWebdavWrite(task) {
+  let lastError
+  for (let attempt = 0; attempt <= WEBDAV_LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await task()
+    } catch (error) {
+      lastError = error
+      if (!isWebdavLockedError(error) || attempt === WEBDAV_LOCK_RETRY_DELAYS_MS.length) throw error
+      await delay(WEBDAV_LOCK_RETRY_DELAYS_MS[attempt])
+    }
+  }
+  throw lastError
+}
+
+function enqueueChatMetadataWrite(task) {
+  const run = chatMetadataWriteQueue.then(task, task)
+  chatMetadataWriteQueue = run.catch(() => {})
+  return run
 }
 
 function createWebdavClient(webdavConfig = {}, overridePath = '') {
@@ -502,9 +565,9 @@ function stringifyRemoteContent(content) {
 async function writeRemoteFileContents(client, remoteFilePath, content, options = {}) {
   const normalizedContent = stringifyRemoteContent(content)
 
-  await client.putFileContents(remoteFilePath, normalizedContent, {
+  await retryLockedWebdavWrite(() => client.putFileContents(remoteFilePath, normalizedContent, {
     overwrite: options?.overwrite !== false
-  })
+  }))
 
   const lastModified = normalizeText(options?.lastModified).trim()
   if (lastModified) {
@@ -595,7 +658,7 @@ async function readChatMetadataYaml(client, remoteDir) {
 
 async function writeChatMetadataYaml(client, remoteDir, data) {
   const metadataPath = buildChatMetadataFilePath(remoteDir)
-  await client.putFileContents(metadataPath, serializeChatMetadataYaml(data), { overwrite: true })
+  await retryLockedWebdavWrite(() => client.putFileContents(metadataPath, serializeChatMetadataYaml(data), { overwrite: true }))
   return {
     ok: true,
     path: metadataPath,
@@ -757,67 +820,77 @@ export async function listBackups(input = {}) {
   }
 }
 
-export async function writeBackup(input = {}) {
+async function commitChatMetadataForUploads(client, remoteDir, files) {
+  const completedFiles = files.filter((file) => isChatJsonFilename(file?.filename))
+  if (completedFiles.length === 0) return new Map()
+
+  return enqueueChatMetadataWrite(async () => {
+    const state = await loadReconciledChatMetadataState(client, remoteDir)
+    const committed = new Map()
+
+    for (const file of completedFiles) {
+      const filename = normalizeFileName(file.filename)
+      const nextEntry = resolveChatMetadataForUpload({
+        filename,
+        content: file.content,
+        chatMetadata: file.chatMetadata,
+        previousEntry: state.data.chats[filename],
+        remoteFile: state.remoteFileMap.get(filename)
+      })
+      state.data.chats[filename] = nextEntry
+      committed.set(filename, nextEntry)
+    }
+
+    await writeChatMetadataYaml(client, remoteDir, state.data)
+    return committed
+  })
+}
+
+async function writeBackupInternal(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const filename = normalizeFileName(input?.filename)
   const remoteDir = config.path
   const remoteFilePath = `${remoteDir}/${filename}`
-  const ensureDirectory = input?.ensureDirectory !== false
-  const useChatMetadata = shouldUseChatMetadata(input, filename)
 
-  if (ensureDirectory) {
+  if (input?.ensureDirectory !== false) {
     await ensureRemoteDirectory(client, remoteDir)
   }
 
   const content = stringifyRemoteContent(input?.content)
-  let state = null
-  let previousEntry = null
-  let nextEntry = null
+  await writeRemoteFileContents(client, remoteFilePath, content, {
+    overwrite: input?.overwrite !== false,
+    lastModified: input?.lastModified
+  })
 
-  if (useChatMetadata) {
-    state = await loadReconciledChatMetadataState(client, remoteDir)
-    previousEntry = state.data.chats[filename] ? { ...state.data.chats[filename] } : null
-    nextEntry = resolveChatMetadataForUpload({
-      filename,
-      content,
-      chatMetadata: input?.chatMetadata,
-      previousEntry,
-      remoteFile: state.remoteFileMap.get(filename)
-    })
-    state.data.chats[filename] = nextEntry
-    await writeChatMetadataYaml(client, remoteDir, state.data)
-  }
+  return { client, remoteDir, remoteFilePath, filename, content }
+}
+
+export async function writeBackup(input = {}) {
+  const filename = normalizeFileName(input?.filename)
 
   try {
-    await writeRemoteFileContents(client, remoteFilePath, content, {
-      overwrite: input?.overwrite !== false,
-      lastModified: input?.lastModified
-    })
-  } catch (error) {
-    if (useChatMetadata && state) {
-      try {
-        if (previousEntry) {
-          state.data.chats[filename] = previousEntry
-        } else {
-          delete state.data.chats[filename]
-        }
-        await writeChatMetadataYaml(client, remoteDir, state.data)
-      } catch {
-        // ignore rollback failure
-      }
-    }
-    throw new Error(toErrorMessage(error, 'webdav_write_failed'))
-  }
+    const result = await writeBackupInternal({ ...input, filename })
+    const metadata = shouldUseChatMetadata(input, filename)
+      ? await commitChatMetadataForUploads(result.client, result.remoteDir, [{
+        filename,
+        content: result.content,
+        chatMetadata: input?.chatMetadata
+      }])
+      : new Map()
 
-  return {
-    ok: true,
-    path: remoteFilePath,
-    filename,
-    chatMetadata: nextEntry || null
+    return {
+      ok: true,
+      path: result.remoteFilePath,
+      filename,
+      chatMetadata: metadata.get(filename) || null
+    }
+  } catch (error) {
+    throw new Error(toErrorMessage(error, 'webdav_write_failed'))
   }
 }
 
-export async function writeBackupsBatch(input = {}) {
+
+async function writeBackupsBatchInternal(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)
   const remoteDir = config.path
   const ensureDirectory = input?.ensureDirectory !== false
@@ -896,25 +969,8 @@ export async function writeBackupsBatch(input = {}) {
     return { ok: true, completed, failed }
   }
 
-  const state = await loadReconciledChatMetadataState(client, remoteDir)
-
   for (let index = 0; index < files.length; index += batchSize) {
     const currentBatch = files.slice(index, index + batchSize)
-    const previousEntries = new Map()
-
-    for (const item of currentBatch) {
-      previousEntries.set(item.filename, state.data.chats[item.filename] ? { ...state.data.chats[item.filename] } : null)
-      state.data.chats[item.filename] = resolveChatMetadataForUpload({
-        filename: item.filename,
-        content: item.content,
-        chatMetadata: item.chatMetadata,
-        previousEntry: previousEntries.get(item.filename),
-        remoteFile: state.remoteFileMap.get(item.filename)
-      })
-    }
-
-    await writeChatMetadataYaml(client, remoteDir, state.data)
-
     const results = await mapWithConcurrency(
       currentBatch,
       async (item) => {
@@ -923,7 +979,7 @@ export async function writeBackupsBatch(input = {}) {
             overwrite,
             lastModified: item.lastModified
           })
-          return { ok: true, filename: item.filename }
+          return { ok: true, item }
         } catch (error) {
           return {
             ok: false,
@@ -935,40 +991,19 @@ export async function writeBackupsBatch(input = {}) {
       Math.min(concurrency, currentBatch.length || 1)
     )
 
-    let hasFailed = false
-
-    for (const result of results) {
-      if (result?.ok) {
-        completed.push(result.filename)
-        const mergedInfo = mergeChatMetadataIntoFileInfo(
-          state.remoteFileMap.get(result.filename) || {
-            basename: result.filename,
-            filename: result.filename,
-            path: `${remoteDir}/${result.filename}`,
-            type: 'file',
-            size: 0,
-            lastmod: state.data.chats[result.filename]?.updatedAt || '',
-            createdAt: state.data.chats[result.filename]?.createdAt || '',
-            updatedAt: state.data.chats[result.filename]?.updatedAt || '',
-            title: state.data.chats[result.filename]?.title || stripJsonExtension(result.filename)
-          },
-          state.data.chats[result.filename]
-        )
-        state.remoteFileMap.set(result.filename, mergedInfo)
-      } else if (result?.filename) {
-        hasFailed = true
-        failed.push({ filename: result.filename, message: result.message })
-        const previousEntry = previousEntries.get(result.filename)
-        if (previousEntry) {
-          state.data.chats[result.filename] = previousEntry
-        } else {
-          delete state.data.chats[result.filename]
-        }
-      }
+    const uploaded = results.filter((result) => result?.ok).map((result) => result.item)
+    try {
+      await commitChatMetadataForUploads(client, remoteDir, uploaded)
+      completed.push(...uploaded.map((item) => item.filename))
+    } catch (error) {
+      const message = toErrorMessage(error, 'webdav_metadata_write_failed')
+      failed.push(...uploaded.map((item) => ({ filename: item.filename, message })))
     }
 
-    if (hasFailed) {
-      await writeChatMetadataYaml(client, remoteDir, state.data)
+    for (const result of results) {
+      if (!result?.ok && result?.filename) {
+        failed.push({ filename: result.filename, message: result.message })
+      }
     }
   }
 
@@ -978,6 +1013,15 @@ export async function writeBackupsBatch(input = {}) {
     failed
   }
 }
+
+export async function writeBackupsBatch(input = {}) {
+  try {
+    return await writeBackupsBatchInternal(input)
+  } catch (error) {
+    throw new Error(toErrorMessage(error, 'webdav_write_failed'))
+  }
+}
+
 
 export async function readBackup(input = {}) {
   const { client, config } = createWebdavClient(input?.webdavConfig, input?.remotePath)

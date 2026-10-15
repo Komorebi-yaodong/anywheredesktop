@@ -14,6 +14,7 @@ import defaultUserAvatarUrl from '../../build/user.png?asset';
 import TextSearchUI from './utils/TextSearchUI.js';
 import { formatTimestamp, sanitizeToolArgs, sanitizeToolFunctionName } from './utils/formatters.js';
 import { resolveSafeConversationMutationTarget } from './utils/conversationMessageTarget.js';
+import { createLinkedUserMessagePair } from './utils/linkedUserMessage.js';
 import { completeConversationClose, createConversationMutationQueue, createConversationPersistenceTracker, mergeConversationMutationRequests as mergeAutoSaveRequests } from './utils/conversationMutationQueue.js';
 import { MAX_AUTOMATIC_NETWORK_RETRIES, createNetworkRetryingStream, runWithNetworkRetries } from './utils/conversationNetworkRetry.js';
 
@@ -793,8 +794,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       prompt.value = multilineText;
       shouldAutoSend = false;
     } else {
-      appendFullHistory({ role: "user", content: multilineText });
-      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }], timestamp: nowTime });
+      appendLinkedUserMessage({ historyContent: multilineText, uiContent: [{ type: "text", text: multilineText }], timestamp: nowTime });
     }
   } else if (data.type === "over" && data.payload) {
     const overText = String(data.payload);
@@ -802,8 +802,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       prompt.value = overText;
       shouldAutoSend = false;
     } else {
-      appendFullHistory({ role: "user", content: overText });
-      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: overText }], timestamp: nowTime });
+      appendLinkedUserMessage({ historyContent: overText, uiContent: [{ type: "text", text: overText }], timestamp: nowTime });
     }
   } else if (data.type === "img" && data.payload) {
     if (shouldRespectDirectSendConfig && !directSendConfig.image) {
@@ -814,8 +813,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       shouldAutoSend = false;
     } else {
       const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
-      appendFullHistory({ role: "user", content: imageContent });
-      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: imageContent, timestamp: nowTime });
+      appendLinkedUserMessage({ historyContent: imageContent, uiContent: imageContent, timestamp: nowTime });
       if (normalizedUserText) {
         prompt.value = normalizedUserText;
       }
@@ -856,8 +854,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       return;
     }
   } else if (data.type === "task" && data.payload) {
-    appendFullHistory({ role: "user", content: data.payload });
-    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
+    appendLinkedUserMessage({ historyContent: data.payload, uiContent: [{ type: "text", text: data.payload }], timestamp: nowTime });
   } else {
     return;
   }
@@ -2592,6 +2589,22 @@ const conversationInstanceId = (typeof crypto !== 'undefined' && typeof crypto.r
   : `window_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 let conversationLeaseHeartbeatTimer = null;
 
+const appendLinkedUserMessage = ({ historyContent, uiContent = historyContent, timestamp = '', historyExtras = {}, uiExtras = {} } = {}) => {
+  const pair = createLinkedUserMessagePair({
+    storageId: createConversationStorageId(),
+    uiId: messageIdCounter.value++,
+    historyContent,
+    uiContent,
+    timestamp,
+    historyExtras,
+    uiExtras
+  });
+  appendFullHistory(pair.historyMessage);
+  chat_show.value.push(pair.uiMessage);
+  return pair;
+};
+
+
 const createConversationStorageId = () => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
   ? crypto.randomUUID()
   : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
@@ -3271,6 +3284,7 @@ const isUserAuthoredMessage = (message = {}) => message?.role === 'user' && !isT
 
 const createViewImageMessage = (toolCallId, payload) => ({
   id: messageIdCounter.value++,
+  storageId: createConversationStorageId(),
   role: 'user',
   origin: 'view_image',
   sourceToolCallId: toolCallId,
@@ -3284,6 +3298,7 @@ const createViewImageMessage = (toolCallId, payload) => ({
 
 const createViewPdfMessage = (toolCallId, payload) => ({
   id: messageIdCounter.value++,
+  storageId: createConversationStorageId(),
   role: 'user',
   origin: 'view_pdf',
   sourceToolCallId: toolCallId,
@@ -5661,11 +5676,10 @@ onMounted(async () => {
         const system_time = new Date().toLocaleString('sv-SE');
         const pre_prompt = `## Scheduled Task\n\n**system_time**:${system_time}\n\n`;
         const suffix_prompt = "\n\nScheduled task triggered! This is a task that you need to execute autonomously without human intervention. Please execute immediately and provide correct feedback.";
-        appendFullHistory({ role: "user", content: pre_prompt + data.payload + suffix_prompt });
-        chat_show.value.push({
-          id: messageIdCounter.value++,
-          role: "user",
-          content: [{ type: "text", text: pre_prompt + data.payload + suffix_prompt }],
+        const scheduledTaskContent = pre_prompt + data.payload + suffix_prompt;
+        appendLinkedUserMessage({
+          historyContent: scheduledTaskContent,
+          uiContent: [{ type: "text", text: scheduledTaskContent }],
           timestamp: new Date().toLocaleString('sv-SE')
         });
 
@@ -5702,8 +5716,7 @@ onMounted(async () => {
       if (data.type === "multiline-text" && data.payload) {
         if (directSendConfig.normal) {
           const multilineText = String(data.payload);
-          appendFullHistory({ role: "user", content: multilineText });
-          chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }] });
+          appendLinkedUserMessage({ historyContent: multilineText, uiContent: [{ type: "text", text: multilineText }] });
           shouldDirectSend = true;
         } else {
           prompt.value = String(data.payload);
@@ -5723,16 +5736,15 @@ onMounted(async () => {
           if (CODE.value.trim().toLowerCase().includes(data.payload.trim().toLowerCase())) { /* do nothing */ }
           else {
             if (directSendConfig.normal) {
-              appendFullHistory({ role: "user", content: data.payload });
-              chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }] });
+              appendLinkedUserMessage({ historyContent: data.payload, uiContent: [{ type: "text", text: data.payload }] });
               shouldDirectSend = true;
             } else { prompt.value = data.payload; }
           }
         }
       } else if (data.type === "img" && data.payload) {
         if (directSendConfig.image) {
-          appendFullHistory({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
-          chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
+          const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
+          appendLinkedUserMessage({ historyContent: imageContent, uiContent: imageContent });
           if (normalizedUserText) {
             prompt.value = normalizedUserText;
           }
@@ -8782,11 +8794,9 @@ const sendAgentToolMessage = async ({ text, filePaths, source = 'agent_tool' } =
     ? contentList[0].text
     : contentList;
 
-  appendFullHistory({ role: 'user', content: contentForHistory });
-  chat_show.value.push({
-    id: messageIdCounter.value++,
-    role: 'user',
-    content: contentList,
+  appendLinkedUserMessage({
+    historyContent: contentForHistory,
+    uiContent: contentList,
     timestamp: userTimestamp
   });
 
@@ -9060,11 +9070,9 @@ const appendCurrentInputToHistory = async () => {
   const userTimestamp = new Date().toLocaleString('sv-SE');
 
   if (!hasPendingFiles && promptText) {
-    appendFullHistory({ role: "user", content: promptText });
-    chat_show.value.push({
-      id: messageIdCounter.value++,
-      role: "user",
-      content: [{ type: "text", text: promptText }],
+    appendLinkedUserMessage({
+      historyContent: promptText,
+      uiContent: [{ type: "text", text: promptText }],
       timestamp: userTimestamp
     });
     prompt.value = "";
@@ -9081,8 +9089,7 @@ const appendCurrentInputToHistory = async () => {
     const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
       ? userContentList[0].text
       : userContentList;
-    appendFullHistory({ role: "user", content: contentForHistory });
-    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
+    appendLinkedUserMessage({ historyContent: contentForHistory, uiContent: userContentList, timestamp: userTimestamp });
     prompt.value = "";
     scheduleAutoSave({ reason: 'user-message', immediate: true });
     return true;

@@ -19,6 +19,7 @@ const DEFAULT_FETCH_TIMEOUT_MS = 30000
 
 
 const DEFAULT_PROXY_BYPASS_RULES = '<local>'
+const UPDATER_SESSION_PARTITION = 'electron-updater'
 const PROXY_SCHEMES = new Set(['http:', 'https:', 'socks5:'])
 
 export function normalizeNetworkProxyConfig(input = {}) {
@@ -52,6 +53,12 @@ export function normalizeNetworkProxyConfig(input = {}) {
   }
 }
 
+async function applyProxyToSession(targetSession, proxyConfig) {
+  if (typeof targetSession?.setProxy !== 'function') return
+  await targetSession.setProxy(proxyConfig)
+  await targetSession.closeAllConnections?.()
+}
+
 export async function applyNetworkProxyConfig(input = {}) {
   const config = normalizeNetworkProxyConfig(input)
   const proxyConfig = config.enabled
@@ -62,11 +69,14 @@ export async function applyNetworkProxyConfig(input = {}) {
     await app.setProxy(proxyConfig)
   }
 
-  const targetSession = session?.defaultSession
-  if (typeof targetSession?.setProxy === 'function') {
-    await targetSession.setProxy(proxyConfig)
-    await targetSession.closeAllConnections?.()
-  }
+  await applyProxyToSession(session?.defaultSession, proxyConfig)
+
+  // electron-updater uses this isolated in-memory partition rather than defaultSession.
+  // Keep it synchronized so update checks and package downloads honor networkProxy too.
+  const updaterSession = typeof session?.fromPartition === 'function'
+    ? session.fromPartition(UPDATER_SESSION_PARTITION, { cache: false })
+    : null
+  await applyProxyToSession(updaterSession, proxyConfig)
 
   return config
 }

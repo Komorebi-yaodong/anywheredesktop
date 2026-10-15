@@ -23,6 +23,7 @@
     "test:conversation-compaction-restore": "node tests/conversation-compaction-restore.test.mjs",
     "test:conversation-persistence": "node tests/conversation-persistence-lifecycle.test.mjs && node tests/conversation-persistence-roundtrip.test.mjs",
     "test:conversation-network-retry": "node tests/conversation-network-retry.test.mjs",
+    "test:updater-proxy-session": "node tests/updater-proxy-session.test.mjs",
     "test:markdown-placeholder": "node tests/markdown-placeholder.test.mjs",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm run build && electron-builder --dir --publish never",

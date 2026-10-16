@@ -65,6 +65,7 @@ import { createRemoteConversationReadService } from './core/remote/conversationR
 import { createRemoteSessionManager } from './core/remote/sessionManager.js'
 import { createRemoteUploadManager } from './core/remote/uploadManager.js'
 import { createRemoteBusinessConfigService } from './core/remote/businessConfig.js'
+import { createMobileWorkspaceService } from './core/remote/mobileWorkspace.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -79,6 +80,15 @@ let remoteShutdownCompleted = false
 const remoteBusinessConfigService = createRemoteBusinessConfigService({
   getConfig: dataApi.getConfig,
   updateConfig: dataApi.updateConfigWithoutFeatures
+})
+
+
+const mobileWorkspaceService = createMobileWorkspaceService({
+  getConfig: dataApi.getConfig,
+  updateConfig: dataApi.updateConfigWithoutFeatures,
+  getUser: dataApi.getUser,
+  readLocalProjects: projectsApi.readLocalProjects,
+  writeLocalProjects: projectsApi.writeLocalProjects
 })
 
 
@@ -106,6 +116,7 @@ const remoteGateway = createRemoteGateway({
   conversationReadService: remoteConversationReadService,
   uploadManager: remoteUploadManager,
   businessConfigService: remoteBusinessConfigService,
+  mobileWorkspaceService,
   onStatusChanged: (status) => {
     for (const item of listWindows('main')) {
       const win = getWindowByRef(item.id)

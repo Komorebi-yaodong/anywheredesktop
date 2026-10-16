@@ -233,6 +233,7 @@ export function createRemoteGateway({
   sessionManager = null,
   uploadManager = null,
   businessConfigService = null,
+  mobileWorkspaceService = null,
   onStatusChanged = null,
   onPairingCreated = null,
   getLanAddresses = getLanIpv4Addresses,
@@ -299,7 +300,8 @@ export function createRemoteGateway({
       capabilities.push(
         'remote.device.profile.update',
         'conversation.assistants.list', 'conversation.create',
-        'conversation.send', 'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
+        'conversation.send', 'conversation.queue.list', 'conversation.queue.remove',
+        'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
         'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask',
         'conversation.rename', 'conversation.delete',
         'conversation.config.get', 'conversation.config.patch', 'conversation.compact', 'conversation.compact.cancel'
@@ -307,6 +309,10 @@ export function createRemoteGateway({
     }
     if (uploadManager) capabilities.push('attachment.begin', 'attachment.chunk', 'attachment.complete', 'attachment.abort')
     if (businessConfigService) capabilities.push('business.config.get', 'business.config.replace')
+    if (mobileWorkspaceService) capabilities.push(
+      'workspace.bootstrap.get', 'workspace.assistants.list', 'workspace.assistant.get', 'workspace.assistant.patch',
+      'workspace.project.create', 'workspace.management.catalog.get'
+    )
     return capabilities
   }
 
@@ -992,6 +998,32 @@ export function createRemoteGateway({
           result = await updateDeviceProfile(context.device.deviceId, params)
           context.device = { ...context.device, ...result.device }
           break
+        case 'workspace.bootstrap.get':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.bootstrap({ params })
+          break
+        case 'workspace.assistants.list':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.assistantList({ params })
+          break
+        case 'workspace.assistant.get':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.assistantGet({ params })
+          break
+        case 'workspace.assistant.patch':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.mutate({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'workspace.project.create':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.projectCreate({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'workspace.management.catalog.get':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.managementCatalog({ params })
+          break
+
+
         case 'business.config.get':
           if (!businessConfigService) throw remoteError('remote_method_unavailable')
           result = await businessConfigService.get({ deviceId: context.device.deviceId, requestId, params })
@@ -1041,6 +1073,16 @@ export function createRemoteGateway({
           if (!conversationReadService) throw remoteError('remote_method_unavailable')
           result = conversationReadService.getWindows(params)
           break
+        case 'conversation.queue.list':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = activeSessionManager.listSendQueue({ deviceId: context.device.deviceId, params })
+          break
+        case 'conversation.queue.remove':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = activeSessionManager.removeQueuedSend({ deviceId: context.device.deviceId, params })
+          break
+
+
         case 'conversation.send':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')
           result = await activeSessionManager.send({

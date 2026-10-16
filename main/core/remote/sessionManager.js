@@ -209,7 +209,7 @@ export function createRemoteSessionManager({
 
   function remember(conversationId, item) {
     const current = sessions.get(conversationId)
-    const session = current || { conversationId, activeRequestId: '', activeDeviceId: '' }
+    const session = current || { conversationId, activeRequestId: '', activeDeviceId: '', pendingSends: [] }
     session.windowRef = item.id
     session.hidden = item.remoteHidden === true
     sessions.set(conversationId, session)
@@ -388,6 +388,66 @@ export function createRemoteSessionManager({
   }
 
 
+  async function dispatchSendRecord(session, record, check) {
+    const { deviceId, requestId, conversationId, body, uploadIds } = record
+    let authorizationWindowRef = ''
+    try {
+      check()
+      const item = windowItem(session.windowRef)
+      if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
+      if (uploadIds.length) {
+        await uploadManager.authorizeForRequest({ deviceId, requestId, windowRef: session.windowRef, uploadIds })
+        authorizationWindowRef = session.windowRef
+      }
+      check()
+      session.activeRequestId = requestId
+      session.activeDeviceId = deviceId
+      session.activeOperation = 'conversation.send'
+      record.windowRef = session.windowRef
+      const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+        type: 'conversation.send', requestId, deviceId, conversationId, text: body, uploadIds, autoApproveTools: true
+      })
+      if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+      const result = { ok: true, conversationId, windowId: session.windowRef, hidden: session.hidden, created: record.created === true, queued: false }
+      record.result = result
+      if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
+      return result
+    } catch (error) {
+      if (authorizationWindowRef) {
+        await uploadManager.releaseRequest({ deviceId, requestId, windowRef: authorizationWindowRef }).catch(() => {})
+      }
+      if (session.activeRequestId === requestId && session.activeDeviceId === deviceId) {
+        session.activeRequestId = ''
+        session.activeDeviceId = ''
+        session.activeOperation = ''
+      }
+      publish(record, 'assistant.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
+      throw error
+    }
+  }
+
+  async function dispatchNextSend(session) {
+    if (session.activeRequestId || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
+    const next = session.pendingSends.shift()
+    const record = requests.get(requestKey(next.deviceId, next.requestId))
+    if (!record || record.terminal) return dispatchNextSend(session)
+    try {
+      await dispatchSendRecord(session, record, next.check)
+    } catch {
+      // The next queued record already received a terminal failure. Continue the queue.
+      await dispatchNextSend(session)
+    }
+  }
+
+  function queueResult(session, record) {
+    const position = session.pendingSends.length
+    const result = { ok: true, conversationId: record.conversationId, windowId: session.windowRef, hidden: session.hidden, created: record.created === true, queued: true, position }
+    record.result = result
+    publish(record, 'conversation.queue.pending', { position })
+    return result
+  }
+
+
   async function send({ deviceId, requestId, params = {} } = {}) {
     parameters(params, ['conversationId', 'text', 'uploadIds'])
     const conversationId = id(params.conversationId, 'conversationId')
@@ -412,56 +472,28 @@ export function createRemoteSessionManager({
     }
     pruneRequests()
     const record = {
-      deviceId: safeDeviceId, requestId: safeRequestId, conversationId, fingerprint,
+      deviceId: safeDeviceId, requestId: safeRequestId, conversationId, fingerprint, body, uploadIds,
       event: 'conversation.command.pending', eventSequence: 0, terminal: false,
       text: '', reasoning: '', truncated: false, updatedAtMs: Date.now(), windowRef: ''
     }
     requests.set(key, record)
     record.dispatched = serialize(conversationId, async () => {
-      let authorizationWindowRef = ''
-      try {
-        check()
-        const hadSession = Boolean(existingSession(conversationId))
-        const session = await ensureSession(conversationId, check)
-        check()
-        const item = windowItem(session.windowRef)
-        if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
-        if (uploadIds.length) {
-          await uploadManager.authorizeForRequest({
-            deviceId: safeDeviceId, requestId: safeRequestId, windowRef: session.windowRef, uploadIds
-          })
-          authorizationWindowRef = session.windowRef
+      const hadSession = Boolean(existingSession(conversationId))
+      const session = await ensureSession(conversationId, check)
+      check()
+      record.created = !hadSession
+      record.windowRef = session.windowRef
+      const item = windowItem(session.windowRef)
+      if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) {
+        if (!Array.isArray(session.pendingSends)) session.pendingSends = []
+        if (session.pendingSends.length >= 20) {
+          publish(record, 'assistant.failed', { code: 'remote_send_queue_limit_reached' })
+          throw remoteError('remote_send_queue_limit_reached')
         }
-        check()
-        session.activeRequestId = safeRequestId
-        session.activeDeviceId = safeDeviceId
-        session.activeOperation = 'conversation.send'
-        record.windowRef = session.windowRef
-        const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
-          type: 'conversation.send', requestId: safeRequestId, deviceId: safeDeviceId,
-          conversationId, text: body, uploadIds, autoApproveTools: true
-        })
-        if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
-        const result = { ok: true, conversationId, windowId: session.windowRef, hidden: session.hidden, created: !hadSession }
-        record.result = result
-        // Renderer acknowledgement may arrive before dispatch returns; don't overwrite a terminal state.
-        if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
-        return result
-      } catch (error) {
-        if (authorizationWindowRef) {
-          await uploadManager.releaseRequest({
-            deviceId: safeDeviceId, requestId: safeRequestId, windowRef: authorizationWindowRef
-          }).catch(() => {})
-        }
-        const session = sessions.get(conversationId)
-        if (session?.activeRequestId === safeRequestId && session.activeDeviceId === safeDeviceId) {
-          session.activeRequestId = ''
-          session.activeDeviceId = ''
-          session.activeOperation = ''
-        }
-        publish(record, 'assistant.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
-        throw error
+        session.pendingSends.push({ deviceId: safeDeviceId, requestId: safeRequestId, check })
+        return queueResult(session, record)
       }
+      return dispatchSendRecord(session, record, check)
     })
     return record.dispatched
   }
@@ -723,6 +755,36 @@ export function createRemoteSessionManager({
   }
 
 
+  function listSendQueue({ deviceId, params = {} } = {}) {
+    parameters(params, ['conversationId'])
+    const conversationId = id(params.conversationId, 'conversationId')
+    assertActive(generation, deviceId)
+    const session = existingSession(conversationId)
+    const pending = Array.isArray(session?.pendingSends) ? session.pendingSends : []
+    return {
+      ok: true,
+      conversationId,
+      activeRequestId: session?.activeDeviceId === deviceId ? session.activeRequestId || '' : '',
+      items: pending.filter((item) => item.deviceId === deviceId).map((item, index) => ({ requestId: item.requestId, position: index + 1 }))
+    }
+  }
+
+  function removeQueuedSend({ deviceId, params = {} } = {}) {
+    parameters(params, ['conversationId', 'requestId'])
+    const conversationId = id(params.conversationId, 'conversationId')
+    const queuedRequestId = id(params.requestId, 'requestId')
+    assertActive(generation, deviceId)
+    const session = existingSession(conversationId)
+    if (!session || !Array.isArray(session.pendingSends)) throw remoteError('remote_send_queue_item_not_found')
+    const index = session.pendingSends.findIndex((item) => item.deviceId === deviceId && item.requestId === queuedRequestId)
+    if (index < 0) throw remoteError('remote_send_queue_item_not_found')
+    session.pendingSends.splice(index, 1)
+    const record = requests.get(requestKey(deviceId, queuedRequestId))
+    if (record && !record.terminal) publish(record, 'assistant.cancelled', { code: 'remote_send_queue_removed' })
+    return { ok: true, conversationId, requestId: queuedRequestId, removed: true }
+  }
+
+
   async function cancel({ deviceId, requestId, params = {} } = {}) {
     parameters(params, ['conversationId'])
     const conversationId = id(params.conversationId, 'conversationId')
@@ -781,6 +843,7 @@ export function createRemoteSessionManager({
       session.activeRequestId = ''
       session.activeDeviceId = ''
       session.activeOperation = ''
+      void dispatchNextSend(session)
     }
     return { ok: true }
   }
@@ -799,6 +862,14 @@ export function createRemoteSessionManager({
   async function revokeDevice(deviceId) {
     revokedDevices.add(deviceId)
     for (const session of sessions.values()) {
+      if (Array.isArray(session.pendingSends)) {
+        const removed = session.pendingSends.filter((item) => item.deviceId === deviceId)
+        session.pendingSends = session.pendingSends.filter((item) => item.deviceId !== deviceId)
+        for (const item of removed) {
+          const record = requests.get(requestKey(deviceId, item.requestId))
+          if (record && !record.terminal) publish(record, 'assistant.cancelled', { code: 'remote_device_revoked' })
+        }
+      }
       if (session.activeDeviceId !== deviceId || !session.activeRequestId) continue
       await dispatchRemoteCommandToWindow(session.windowRef, {
         type: session.activeOperation === 'conversation.compact' ? 'conversation.compact.cancel' : 'conversation.cancel',
@@ -851,6 +922,7 @@ export function createRemoteSessionManager({
 
   return {
     send,
+    listSendQueue, removeQueuedSend,
     listAssistants, createConversation,
 
     editMessage: (input) => mutate({ ...input, operation: 'conversation.message.edit' }),

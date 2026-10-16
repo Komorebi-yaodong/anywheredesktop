@@ -488,6 +488,8 @@ export function createRemoteGateway({
         type: String(type || 'remote.unknown').slice(0, 80),
         deviceId: typeof details?.deviceId === 'string' ? details.deviceId.slice(0, 160) : '',
         deviceName: typeof details?.deviceName === 'string' ? normalizeDisplayName(details.deviceName).slice(0, 80) : '',
+        deviceModel: typeof details?.deviceModel === 'string' ? normalizeDisplayName(details.deviceModel, '').slice(0, 80) : '',
+        appVersion: typeof details?.appVersion === 'string' ? normalizeDisplayName(details.appVersion, '').slice(0, 80) : '',
         result: typeof details?.result === 'string' ? details.result.slice(0, 80) : '',
         meta: details?.meta && typeof details.meta === 'object' ? clone(details.meta) : {}
       }
@@ -905,7 +907,10 @@ export function createRemoteGateway({
 
     activeSessionManager?.authorizeDevice?.(nextDevice.deviceId)
 
-    await appendAudit('remote.device.paired', { deviceId: nextDevice.deviceId, result: 'ok' })
+    await appendAudit('remote.device.paired', {
+      deviceId: nextDevice.deviceId, deviceName: nextDevice.displayName,
+      deviceModel: nextDevice.deviceModel, appVersion: nextDevice.appVersion, result: 'ok'
+    })
     notifyStatus()
 
     return {
@@ -1178,7 +1183,10 @@ export function createRemoteGateway({
       activeSocketsByDeviceId.set(device.deviceId, sockets)
       await touchDevice(device.deviceId)
       notifyStatus()
-      await appendAudit('remote.session.opened', { deviceId: device.deviceId, result: 'ok' })
+      await appendAudit('remote.session.opened', {
+        deviceId: device.deviceId, deviceName: device.displayName,
+        deviceModel: device.deviceModel, appVersion: device.appVersion, result: 'ok'
+      })
 
       if (!sendEncrypted(socket, context, {
         kind: 'event',
@@ -1467,7 +1475,10 @@ export function createRemoteGateway({
       await activeSessionManager?.revokeDevice?.(normalizedId)
       await uploadManager?.cleanupDevice?.(normalizedId)
 
-      await appendAudit('remote.device.revoked', { deviceId: normalizedId, deviceName: normalizeDisplayName(removedDevice?.displayName), result: 'ok' })
+      await appendAudit('remote.device.revoked', {
+        deviceId: normalizedId, deviceName: normalizeDisplayName(removedDevice?.displayName),
+        deviceModel: removedDevice?.deviceModel, appVersion: removedDevice?.appVersion, result: 'ok'
+      })
       notifyStatus()
     }
     return { ok: true, removed, deviceId: normalizedId }
@@ -1490,18 +1501,40 @@ export function createRemoteGateway({
   async function getAuditLog() {
     const stored = await storageGet(AUDIT_STORAGE_KEY, { version: REMOTE_PROTOCOL_VERSION, entries: [] })
     const devices = await readDevices()
-    const names = new Map(devices.devices.map((device) => [device.deviceId, normalizeDisplayName(device.displayName)]))
+    const profiles = new Map(devices.devices.map((device) => [device.deviceId, {
+      deviceName: normalizeDisplayName(device.displayName),
+      deviceModel: normalizeDisplayName(device.deviceModel, '').slice(0, 80),
+      appVersion: normalizeDisplayName(device.appVersion, '').slice(0, 80)
+    }]))
     const labels = {
       'remote.device.paired': '新手机已配对',
       'remote.device.revoked': '已撤销设备',
       'remote.device.renamed': '已更新设备名称',
       'remote.session.opened': '手机已连接'
     }
+    const entries = recentAuditEntries(stored?.entries)
+      .filter((entry) => Object.hasOwn(labels, entry.type))
+    // A revoked device is no longer in the active map. Reuse its most recent
+    // retained public profile so older connection records remain informative.
+    const historicProfiles = new Map()
+    for (const entry of entries) {
+      if (!entry.deviceId || historicProfiles.has(entry.deviceId)) continue
+      historicProfiles.set(entry.deviceId, {
+        deviceName: normalizeDisplayName(entry.deviceName, ''),
+        deviceModel: normalizeDisplayName(entry.deviceModel, '').slice(0, 80),
+        appVersion: normalizeDisplayName(entry.appVersion, '').slice(0, 80)
+      })
+    }
     return {
       ok: true,
-      entries: recentAuditEntries(stored?.entries)
-        .filter((entry) => Object.hasOwn(labels, entry.type))
-        .map((entry) => ({ at: entry.at, action: labels[entry.type], deviceName: names.get(entry.deviceId) || normalizeDisplayName(entry.deviceName, '') }))
+      entries: entries.map((entry) => {
+        const profile = profiles.get(entry.deviceId) || historicProfiles.get(entry.deviceId) || {
+          deviceName: normalizeDisplayName(entry.deviceName, ''),
+          deviceModel: normalizeDisplayName(entry.deviceModel, '').slice(0, 80),
+          appVersion: normalizeDisplayName(entry.appVersion, '').slice(0, 80)
+        }
+        return { at: entry.at, action: labels[entry.type], ...profile }
+      })
     }
   }
 

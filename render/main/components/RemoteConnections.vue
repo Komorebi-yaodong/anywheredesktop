@@ -161,7 +161,7 @@ function formatTime(value = '') {
 
 
 function deviceSubtitle(device = {}) {
-  const parts = [device.deviceModel || device.platform || '手机']
+  const parts = [device.deviceModel || device.platform || device.deviceName || '手机']
   if (device.appVersion) parts.push(`Anywhere Mobile ${device.appVersion}`)
   return parts.join(' · ')
 }
@@ -302,7 +302,7 @@ defineExpose({ openDialog })
               <div v-for="entry in visibleAuditEntries" :key="`${entry.at}-${entry.action}-${entry.deviceName}`" class="audit-row">
                 <el-icon><Document /></el-icon>
                 <strong>{{ entry.action }}</strong>
-                <span>{{ entry.deviceName || '本机服务' }}</span>
+                <span>{{ deviceSubtitle(entry) }}</span>
                 <time>{{ formatTime(entry.at) }}</time>
               </div>
             </div>

@@ -647,6 +647,8 @@ async function main() {
       params: { platform: 'android', deviceModel: 'Fixture Phone Model', appVersion: 'test.1' }
     })
     assert.equal(profileUpdated.result.device.deviceModel, 'Fixture Phone Model')
+
+    assert.equal(profileUpdated.result.device.appVersion, 'test.1')
     const invalidProfile = await sendEncryptedRequest({
       socket, session, requestId: 'request-device-profile-invalid-0001', method: 'remote.device.profile.update',
       params: { serial: 'MUST_NOT_ACCEPT' }
@@ -979,6 +981,10 @@ async function main() {
 
     const audit = await gateway.getAuditLog()
     assert.ok(audit.entries.some((entry) => entry.action === '新手机已配对'))
+
+    const pairedAudit = audit.entries.find((entry) => entry.action === '新手机已配对')
+    assert.equal(pairedAudit.deviceModel, 'Fixture Phone Model')
+    assert.equal(pairedAudit.appVersion, 'test.1')
     assert.ok(audit.entries.every((entry) => !Object.hasOwn(entry, 'deviceId')))
     assert.ok(audit.entries.every((entry) => !JSON.stringify(entry).includes(mobilePairing2.rootSecret)))
 

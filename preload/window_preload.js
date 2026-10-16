@@ -339,7 +339,7 @@ const api = {
   applyAdvancedCompactConfigToAll: (patch = {}) => electronAPI.ipcRenderer.invoke('compact:applyAdvancedToAll', toPlainPayload(patch) || {}),
   resolveModelContext: (modelInput = '', options = {}) => electronAPI.ipcRenderer.invoke('compact:resolveContext', modelInput, options),
   pruneCompactCache: (enabledModels = []) => electronAPI.ipcRenderer.invoke('compact:pruneCache', toPlainPayload(enabledModels) || []),
-  estimateCompactTokens: (messages = []) => electronAPI.ipcRenderer.invoke('compact:estimateTokens', toPlainPayload(messages) || []),
+  estimateCompactTokens: (messages = [], options = {}) => electronAPI.ipcRenderer.invoke('compact:estimateTokens', toPlainPayload(messages) || [], toPlainPayload(options) || {}),
   shouldAutoCompact: (input = {}) => electronAPI.ipcRenderer.invoke('compact:shouldAuto', toPlainPayload(input) || {}),
 
   selectCompactionCut: (input = {}) => electronAPI.ipcRenderer.invoke('compact:selectCut', toPlainPayload(input) || {}),
@@ -474,6 +474,7 @@ const api = {
   readRemoteText: (url, options = {}) => invokeOrThrow('file:readRemoteText', url, options),
   readRemoteBinary: (url, options = {}) => invokeOrThrow('file:readRemoteBinary', url, options),
 
+  ensureWebdavDirectory: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:ensureDirectory', input),
   listWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listBackups', input),
   writeWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackup', input),
 
@@ -492,6 +493,7 @@ const api = {
   openConversation: (input = {}) => invokeOrThrow('conversation:open', toPlainPayload(input)),
   loadConversationPage: (input = {}) => invokeOrThrow('conversation:loadPage', toPlainPayload(input)),
   getConversationRequestMessages: (input = {}) => invokeOrThrow('conversation:getRequestMessages', toPlainPayload(input)),
+  repairConversationUiLinks: (input = {}) => invokeOrThrow('conversation:repairUiLinks', toPlainPayload(input)),
 
   saveConversationSnapshot: (input = {}) => invokeOrThrow('conversation:saveSnapshot', toPlainPayload(input)),
   saveConversationState: (input = {}) => invokeOrThrow('conversation:saveState', toPlainPayload(input)),

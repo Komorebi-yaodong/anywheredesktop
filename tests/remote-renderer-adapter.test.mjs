@@ -30,11 +30,22 @@ const context = {
   isWindowBootstrapped: ref(true), isClosingWindow: ref(false), loading: ref(false), compacting: ref(false),
   isPreparingSend: ref(false), isMcpLoading: ref(false), chat_show: ref([]),
   sessionMutationVersion: 0, lastPersistedSessionVersion: 0,
+  isAutoApproveTools: ref(false),
   ensureConversationWriteAccess: () => true,
   clearScheduledAutoSave: () => {},
-  queuedAutoSaveRequest: null,
+  scheduledAutoSaveRequest: null,
   autoSaveExecutionPromise: null,
+  conversationPersistenceTracker: {
+    markRequired: () => {},
+    markPersisted: () => {},
+    getState: () => ({ persistedFullSnapshotVersion: context.lastPersistedSessionVersion })
+  },
+  autoSaveMutationQueue: { whenIdle: async () => {} },
   stopConversationLeaseHeartbeat: () => actions.push('lease-heartbeat-stop'),
+  createLinkedUserMessagePair: ({ storageId, uiId, historyContent, uiContent, timestamp }) => ({
+    historyMessage: { role: 'user', storageId, content: historyContent },
+    uiMessage: { id: uiId, role: 'user', storageId, content: uiContent, timestamp }
+  }),
   appendFullHistory: (message) => { appendedMessages.push(structuredClone(message)); actions.push(`user:${message.content}`) },
   flushAppendBuffer: async () => actions.push('buffer-flush'),
   syncAutoCloseOnBlurListener: () => {},

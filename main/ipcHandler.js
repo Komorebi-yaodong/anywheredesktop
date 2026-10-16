@@ -607,8 +607,8 @@ handleInvoke('data:getUser', async () => {
     return compactApi.pruneCompactCacheByEnabledModels(enabledModels)
   })
 
-  handleInvoke('compact:estimateTokens', async (_event, messages = []) => {
-    const tokens = compactApi.estimateMessagesTokens(messages)
+  handleInvoke('compact:estimateTokens', async (_event, messages = [], options = {}) => {
+    const tokens = compactApi.estimateMessagesTokens(messages, options)
     return { ok: true, tokens }
   })
 
@@ -1269,7 +1269,12 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
 
 
 
-  handleInvoke('webdav:listBackups', async (_event, input = {}) => {
+    handleInvoke('webdav:ensureDirectory', async (_event, input = {}) => {
+    return webdavApi.ensureDirectory(input)
+  })
+
+
+handleInvoke('webdav:listBackups', async (_event, input = {}) => {
     return webdavApi.listBackups(input)
   })
 
@@ -1336,7 +1341,12 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
   })
 
 
-  handleInvoke('conversation:saveSnapshot', async (_event, input = {}) => {
+    handleInvoke('conversation:repairUiLinks', async (_event, input = {}) => {
+    return conversationApi.repairConversationUiLinks(input)
+  })
+
+
+handleInvoke('conversation:saveSnapshot', async (_event, input = {}) => {
     return conversationApi.saveConversationSnapshot(input)
   })
 
@@ -1424,7 +1434,7 @@ handleInvoke('file:isFileTypeSupported', async (_event, fileName = '') => {
       filename: descriptor.dbFile,
       content: snapshot.content,
       overwrite: true,
-      ensureDirectory: true,
+      ensureDirectory: input?.remote?.ensureDirectory !== false,
       useChatMetadata: false
     })
     if (!result || result.ok === false) throw new Error(result?.reason || 'webdav_write_failed')

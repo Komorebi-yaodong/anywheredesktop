@@ -225,6 +225,32 @@ async function normalizeFileObject(fileObj = {}) {
   }
 }
 
+function estimatePdfPageCountFromBase64(base64 = '') {
+  if (typeof base64 !== 'string' || !base64) return 1
+  try {
+    // Scan one small decoded block at a time so token metadata never creates a second full PDF-sized buffer.
+    const chunkChars = 64 * 1024
+    let carry = ''
+    let pageObjects = 0
+    let maxPageTreeCount = 0
+    for (let offset = 0; offset < base64.length; offset += chunkChars) {
+      const chunk = Buffer.from(base64.slice(offset, offset + chunkChars), 'base64').toString('latin1')
+      const source = carry + chunk
+      for (const match of source.matchAll(/\/Type\s*\/Page\b/g)) {
+        if (match.index + match[0].length > carry.length) pageObjects += 1
+      }
+      for (const match of source.matchAll(/\/Type\s*\/Pages\b[\s\S]{0,256}?\/Count\s+(\d+)/g)) {
+        if (match.index + match[0].length > carry.length) maxPageTreeCount = Math.max(maxPageTreeCount, Number(match[1]) || 0)
+      }
+      carry = source.slice(-512)
+    }
+    return Math.max(1, pageObjects, maxPageTreeCount)
+  } catch {
+    return 1
+  }
+}
+
+
 async function parseTextFileFromDataUrl(dataUrl = '') {
   const base64 = extractBase64FromDataUrl(dataUrl)
   if (!base64) {
@@ -369,7 +395,9 @@ export async function parseFileObject(fileObj) {
       type: 'file',
       file: {
         filename: normalized.name,
-        file_data: normalized.url
+        file_data: normalized.url,
+        // Local-only visual-token estimate metadata. Chat request normalizers strip it before provider calls.
+        tokenEstimate: { pageCount: estimatePdfPageCountFromBase64(normalized.base64) }
       }
     }
   }

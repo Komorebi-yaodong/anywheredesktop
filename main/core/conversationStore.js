@@ -11,7 +11,8 @@ import {
   registerConversation,
   removeConversation as removeConversationFromProjects,
   updateConversation,
-  writeLocalProjects
+  writeLocalProjects,
+  writeLocalProjectsBestEffort
 } from './projects.js'
 
 const SCHEMA_VERSION = 1
@@ -112,6 +113,85 @@ function openDatabase(databasePath, { readOnly = false } = {}) {
   }
   return db
 }
+
+function descriptorFromConversationRow(row, dbFile, existing = {}) {
+  const conversationId = normalizeText(row?.conversation_id).trim()
+  if (!conversationId) return null
+  const createdAt = normalizeTimestamp(row?.created_at)
+  const updatedAt = normalizeTimestamp(row?.updated_at) || createdAt
+  return {
+    conversationId,
+    dbFile,
+    title: normalizeText(row?.title).trim() || normalizeText(existing?.title).trim() || conversationId,
+    legacyJson: normalizeBasename(existing?.legacyJson || row?.legacy_json),
+    storageMode: normalizeText(existing?.storageMode, 'local').trim() || 'local',
+    revision: Math.max(0, Math.floor(Number(row?.revision) || 0)),
+    createdAt: createdAt || updatedAt,
+    updatedAt,
+    schemaVersion: Math.max(1, Math.floor(Number(row?.schema_version) || SCHEMA_VERSION))
+  }
+}
+
+async function synchronizeLocalProjectsWithDatabases(dirPath) {
+  const normalizedDir = path.resolve(normalizeText(dirPath).trim())
+  let projects = await readLocalProjects(normalizedDir)
+  const entries = await fs.readdir(normalizedDir, { withFileTypes: true }).catch((error) => {
+    if (error?.code === 'ENOENT') return []
+    throw error
+  })
+  const discoveredById = new Map()
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(DB_EXTENSION)) continue
+    let db
+    try {
+      db = openDatabase(path.join(normalizedDir, entry.name), { readOnly: true })
+      const row = getConversationRow(db)
+      const existing = projects.conversations?.[normalizeText(row?.conversation_id).trim()] || {}
+      const descriptor = descriptorFromConversationRow(row, entry.name, existing)
+      if (!descriptor) continue
+      if (!discoveredById.has(descriptor.conversationId)) discoveredById.set(descriptor.conversationId, [])
+      discoveredById.get(descriptor.conversationId).push(descriptor)
+    } catch {
+      // Ignore unrelated/corrupt .db files; only valid Anywhere conversation databases are indexed.
+    } finally {
+      try { db?.close() } catch {}
+    }
+  }
+
+  const rootDatabaseFiles = new Set(
+    entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(DB_EXTENSION))
+      .map((entry) => entry.name.toLowerCase())
+  )
+  const discoveredConversationIdByFile = new Map()
+  const selectedDescriptors = new Map()
+  for (const [conversationId, descriptors] of discoveredById.entries()) {
+    for (const descriptor of descriptors) {
+      discoveredConversationIdByFile.set(descriptor.dbFile.toLowerCase(), descriptor.conversationId)
+    }
+    const indexedDbFile = normalizeText(projects.conversations?.[conversationId]?.dbFile).trim().toLowerCase()
+    const descriptor = descriptors.find((item) => item.dbFile.toLowerCase() === indexedDbFile)
+      || (descriptors.length === 1 ? descriptors[0] : null)
+    if (descriptor) selectedDescriptors.set(conversationId, descriptor)
+  }
+
+  let nextProjects = projects
+  for (const [conversationId, descriptor] of Object.entries(projects.conversations || {})) {
+    if (selectedDescriptors.has(conversationId)) continue
+    const indexedDbFile = normalizeText(descriptor?.dbFile).trim().toLowerCase()
+    const discoveredConversationId = discoveredConversationIdByFile.get(indexedDbFile)
+    if (!rootDatabaseFiles.has(indexedDbFile) || (discoveredConversationId && discoveredConversationId !== conversationId)) {
+      nextProjects = removeConversationFromProjects(nextProjects, conversationId)
+    }
+  }
+  for (const [conversationId, descriptor] of selectedDescriptors.entries()) {
+    nextProjects = registerConversation(nextProjects, descriptor)
+  }
+  if (JSON.stringify(nextProjects) !== JSON.stringify(projects)) {
+    await writeLocalProjects(normalizedDir, nextProjects)
+  }
+  return nextProjects
+}
+
 
 function initializeSchema(db) {
   db.exec(`
@@ -475,24 +555,74 @@ function messageSignature(message = {}) {
   })
 }
 
+function normalizeRenderableContent(content) {
+  if (!Array.isArray(content)) {
+    const value = content ?? ''
+    return typeof value === 'string' && value.length === 0 ? null : value
+  }
+  const parts = content.filter((part) => part && !part.isTranscript)
+  if (parts.length === 0) return null
+  if (parts.every((part) => part?.type === 'text')) {
+    const text = parts.map((part) => part.text ?? '').join('')
+    return text.length === 0 ? null : text
+  }
+  return parts.map((part) => (
+    part?.type === 'text' ? { type: 'text', text: part.text ?? '' } : part
+  ))
+}
+
+function messageLinkSignature(message = {}) {
+  const role = normalizeText(message?.role)
+  if (role === 'user' || role === 'assistant') {
+    return JSON.stringify({ role, content: normalizeRenderableContent(message?.content) })
+  }
+  if (role === 'compaction') {
+    return JSON.stringify({ role, snapshotId: normalizeText(message?.snapshotId || message?.id) })
+  }
+  return messageSignature(message)
+}
+
+
 function prepareMigrationMessages(fullHistory = [], chatShow = []) {
-  const messages = (Array.isArray(fullHistory) ? fullHistory : []).map((message) => ({
-    ...clone(message),
-    storageId: normalizeText(message?.storageId).trim() || crypto.randomUUID()
-  }))
+  const usedMessageIds = new Set()
+  const messages = (Array.isArray(fullHistory) ? fullHistory : []).map((message) => {
+    const next = clone(message)
+    const requestedStorageId = normalizeText(message?.storageId).trim()
+    next.storageId = requestedStorageId && !usedMessageIds.has(requestedStorageId)
+      ? requestedStorageId
+      : crypto.randomUUID()
+    usedMessageIds.add(next.storageId)
+    return next
+  })
+  const canonicalByStorageId = new Map(messages.map((message) => [message.storageId, message]))
   const signatureQueues = new Map()
   messages.forEach((message) => {
     if (message.role === 'tool') return
-    const signature = messageSignature(message)
+    const signature = messageLinkSignature(message)
     if (!signatureQueues.has(signature)) signatureQueues.set(signature, [])
     signatureQueues.get(signature).push(message.storageId)
   })
+  const claimedStorageIds = new Set()
+  const usedUiStorageIds = new Set()
   const uiMessages = (Array.isArray(chatShow) ? chatShow : []).map((message) => {
     const next = clone(message)
-    const signature = messageSignature(next)
-    const queue = signatureQueues.get(signature)
-    next.storageId = normalizeText(next.storageId).trim() || (queue?.shift() || '')
-    next.uiStorageId = normalizeText(next.uiStorageId).trim() || crypto.randomUUID()
+    const signature = messageLinkSignature(next)
+    const requestedStorageId = normalizeText(next.storageId).trim()
+    const requestedCanonical = canonicalByStorageId.get(requestedStorageId)
+    const requestedIsValid = Boolean(
+      requestedCanonical
+      && !claimedStorageIds.has(requestedStorageId)
+      && messageLinkSignature(requestedCanonical) === signature
+    )
+    const reboundCandidates = (signatureQueues.get(signature) || []).filter((storageId) => !claimedStorageIds.has(storageId))
+    const reboundStorageId = reboundCandidates.length === 1 ? reboundCandidates[0] : ''
+    next.storageId = requestedIsValid ? requestedStorageId : reboundStorageId
+    if (next.storageId) claimedStorageIds.add(next.storageId)
+    const requestedUiStorageId = normalizeText(next.uiStorageId).trim()
+    next.uiStorageId = requestedUiStorageId && !usedUiStorageIds.has(requestedUiStorageId)
+      ? requestedUiStorageId
+      : crypto.randomUUID()
+    usedUiStorageIds.add(next.uiStorageId)
     return next
   })
   return { messages, uiMessages }
@@ -665,6 +795,65 @@ function syncUiMessagesIncrementally(db, messages, lowerBound = 1) {
 }
 
 
+function repairUiMessageLinks(db, { apply = true } = {}) {
+  const canonicalRows = db.prepare("SELECT message_uuid, role_code, payload_json FROM messages WHERE role_code IN ('user', 'assistant', 'compaction')").all()
+  const canonicalById = new Map()
+  const candidatesBySignature = new Map()
+  for (const row of canonicalRows) {
+    const message = JSON.parse(row.payload_json)
+    const entry = { id: row.message_uuid, role: row.role_code, signature: messageLinkSignature(message) }
+    canonicalById.set(entry.id, entry)
+    if (!candidatesBySignature.has(entry.signature)) candidatesBySignature.set(entry.signature, [])
+    candidatesBySignature.get(entry.signature).push(entry)
+  }
+
+  const uiRows = db.prepare("SELECT ui_uuid, message_uuid, role_code, payload_json FROM ui_messages WHERE message_uuid IS NOT NULL AND role_code IN ('user', 'assistant', 'compaction') ORDER BY ui_order").all()
+  const claimedCanonicalIds = new Set()
+  const invalidRows = []
+  for (const row of uiRows) {
+    const uiMessage = JSON.parse(row.payload_json)
+    const signature = messageLinkSignature(uiMessage)
+    const linked = canonicalById.get(row.message_uuid)
+    if (linked && linked.role === row.role_code && linked.signature === signature && !claimedCanonicalIds.has(linked.id)) {
+      claimedCanonicalIds.add(linked.id)
+    } else {
+      invalidRows.push({ ...row, signature })
+    }
+  }
+
+  const repairs = []
+  let rebound = 0
+  let unlinked = 0
+  for (const row of invalidRows) {
+    const candidates = (candidatesBySignature.get(row.signature) || []).filter((candidate) => !claimedCanonicalIds.has(candidate.id))
+    const nextMessageId = candidates.length === 1 ? candidates[0].id : null
+    repairs.push({ uiStorageId: row.ui_uuid, messageStorageId: nextMessageId })
+    if (nextMessageId) {
+      claimedCanonicalIds.add(nextMessageId)
+      rebound += 1
+    } else {
+      unlinked += 1
+    }
+  }
+  if (apply && repairs.length > 0) {
+    const updateLink = db.prepare('UPDATE ui_messages SET message_uuid = ? WHERE ui_uuid = ?')
+    for (const repair of repairs) updateLink.run(repair.messageStorageId, repair.uiStorageId)
+  }
+  return { changed: repairs.length, rebound, unlinked, repairs }
+}
+
+
+function replaceUiProjection(db, uiMessages, lowerBound) {
+  db.prepare("DELETE FROM ui_messages WHERE role_code = 'system' OR ui_order >= ?").run(lowerBound)
+  const systemUi = uiMessages.filter((message) => message?.role === 'system')
+  const activeUi = uiMessages.filter((message) => message?.role !== 'system')
+  // UI is a derived projection. Never reuse stale or cross-client uiStorageOrder values while rebuilding.
+  systemUi.forEach((message, index) => insertUiMessage(db, message, index - systemUi.length))
+  activeUi.forEach((message, index) => insertUiMessage(db, message, lowerBound + index))
+}
+
+
+
 function writeState(db, state) {
   const stateStmt = db.prepare(`
     INSERT INTO session_state(state_key, value_json, updated_at) VALUES (?, ?, ?)
@@ -771,6 +960,44 @@ function loadMessages(db, { activeOnly = true, limit = 0, beforeOrdinal = null }
   }))
 }
 
+function resolveValidatedUiMessageStorageId(db, row, canonicalCache = new Map()) {
+  const requestedStorageId = normalizeText(row?.message_uuid).trim()
+  if (!requestedStorageId) return ''
+  let canonical = canonicalCache.get(requestedStorageId)
+  if (canonical === undefined) {
+    canonical = db.prepare('SELECT role_code, payload_json FROM messages WHERE message_uuid = ?').get(requestedStorageId) || null
+    canonicalCache.set(requestedStorageId, canonical)
+  }
+  if (!canonical || canonical.role_code !== row?.role_code) return ''
+  try {
+    return messageLinkSignature(JSON.parse(row.payload_json)) === messageLinkSignature(JSON.parse(canonical.payload_json))
+      ? requestedStorageId
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+
+function materializeUiMessages(db, rows = []) {
+  const canonicalCache = new Map()
+  return rows.map((row) => {
+    const storageId = resolveValidatedUiMessageStorageId(db, row, canonicalCache)
+    const payload = hydrateAttachments(db, JSON.parse(row.payload_json))
+    delete payload.storageId
+    delete payload.storageOrdinal
+    delete payload.uiStorageId
+    delete payload.uiStorageOrder
+    return {
+      ...payload,
+      ...(storageId ? { storageId } : {}),
+      uiStorageId: row.ui_uuid,
+      uiStorageOrder: row.ui_order
+    }
+  })
+}
+
+
 function loadUiMessages(db, { activeOnly = true, limit = 0 } = {}) {
   let rows
   if (activeOnly) {
@@ -779,7 +1006,7 @@ function loadUiMessages(db, { activeOnly = true, limit = 0 } = {}) {
     `).get()
     if (lastCompact?.ui_order) {
       rows = db.prepare(`
-        SELECT ui_order, ui_uuid, message_uuid, payload_json
+        SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
         FROM ui_messages
         WHERE role_code = 'system' OR ui_order >= ?
         ORDER BY ui_order
@@ -789,23 +1016,18 @@ function loadUiMessages(db, { activeOnly = true, limit = 0 } = {}) {
   if (!rows) {
     if (Number(limit) > 0) {
       const tailRows = db.prepare(`
-        SELECT ui_order, ui_uuid, message_uuid, payload_json FROM (
-          SELECT ui_order, ui_uuid, message_uuid, payload_json
+        SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json FROM (
+          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
           FROM ui_messages WHERE role_code != 'system' ORDER BY ui_order DESC LIMIT ?
         ) ORDER BY ui_order
       `).all(Math.floor(Number(limit)))
-      const systemRows = db.prepare("SELECT ui_order, ui_uuid, message_uuid, payload_json FROM ui_messages WHERE role_code = 'system' ORDER BY ui_order").all()
+      const systemRows = db.prepare("SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json FROM ui_messages WHERE role_code = 'system' ORDER BY ui_order").all()
       rows = [...systemRows, ...tailRows]
     } else {
-      rows = db.prepare('SELECT ui_order, ui_uuid, message_uuid, payload_json FROM ui_messages ORDER BY ui_order').all()
+      rows = db.prepare('SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json FROM ui_messages ORDER BY ui_order').all()
     }
   }
-  return rows.map((row) => ({
-    ...hydrateAttachments(db, JSON.parse(row.payload_json)),
-    ...(row.message_uuid ? { storageId: row.message_uuid } : {}),
-    uiStorageId: row.ui_uuid,
-    uiStorageOrder: row.ui_order
-  }))
+  return materializeUiMessages(db, rows)
 }
 
 export async function migrateJsonConversation({ dirPath, jsonBasename, instanceId = '', appType = 'desktop' } = {}) {
@@ -924,7 +1146,7 @@ export async function createConversation({ dirPath, title, sessionData = {}, pro
 
 export async function openConversation({ dirPath, reference, activeOnly = true, pageSize = 200 } = {}) {
   const normalizedDir = path.resolve(normalizeText(dirPath).trim())
-  let projects = await readLocalProjects(normalizedDir)
+  let projects = await synchronizeLocalProjectsWithDatabases(normalizedDir)
   let descriptor = findConversation(projects, reference)
   if (!descriptor && normalizeBasename(reference).toLowerCase().endsWith('.json')) {
     const migration = await migrateJsonConversation({ dirPath: normalizedDir, jsonBasename: reference })
@@ -975,7 +1197,7 @@ export async function openConversation({ dirPath, reference, activeOnly = true, 
 
 export async function listLocalConversations(dirPath) {
   const normalizedDir = path.resolve(normalizeText(dirPath).trim())
-  const projects = await readLocalProjects(normalizedDir)
+  const projects = await synchronizeLocalProjectsWithDatabases(normalizedDir)
   const files = await fs.readdir(normalizedDir, { withFileTypes: true }).catch((error) => {
     if (error?.code === 'ENOENT') return []
     throw error
@@ -1048,19 +1270,15 @@ export async function loadConversationPage({ dirPath, conversationId, beforeOrdi
     const safeUiBefore = beforeUiOrder !== null && beforeUiOrder !== undefined && beforeUiOrder !== '' && Number.isFinite(Number(beforeUiOrder))
       ? Number(beforeUiOrder)
       : null
-    const uiMessages = safeUiBefore != null
+    const uiRows = safeUiBefore != null
       ? db.prepare(`
-          SELECT ui_order, ui_uuid, message_uuid, payload_json FROM (
-            SELECT ui_order, ui_uuid, message_uuid, payload_json
+          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json FROM (
+            SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
             FROM ui_messages WHERE ui_order < ? ORDER BY ui_order DESC LIMIT ?
           ) ORDER BY ui_order
-        `).all(safeUiBefore, Math.max(1, Number(pageSize) || 200)).map((row) => ({
-          ...hydrateAttachments(db, JSON.parse(row.payload_json)),
-          ...(row.message_uuid ? { storageId: row.message_uuid } : {}),
-          uiStorageId: row.ui_uuid,
-          uiStorageOrder: row.ui_order
-        }))
+        `).all(safeUiBefore, Math.max(1, Number(pageSize) || 200))
       : []
+    const uiMessages = materializeUiMessages(db, uiRows)
     const loadedFromOrdinal = messages.find((message) => message.role !== 'system')?.storageOrdinal || 0
     const loadedFromUiOrder = uiMessages.find((message) => message.role !== 'system')?.uiStorageOrder || 0
     return {
@@ -1224,22 +1442,7 @@ export async function saveConversationSnapshot({ dirPath, conversationId, expect
         : (activeUiStart > 0 ? activeUiStart : 1)
       const uiIncremental = syncUiMessagesIncrementally(db, prepared.uiMessages, loadedUiStart)
       if (!uiIncremental) {
-        if (isPaged || activeUiStart > 0) {
-          db.prepare("DELETE FROM ui_messages WHERE role_code = 'system' OR ui_order >= ?").run(loadedUiStart)
-          const systemUi = prepared.uiMessages.filter((message) => message?.role === 'system')
-          const activeUi = prepared.uiMessages.filter((message) => message?.role !== 'system')
-          systemUi.forEach((message, index) => insertUiMessage(db, message, index - systemUi.length))
-          let nextUiOrder = Number(db.prepare('SELECT COALESCE(MAX(ui_order), ?) AS value FROM ui_messages').get(loadedUiStart - 1)?.value) || (loadedUiStart - 1)
-          activeUi.forEach((message) => {
-            const preservedOrder = Number(message?.uiStorageOrder)
-            const uiOrder = Number.isFinite(preservedOrder) && preservedOrder >= loadedUiStart ? preservedOrder : ++nextUiOrder
-            nextUiOrder = Math.max(nextUiOrder, uiOrder)
-            insertUiMessage(db, message, uiOrder)
-          })
-        } else {
-          db.exec('DELETE FROM ui_messages')
-          prepared.uiMessages.forEach((message, index) => insertUiMessage(db, message, index + 1))
-        }
+        replaceUiProjection(db, prepared.uiMessages, isPaged || activeUiStart > 0 ? loadedUiStart : 1)
       }
 
       db.exec('DELETE FROM session_state')
@@ -1255,12 +1458,17 @@ export async function saveConversationSnapshot({ dirPath, conversationId, expect
       return { revision: nextRevision, title: nextTitle, updatedAt }
     })
 
-    await writeLocalProjects(dirPath, updateConversation(projects, conversationId, {
+    const warning = await writeLocalProjectsBestEffort(dirPath, updateConversation(projects, conversationId, {
       title: result.title,
       revision: result.revision,
       updatedAt: result.updatedAt
     }))
-    return { ok: true, ...result, descriptor: { ...descriptor, title: result.title, revision: result.revision, updatedAt: result.updatedAt } }
+    return {
+      ok: true,
+      ...result,
+      ...(warning ? { warning } : {}),
+      descriptor: { ...descriptor, title: result.title, revision: result.revision, updatedAt: result.updatedAt }
+    }
   } finally {
     db.close()
   }
@@ -1297,10 +1505,92 @@ export async function saveConversationState({ dirPath, conversationId, expectedR
       return { revision: nextRevision, title: nextTitle }
     })
     const nextProjects = updateConversation(projects, conversationId, { title: result.title, revision: result.revision, updatedAt: nowIso() })
-    await writeLocalProjects(dirPath, nextProjects)
-    return { ok: true, ...result }
+    const warning = await writeLocalProjectsBestEffort(dirPath, nextProjects)
+    return { ok: true, ...result, ...(warning ? { warning } : {}) }
   } finally { db.close() }
 }
+
+export async function repairConversationUiLinks({ dirPath, conversationId, expectedRevision, holderInstanceId = '', leaseEpoch = null } = {}) {
+  const projects = await readLocalProjects(dirPath)
+  const descriptor = findConversation(projects, conversationId)
+  if (!descriptor) throw new Error('conversation_not_found')
+  const databasePath = resolveDatabasePath(dirPath, descriptor.dbFile)
+  const inspectDb = openDatabase(databasePath)
+  let preview
+  let initialRow
+  try {
+    initializeSchema(inspectDb)
+    initialRow = getConversationRow(inspectDb)
+    assertConversationWriteLease(inspectDb, { holderInstanceId, leaseEpoch })
+    if (Number.isFinite(Number(expectedRevision)) && Number(expectedRevision) !== Number(initialRow.revision)) {
+      const error = new Error('conversation_revision_conflict')
+      error.currentRevision = initialRow.revision
+      throw error
+    }
+    preview = repairUiMessageLinks(inspectDb, { apply: false })
+  } finally { inspectDb.close() }
+
+  if (preview.changed === 0) {
+    return {
+      ok: true,
+      changed: 0,
+      rebound: 0,
+      unlinked: 0,
+      revision: initialRow.revision,
+      title: initialRow.title,
+      updatedAt: initialRow.updated_at,
+      backupCreated: false
+    }
+  }
+
+  const snapshotDir = path.join(path.dirname(databasePath), '.snapshots')
+  const snapshotPath = path.join(snapshotDir, `${conversationId}-pre-ui-link-repair-${Date.now()}.db`)
+  await fs.mkdir(snapshotDir, { recursive: true })
+  await fs.rm(snapshotPath, { force: true })
+  const backupDb = openDatabase(databasePath)
+  try {
+    assertConversationWriteLease(backupDb, { holderInstanceId, leaseEpoch })
+    await sqliteBackup(backupDb, snapshotPath)
+  } finally { backupDb.close() }
+
+  const db = openDatabase(databasePath)
+  let result
+  try {
+    initializeSchema(db)
+    result = withTransaction(db, () => {
+      const row = getConversationRow(db)
+      assertConversationWriteLease(db, { holderInstanceId, leaseEpoch })
+      if (Number(row.revision) !== Number(initialRow.revision)) {
+        const error = new Error('conversation_revision_conflict')
+        error.currentRevision = row.revision
+        throw error
+      }
+      const repaired = repairUiMessageLinks(db)
+      const updatedAt = nowIso()
+      const revision = Number(row.revision) + 1
+      db.prepare('UPDATE conversation SET updated_at = ?, revision = ? WHERE conversation_id = ?')
+        .run(updatedAt, revision, conversationId)
+      return {
+        changed: repaired.changed,
+        rebound: repaired.rebound,
+        unlinked: repaired.unlinked,
+        revision,
+        title: row.title,
+        updatedAt,
+        backupCreated: true
+      }
+    })
+  } finally { db.close() }
+
+  const warning = await writeLocalProjectsBestEffort(dirPath, updateConversation(projects, conversationId, {
+    title: result.title,
+    revision: result.revision,
+    updatedAt: result.updatedAt
+  }))
+  return { ok: true, ...result, ...(warning ? { warning } : {}) }
+}
+
+
 
 export async function appendMessages({ dirPath, conversationId, holderInstanceId = '', leaseEpoch = null, messages = [] } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return { ok: true, messageIds: [] }
@@ -1586,26 +1876,27 @@ export async function deleteConversation({ dirPath, conversationId, holderInstan
 }
 
 export async function acquireWriteLease({ dirPath, conversationId, holderInstanceId, holderApp = 'desktop', force = false } = {}) {
-  const descriptor = findConversation(await readLocalProjects(dirPath), conversationId)
+  const descriptor = findConversation(await synchronizeLocalProjectsWithDatabases(dirPath), conversationId)
   if (!descriptor) throw new Error('conversation_not_found')
   const db = openDatabase(resolveDatabasePath(dirPath, descriptor.dbFile))
   try {
     initializeSchema(db)
     return withTransaction(db, () => {
       const resource = 'conversation'
+      const conversation = getConversationRow(db)
       const holder = normalizeText(holderInstanceId).trim()
       if (!holder) throw new Error('conversation_write_lease_holder_required')
       const current = db.prepare('SELECT * FROM write_lease WHERE resource = ?').get(resource)
       const expired = !current || new Date(current.expires_at).getTime() <= Date.now()
       if (!force && current && !expired && current.holder_instance_id !== holder) {
-        return { ok: false, readonly: true, holderApp: current.holder_app, expiresAt: current.expires_at, leaseEpoch: current.lease_epoch }
+        return { ok: false, readonly: true, holderApp: current.holder_app, expiresAt: current.expires_at, leaseEpoch: current.lease_epoch, revision: conversation.revision }
       }
       const heartbeatAt = nowIso()
       const expiresAt = new Date(Date.now() + WRITE_LEASE_TTL_MS).toISOString()
       if (!force && current && !expired && current.holder_instance_id === holder) {
         db.prepare("UPDATE write_lease SET holder_app = ?, heartbeat_at = ?, expires_at = ? WHERE resource = 'conversation' AND holder_instance_id = ? AND lease_epoch = ?")
           .run(holderApp, heartbeatAt, expiresAt, holder, current.lease_epoch)
-        return { ok: true, readonly: false, leaseEpoch: current.lease_epoch, expiresAt }
+        return { ok: true, readonly: false, leaseEpoch: current.lease_epoch, expiresAt, revision: conversation.revision }
       }
       const epoch = Number(current?.lease_epoch || 0) + 1
       db.prepare(`
@@ -1618,7 +1909,7 @@ export async function acquireWriteLease({ dirPath, conversationId, holderInstanc
           heartbeat_at = excluded.heartbeat_at,
           expires_at = excluded.expires_at
       `).run(resource, holder, holderApp, epoch, heartbeatAt, expiresAt)
-      return { ok: true, readonly: false, leaseEpoch: epoch, expiresAt }
+      return { ok: true, readonly: false, leaseEpoch: epoch, expiresAt, revision: conversation.revision }
     })
   } finally { db.close() }
 }
@@ -1763,7 +2054,7 @@ export async function importConversationSnapshot({ dirPath, descriptor: rawDescr
 
 
 export async function getConversationDescriptor({ dirPath, reference } = {}) {
-  const descriptor = findConversation(await readLocalProjects(dirPath), reference)
+  const descriptor = findConversation(await synchronizeLocalProjectsWithDatabases(dirPath), reference)
   return descriptor ? { ok: true, descriptor } : { ok: false, descriptor: null }
 }
 

@@ -39,7 +39,13 @@
     "build:linux": "pnpm run build && electron-builder --linux AppImage --publish never",
     "release:win": "pnpm run build && electron-builder --win nsis --publish always",
     "release:mac": "pnpm run build && electron-builder --mac dmg zip --publish always",
-    "release:linux": "pnpm run build && electron-builder --linux AppImage --publish always"
+    "release:linux": "pnpm run build && electron-builder --linux AppImage --publish always",
+    "test:conversation-persistence": "node tests/conversation-persistence-lifecycle.test.mjs && node tests/conversation-persistence-roundtrip.test.mjs",
+    "test:conversation-network-retry": "node tests/conversation-network-retry.test.mjs",
+    "test:updater-proxy-session": "node tests/updater-proxy-session.test.mjs",
+    "test:quick-selection": "node tests/quick-selection.test.mjs",
+    "test:agent-message-buffer": "node tests/agent-message-buffer.test.mjs",
+    "test:markdown-placeholder": "node tests/markdown-placeholder.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

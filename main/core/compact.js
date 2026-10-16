@@ -43,6 +43,7 @@ export function selectCompactionCut({
   preferredMaxTokens = 0,
   keepRecentRounds = 0,
   fixedOverheadTokens = 0,
+  modelInput = '',
   includeCandidates = false
 } = {}) {
   const system = Array.isArray(systemMessages) ? systemMessages : []
@@ -72,12 +73,12 @@ export function selectCompactionCut({
 
   const userStartSet = new Set(userStarts)
   const pendingToolCallIds = new Set()
-  const baseTokens = estimateMessagesTokens(system) + Math.max(0, Number(fixedOverheadTokens) || 0)
+  const baseTokens = estimateMessagesTokens(system, { modelInput }) + Math.max(0, Number(fixedOverheadTokens) || 0)
   let prefixTokens = baseTokens
   const candidates = []
   for (let cutIndex = 1; cutIndex < window.length; cutIndex += 1) {
     const previousMessage = window[cutIndex - 1]
-    prefixTokens += estimateMessagesTokens([previousMessage])
+    prefixTokens += estimateMessagesTokens([previousMessage], { modelInput })
     for (const toolCallId of getToolCallIds(previousMessage)) pendingToolCallIds.add(toolCallId)
     if (previousMessage?.role === 'tool') {
       const toolCallId = String(previousMessage?.tool_call_id || previousMessage?.toolCallId || '').trim()
@@ -280,13 +281,123 @@ function extractTextFromContent(content) {
     .map((part) => {
       if (!part || typeof part !== 'object') return ''
       if (part.type === 'text' && typeof part.text === 'string') return part.text
-      if (part.type === 'image_url') return '[image]'
+      // Images and PDFs are counted separately by the visual estimator; do not double-count placeholders as text.
+      if (part.type === 'image_url' || part.type === 'file' || part.type === 'input_file') return ''
       if (part.type === 'input_audio' || part.type === 'audio') return '[audio]'
       return ''
     })
     .filter(Boolean)
     .join('\n')
 }
+
+// Local multimodal estimates are calibrated from the user's observed Gemini/GPT usage.
+// They are intentionally provider-neutral approximations; API usage remains authoritative.
+const BINARY_MEBIBYTE = 1024 * 1024
+const IMAGE_TOKENS_PER_MEBIBYTE = 1875
+const PDF_TOKENS_PER_PAGE = 32250 / 29
+const UNKNOWN_IMAGE_TOKENS = Math.round(1.44 * IMAGE_TOKENS_PER_MEBIBYTE)
+const VISUAL_METADATA_CACHE_LIMIT = 256
+const visualMetadataCache = new Map()
+
+function getVisualCacheKey(kind, value = '') {
+  const source = typeof value === 'string' ? value : ''
+  return `${kind}:${source.length}:${source.slice(0, 160)}:${source.slice(-160)}`
+}
+
+function rememberVisualMetadata(cacheKey, value) {
+  if (!cacheKey) return value
+  visualMetadataCache.delete(cacheKey)
+  visualMetadataCache.set(cacheKey, value)
+  while (visualMetadataCache.size > VISUAL_METADATA_CACHE_LIMIT) {
+    visualMetadataCache.delete(visualMetadataCache.keys().next().value)
+  }
+  return value
+}
+
+function estimateDataUrlBinaryBytes(dataUrl = '') {
+  const cacheKey = getVisualCacheKey('binary-bytes', dataUrl)
+  const cached = visualMetadataCache.get(cacheKey)
+  if (Number.isFinite(cached) && cached >= 0) return cached
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return rememberVisualMetadata(cacheKey, 0)
+  const comma = dataUrl.indexOf(',')
+  if (comma < 0 || !/;base64(?:;|$)/i.test(dataUrl.slice(0, comma))) return rememberVisualMetadata(cacheKey, 0)
+  const payloadLength = dataUrl.length - comma - 1
+  if (payloadLength <= 0) return rememberVisualMetadata(cacheKey, 0)
+  const last = dataUrl.charCodeAt(dataUrl.length - 1)
+  const previous = dataUrl.charCodeAt(dataUrl.length - 2)
+  const padding = last === 61 ? (previous === 61 ? 2 : 1) : 0
+  return rememberVisualMetadata(cacheKey, Math.max(0, Math.floor((payloadLength * 3) / 4) - padding))
+}
+
+function estimatePdfPageCountFromDataUrl(dataUrl = '') {
+  const cacheKey = getVisualCacheKey('pdf-pages', dataUrl)
+  const cached = visualMetadataCache.get(cacheKey)
+  if (Number.isFinite(cached) && cached > 0) return cached
+  if (typeof dataUrl !== 'string' || !/^data:application\/pdf(?:;[^,]*)?;base64,/i.test(dataUrl)) return 1
+  const base64Start = dataUrl.indexOf(',') + 1
+  if (base64Start <= 0 || base64Start >= dataUrl.length) return 1
+  try {
+    const chunkChars = 64 * 1024
+    let carry = ''
+    let pageObjects = 0
+    let maxPageTreeCount = 0
+    for (let offset = base64Start; offset < dataUrl.length; offset += chunkChars) {
+      const chunk = Buffer.from(dataUrl.slice(offset, offset + chunkChars), 'base64').toString('latin1')
+      const source = carry + chunk
+      for (const match of source.matchAll(/\/Type\s*\/Page\b/g)) {
+        if (match.index + match[0].length > carry.length) pageObjects += 1
+      }
+      for (const match of source.matchAll(/\/Type\s*\/Pages\b[\s\S]{0,256}?\/Count\s+(\d+)/g)) {
+        if (match.index + match[0].length > carry.length) maxPageTreeCount = Math.max(maxPageTreeCount, Number(match[1]) || 0)
+      }
+      carry = source.slice(-512)
+    }
+    return rememberVisualMetadata(cacheKey, Math.max(1, pageObjects, maxPageTreeCount))
+  } catch {
+    return rememberVisualMetadata(cacheKey, 1)
+  }
+}
+
+export function estimateVisualImageTokens({ byteLength, bytes } = {}) {
+  const resolvedBytes = Math.max(0, Number(byteLength ?? bytes) || 0)
+  if (resolvedBytes <= 0) return UNKNOWN_IMAGE_TOKENS
+  return Math.max(1, Math.round((resolvedBytes / BINARY_MEBIBYTE) * IMAGE_TOKENS_PER_MEBIBYTE))
+}
+
+function getPartTokenEstimate(part = {}) {
+  if (!part || typeof part !== 'object') return {}
+  const imageMeta = part?.image_url && typeof part.image_url === 'object' ? part.image_url.tokenEstimate : null
+  const fileMeta = part?.file && typeof part.file === 'object' ? part.file.tokenEstimate : null
+  return part.tokenEstimate || imageMeta || fileMeta || {}
+}
+
+function estimateMultimodalContentTokens(content) {
+  if (!Array.isArray(content)) return 0
+  let total = 0
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue
+    if (part.type === 'image_url') {
+      const source = typeof part.image_url === 'string' ? part.image_url : part.image_url?.url
+      const metadata = getPartTokenEstimate(part)
+      const byteLength = Math.max(0, Number(metadata?.byteLength ?? metadata?.bytes ?? metadata?.size) || estimateDataUrlBinaryBytes(source))
+      total += estimateVisualImageTokens({ byteLength })
+      continue
+    }
+    if (part.type === 'file' || part.type === 'input_file') {
+      const file = part.file || part
+      const isPdf = /^application\/pdf(?:;|$)/i.test(String(file?.mimeType || file?.type || ''))
+        || /^data:application\/pdf;base64,/i.test(String(file?.file_data || file?.url || ''))
+        || /\.pdf$/i.test(String(file?.filename || file?.name || ''))
+      if (!isPdf) continue
+      const metadata = getPartTokenEstimate(part)
+      const source = String(file?.file_data || file?.url || '')
+      const pageCount = Math.max(1, Math.floor(Number(metadata?.pageCount || metadata?.pages) || estimatePdfPageCountFromDataUrl(source)))
+      total += Math.max(1, Math.round(pageCount * PDF_TOKENS_PER_PAGE))
+    }
+  }
+  return total
+}
+
 
 function messageToPlainText(message = {}) {
   const role = message?.role || 'unknown'
@@ -304,17 +415,19 @@ function messageToPlainText(message = {}) {
   return [role, text, reasoning, toolCalls].filter(Boolean).join('\n')
 }
 
-export function estimateMessagesTokens(messages = []) {
+export function estimateMessagesTokens(messages = [], { modelInput = '' } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return 0
   let total = 0
   for (const message of messages) {
     const text = messageToPlainText(message)
-    if (!text) continue
-    try {
-      total += encode(text).length
-    } catch {
-      total += Math.ceil(text.length / 4)
+    if (text) {
+      try {
+        total += encode(text).length
+      } catch {
+        total += Math.ceil(text.length / 4)
+      }
     }
+    total += estimateMultimodalContentTokens(message?.content, modelInput)
   }
   // small per-message overhead
   total += messages.length * 4
@@ -1024,7 +1137,7 @@ export async function runConversationCompaction({
   }
 
   const summarySource = flattenForSummary(sourceMessages)
-  const localTokens = estimateMessagesTokens(summarySource)
+  const localTokens = estimateMessagesTokens(summarySource, { modelInput: modelValue })
   report('estimate_usage', {
     percent: 25,
     message: '估算上下文用量…',
@@ -1088,7 +1201,8 @@ export async function runConversationCompaction({
       createdAt: Date.now(),
       collapsed: true,
       expanded: false,
-      archivedMessages: deepClone(sourceMessages),
+      // SQLite canonical messages remain the recovery source. Do not clone the covered prefix
+      // into this runtime IPC result: it can contain large attachment data URLs and is unused by new-session restore.
       timestamp: new Date().toLocaleString('sv-SE')
     },
     modelConfig,

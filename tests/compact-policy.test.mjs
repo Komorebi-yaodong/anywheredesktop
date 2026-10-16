@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import {
   selectCompactionCut,
-  createCompactionTimeoutContext
+  createCompactionTimeoutContext,
+  estimateMessagesTokens,
+  estimateVisualImageTokens
 } from '../main/core/compact.js'
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -47,6 +49,31 @@ function verifyRatioWindow(ratio) {
 }
 
 async function main() {
+
+  const oneMiBImage = `data:image/png;base64,${Buffer.alloc(1024 * 1024, 1).toString('base64')}`
+  const baseUserTokens = estimateMessagesTokens([{ role: 'user', content: [] }], { modelInput: 'qwen3-vl' })
+  const imageTokens = estimateMessagesTokens([{ role: 'user', content: [{ type: 'image_url', image_url: { url: oneMiBImage } }] }], { modelInput: 'qwen3-vl' })
+  assert.equal(imageTokens - baseUserTokens, 1875, 'a 1 MiB image must use the user-calibrated 1,875 token ratio')
+  assert.equal(estimateVisualImageTokens({ byteLength: 1024 * 1024 }), 1875)
+  assert.equal(estimateVisualImageTokens(), 2700, 'images without usable byte metadata must use the calibrated 1.44 MiB fallback')
+
+  const unknownImageTokens = estimateMessagesTokens([{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.invalid/image.png' } }] }])
+  assert.equal(unknownImageTokens - baseUserTokens, 2700, 'remote images without local bytes must use the calibrated fallback')
+
+  const pdfTokens = estimateMessagesTokens([{ role: 'user', content: [{
+    type: 'file',
+    file: { filename: 'synthetic.pdf', file_data: 'data:application/pdf;base64,JVBERi0=', tokenEstimate: { pageCount: 29 } }
+  }] }], { modelInput: 'qwen3-vl' })
+  assert.equal(pdfTokens - baseUserTokens, 32250, 'a 29-page PDF must use the user-calibrated 32,250 token total')
+
+  const legacyPdfBody = `%PDF-1.7\n${'/Type /Page\n'.repeat(29)}`
+  const legacyPdfTokens = estimateMessagesTokens([{ role: 'user', content: [{
+    type: 'file',
+    file: { filename: 'legacy.pdf', file_data: `data:application/pdf;base64,${Buffer.from(legacyPdfBody, 'latin1').toString('base64')}` }
+  }] }], { modelInput: 'qwen3-vl' })
+  assert.equal(legacyPdfTokens - baseUserTokens, 32250, 'legacy PDFs without metadata must lazily recover their page count')
+
+
   const eighty = verifyRatioWindow(0.8)
   const ninety = verifyRatioWindow(0.9)
   assert.equal(eighty.selected.strategy, 'ai_unit_keep')

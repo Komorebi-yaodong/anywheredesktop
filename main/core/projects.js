@@ -171,6 +171,19 @@ export async function writeLocalProjects(dirPath, data) {
   return { ok: true, path: filePath }
 }
 
+export async function writeLocalProjectsBestEffort(dirPath, data, writer = writeLocalProjects) {
+  try {
+    await writer(dirPath, data)
+    return null
+  } catch (error) {
+    console.warn('[conversation] SQLite commit succeeded but projects index sync failed:', error?.message || error)
+    return {
+      code: 'conversation_index_sync_failed',
+      message: 'conversation_saved_but_index_sync_failed'
+    }
+  }
+}
+
 export async function readCloudProjects(webdavConfig) {
   const { readBackup } = await import('./webdav.js')
   const result = await readBackup({ webdavConfig, filename: PROJECTS_FILENAME })

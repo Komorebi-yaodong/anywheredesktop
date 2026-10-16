@@ -248,6 +248,7 @@ getDroppedFilePath: (file) => {
   readRemoteText: (url, options = {}) => invokeOrThrow('file:readRemoteText', url, options),
   readRemoteBinary: (url, options = {}) => invokeOrThrow('file:readRemoteBinary', url, options),
 
+  ensureWebdavDirectory: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:ensureDirectory', input),
   listWebdavBackups: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listBackups', input),
   writeWebdavBackup: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:writeBackup', input),
 
@@ -266,6 +267,7 @@ getDroppedFilePath: (file) => {
   openConversation: (input = {}) => invokeOrThrow('conversation:open', toPlainPayload(input)),
   loadConversationPage: (input = {}) => invokeOrThrow('conversation:loadPage', toPlainPayload(input)),
   getConversationRequestMessages: (input = {}) => invokeOrThrow('conversation:getRequestMessages', toPlainPayload(input)),
+  repairConversationUiLinks: (input = {}) => invokeOrThrow('conversation:repairUiLinks', toPlainPayload(input)),
 
   saveConversationSnapshot: (input = {}) => invokeOrThrow('conversation:saveSnapshot', toPlainPayload(input)),
   saveConversationState: (input = {}) => invokeOrThrow('conversation:saveState', toPlainPayload(input)),

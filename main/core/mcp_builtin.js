@@ -145,6 +145,21 @@ function inspectViewableImage(buffer) {
     return null;
 }
 
+function estimatePdfPageCount(buffer) {
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0) return 1;
+    try {
+        const source = buffer.toString('latin1');
+        const pageObjects = source.match(/\/Type\s*\/Page\b/g)?.length || 0;
+        const pageTreeCounts = [...source.matchAll(/\/Type\s*\/Pages\b[\s\S]{0,256}?\/Count\s+(\d+)/g)]
+            .map((match) => Number(match[1]))
+            .filter((count) => Number.isFinite(count) && count > 0);
+        return Math.max(1, pageObjects, ...pageTreeCounts);
+    } catch {
+        return 1;
+    }
+}
+
+
 const subAgentTasks = new Map();
 const MAX_SUBAGENT_TASKS = 100;
 const MAX_SUBAGENT_LOG_CHARS = 1024 * 1024;
@@ -1211,7 +1226,7 @@ IMPORTANT:
         },
         {
             name: "continue_agent_chats",
-            description: "Send follow-up messages to an ALREADY OPEN agent window. \n\nUse this tool to REUSE an existing agent's context instead of creating a new window. Returns immediately. The agent starts generating in background. You can do other things or immediately call 'read_agent_chats' with index=-1 to wait for its result.",
+            description: "Send follow-up messages to an ALREADY OPEN agent window. \n\nUse this tool to REUSE an existing agent's context instead of creating a new window. Returns immediately. If the target is busy, the message is queued until its current response completes; otherwise it starts responding to this message in background. You can do other things or immediately call 'read_agent_chats' with index=-1 to wait for its result.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -2479,7 +2494,7 @@ ${contextBlock}
             const displayText = `Local PDF loaded as complete document context: ${path.basename(safePath)} (${(stats.size / 1024 / 1024).toFixed(2)} MB).`;
             return {
                 __anywhereToolResult: 'pdf',
-                pdf: { encodedBytes: bytes.toString('base64'), mimeType: 'application/pdf', fileName: path.basename(safePath) },
+                pdf: { encodedBytes: bytes.toString('base64'), mimeType: 'application/pdf', fileName: path.basename(safePath), pageCount: estimatePdfPageCount(bytes) },
                 display: { text: displayText, fileName: path.basename(safePath), bytes: stats.size }
             };
         } catch (error) {
@@ -3629,7 +3644,7 @@ ${agentStr}`;
             const res = await win.webContents.executeJavaScript(`window.__AGENT_API__.sendMessage(${JSON.stringify(text)}, ${JSON.stringify(file_paths || [])})`);
             return res;
         } catch (e) {
-            return `Error sending message: ${e.message}`;
+            return `Error sending message: ${typeof e === 'string' ? e : (e?.message || 'Unable to deliver the message to the target agent.')}`;
         }
     },
 

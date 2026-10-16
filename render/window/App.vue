@@ -13,6 +13,10 @@ import defaultAiAvatarUrl from '../../resources/icon.png?asset';
 import defaultUserAvatarUrl from '../../build/user.png?asset';
 import TextSearchUI from './utils/TextSearchUI.js';
 import { formatTimestamp, sanitizeToolArgs, sanitizeToolFunctionName } from './utils/formatters.js';
+import { resolveSafeConversationMutationTarget } from './utils/conversationMessageTarget.js';
+import { createLinkedUserMessagePair } from './utils/linkedUserMessage.js';
+import { completeConversationClose, createConversationMutationQueue, createConversationPersistenceTracker, mergeConversationMutationRequests as mergeAutoSaveRequests } from './utils/conversationMutationQueue.js';
+import { MAX_AUTOMATIC_NETWORK_RETRIES, createNetworkRetryingStream, runWithNetworkRetries } from './utils/conversationNetworkRetry.js';
 
 
 let gptTokenizerEncodePromise = null;
@@ -450,13 +454,13 @@ const AUTO_SAVE_REQUEST_CONFIG_DEBOUNCE_MS = 250;
 const AUTO_SAVE_LOADING_THROTTLE_MS = 2500;
 let autoSaveTimer = null;
 let scheduledAutoSaveRequest = null;
-let queuedAutoSaveRequest = null;
 let autoSaveExecutionPromise = null;
 let conversationMetadataMutationPromise = null;
 
 let sessionMutationVersion = 0;
-let lastPersistedSessionVersion = 0;
+const conversationPersistenceTracker = createConversationPersistenceTracker();
 let lastAutoSaveAt = 0;
+let lastAutoSaveError = null;
 
 let textSearchInstance = null;
 
@@ -492,13 +496,7 @@ const getMessageViewportOffset = (container, messageElement) => (
   messageElement.getBoundingClientRect().top - container.getBoundingClientRect().top
 );
 
-const nextAnimationFrame = () => new Promise((resolve) => {
-  // Hidden Remote writers may have no compositor frame; never block model execution on paint.
-  if (document.visibilityState === 'hidden') { setTimeout(resolve, 0); return; }
-  let frame = null;
-  const timer = setTimeout(() => { if (frame !== null) cancelAnimationFrame(frame); resolve(); }, 100);
-  frame = requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
-});
+const nextAnimationFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
 
 const getLastMessageElement = () => {
@@ -797,8 +795,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       prompt.value = multilineText;
       shouldAutoSend = false;
     } else {
-      appendFullHistory({ role: "user", content: multilineText });
-      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }], timestamp: nowTime });
+      appendLinkedUserMessage({ historyContent: multilineText, uiContent: [{ type: "text", text: multilineText }], timestamp: nowTime });
     }
   } else if (data.type === "over" && data.payload) {
     const overText = String(data.payload);
@@ -806,8 +803,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       prompt.value = overText;
       shouldAutoSend = false;
     } else {
-      appendFullHistory({ role: "user", content: overText });
-      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: overText }], timestamp: nowTime });
+      appendLinkedUserMessage({ historyContent: overText, uiContent: [{ type: "text", text: overText }], timestamp: nowTime });
     }
   } else if (data.type === "img" && data.payload) {
     if (shouldRespectDirectSendConfig && !directSendConfig.image) {
@@ -818,8 +814,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       shouldAutoSend = false;
     } else {
       const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
-      appendFullHistory({ role: "user", content: imageContent });
-      chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: imageContent, timestamp: nowTime });
+      appendLinkedUserMessage({ historyContent: imageContent, uiContent: imageContent, timestamp: nowTime });
       if (normalizedUserText) {
         prompt.value = normalizedUserText;
       }
@@ -860,8 +855,7 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       return;
     }
   } else if (data.type === "task" && data.payload) {
-    appendFullHistory({ role: "user", content: data.payload });
-    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }], timestamp: nowTime });
+    appendLinkedUserMessage({ historyContent: data.payload, uiContent: [{ type: "text", text: data.payload }], timestamp: nowTime });
   } else {
     return;
   }
@@ -1747,13 +1741,13 @@ const projectUiToFullHistoryForLegacyMigration = (messages = []) => {
 
 const estimateCompactHistoryTokens = async (messages = []) => {
   if (!window.api?.estimateCompactTokens) return 0;
-  const estimate = await window.api.estimateCompactTokens(messages);
+  const estimate = await window.api.estimateCompactTokens(messages, { modelInput: model.value });
   return Math.max(0, Number(estimate?.tokens) || 0);
 };
 
 const splitFullHistoryPrefixAndTail = async (
   messages = fullHistory.value,
-  { maxPrefixTokens = 0, preferredMaxTokens = maxPrefixTokens, keepRecentRounds = 0 } = {}
+  { maxPrefixTokens = 0, keepRecentRounds = 0 } = {}
 ) => {
   const list = Array.isArray(messages) ? messages : [];
   let windowStart = 0;
@@ -1770,39 +1764,55 @@ const splitFullHistoryPrefixAndTail = async (
 
   const systemMessages = list.filter((message) => message?.role === 'system');
   const windowMessages = list.slice(windowStart);
-  const dynamicOverheadTokens = await estimateCurrentDynamicRequestOverhead();
-  if (!window.api?.selectCompactionCut || windowMessages.length < 2 || !Number.isFinite(Number(maxPrefixTokens)) || maxPrefixTokens <= 0) {
-    return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]) + dynamicOverheadTokens, maxPrefixTokens: Math.max(0, Number(maxPrefixTokens) || 0), tailStartUserOrdinal: 0, strategy: 'none' };
+  const userStartIndexes = [];
+  windowMessages.forEach((message, index) => {
+    if (isUserAuthoredMessage(message) && index > 0) userStartIndexes.push(index);
+  });
+  if (userStartIndexes.length === 0 || !Number.isFinite(Number(maxPrefixTokens)) || maxPrefixTokens <= 0) {
+    return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]), maxPrefixTokens: Math.max(0, Number(maxPrefixTokens) || 0), tailStartUserOrdinal: 0 };
   }
 
-  const selected = await window.api.selectCompactionCut({
-    systemMessages,
-    windowMessages,
-    thresholdTokens: Math.floor(Number(maxPrefixTokens)),
-    preferredMaxTokens: Math.floor(Math.max(Number(maxPrefixTokens), Number(preferredMaxTokens) || 0)),
-    keepRecentRounds,
-    fixedOverheadTokens: dynamicOverheadTokens
-  });
-  const cutIndex = Math.max(0, Math.min(windowMessages.length, Number(selected?.cutIndex) || 0));
-  if (!cutIndex) {
-    return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]) + dynamicOverheadTokens, maxPrefixTokens: Math.floor(Number(maxPrefixTokens)), tailStartUserOrdinal: 0, strategy: selected?.strategy || 'none' };
+  const budget = Math.floor(Number(maxPrefixTokens));
+  const estimatePrefixAt = async (cutIndex) => estimateCompactHistoryTokens([...systemMessages, ...windowMessages.slice(0, cutIndex)]);
+  let low = 0;
+  let high = userStartIndexes.length - 1;
+  let bestCandidate = -1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = userStartIndexes[middle];
+    const tokens = await estimatePrefixAt(candidate);
+    if (tokens <= budget) {
+      bestCandidate = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
   }
+  if (bestCandidate < 0) {
+    return { insertIndex: list.length, prefix: [], tail: windowMessages, prefixTokens: 0, tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...windowMessages]), maxPrefixTokens: budget, tailStartUserOrdinal: 0 };
+  }
+
+  const thresholdCutIndex = userStartIndexes[bestCandidate];
+  const requestedKeepRounds = Math.max(0, Math.floor(Number(keepRecentRounds) || 0));
+  // Move the threshold cut backwards by N complete user rounds to keep them verbatim.
+  const tailStartUserOrdinal = Math.max(0, bestCandidate - requestedKeepRounds);
+  let cutIndex = userStartIndexes[tailStartUserOrdinal] ?? thresholdCutIndex;
+  // Never summarize only an existing compaction marker: that would not reduce history.
+  const hasRealPrefixMessage = windowMessages
+    .slice(0, cutIndex)
+    .some((message) => message?.role && message.role !== 'system' && message.role !== 'compaction');
+  if (!hasRealPrefixMessage) cutIndex = thresholdCutIndex;
 
   const prefix = windowMessages.slice(0, cutIndex);
   const tail = windowMessages.slice(cutIndex);
-  const userStarts = windowMessages
-    .map((message, index) => (isUserAuthoredMessage(message) ? index : -1))
-    .filter((index) => index >= 0);
-  const tailStartUserOrdinal = Math.max(0, userStarts.findIndex((index) => index >= cutIndex));
   return {
     insertIndex: windowStart + cutIndex,
     prefix,
     tail,
-    prefixTokens: await estimateCompactHistoryTokens([...systemMessages, ...prefix]) + dynamicOverheadTokens,
-    tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...tail]) + dynamicOverheadTokens,
-    maxPrefixTokens: Math.floor(Number(maxPrefixTokens)),
-    tailStartUserOrdinal,
-    strategy: selected?.strategy || 'safe_adaptive'
+    prefixTokens: await estimateCompactHistoryTokens([...systemMessages, ...prefix]),
+    tailTokens: await estimateCompactHistoryTokens([...systemMessages, ...tail]),
+    maxPrefixTokens: budget,
+    tailStartUserOrdinal: Math.max(0, userStartIndexes.indexOf(cutIndex))
   };
 };
 
@@ -1999,14 +2009,14 @@ const estimateCurrentDynamicToolPrompt = async () => {
     if (compactToolSchemaTokenCache.has(schemaText)) {
       schemaTokens = compactToolSchemaTokenCache.get(schemaText);
     } else {
-      const estimate = await window.api.estimateCompactTokens([{ role: 'system', content: schemaText }]);
+      const estimate = await window.api.estimateCompactTokens([{ role: 'system', content: schemaText }], { modelInput: model.value });
       schemaTokens = Math.max(0, Number(estimate?.tokens) || 0);
       compactToolSchemaTokenCache.clear();
       compactToolSchemaTokenCache.set(schemaText, schemaTokens);
     }
   }
   const promptEstimate = overheadMessages.length
-    ? await window.api.estimateCompactTokens(overheadMessages)
+    ? await window.api.estimateCompactTokens(overheadMessages, { modelInput: model.value })
     : { tokens: 0 };
   const systemPromptTokens = Math.max(0, Number(promptEstimate?.tokens) || 0);
   return {
@@ -2027,8 +2037,8 @@ const refreshPromptTokenBreakdown = async () => {
     const systemMessages = requestMessages.filter((message) => message?.role === 'system');
     const conversationMessages = requestMessages.filter((message) => message?.role !== 'system');
     const [systemEstimate, conversationEstimate, toolPrompt] = await Promise.all([
-      window.api.estimateCompactTokens(systemMessages),
-      window.api.estimateCompactTokens(conversationMessages),
+      window.api.estimateCompactTokens(systemMessages, { modelInput: model.value }),
+      window.api.estimateCompactTokens(conversationMessages, { modelInput: model.value }),
       estimateCurrentDynamicToolPrompt()
     ]);
     const systemTokens = Math.max(0, Number(systemEstimate?.tokens) || 0);
@@ -2058,7 +2068,7 @@ const getCompactTokenSnapshot = async (messagesForAi = history.value) => {
   // 避免沿用压缩前 assistant.tokenUsage.total_tokens 导致立刻二次压缩。
   let localTokens = 0;
   if (window.api?.estimateCompactTokens) {
-    const estimate = await window.api.estimateCompactTokens(messagesForAi);
+    const estimate = await window.api.estimateCompactTokens(messagesForAi, { modelInput: model.value });
     localTokens = Math.max(0, Number(estimate?.tokens) || 0);
   }
   const requestOverheadTokens = await estimateCurrentDynamicRequestOverhead();
@@ -2103,22 +2113,28 @@ const findAiWindowStartIndex = (list = []) => {
  * 在「AI 可见窗口」内切 prefix/tail。
  * UI 不删除 prefix，只在 prefix 后插入 summary。
  */
-// Map a protocol-safe full-history cut to the owning chat bubbles. Full history keeps
-// tool results as rows; chat_show keeps those results inside the assistant bubble.
-// Counting only renderable non-system/non-tool rows keeps user and AI-unit cuts identical.
-const splitChatShowPrefixAtFullCut = (messages = [], fullPrefix = []) => {
+const splitAiWindowPrefixAndTail = (messages = [], tailStartUserOrdinal = 0) => {
   const list = Array.isArray(messages) ? messages : [];
   if (list.length === 0) return { windowStart: 0, insertIndex: 0, prefix: [], tail: [] };
+
   const windowStart = findAiWindowStartIndex(list);
-  const visiblePrefixCount = (Array.isArray(fullPrefix) ? fullPrefix : [])
-    .filter((message) => message?.role && message.role !== 'system' && message.role !== 'tool')
-    .length;
-  const insertIndex = Math.max(windowStart, Math.min(list.length, windowStart + visiblePrefixCount));
+  const windowMsgs = list.slice(windowStart);
+  const userStartIndexes = [];
+  windowMsgs.forEach((message, index) => {
+    if (isUserAuthoredMessage(message) && index > 0) userStartIndexes.push(index);
+  });
+  if (userStartIndexes.length === 0) return { windowStart, insertIndex: list.length, prefix: [], tail: windowMsgs };
+
+  const safeOrdinal = Math.min(
+    Math.max(0, Math.floor(Number(tailStartUserOrdinal) || 0)),
+    userStartIndexes.length - 1
+  );
+  const cutInWindow = userStartIndexes[safeOrdinal];
   return {
     windowStart,
-    insertIndex,
-    prefix: list.slice(windowStart, insertIndex),
-    tail: list.slice(insertIndex)
+    insertIndex: windowStart + cutInWindow,
+    prefix: windowMsgs.slice(0, cutInWindow),
+    tail: windowMsgs.slice(cutInWindow)
   };
 };
 
@@ -2218,7 +2234,7 @@ const handleRestoreCompact = async (payload = null) => {
       chat_show.value = Array.isArray(sessionData.chat_show) ? sessionData.chat_show : [];
       compactArchives.value = Array.isArray(sessionData.compactArchives)
         ? sessionData.compactArchives
-        : compactArchives.value.filter((item) => item?.id !== (restored?.restoredSnapshotId || outermost.snapshotId));
+        : compactArchives.value.filter((item) => item?.id !== outermost.snapshotId);
       currentConversationStorage.value = {
         ...storage,
         title: restored?.descriptor?.title || storage.title,
@@ -2265,8 +2281,7 @@ const runConversationCompact = async ({
   manual = true,
   // 工具循环中：允许在 loading 时压缩，避免 tool 轮次撞上下文上限
   allowDuringLoading = false,
-  quiet = false,
-  throwOnError = false
+  quiet = false
 } = {}) => {
   let hydratedPagedConversation = false;
 
@@ -2290,8 +2305,6 @@ const runConversationCompact = async ({
   syncHistoryFromFullHistory();
 
   compacting.value = true;
-
-  syncAutoCloseOnBlurListener();
   compactProgress.value = { percent: 2, message: '准备级联压缩…', stage: 'prepare' };
   compactAbortController = new AbortController();
   // 发送区仅 loading 时用户不易感知原因；气泡提示当前在做会话压缩
@@ -2327,18 +2340,20 @@ const runConversationCompact = async ({
         break;
       }
 
-      const contextLength = Math.max(0, Number(compactConfig.value.contextLength) || 0);
-      const triggerRatio = Math.min(0.99, Math.max(0.1, Number(compactConfig.value.triggerRatio) || 0));
-      const maxPrefixTokens = Math.floor(contextLength * triggerRatio);
-      // Prefer safe boundaries in the first half of the remaining window: 80% → 80~90%, 90% → 90~95%.
-      const preferredMaxTokens = Math.floor(contextLength * (triggerRatio + ((1 - triggerRatio) * 0.5)));
+      const maxPrefixTokens = Math.floor(
+        Number(compactConfig.value.contextLength || 0)
+        * Number(compactConfig.value.triggerRatio || 0)
+      );
       const fullSplit = await splitFullHistoryPrefixAndTail(fullHistory.value, {
         maxPrefixTokens,
-        preferredMaxTokens,
         keepRecentRounds: compactConfig.value.keepRecentRounds
       });
-      const { insertIndex: fullInsertIndex, prefix } = fullSplit;
-      const uiSplit = splitChatShowPrefixAtFullCut(chat_show.value, prefix);
+      const {
+        insertIndex: fullInsertIndex,
+        prefix,
+        tailStartUserOrdinal
+      } = fullSplit;
+      const uiSplit = splitAiWindowPrefixAndTail(chat_show.value, tailStartUserOrdinal);
       if (!prefix.length) {
         if (manual && steps === 1 && !quiet) {
           showDismissibleMessage.info('可压缩前缀不足，已跳过');
@@ -2418,8 +2433,8 @@ const runConversationCompact = async ({
     }
 
     autoCompactSuppressedForTurn.value = false;
-    // The database is authoritative after a cascade. Await one full snapshot then reload
-    // the active window so a multi-layer UI projection can never diverge until reopening.
+    // Persist first, then always reload only the active SQLite window. Canonical compressed prefixes
+    // stay untouched in SQLite but no longer remain reactive in this renderer after compaction.
     await executeAutoSaveRequest({ reason: 'conversation-compacted', force: true, version: ++sessionMutationVersion });
     await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 });
     if (!quiet) {
@@ -2432,26 +2447,22 @@ const runConversationCompact = async ({
     if (cancelledByUser) {
       if (!manual) autoCompactSuppressedForTurn.value = true;
       if (!quiet) showDismissibleMessage.info('已取消压缩');
-      if (throwOnError) throw createAbortError();
       return false;
     }
     if (!quiet) showDismissibleMessage.error(`压缩失败: ${error?.message || error}`);
-    if (throwOnError) throw error;
     return false;
   } finally {
     if (hydratedPagedConversation && currentConversationStorage.value?.isPaged === false) {
       await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 }).catch(() => {});
     }
     compacting.value = false;
-
-    syncAutoCloseOnBlurListener();
     compactAbortController = null;
     compactProgress.value = { percent: 0, message: '', stage: '' };
   }
 };
 
 // 工具循环内：tool 结果写回后、下一轮 AI 请求前检测并压缩
-const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request', onCompacting } = {}) => {
+const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request', onCompacting, requestMessages = null } = {}) => {
   if (autoCompactSuppressedForTurn.value) {
     autoCompactSuppressedForTurn.value = false;
     return false;
@@ -2459,9 +2470,13 @@ const maybeAutoCompactBeforeNextRequest = async ({ reason = 'pre-request', onCom
   if (compacting.value) return false;
   if (compactConfig.value.autoCompactEnabled === false) return false;
   try {
-    rehydrateHistoryToolsIfNeeded();
-    // 不在这里 sync 掉内存 history 的 tool 细节；rehydrate 已保证 tool 完整
-    const need = await shouldCompactNow(await buildRequestHistoryForCurrentConversation());
+    // The first user request already has an immutable, canonical request DTO. Tool-loop
+    // continuations still rehydrate before projection because their tool result may be new.
+    if (!Array.isArray(requestMessages)) rehydrateHistoryToolsIfNeeded();
+    const messagesForCheck = Array.isArray(requestMessages)
+      ? requestMessages
+      : await buildRequestHistoryForCurrentConversation();
+    const need = await shouldCompactNow(messagesForCheck);
     if (!need) return false;
     onCompacting?.();
     const ok = await runConversationCompact({
@@ -2759,10 +2774,16 @@ const setSessionSystemPromptOnly = (nextPrompt) => {
 const persistRemoteTranscript = async (reason) => {
   clearScheduledAutoSave();
   const version = ++sessionMutationVersion;
-  const request = { reason, force: true, version };
-  let saved = await executeAutoSaveRequest(request);
-  if (lastPersistedSessionVersion < version) saved = await executeAutoSaveRequest(request);
-  return saved && lastPersistedSessionVersion >= version;
+  const request = { reason, force: true, stateOnly: false, version };
+  const saved = await executeAutoSaveRequest(request);
+  if (typeof autoSaveMutationQueue !== 'undefined') {
+    await autoSaveMutationQueue.whenIdle();
+  }
+  if (typeof conversationPersistenceTracker !== 'undefined') {
+    const state = conversationPersistenceTracker.getState();
+    return saved === true && state.persistedFullSnapshotVersion >= version;
+  }
+  return saved === true && (typeof lastPersistedSessionVersion === 'undefined' || lastPersistedSessionVersion >= version);
 };
 
 
@@ -2962,7 +2983,6 @@ const runRemoteConversationCommand = async (input = {}) => {
           };
         } else {
           clearScheduledAutoSave();
-          queuedAutoSaveRequest = null;
           const deleted = await window.api.deleteConversation({
             dirPath,
             conversationId: storage.conversationId,
@@ -3097,9 +3117,9 @@ const runRemoteConversationCommand = async (input = {}) => {
       const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
         ? userContentList[0].text
         : userContentList;
-      appendFullHistory({ role: 'user', content: contentForHistory });
-      chat_show.value.push({
-        id: messageIdCounter.value++, role: 'user', content: userContentList,
+      appendLinkedUserMessage({
+        historyContent: contentForHistory,
+        uiContent: userContentList,
         timestamp: new Date().toLocaleString('sv-SE')
       });
       const userSaved = await persistRemoteTranscript('remote-user-message');
@@ -3147,6 +3167,27 @@ const runRemoteConversationCommand = async (input = {}) => {
   }
 };
 
+
+
+const appendLinkedUserMessage = ({ historyContent, uiContent = historyContent, timestamp = '', historyExtras = {}, uiExtras = {} } = {}) => {
+  const pair = createLinkedUserMessagePair({
+    storageId: createConversationStorageId(),
+    uiId: messageIdCounter.value++,
+    historyContent,
+    uiContent,
+    timestamp,
+    historyExtras,
+    uiExtras
+  });
+  appendFullHistory(pair.historyMessage);
+  chat_show.value.push(pair.uiMessage);
+  return pair;
+};
+
+
+const createConversationStorageId = () => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+  ? crypto.randomUUID()
+  : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
 
 
 const stopConversationLeaseHeartbeat = () => {
@@ -3203,10 +3244,31 @@ const acquireCurrentConversationLease = async () => {
       holderApp: 'desktop'
     });
     conversationReadOnly.value = lease?.readonly === true || lease?.ok === false;
-    conversationLease.value = lease?.ok ? lease : null;
     if (conversationReadOnly.value) {
       showDismissibleMessage.warning(`该会话正在由${lease?.holderApp || '另一个客户端'}编辑，当前以只读模式打开`);
       return;
+    }
+    conversationLease.value = lease;
+    const authoritativeRevision = Number(lease.revision);
+    currentConversationStorage.value = {
+      ...storage,
+      revision: Number.isFinite(authoritativeRevision) ? authoritativeRevision : storage.revision
+    };
+    const repaired = await window.api.repairConversationUiLinks({
+      dirPath,
+      conversationId: storage.conversationId,
+      expectedRevision: currentConversationStorage.value.revision,
+      holderInstanceId: conversationInstanceId,
+      leaseEpoch: lease.leaseEpoch
+    });
+    const repairedRevision = Number(repaired?.revision);
+    currentConversationStorage.value = {
+      ...currentConversationStorage.value,
+      revision: Number.isFinite(repairedRevision) ? repairedRevision : currentConversationStorage.value.revision
+    };
+    if (Number(repaired?.changed) > 0) {
+      await reloadConversationWindowFromStore({ activeOnly: true, pageSize: Number(storage.pageSize) || 200 });
+      showDismissibleMessage.info('已安全修复历史会话的消息索引映射');
     }
     conversationLeaseHeartbeatTimer = setInterval(async () => {
       const currentLease = conversationLease.value;
@@ -3226,9 +3288,18 @@ const acquireCurrentConversationLease = async () => {
       }
     }, 5000);
   } catch (error) {
+    const failedLease = conversationLease.value;
+    if (failedLease?.leaseEpoch) {
+      await window.api.releaseConversationWriteLease({
+        dirPath,
+        conversationId: storage.conversationId,
+        holderInstanceId: conversationInstanceId,
+        leaseEpoch: failedLease.leaseEpoch
+      }).catch(() => {});
+    }
     conversationReadOnly.value = true;
     conversationLease.value = null;
-    showDismissibleMessage.warning(`确认会话编辑权失败，当前以只读模式打开: ${error?.message || error}`);
+    showDismissibleMessage.warning(`确认或修复会话编辑状态失败，当前以只读模式打开: ${error?.message || error}`);
   } finally {
     conversationLeasePending.value = false;
   }
@@ -3481,8 +3552,14 @@ const pendingAppendBuffer = ref([]);
 
 
 const normalizePendingInputBuffer = (items) => (Array.isArray(items) ? items : [])
-  .filter((item) => item?.kind === 'input')
+  .filter((item) => item?.kind === 'input' || item?.kind === 'agent')
   .map((item) => {
+    if (item.kind === 'agent') {
+      const text = typeof item.text === 'string' ? item.text : '';
+      const filePaths = Array.isArray(item.filePaths) ? item.filePaths.filter((path) => typeof path === 'string' && path.trim()) : [];
+      if (!text.trim() && !filePaths.length) return null;
+      return { kind: 'agent', text, filePaths, source: 'continue_agent_chats', preview: text || `[${filePaths.length} files]` };
+    }
     const text = typeof item.text === 'string' ? item.text : '';
     const files = Array.isArray(item.files) ? item.files.filter((file) => file && typeof file === 'object') : [];
     if (!text.trim() && files.length === 0) return null;
@@ -3495,7 +3572,7 @@ const normalizePendingInputBuffer = (items) => (Array.isArray(items) ? items : [
   })
   .filter(Boolean);
 
-const enqueueInputToBuffer = (notice = '正在生成，消息已加入缓冲区，将在本轮结束后自动发送') => {
+const enqueueInputToBuffer = () => {
   const text = prompt.value.trim();
   const files = Array.isArray(fileList.value) ? fileList.value.slice() : [];
   if (!text && files.length === 0) return;
@@ -3508,7 +3585,7 @@ const enqueueInputToBuffer = (notice = '正在生成，消息已加入缓冲区�
   prompt.value = "";
   fileList.value = [];
   scheduleAutoSave({ reason: 'append-buffer-enqueued', immediate: true });
-  showDismissibleMessage.info(notice);
+  showDismissibleMessage.info('正在生成，消息已加入缓冲区，将在本轮结束后自动发送');
 };
 
 const removeBufferedMessage = (index) => {
@@ -3533,45 +3610,75 @@ const drainBufferIntoHistory = async () => {
   const savedPrompt = prompt.value;
   const savedFiles = Array.isArray(fileList.value) ? fileList.value.slice() : [];
   let appendedAny = false;
-  for (const item of items) {
-    if (item.kind === 'input') {
-      prompt.value = item.text || '';
-      fileList.value = Array.isArray(item.files) ? item.files : [];
-      isPreparingSend.value = true;
-      try {
-        const added = await appendCurrentInputToHistory();
-        if (added) appendedAny = true;
-      } finally {
-        isPreparingSend.value = false;
+  let consumed = 0;
+  let draftSwapped = false;
+  try {
+    for (const item of items) {
+      if (isClosingWindow.value || !ensureConversationWriteAccess(false)) break;
+      if (item.kind === 'agent') {
+        isPreparingSend.value = true;
+        try {
+          const { contentList } = await buildAgentToolContentList(item);
+          if (loading.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta) break;
+          appendAgentToolContent(contentList);
+          appendedAny = true;
+        } finally {
+          isPreparingSend.value = false;
+        }
+      } else if (item.kind === 'input') {
+        draftSwapped = true;
+        prompt.value = item.text || '';
+        fileList.value = Array.isArray(item.files) ? item.files : [];
+        isPreparingSend.value = true;
+        try {
+          const added = await appendCurrentInputToHistory();
+          if (added) appendedAny = true;
+        } finally {
+          isPreparingSend.value = false;
+        }
+      } else if (item.kind === 'window' && item.data) {
+        draftSwapped = true;
+        await handleAppendMessageEvent(item.data, { deferSend: true });
+        appendedAny = true;
       }
-    } else if (item.kind === 'window' && item.data) {
-      await handleAppendMessageEvent(item.data, { deferSend: true });
-      appendedAny = true;
+      consumed++;
     }
+  } catch (error) {
+    showDismissibleMessage.error(`Buffered message was not sent: ${error?.message || 'Message preparation failed.'}`);
+  } finally {
+    // Keep failed/unconsumed messages ahead of arrivals received during attachment parsing.
+    pendingAppendBuffer.value.unshift(...items.slice(consumed));
+    if (draftSwapped) {
+      prompt.value = savedPrompt;
+      fileList.value = savedFiles;
+    }
+    scheduleAutoSave({ reason: 'append-buffer-drained', immediate: true });
   }
-  prompt.value = savedPrompt;
-  fileList.value = savedFiles;
   return appendedAny;
 };
 
 const flushAppendBuffer = async () => {
   // A buffered turn may begin only after the previous turn has fully released ownership.
   // isMcpLoading is deliberately declared before this function.
-  if (!ensureConversationWriteAccess(false)) return;
-  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeRemoteCommand.value) return;
+  if (isClosingWindow.value || !ensureConversationWriteAccess(false)) return;
+  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta) return;
   isFlushingAppendBuffer = true;
+  let startedTurn = false;
   try {
     const appendedAny = await drainBufferIntoHistory();
     if (appendedAny) {
+      startedTurn = true;
       await askAI(true);
     }
   } finally {
     isFlushingAppendBuffer = false;
+    // The turn finalizer cannot drain while this lock is held. Resume later arrivals now.
+    if (startedTurn && pendingAppendBuffer.value.length) nextTick(() => { flushAppendBuffer(); });
   }
 };
 
-watch(isMcpLoading, (now, prev) => {
-  if (prev && !now) {
+watch([isMcpLoading, compacting, isPreparingSend], (now, prev) => {
+  if (!isFlushingAppendBuffer && prev.some((busy, index) => busy && !now[index])) {
     nextTick(() => { flushAppendBuffer(); });
   }
 });
@@ -3589,6 +3696,19 @@ const createAbortError = () => {
   error.name = 'AbortError';
   return error;
 };
+
+
+const hasMeaningfulAssistantStreamOutput = (part) => {
+  const delta = part?.choices?.[0]?.delta;
+  if (delta && (delta.content || delta.reasoning_content || delta.reasoning || delta.tool_calls?.length || delta.extra_content || delta.thought_signature)) return true;
+  return Boolean(
+    (part?.type === 'response.output_text.delta' && part.delta)
+    || (part?.type === 'response.reasoning_summary_text.delta' && part.delta)
+    || (part?.type === 'response.output_item.added' && part.item?.type === 'function_call')
+    || (part?.type === 'response.function_call_arguments.delta' && part.delta)
+  );
+};
+
 
 const normalizeAssistantMessageContent = (content) => {
   if (Array.isArray(content)) return content.filter(part => part && typeof part === 'object');
@@ -3692,6 +3812,7 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   if (assistantBubbleIndex === -1) {
     chat_show.value.push({
       id: messageIdCounter.value++,
+      storageId: createConversationStorageId(),
       role: 'assistant',
       content: [],
       reasoning_content: "",
@@ -3708,6 +3829,7 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   }
 
   const currentBubble = chat_show.value[assistantBubbleIndex];
+  currentBubble.storageId = currentBubble.storageId || createConversationStorageId();
   delete currentBubble.isPreparing;
   const finalContent = appendTerminalNoticeToAssistantContent(currentBubble.content, ASSISTANT_CANCELLED_NOTICE_MARKDOWN);
   const finalReasoningContent = typeof currentBubble.reasoning_content === 'string'
@@ -3728,6 +3850,7 @@ const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
     }
     appendFullHistory({
       role: 'assistant',
+      storageId: currentBubble.storageId || createConversationStorageId(),
       content: finalContent,
       reasoning_content: finalReasoningContent || null
     });
@@ -3763,6 +3886,7 @@ const getViewPdfPayload = (result) => {
   return {
     dataUrl: `data:application/pdf;base64,${encodedBytes}`,
     fileName,
+    pageCount: Math.max(1, Number(result?.pdf?.pageCount) || 1),
     displayText: typeof result?.display?.text === 'string' ? result.display.text : 'Local PDF loaded as complete document context.'
   };
 };
@@ -3776,6 +3900,7 @@ const isUserAuthoredMessage = (message = {}) => message?.role === 'user' && !isT
 
 const createViewImageMessage = (toolCallId, payload) => ({
   id: messageIdCounter.value++,
+  storageId: createConversationStorageId(),
   role: 'user',
   origin: 'view_image',
   sourceToolCallId: toolCallId,
@@ -3789,13 +3914,14 @@ const createViewImageMessage = (toolCallId, payload) => ({
 
 const createViewPdfMessage = (toolCallId, payload) => ({
   id: messageIdCounter.value++,
+  storageId: createConversationStorageId(),
   role: 'user',
   origin: 'view_pdf',
   sourceToolCallId: toolCallId,
   timestamp: new Date().toLocaleString('sv-SE'),
   content: [
     { type: 'text', text: 'The PDF returned by the view_pdf tool is attached below. Use the complete document as context to continue the task.' },
-    { type: 'file', file: { filename: payload.fileName, file_data: payload.dataUrl } }
+    { type: 'file', file: { filename: payload.fileName, file_data: payload.dataUrl, tokenEstimate: { pageCount: payload.pageCount } } }
   ]
 });
 
@@ -5058,7 +5184,7 @@ const handleChangeModel = (chosenModel) => {
 const handleAutoCloseOnBlur = () => closePage(false);
 const syncAutoCloseOnBlurListener = () => {
   window.removeEventListener('blur', handleAutoCloseOnBlur);
-  if (autoCloseOnBlur.value && !loading.value && !compacting.value && !remoteHiddenWriter.value && !activeRemoteCommand.value) {
+  if (autoCloseOnBlur.value && !loading.value) {
     window.addEventListener('blur', handleAutoCloseOnBlur);
   }
 };
@@ -5238,8 +5364,12 @@ const onAvatarClick = async (role, event) => {
 const handleSubmit = () => {
   if (!ensureConversationWriteAccess(true)) return;
 
-  if (compacting.value || loading.value || isPreparingSend.value) {
-    enqueueInputToBuffer(compacting.value ? '正在压缩，消息已加入缓冲区，将在压缩结束后自动发送' : '正在生成，消息已加入缓冲区，将在本轮结束后自动发送');
+  if (compacting.value) {
+    showDismissibleMessage.warning('压缩进行中，暂不可发送');
+    return;
+  }
+  if (loading.value || isPreparingSend.value) {
+    enqueueInputToBuffer();
     return;
   }
   askAI(false);
@@ -5692,55 +5822,134 @@ const saveSystemPrompt = async () => {
   systemPromptDialogVisible.value = false;
 };
 
+const waitForPendingWindowMutationsBeforeClose = async (timeoutMs = 15_000) => {
+  const startedAt = Date.now();
+  while (isPreparingSend.value || isMcpLoading.value || isApplyMcpRunning.value || pendingApplyMcpRequest.value) {
+    if (Date.now() - startedAt >= timeoutMs) throw new Error('conversation_runtime_mutations_close_timeout');
+    if (pendingApplyMcpRequest.value && !isApplyMcpRunning.value && !isModelIterationConfigLocked.value) {
+      await requestApplyMcpTools(false, 'window-close-settle');
+      continue;
+    }
+    if (activeApplyMcpPromise) {
+      await activeApplyMcpPromise;
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+};
+
+
+const waitForAssistantTurnToSettleBeforeClose = async (settlementPromise, timeoutMs = 15_000) => {
+  if (!settlementPromise || typeof settlementPromise.then !== 'function') return;
+  let timeoutId;
+  try {
+    await Promise.race([
+      settlementPromise,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('conversation_assistant_close_timeout')), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
+
+
+const waitForCompactionToSettleBeforeClose = async (timeoutMs = 10_000) => {
+  const startedAt = Date.now();
+  while (compacting.value) {
+    if (Date.now() - startedAt >= timeoutMs) throw new Error('conversation_compaction_close_timeout');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+};
+
+
+const persistLatestSessionBeforeClose = async (shouldForceSave) => {
+  const pendingScheduledRequest = scheduledAutoSaveRequest;
+  clearScheduledAutoSave();
+  let request = mergeAutoSaveRequests(pendingScheduledRequest, {
+    reason: 'window-close-final',
+    force: shouldForceSave,
+    version: ++sessionMutationVersion,
+    skipProjectAssignment: true,
+    stateOnly: false
+  });
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const targetVersion = Number(request.version) || sessionMutationVersion;
+    const saved = await executeAutoSaveRequest(request);
+    await autoSaveMutationQueue.whenIdle();
+    const persistenceState = conversationPersistenceTracker.getState();
+    if (persistenceState.persistedFullSnapshotVersion < targetVersion && saved !== true) {
+      throw lastAutoSaveError || new Error('conversation_close_save_incomplete');
+    }
+    if (
+      sessionMutationVersion <= targetVersion
+      && persistenceState.persistedMutationVersion >= targetVersion
+      && persistenceState.persistedFullSnapshotVersion >= targetVersion
+    ) return true;
+    request = {
+      reason: 'window-close-final-latest',
+      force: shouldForceSave,
+      version: ++sessionMutationVersion,
+      skipProjectAssignment: true,
+      stateOnly: false
+    };
+  }
+
+  throw new Error('conversation_close_mutations_unstable');
+};
+
+
 const closePage = async (force_save = false) => {
-  if (isClosingWindow.value) return;
-  if (isFilePickerOpen.value) return;
+  if (isClosingWindow.value || isFilePickerOpen.value) return false;
 
   const shouldForceSave = force_save === true;
   isClosingWindow.value = true;
 
   try {
-    // Do not let a delayed save create a second full serialization while this window is closing.
-    clearScheduledAutoSave();
-    queuedAutoSaveRequest = null;
+    const assistantSettlementPromise = activeAssistantTurnMeta?.settlementPromise || null;
+    if (loading.value) {
+      cancelAskAI();
+      await waitForAssistantTurnToSettleBeforeClose(assistantSettlementPromise);
+    }
+    await waitForPendingWindowMutationsBeforeClose();
+    if (compacting.value) {
+      handleCancelCompact();
+      await waitForCompactionToSettleBeforeClose();
+    }
 
-    // 关闭对话前先结束本对话所有运行中 Subagent，避免后台孤儿任务继续占资源
     try {
       await killAllRunningSubAgentsForCurrentConversation();
-    } catch (e) {
-      console.warn('[Sub-Agent] Kill-on-close failed:', e);
+    } catch (error) {
+      console.warn('[Sub-Agent] Kill-on-close failed:', error);
     }
 
-    if (!remoteConversationDeleted.value && (currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath) && (defaultConversationName.value || shouldForceSave)) {
-      try {
-        const closeVersion = sessionMutationVersion;
-        await executeAutoSaveRequest({
-          reason: 'window-close',
-          force: shouldForceSave,
-          version: closeVersion,
-          skipQueueWhenBusy: true,
-          skipProjectAssignment: true
-        });
-        if (lastPersistedSessionVersion < closeVersion) {
-          await executeAutoSaveRequest({
-            reason: 'window-close-final',
-            force: shouldForceSave,
-            version: closeVersion,
-            skipProjectAssignment: true
-          });
-        }
-      } catch (e) {
-        console.error("关闭时自动保存失败:", e);
-      }
+    const dirPath = currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
+    const persistenceState = conversationPersistenceTracker.getState();
+    const hasUnpersistedSession = persistenceState.hasUnpersistedMutations || persistenceState.hasUnpersistedFullSnapshot;
+    const canWriteCurrentConversation = !currentConversationStorage.value?.conversationId || ensureConversationWriteAccess(false);
+    if (hasUnpersistedSession && !canWriteCurrentConversation) {
+      throw lastAutoSaveError || new Error('conversation_unpersisted_changes_without_write_access');
     }
-
-    await releaseCurrentConversationLease();
-
-    await window.api.windowControl('close-window');
+    const shouldPersistOnClose = Boolean(
+      dirPath &&
+      (defaultConversationName.value || shouldForceSave) &&
+      canWriteCurrentConversation &&
+      (hasUnpersistedSession || shouldForceSave)
+    );
+    return await completeConversationClose({
+      persist: async () => shouldPersistOnClose
+        ? await persistLatestSessionBeforeClose(shouldForceSave)
+        : true,
+      release: releaseCurrentConversationLease,
+      close: () => window.api.windowControl('close-window')
+    });
   } catch (error) {
     isClosingWindow.value = false;
     console.error('关闭窗口失败:', error);
-    showDismissibleMessage.error(`关闭窗口失败: ${getErrorMessage(error)}`);
+    showDismissibleMessage.error(`会话保存失败，窗口已保持打开: ${getErrorMessage(error)}`);
+    return false;
   }
 };
 
@@ -5802,7 +6011,7 @@ onMounted(async () => {
   // 暴露给后台MCP调用的 Agent API
 
   window.__AGENT_API__ = {
-    isBusy: () => loading.value || compacting.value,
+    isBusy: () => isAgentMessageBusy(),
 
     getChatLength: () => chat_show.value.length,
 
@@ -6038,12 +6247,7 @@ onMounted(async () => {
 
     if (data) {
       remoteHiddenWriter.value = data.remoteHidden === true;
-      basic_msg.value = {
-        code: data.code,
-        type: data.type,
-        payload: data.payload,
-        remoteHidden: remoteHiddenWriter.value
-      };
+      basic_msg.value = { code: data.code, type: data.type, payload: data.payload };
       if (data.conversation?.descriptor && data.conversation?.sessionData) {
         const descriptor = data.conversation.descriptor;
         conversationLeasePending.value = true;
@@ -6089,11 +6293,10 @@ onMounted(async () => {
         const system_time = new Date().toLocaleString('sv-SE');
         const pre_prompt = `## Scheduled Task\n\n**system_time**:${system_time}\n\n`;
         const suffix_prompt = "\n\nScheduled task triggered! This is a task that you need to execute autonomously without human intervention. Please execute immediately and provide correct feedback.";
-        appendFullHistory({ role: "user", content: pre_prompt + data.payload + suffix_prompt });
-        chat_show.value.push({
-          id: messageIdCounter.value++,
-          role: "user",
-          content: [{ type: "text", text: pre_prompt + data.payload + suffix_prompt }],
+        const scheduledTaskContent = pre_prompt + data.payload + suffix_prompt;
+        appendLinkedUserMessage({
+          historyContent: scheduledTaskContent,
+          uiContent: [{ type: "text", text: scheduledTaskContent }],
           timestamp: new Date().toLocaleString('sv-SE')
         });
 
@@ -6130,8 +6333,7 @@ onMounted(async () => {
       if (data.type === "multiline-text" && data.payload) {
         if (directSendConfig.normal) {
           const multilineText = String(data.payload);
-          appendFullHistory({ role: "user", content: multilineText });
-          chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: multilineText }] });
+          appendLinkedUserMessage({ historyContent: multilineText, uiContent: [{ type: "text", text: multilineText }] });
           shouldDirectSend = true;
         } else {
           prompt.value = String(data.payload);
@@ -6151,16 +6353,15 @@ onMounted(async () => {
           if (CODE.value.trim().toLowerCase().includes(data.payload.trim().toLowerCase())) { /* do nothing */ }
           else {
             if (directSendConfig.normal) {
-              appendFullHistory({ role: "user", content: data.payload });
-              chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "text", text: data.payload }] });
+              appendLinkedUserMessage({ historyContent: data.payload, uiContent: [{ type: "text", text: data.payload }] });
               shouldDirectSend = true;
             } else { prompt.value = data.payload; }
           }
         }
       } else if (data.type === "img" && data.payload) {
         if (directSendConfig.image) {
-          appendFullHistory({ role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
-          chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: [{ type: "image_url", image_url: { url: String(data.payload) } }] });
+          const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
+          appendLinkedUserMessage({ historyContent: imageContent, uiContent: imageContent });
           if (normalizedUserText) {
             prompt.value = normalizedUserText;
           }
@@ -7138,8 +7339,47 @@ const triggerAutoNamingForFirstUserMessage = async ({ force = false, requestSign
   return namingTask;
 };
 
+const serializeSessionMcpToolOverrides = () => Object.fromEntries(
+  Object.entries(sessionMcpToolOverrides.value || {})
+    .map(([serverId, tools]) => [
+      serverId,
+      (Array.isArray(tools) ? tools : [])
+        .filter((tool) => tool && typeof tool.name === 'string' && tool.name)
+        .map((tool) => ({ name: tool.name, enabled: tool.enabled !== false }))
+    ])
+    .filter(([, tools]) => tools.length > 0)
+);
+
+const getSessionTransientStatePatch = () => ({
+  promptDraft: prompt.value,
+  draftFileList: fileList.value,
+  pendingAppendBuffer: normalizePendingInputBuffer(pendingAppendBuffer.value)
+});
+
+const getSessionRequestConfigStatePatch = () => {
+  const currentPromptConfig = {
+    ...(currentConfig.value.prompts?.[CODE.value] || {}),
+    ...(sourcePromptConfig.value || {}),
+    model: model.value || '',
+    reasoning_effort: tempReasoningEffort.value || 'default',
+    voice: selectedVoice.value || null
+  };
+  sourcePromptConfig.value = { ...currentPromptConfig };
+  return {
+    model: model.value || '',
+    currentPromptConfig,
+    selectedVoice: selectedVoice.value || '',
+    activeMcpServerIds: [...(sessionMcpServerIds.value || [])],
+    activeSkillIds: [...(sessionSkillIds.value || [])],
+    isAutoApproveTools: isAutoApproveTools.value === true,
+    sessionMcpToolOverrides: serializeSessionMcpToolOverrides()
+  };
+};
+
+
 const autoSaveSession = async (force = false, { skipProjectAssignment = false, version = sessionMutationVersion } = {}) => {
   if (!currentConversationStorage.value?.dirPath && !currentConfig.value?.webdav?.localChatPath) {
+    lastAutoSaveError = new Error('conversation_local_dir_required');
     return false;
   }
 
@@ -7157,12 +7397,16 @@ const autoSaveSession = async (force = false, { skipProjectAssignment = false, v
 
   // 5. 如果经过尝试后仍然没有对话名称（例如空对话），则不保存
   if (!defaultConversationName.value) {
+    lastAutoSaveError = new Error('conversation_title_required');
     return false;
   }
 
   // 6. 执行数据库增量快照写入；物理 dbFile 永远不参与会话标题。
   try {
-    if (!ensureConversationWriteAccess(false)) return false;
+    if (!ensureConversationWriteAccess(false)) {
+      lastAutoSaveError = new Error('conversation_write_access_unavailable');
+      return false;
+    }
     let storage = currentConversationStorage.value;
     const dirPath = storage?.dirPath || currentConfig.value.webdav.localChatPath;
     const sessionData = getSessionDataAsObject();
@@ -7206,43 +7450,31 @@ const autoSaveSession = async (force = false, { skipProjectAssignment = false, v
       currentConversationStorage.value = storage;
     }
 
-    lastPersistedSessionVersion = Math.max(lastPersistedSessionVersion, Number(version) || 0);
+    conversationPersistenceTracker.markPersisted({ version, stateOnly: false });
     lastAutoSaveAt = Date.now();
+    lastAutoSaveError = null;
     return true;
   } catch (error) {
     if (/conversation_(revision_conflict|write_lease_lost)/.test(String(error?.message || ''))) {
       conversationReadOnly.value = true;
       showDismissibleMessage.warning('会话已在其他客户端更新，当前窗口已切换为只读模式');
     }
+    lastAutoSaveError = error;
     console.error('Auto-save failed:', error);
     return false;
   }
 };
 
-const getSessionRequestConfigStatePatch = () => {
-  const currentPromptConfig = {
-    ...(currentConfig.value.prompts?.[CODE.value] || {}),
-    ...(sourcePromptConfig.value || {}),
-    reasoning_effort: tempReasoningEffort.value || 'default',
-    voice: selectedVoice.value || null
-  };
-  sourcePromptConfig.value = { ...currentPromptConfig };
-  return {
-    currentPromptConfig,
-    selectedVoice: selectedVoice.value || '',
-    activeMcpServerIds: [...(sessionMcpServerIds.value || [])],
-    activeSkillIds: [...(sessionSkillIds.value || [])]
-  };
-};
-
 const autoSaveSessionRequestConfig = async (force = false, { version = sessionMutationVersion } = {}) => {
   const storage = currentConversationStorage.value;
   if (!storage?.conversationId) {
-    // A new conversation still needs one full snapshot to create its SQLite transcript.
     return autoSaveSession(force, { version });
   }
   if (!force && !shouldPersistCurrentSessionAutomatically()) return false;
-  if (!ensureConversationWriteAccess(false)) return false;
+  if (!ensureConversationWriteAccess(false)) {
+    lastAutoSaveError = new Error('conversation_write_access_unavailable');
+    return false;
+  }
 
   try {
     const saved = await window.api.saveConversationState({
@@ -7252,25 +7484,31 @@ const autoSaveSessionRequestConfig = async (force = false, { version = sessionMu
       holderInstanceId: conversationInstanceId,
       leaseEpoch: conversationLease.value?.leaseEpoch,
       title: defaultConversationName.value,
-      state: getSessionRequestConfigStatePatch()
+      state: {
+        ...getSessionRequestConfigStatePatch(),
+        ...getSessionTransientStatePatch()
+      }
     });
     currentConversationStorage.value = {
       ...storage,
       title: saved.title || storage.title,
       revision: Number(saved.revision) || storage.revision
     };
-    lastPersistedSessionVersion = Math.max(lastPersistedSessionVersion, Number(version) || 0);
+    conversationPersistenceTracker.markPersisted({ version, stateOnly: true });
     lastAutoSaveAt = Date.now();
+    lastAutoSaveError = null;
     return true;
   } catch (error) {
     if (/conversation_(revision_conflict|write_lease_lost)/.test(String(error?.message || ''))) {
       conversationReadOnly.value = true;
       showDismissibleMessage.warning('会话已在其他客户端更新，当前窗口已切换为只读模式');
     }
+    lastAutoSaveError = error;
     console.error('Request-config state save failed:', error);
     return false;
   }
 };
+
 
 
 const clearScheduledAutoSave = () => {
@@ -7281,88 +7519,57 @@ const clearScheduledAutoSave = () => {
   scheduledAutoSaveRequest = null;
 };
 
+const autoSaveMutationQueue = createConversationMutationQueue(async (request = {}) => {
+  if (conversationMetadataMutationPromise) await conversationMetadataMutationPromise;
+  if ((!request || !request.force) && !shouldPersistCurrentSessionAutomatically()) return false;
+
+  const saveOptions = {
+    skipProjectAssignment: request.skipProjectAssignment === true,
+    version: Number(request.version) || sessionMutationVersion
+  };
+  return request.stateOnly === true
+    ? await autoSaveSessionRequestConfig(Boolean(request.force), saveOptions)
+    : await autoSaveSession(Boolean(request.force), saveOptions);
+});
+
 const executeAutoSaveRequest = async (request = {}) => {
-  if (conversationMetadataMutationPromise) {
-    await conversationMetadataMutationPromise;
-  }
-
-  if (!request || !request.force) {
-    if (!shouldPersistCurrentSessionAutomatically()) {
-      return false;
-    }
-  }
-
-  if (autoSaveExecutionPromise) {
-    // Closing only needs the in-flight durable write; never enqueue a duplicate full save.
-    if (request.skipQueueWhenBusy) return autoSaveExecutionPromise;
-    queuedAutoSaveRequest = {
-      force: queuedAutoSaveRequest?.force || request.force || false,
-      reason: request.reason || queuedAutoSaveRequest?.reason || 'queued',
-      version: Math.max(Number(queuedAutoSaveRequest?.version) || 0, Number(request.version) || sessionMutationVersion),
-      skipProjectAssignment: Boolean(queuedAutoSaveRequest?.skipProjectAssignment && request.skipProjectAssignment),
-      // Any normal snapshot supersedes a state-only patch so drafts/messages cannot be skipped.
-      stateOnly: request.stateOnly === true && queuedAutoSaveRequest?.stateOnly !== false
-    };
-    return autoSaveExecutionPromise;
-  }
-
-  autoSaveExecutionPromise = (async () => {
-    try {
-      const saveOptions = {
-        skipProjectAssignment: request.skipProjectAssignment === true,
-        version: Number(request.version) || sessionMutationVersion
-      };
-      return request.stateOnly === true
-        ? await autoSaveSessionRequestConfig(Boolean(request.force), saveOptions)
-        : await autoSaveSession(Boolean(request.force), saveOptions);
-    } finally {
-      autoSaveExecutionPromise = null;
-      if (queuedAutoSaveRequest) {
-        const nextRequest = queuedAutoSaveRequest;
-        queuedAutoSaveRequest = null;
-        await executeAutoSaveRequest(nextRequest);
-      }
-    }
-  })();
-
-  return autoSaveExecutionPromise;
+  const normalizedRequest = { ...request, version: Math.max(0, Number(request.version) || sessionMutationVersion) };
+  conversationPersistenceTracker.markRequired(normalizedRequest);
+  const completionPromise = autoSaveMutationQueue.enqueue(normalizedRequest);
+  const idlePromise = autoSaveMutationQueue.whenIdle();
+  autoSaveExecutionPromise = idlePromise;
+  void idlePromise.finally(() => {
+    if (autoSaveExecutionPromise === idlePromise) autoSaveExecutionPromise = null;
+  });
+  return await completionPromise;
 };
 
 const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false, delay = 0, stateOnly = false } = {}) => {
-  if (!force && !shouldPersistCurrentSessionAutomatically()) {
-    return;
-  }
+  if (!force && !shouldPersistCurrentSessionAutomatically()) return null;
+  if (isClosingWindow.value) immediate = true;
 
-  const request = { reason, force, stateOnly: Boolean(stateOnly), version: ++sessionMutationVersion };
-  // Do not downgrade a pending full snapshot to a state-only patch.
-  if (scheduledAutoSaveRequest && !scheduledAutoSaveRequest.stateOnly) request.stateOnly = false;
+  let request = { reason, force, stateOnly: Boolean(stateOnly), version: ++sessionMutationVersion };
+  request = mergeAutoSaveRequests(scheduledAutoSaveRequest, request);
+  conversationPersistenceTracker.markRequired(request);
 
   if (immediate || force || delay <= 0) {
     clearScheduledAutoSave();
-    executeAutoSaveRequest(request);
-    return;
+    return executeAutoSaveRequest(request);
   }
 
-  if (scheduledAutoSaveRequest?.force) {
-    request.force = true;
-  }
   scheduledAutoSaveRequest = request;
-
-  if (autoSaveTimer) {
-    clearTimeout(autoSaveTimer);
-  }
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(() => {
-    const pendingRequest = scheduledAutoSaveRequest || request;
+    const pendingRequest = scheduledAutoSaveRequest;
     autoSaveTimer = null;
     scheduledAutoSaveRequest = null;
-    executeAutoSaveRequest(pendingRequest);
+    if (pendingRequest) void executeAutoSaveRequest(pendingRequest);
   }, delay);
+  return null;
 };
 
-
-watch([selectedVoice, tempReasoningEffort, sessionMcpServerIds, sessionSkillIds], () => {
-  if (isRestoringSessionSnapshot) return;
-  // Request configuration is state only; never rescan or rewrite the full transcript for it.
+watch([model, selectedVoice, tempReasoningEffort, sessionMcpServerIds, sessionSkillIds, isAutoApproveTools, sessionMcpToolOverrides], () => {
+  if (isRestoringSessionSnapshot || conversationReadOnly.value || conversationLeasePending.value) return;
   scheduleAutoSave({
     reason: 'session-request-config',
     delay: AUTO_SAVE_REQUEST_CONFIG_DEBOUNCE_MS,
@@ -7372,7 +7579,8 @@ watch([selectedVoice, tempReasoningEffort, sessionMcpServerIds, sessionSkillIds]
 
 
 const scheduleInputDraftAutoSave = (reason = 'input-draft') => {
-  scheduleAutoSave({ reason, delay: AUTO_SAVE_INPUT_DEBOUNCE_MS });
+  // Draft-only changes belong in session_state and must not rebuild the full transcript/UI snapshot.
+  scheduleAutoSave({ reason, delay: AUTO_SAVE_INPUT_DEBOUNCE_MS, stateOnly: true });
 };
 
 const scheduleLoadingAutoSave = (reason = 'loading-progress') => {
@@ -7391,6 +7599,7 @@ onBeforeUnmount(() => {
     clearTimeout(conversationStatusSyncTimer);
     conversationStatusSyncTimer = null;
   }
+
 
   if (tailBubbleRecoveryRafId !== null) {
     cancelAnimationFrame(tailBubbleRecoveryRafId);
@@ -7469,9 +7678,7 @@ const saveWindowSize = async () => {
 }
 
 const getSessionDataAsObject = (options = {}) => {
-  const createStorageId = () => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-    ? crypto.randomUUID()
-    : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+  const createStorageId = createConversationStorageId;
   fullHistory.value.forEach((message) => {
     if (message && typeof message === 'object' && !message.storageId) message.storageId = createStorageId();
   });
@@ -7479,12 +7686,8 @@ const getSessionDataAsObject = (options = {}) => {
     if (message && typeof message === 'object' && !message.uiStorageId) message.uiStorageId = createStorageId();
   });
 
-  const currentPromptConfig = {
-    ...(currentConfig.value.prompts?.[CODE.value] || {}),
-    ...(sourcePromptConfig.value || {}),
-    reasoning_effort: tempReasoningEffort.value || 'default',
-    voice: selectedVoice.value || null
-  };
+  const requestConfigState = getSessionRequestConfigStatePatch();
+  const currentPromptConfig = requestConfigState.currentPromptConfig;
   const explicitTitle = typeof options?.title === 'string' ? options.title.trim() : '';
   // Persist the complete API transcript and derive the current request window from it.
   // Keep the request projection current, but do not rebuild the UI cache while serializing.
@@ -7498,19 +7701,20 @@ const getSessionDataAsObject = (options = {}) => {
   const historyToSave = history.value;
   return {
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
-    autoCloseOnBlur: autoCloseOnBlur.value, model: model.value,
+    autoCloseOnBlur: autoCloseOnBlur.value, model: requestConfigState.model,
     sessionMetadata: { ...getSessionMetadata(), ...(explicitTitle ? { title: explicitTitle } : {}) },
     currentPromptConfig: currentPromptConfig,
     fullHistory: fullHistory.value,
     history: historyToSave,
     chat_show: fullChatShow,
-    selectedVoice: selectedVoice.value,
+    selectedVoice: requestConfigState.selectedVoice,
     promptDraft: prompt.value,
     draftFileList: fileList.value,
     pendingAppendBuffer: normalizePendingInputBuffer(pendingAppendBuffer.value),
-    activeMcpServerIds: sessionMcpServerIds.value || [],
-    activeSkillIds: sessionSkillIds.value || [],
-    isAutoApproveTools: isAutoApproveTools.value,
+    activeMcpServerIds: requestConfigState.activeMcpServerIds,
+    activeSkillIds: requestConfigState.activeSkillIds,
+    isAutoApproveTools: requestConfigState.isAutoApproveTools,
+    sessionMcpToolOverrides: requestConfigState.sessionMcpToolOverrides,
     taskList: taskList.value,
     conversationOwnerId: ensureConversationOwnerId(),
     subAgentTasks: subAgentTasks.value.map(normalizeSubAgentSummary).filter(Boolean),
@@ -8842,9 +9046,18 @@ const loadSession = async (jsonData) => {
     // Never trim or restore it from the UI cache after fullHistory has been loaded.
     syncHistoryFromFullHistory();
 
-    selectedVoice.value = jsonData.selectedVoice || '';
-    tempReasoningEffort.value = jsonData.currentPromptConfig?.reasoning_effort || 'default';
-    isAutoApproveTools.value = jsonData.isAutoApproveTools || true;
+    selectedVoice.value = typeof jsonData.selectedVoice === 'string'
+      ? jsonData.selectedVoice
+      : (jsonData.currentPromptConfig?.voice || '');
+    tempReasoningEffort.value = typeof jsonData.currentPromptConfig?.reasoning_effort === 'string'
+      ? jsonData.currentPromptConfig.reasoning_effort
+      : 'default';
+    isAutoApproveTools.value = typeof jsonData.isAutoApproveTools === 'boolean'
+      ? jsonData.isAutoApproveTools
+      : true;
+    sessionMcpToolOverrides.value = jsonData.sessionMcpToolOverrides && typeof jsonData.sessionMcpToolOverrides === 'object'
+      ? deepCloneSafe(jsonData.sessionMcpToolOverrides)
+      : {};
 
     const configData = await window.api.getConfig();
     currentConfig.value = configData.config;
@@ -8860,8 +9073,9 @@ const loadSession = async (jsonData) => {
     if (currentConfig.value.isDarkMode) { document.documentElement.classList.add('dark'); }
     else { document.documentElement.classList.remove('dark'); }
 
-    const currentPromptConfigFromLoad = jsonData.currentPromptConfig || currentConfig.value.prompts[CODE.value];
-    if (currentPromptConfigFromLoad && currentPromptConfigFromLoad.icon) {
+    const currentPromptConfigFromLoad = jsonData.currentPromptConfig || currentConfig.value.prompts[CODE.value] || {};
+    sourcePromptConfig.value = { ...currentPromptConfigFromLoad };
+    if (currentPromptConfigFromLoad.icon) {
       AIAvart.value = currentPromptConfigFromLoad.icon;
       favicon.value = currentPromptConfigFromLoad.icon;
     } else {
@@ -9173,6 +9387,9 @@ const buildAgentToolContentList = async ({ text, filePaths, source = 'agent_tool
     }
   }
 
+  if (normalizedPaths.length && (!Array.isArray(fileContentList) || fileContentList.length !== normalizedPaths.length)) {
+    throw new Error('One or more attachments could not be prepared. The message was not sent.');
+  }
   if (Array.isArray(fileContentList) && fileContentList.length > 0) {
     contentList.push(...fileContentList);
   }
@@ -9185,43 +9402,65 @@ const buildAgentToolContentList = async ({ text, filePaths, source = 'agent_tool
   };
 };
 
-const sendAgentToolMessage = async ({ text, filePaths, source = 'agent_tool' } = {}) => {
-  if (!ensureConversationWriteAccess(false)) {
-    return Promise.reject('Error: This conversation is read-only or its write lease is still being confirmed.');
-  }
-  if (loading.value) {
-    return Promise.reject("Error: This agent is currently busy generating a response. Please wait until it becomes Idle.");
-  }
+const AGENT_MESSAGE_QUEUED = 'The other agent is currently responding. Your message has been queued and will be viewed after it finishes its current response.';
+const AGENT_MESSAGE_SENT = 'Message sent successfully. The other agent is now responding to your message.';
 
-  const { normalizedText, normalizedPaths, attachedFiles, contentList } = await buildAgentToolContentList({
-    text,
-    filePaths,
-    source
+const isAgentMessageBusy = () => loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || Boolean(activeAssistantTurnMeta) || isFlushingAppendBuffer;
+
+const queueAgentToolMessage = (message, prepend = false) => {
+  const item = { kind: 'agent', ...message, preview: message.text || `[${message.filePaths.length} files]` };
+  if (prepend) pendingAppendBuffer.value.unshift(item);
+  else pendingAppendBuffer.value.push(item);
+  scheduleAutoSave({ reason: 'agent-message-buffered', immediate: true });
+  return AGENT_MESSAGE_QUEUED;
+};
+
+const appendAgentToolContent = (contentList) => {
+  if (isClosingWindow.value || !ensureConversationWriteAccess(false)) {
+    throw new Error('The target conversation is closing, read-only, or its write lease is unavailable.');
+  }
+  if (!contentList.length) throw new Error('No text or valid attachments were provided.');
+  appendLinkedUserMessage({
+    historyContent: contentList.length === 1 && contentList[0].type === 'text' ? contentList[0].text : contentList,
+    uiContent: contentList,
+    timestamp: new Date().toLocaleString('sv-SE')
   });
-
-  if (contentList.length === 0) {
-    return Promise.reject('Error: No text or valid attachments were provided.');
-  }
-
-  const userTimestamp = new Date().toLocaleString('sv-SE');
-  const contentForHistory = contentList.length === 1 && contentList[0].type === 'text'
-    ? contentList[0].text
-    : contentList;
-
-  appendFullHistory({ role: 'user', content: contentForHistory });
-  chat_show.value.push({
-    id: messageIdCounter.value++,
-    role: 'user',
-    content: contentList,
-    timestamp: userTimestamp
-  });
-
-  prompt.value = '';
-  fileList.value = [];
   scheduleAutoSave({ reason: 'agent-tool-message', immediate: true });
+};
 
+const sendAgentToolMessage = async ({ text, filePaths, source = 'agent_tool' } = {}) => {
+  if (isClosingWindow.value || !ensureConversationWriteAccess(false)) {
+    throw new Error('The target conversation is closing, read-only, or its write lease is unavailable.');
+  }
+  const message = {
+    text: typeof text === 'string' ? text.trim() : '',
+    filePaths: Array.isArray(filePaths) ? filePaths.filter((path) => typeof path === 'string' && path.trim()) : [],
+    source
+  };
+  if (!message.text && !message.filePaths.length) throw new Error('No text or valid attachments were provided.');
+  if (isAgentMessageBusy() || pendingAppendBuffer.value.length) {
+    const result = queueAgentToolMessage(message);
+    nextTick(() => { flushAppendBuffer(); });
+    return result;
+  }
+
+  // Reserve preparation before awaiting attachments; never use or clear the user's draft.
+  isPreparingSend.value = true;
+  try {
+    const { contentList } = await buildAgentToolContentList(message);
+    if (isClosingWindow.value || !ensureConversationWriteAccess(false)) {
+      throw new Error('The target conversation is closing, read-only, or its write lease is unavailable.');
+    }
+    if (loading.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta) {
+      // This message reserved the idle slot before later arrivals were queued.
+      return queueAgentToolMessage(message, true);
+    }
+    appendAgentToolContent(contentList);
+  } finally {
+    isPreparingSend.value = false;
+  }
   askAI(true).catch((err) => console.error('Background generation error:', err));
-  return `Message sent successfully${Array.isArray(attachedFiles) && attachedFiles.length > 0 ? ` (${attachedFiles.length} files attached)` : ''}. Agent is now generating response...`;
+  return AGENT_MESSAGE_SENT;
 };
 
 
@@ -9486,11 +9725,9 @@ const appendCurrentInputToHistory = async () => {
   const userTimestamp = new Date().toLocaleString('sv-SE');
 
   if (!hasPendingFiles && promptText) {
-    appendFullHistory({ role: "user", content: promptText });
-    chat_show.value.push({
-      id: messageIdCounter.value++,
-      role: "user",
-      content: [{ type: "text", text: promptText }],
+    appendLinkedUserMessage({
+      historyContent: promptText,
+      uiContent: [{ type: "text", text: promptText }],
       timestamp: userTimestamp
     });
     prompt.value = "";
@@ -9507,8 +9744,7 @@ const appendCurrentInputToHistory = async () => {
     const contentForHistory = userContentList.length === 1 && userContentList[0].type === 'text'
       ? userContentList[0].text
       : userContentList;
-    appendFullHistory({ role: "user", content: contentForHistory });
-    chat_show.value.push({ id: messageIdCounter.value++, role: "user", content: userContentList, timestamp: userTimestamp });
+    appendLinkedUserMessage({ historyContent: contentForHistory, uiContent: userContentList, timestamp: userTimestamp });
     prompt.value = "";
     scheduleAutoSave({ reason: 'user-message', immediate: true });
     return true;
@@ -9518,7 +9754,7 @@ const appendCurrentInputToHistory = async () => {
 
 const askAI = async (forceSend = false, remoteCommand = null) => {
   if (activeRemoteCommand.value && activeRemoteCommand.value !== remoteCommand) return;
-  if (!ensureConversationWriteAccess(true)) return;
+  if (isClosingWindow.value || !ensureConversationWriteAccess(true)) return;
   if (loading.value || isPreparingSend.value || compacting.value) return;
   if (isMcpLoading.value) {
     showDismissibleMessage.info('正在加载工具，请稍后再试...');
@@ -9536,15 +9772,17 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
     }
     if (!added) return;
   }
+  if (isClosingWindow.value) return;
 
   // --- 2. 初始化 AI 回合并立即显示 UI 专用准备气泡 ---
   // This bubble is deliberately absent from fullHistory until a real assistant result exists.
   loading.value = true;
   syncAutoCloseOnBlurListener();
-  const turnRemoteCommand = activeRemoteCommand.value;
+  const turnRemoteCommand = remoteCommand || activeRemoteCommand.value;
   const autoApproveThisTurn = () => turnRemoteCommand?.autoApproveTools === true || isAutoApproveTools.value;
   if (turnRemoteCommand) {
     turnRemoteCommand.__remoteStarted = true;
+    turnRemoteCommand.__remoteTerminalEvent = 'assistant.completed';
     emitRemoteRendererEvent('assistant.started', turnRemoteCommand, { startedAt: new Date().toISOString() });
   }
   const turnId = activeAssistantTurnId.value + 1;
@@ -9552,12 +9790,16 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
   signalController.value = new AbortController();
   const requestAbortController = signalController.value;
   const requestSignal = requestAbortController.signal;
+  let resolveTurnSettlement;
+  const turnSettlementPromise = new Promise((resolve) => { resolveTurnSettlement = resolve; });
   const turnMeta = {
     id: turnId,
     controller: requestAbortController,
     assistantMessageId: null,
     cancellationRecorded: false,
-    cancelledByUser: false
+    cancelledByUser: false,
+    settlementPromise: turnSettlementPromise,
+    resolveSettlement: resolveTurnSettlement
   };
   activeAssistantTurnMeta = turnMeta;
   const isCurrentAssistantTurn = () => activeAssistantTurnId.value === turnId && activeAssistantTurnMeta === turnMeta;
@@ -9569,8 +9811,10 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
   };
 
   const preparingAssistantMessageId = messageIdCounter.value++;
+  const assistantStorageId = createConversationStorageId();
   chat_show.value.push({
     id: preparingAssistantMessageId,
+    storageId: assistantStorageId,
     role: 'assistant',
     content: [],
     reasoning_content: '',
@@ -9585,7 +9829,6 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
   let currentAssistantChatShowIndex = chat_show.value.length - 1;
   let hasReusedPreparingBubble = false;
   let cancelPendingStreamingDisplay = null;
-  if (turnRemoteCommand) turnRemoteCommand.__remoteTerminalEvent = 'assistant.completed';
 
   // Yield a DOM tick and paint frame before token estimation / compaction work.
   await nextTick();
@@ -9599,17 +9842,22 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
     return;
   }
 
-  // 用户消息写入后、进入 AI 请求前：若已超阈值，先压缩再开跑。
-  // The UI bubble remains visual-only while this asynchronous preflight is running.
+  // User-message preflight reads the SQLite request window once. If no compaction runs,
+  // that same DTO is reused by the first model iteration below.
+  let firstRequestMessages = null;
   try {
-    await maybeAutoCompactBeforeNextRequest({
+    firstRequestMessages = await buildRequestHistoryForCurrentConversation();
+    const compacted = await maybeAutoCompactBeforeNextRequest({
       reason: 'before-askAI',
+      requestMessages: firstRequestMessages,
       onCompacting: () => {
         const preparingBubble = chat_show.value.find((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
         if (preparingBubble) preparingBubble.status = 'compacting';
       }
     });
+    if (compacted) firstRequestMessages = null;
   } catch (error) {
+    firstRequestMessages = null;
     console.warn('[compact] before-askAI compact failed:', error);
   }
   const preparingBubble = chat_show.value.find((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
@@ -9656,9 +9904,11 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
       // chatInputRef.value?.focus({ cursor: 'end' });
 
       // --- 为本次请求创建临时消息列表 ---
-      // 发送前自愈：若 tool 结果只在 chat_show.assistant.tool_calls.result 中，补回 history
-      rehydrateHistoryToolsIfNeeded();
-      let messagesForThisRequest = await buildRequestHistoryForCurrentConversation();
+      // The first turn reuses the preflight DTO; tool continuations must rehydrate fresh history.
+      const reusableRequestMessages = firstRequestMessages;
+      firstRequestMessages = null;
+      if (!reusableRequestMessages) rehydrateHistoryToolsIfNeeded();
+      let messagesForThisRequest = reusableRequestMessages || await buildRequestHistoryForCurrentConversation();
 
       messagesForThisRequest = messagesForThisRequest.filter(msg => {
         if (msg.role === 'system' && (!msg.content || msg.content.trim() === '')) {
@@ -9779,17 +10029,22 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         ? -1
         : chat_show.value.findIndex((message) => message?.id === preparingAssistantMessageId && message?.isPreparing === true);
       let assistantMessageId;
+      let currentAssistantStorageId;
       if (preparingIndex >= 0) {
         currentAssistantChatShowIndex = preparingIndex;
         assistantMessageId = preparingAssistantMessageId;
         const preparingBubble = chat_show.value[preparingIndex];
+        currentAssistantStorageId = preparingBubble.storageId || assistantStorageId;
+        preparingBubble.storageId = currentAssistantStorageId;
         delete preparingBubble.isPreparing;
         preparingBubble.status = '';
         hasReusedPreparingBubble = true;
       } else {
         assistantMessageId = messageIdCounter.value++;
+        currentAssistantStorageId = createConversationStorageId();
         chat_show.value.push({
           id: assistantMessageId,
+          storageId: currentAssistantStorageId,
           role: "assistant", content: [], reasoning_content: "", status: "",
           aiName: modelMap.value[model.value] || model.value.split('|')[1],
           voiceName: iterationVoice, tool_calls: [],
@@ -9805,7 +10060,21 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
 
       if (useStream) {
         // --- 流式处理 ---
-        const stream = await window.api.createChatCompletion(requestParams);
+        const stream = createNetworkRetryingStream(
+          () => window.api.createChatCompletion(requestParams),
+          {
+            maxRetries: MAX_AUTOMATIC_NETWORK_RETRIES,
+            signal: requestSignal,
+            isMeaningfulChunk: hasMeaningfulAssistantStreamOutput,
+            onRetry: ({ retryAttempt, maxRetries }) => {
+              const bubble = chat_show.value[currentAssistantChatShowIndex];
+              if (bubble && !isTurnAborted()) {
+                bubble.status = 'retrying';
+                bubble.retryMessage = `网络异常，正在自动重试（${retryAttempt}/${maxRetries}）`;
+              }
+            }
+          }
+        );
 
         let aggregatedReasoningContent = "";
         let aggregatedContent = "";
@@ -9833,9 +10102,11 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
           }
           lastUpdateTime = Date.now();
           emitRemoteAssistantDelta(
-            turnRemoteCommand, aggregatedContent, aggregatedReasoningContent,
-            chat_show.value[currentAssistantChatShowIndex].status,
-            chat_show.value[currentAssistantChatShowIndex].id
+            turnRemoteCommand,
+            aggregatedContent,
+            aggregatedReasoningContent,
+            chat_show.value[currentAssistantChatShowIndex]?.status || '',
+            chat_show.value[currentAssistantChatShowIndex]?.id || ''
           );
           syncStickyScrollAfterRender();
           scheduleLoadingAutoSave('assistant-stream');
@@ -9848,12 +10119,6 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         };
         cancelPendingStreamingDisplay = cancelScheduledStreamingDisplay;
         const scheduleStreamingDisplay = () => {
-
-          if (remoteHiddenWriter.value || document.visibilityState === 'hidden') {
-            flushStreamingDisplay();
-            return;
-          }
-
           if (streamingDisplayRafId !== null) return;
           streamingDisplayRafId = requestAnimationFrame(() => {
             streamingDisplayRafId = null;
@@ -9862,6 +10127,10 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         };
 
         for await (const part of stream) {
+          if (chat_show.value[currentAssistantChatShowIndex]?.status === 'retrying' && hasMeaningfulAssistantStreamOutput(part)) {
+            chat_show.value[currentAssistantChatShowIndex].status = '';
+            delete chat_show.value[currentAssistantChatShowIndex].retryMessage;
+          }
           if (isTurnAborted()) {
             break;
           }
@@ -10017,7 +10286,20 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         }
       } else {
         // --- 非流式处理 ---
-        const response = await window.api.createChatCompletion(requestParams);
+        const response = await runWithNetworkRetries(
+          () => window.api.createChatCompletion(requestParams),
+          {
+            maxRetries: MAX_AUTOMATIC_NETWORK_RETRIES,
+            signal: requestSignal,
+            onRetry: ({ retryAttempt, maxRetries }) => {
+              const bubble = chat_show.value[currentAssistantChatShowIndex];
+              if (bubble && !isTurnAborted()) {
+                bubble.status = 'retrying';
+                bubble.retryMessage = `网络异常，正在自动重试（${retryAttempt}/${maxRetries}）`;
+              }
+            }
+          }
+        );
         throwIfTurnAborted();
 
         if (apiType === 'responses' || apiType === 'codex') {
@@ -10077,6 +10359,14 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         }
       }
 
+      emitRemoteAssistantDelta(
+        turnRemoteCommand,
+        extractRemoteText(currentBubble.content),
+        typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
+        currentBubble.status || '',
+        currentBubble.id || ''
+      );
+
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
         responseMessage.tool_calls.forEach(tc => {
           if (tc.function && tc.function.arguments) {
@@ -10094,12 +10384,15 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
 
 
 
+      responseMessage.storageId = currentAssistantStorageId;
       appendFullHistory(responseMessage);
 
       throwIfTurnAborted();
 
       // --- 更新 UI 气泡 ---
       const currentBubble = chat_show.value[currentAssistantChatShowIndex];
+      delete currentBubble.retryMessage;
+      if (currentBubble.status === 'retrying') currentBubble.status = '';
       applyTokenUsageToAssistantMessage(currentAssistantChatShowIndex, responseMessage.tokenUsage);
 
 
@@ -10119,11 +10412,6 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         // 关键：非流式下如果存在思考内容，必须将 status 设为 end 才能正确显示
         currentBubble.status = 'end';
       }
-      emitRemoteAssistantDelta(
-        turnRemoteCommand, extractRemoteText(currentBubble.content),
-        typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
-        currentBubble.status, currentBubble.id
-      );
 
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
         tool_calls_count++;
@@ -10390,13 +10678,15 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
     const errorBubbleIndex = currentAssistantChatShowIndex > -1 ? currentAssistantChatShowIndex : chat_show.value.length;
     if (currentAssistantChatShowIndex === -1) {
       chat_show.value.push({
-        id: messageIdCounter.value++, role: "assistant", content: [], reasoning_content: "", status: "",
+        id: messageIdCounter.value++, storageId: createConversationStorageId(), role: "assistant", content: [], reasoning_content: "", status: "",
         aiName: modelMap.value[model.value] || model.value.split('|')[1], voiceName: selectedVoice.value
       });
     }
 
     const currentBubble = chat_show.value[errorBubbleIndex];
+    currentBubble.storageId = currentBubble.storageId || createConversationStorageId();
     delete currentBubble.isPreparing;
+    delete currentBubble.retryMessage;
     let finalContent;
     let finalReasoningContent;
     if (aborted) {
@@ -10416,6 +10706,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
 
       appendFullHistory({
         role: 'assistant',
+        storageId: currentBubble.storageId || createConversationStorageId(),
         content: finalContent,
         reasoning_content: finalReasoningContent || null
       });
@@ -10427,94 +10718,105 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
     }
 
   } finally {
-    cancelPendingStreamingDisplay?.();
+    try {
+      cancelPendingStreamingDisplay?.();
 
-    isModelIterationConfigLocked.value = false;
-    if (pendingApplyMcpRequest.value && !isApplyMcpRunning.value) {
-      await requestApplyMcpTools(false, 'assistant-turn-finalized');
-    }
-    cancelPendingStreamingDisplay = null;
-    const stillOwnsTurn = activeAssistantTurnMeta === turnMeta;
-    const stillOwnsSignal = signalController.value === requestAbortController;
-    if (stillOwnsSignal) {
-      signalController.value = null;
-    }
-    if (currentAssistantChatShowIndex > -1 && !turnMeta.cancellationRecorded) {
-      const endTime = Date.now();
-      chat_show.value[currentAssistantChatShowIndex].endTime = endTime;
-      chat_show.value[currentAssistantChatShowIndex].completedTimestamp = new Date().toLocaleString('sv-SE');
-    }
-    await nextTick();
-    focusChatInputIfSafe({ cursor: 'end' });
+      isModelIterationConfigLocked.value = false;
+      if (pendingApplyMcpRequest.value && !isApplyMcpRunning.value) {
+        await requestApplyMcpTools(false, 'assistant-turn-finalized');
+      }
+      cancelPendingStreamingDisplay = null;
+      const stillOwnsTurn = activeAssistantTurnMeta === turnMeta;
+      const stillOwnsSignal = signalController.value === requestAbortController;
+      if (stillOwnsSignal) {
+        signalController.value = null;
+      }
+      if (currentAssistantChatShowIndex > -1 && !turnMeta.cancellationRecorded) {
+        const endTime = Date.now();
+        chat_show.value[currentAssistantChatShowIndex].endTime = endTime;
+        chat_show.value[currentAssistantChatShowIndex].completedTimestamp = new Date().toLocaleString('sv-SE');
+      }
+      await nextTick();
+      focusChatInputIfSafe({ cursor: 'end' });
 
-    if (currentTaskConfig.value) {
-      let savedFileName = '未保存';
-      let savedConversationId = '';
-      try {
-        if (currentTaskConfig.value.autoSave && currentConfig.value.webdav?.localChatPath) {
-          const timeStr = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[\/ :]/g, '-').replace(/,/g, '');
-          defaultConversationName.value = `定时任务-${currentTaskConfig.value.name}-${timeStr}`;
-          const dirPath = currentConfig.value.webdav.localChatPath;
-          const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(dirPath));
-          const taskProjectId = typeof currentTaskConfig.value.autoSaveProjectId === 'string' ? currentTaskConfig.value.autoSaveProjectId : '';
-          const projectName = localProjects.projects.find((p) => p.id === taskProjectId)?.name || '';
-          if (!currentConversationStorage.value?.conversationId) {
-            const created = await window.api.createConversation({
-              dirPath,
-              title: defaultConversationName.value,
-              sessionData: getSessionDataAsObject(),
-              projectId: taskProjectId,
-              projectName
-            });
-            currentConversationStorage.value = {
-              format: 'sqlite',
-              conversationId: created.descriptor.conversationId,
-              dbFile: created.descriptor.dbFile,
-              title: created.descriptor.title,
-              revision: Number(created.descriptor.revision) || 0,
-              dirPath,
-              storageMode: 'local'
-            };
-          } else {
-            await executeAutoSaveRequest({ reason: 'scheduled-task-finalized', force: true, version: ++sessionMutationVersion });
+      if (currentTaskConfig.value) {
+        let savedFileName = '未保存';
+        let savedConversationId = '';
+        try {
+          if (currentTaskConfig.value.autoSave && currentConfig.value.webdav?.localChatPath) {
+            const timeStr = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[\/ :]/g, '-').replace(/,/g, '');
+            defaultConversationName.value = `定时任务-${currentTaskConfig.value.name}-${timeStr}`;
+            const dirPath = currentConfig.value.webdav.localChatPath;
+            const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(dirPath));
+            const taskProjectId = typeof currentTaskConfig.value.autoSaveProjectId === 'string' ? currentTaskConfig.value.autoSaveProjectId : '';
+            const projectName = localProjects.projects.find((p) => p.id === taskProjectId)?.name || '';
+            if (!currentConversationStorage.value?.conversationId) {
+              const created = await window.api.createConversation({
+                dirPath,
+                title: defaultConversationName.value,
+                sessionData: getSessionDataAsObject(),
+                projectId: taskProjectId,
+                projectName
+              });
+              currentConversationStorage.value = {
+                format: 'sqlite',
+                conversationId: created.descriptor.conversationId,
+                dbFile: created.descriptor.dbFile,
+                title: created.descriptor.title,
+                revision: Number(created.descriptor.revision) || 0,
+                dirPath,
+                storageMode: 'local'
+              };
+            } else {
+              await executeAutoSaveRequest({ reason: 'scheduled-task-finalized', force: true, version: ++sessionMutationVersion });
+            }
+            savedFileName = defaultConversationName.value;
+            savedConversationId = currentConversationStorage.value?.conversationId || '';
           }
-          savedFileName = defaultConversationName.value;
-          savedConversationId = currentConversationStorage.value?.conversationId || '';
-        }
-        await window.api.addTaskHistory(currentTaskConfig.value.id, {
-          time: Date.now(),
-          status: 'success',
-          file: savedFileName,
-          conversationId: savedConversationId
-        });
+          await window.api.addTaskHistory(currentTaskConfig.value.id, {
+            time: Date.now(),
+            status: 'success',
+            file: savedFileName,
+            conversationId: savedConversationId
+          });
 
-        // 自动关闭窗口
-        if (currentTaskConfig.value.autoClose) {
-          window.api.windowControl('close-window');
+          // 自动关闭窗口
+          if (currentTaskConfig.value.autoClose) {
+            window.api.windowControl('close-window');
+          }
+        } catch (taskErr) {
+          console.error("Task Finalize Error:", taskErr);
+          await window.api.addTaskHistory(currentTaskConfig.value.id, {
+            time: Date.now(),
+            status: 'error',
+            file: '报错'
+          });
         }
-      } catch (taskErr) {
-        console.error("Task Finalize Error:", taskErr);
-        await window.api.addTaskHistory(currentTaskConfig.value.id, {
-          time: Date.now(),
-          status: 'error',
-          file: '报错'
-        });
+        currentTaskConfig.value = null; // 清空标记，避免后续手动问答也触发
+      } else {
+        scheduleAutoSave({ reason: 'assistant-turn-finalized', immediate: true }); // 普通对话的自动保存
+        if (stillOwnsTurn) {
+          // 等待自动压缩检测完成，避免与 loading 结束后的缓冲消息续发竞争。
+          await maybeAutoCompactAfterTurn();
+        }
       }
-      currentTaskConfig.value = null; // 清空标记，避免后续手动问答也触发
-    } else {
-      scheduleAutoSave({ reason: 'assistant-turn-finalized', immediate: true }); // 普通对话的自动保存
-      if (stillOwnsTurn) {
-        // 等待自动压缩检测完成，避免与 loading 结束后的缓冲消息续发竞争。
-        await maybeAutoCompactAfterTurn();
+      if (activeAssistantTurnMeta === turnMeta) {
+        // Do not release busy state until this turn has completed every finalizer above.
+        // The next buffered turn is started only after ownership is cleared.
+        if (turnRemoteCommand && !turnRemoteCommand.__remoteTerminalPayload) {
+          turnRemoteCommand.__remoteTerminalEvent = 'assistant.completed';
+          turnRemoteCommand.__remoteTerminalPayload = {
+            completedAt: new Date().toISOString(),
+            revision: currentConversationStorage.value?.revision || 0
+          };
+        }
+        activeAssistantTurnMeta = null;
+        loading.value = false;
+        syncAutoCloseOnBlurListener();
+        if (!turnRemoteCommand) await flushAppendBuffer();
       }
-    }
-    if (activeAssistantTurnMeta === turnMeta) {
-      // Do not release busy state until this turn has completed every finalizer above.
-      // The next buffered turn is started only after ownership is cleared.
-      activeAssistantTurnMeta = null;
-      loading.value = false;
-      syncAutoCloseOnBlurListener();
-      if (!turnRemoteCommand) await flushAppendBuffer();
+    } finally {
+      turnMeta.resolveSettlement?.();
     }
   }
 };
@@ -10525,6 +10827,7 @@ const cancelAskAI = () => {
   }
 
   const turnMeta = activeAssistantTurnMeta;
+  const cancelledRemoteCommand = activeRemoteCommand.value;
   const requestAbortController = signalController.value;
   if (turnMeta) {
     turnMeta.cancelledByUser = true;
@@ -10571,6 +10874,10 @@ const cancelAskAI = () => {
   loading.value = false;
   syncAutoCloseOnBlurListener();
   scheduleAutoSave({ reason: 'assistant-cancelled', immediate: true });
+  if (cancelledRemoteCommand) {
+    cancelledRemoteCommand.__remoteTerminalEvent = 'assistant.cancelled';
+    cancelledRemoteCommand.__remoteTerminalPayload = {};
+  }
   nextTick(() => { flushAppendBuffer(); });
   focusChatInputIfSafe({ cursor: 'end' });
 };
@@ -10637,18 +10944,18 @@ const reaskAI = async (assistantMessageId = null, remoteCommand = null) => {
 };
 
 const deleteMessage = (index) => {
-  if (!ensureConversationWriteAccess(true)) return false;
+  if (!ensureConversationWriteAccess(true)) return;
 
   if (loading.value || compacting.value) {
     showDismissibleMessage.warning(compacting.value ? '压缩进行中，暂不可编辑历史' : '请等待当前回复完成后再操作');
-    return false;
+    return;
   }
-  if (index < 0 || index >= chat_show.value.length) return false;
+  if (index < 0 || index >= chat_show.value.length) return;
 
   const msgToDeleteInShow = chat_show.value[index];
   if (msgToDeleteInShow?.role === 'system') {
     showDismissibleMessage.info('系统提示词不能被删除');
-    return false;
+    return;
   }
 
   // 级联压缩后：chat_show 是完整 UI 真源，history 只是 AI 投影（更短）。
@@ -10679,12 +10986,14 @@ const deleteMessage = (index) => {
     show_delete_count = 1;
   }
 
-  // Map the UI item to the corresponding non-tool full-history item, then remove its tool results too.
-  const fullVisibleIndexes = fullHistory.value
-    .map((message, fullIndex) => (message?.role === 'tool' ? -1 : fullIndex))
-    .filter((fullIndex) => fullIndex >= 0);
-  const fullStartIndex = fullVisibleIndexes[show_start_idx];
-  if (Number.isInteger(fullStartIndex)) {
+  // A persisted UI cache can be out of sync with canonical history. Never delete by array position:
+  // require a verified storage link or one unique semantic anchor match.
+  const fullStartIndex = resolveSafeConversationMutationTarget(fullHistory.value, chat_show.value, show_start_idx);
+  if (fullStartIndex < 0) {
+    showDismissibleMessage.warning('消息索引未能安全匹配，已阻止删除；请重开会话后重试');
+    return;
+  }
+  {
     let fullDeleteCount = 1;
     if (fullHistory.value[fullStartIndex]?.role === 'assistant') {
       const calledIds = new Set((fullHistory.value[fullStartIndex]?.tool_calls || []).map((call) => call?.id).filter(Boolean));
@@ -10717,7 +11026,6 @@ const deleteMessage = (index) => {
 
   focusedMessageIndex.value = null;
   scheduleAutoSave({ reason: 'message-deleted', immediate: true });
-  return true;
 };
 
 const clearHistory = async () => {
@@ -11167,7 +11475,7 @@ const scrollToMessageByIndex = async (index) => {
         </div>
 
         <ChatInput ref="chatInputRef" v-model:prompt="prompt" v-model:fileList="fileList"
-          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting" :write-locked="conversationReadOnly || conversationLeasePending"
+          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting" :write-locked="conversationReadOnly || conversationLeasePending || isClosingWindow"
           :ctrlEnterToSend="currentConfig.CtrlEnterToSend" :layout="inputLayout" :voiceList="currentConfig.voiceList"
           :is-mcp-active="isMcpActive" :all-mcp-servers="availableMcpServers" :active-mcp-ids="sessionMcpServerIds"
           :active-skill-ids="sessionSkillIds" :all-skills="allSkillsList"

@@ -1226,7 +1226,7 @@ IMPORTANT:
         },
         {
             name: "continue_agent_chats",
-            description: "Send follow-up messages to an ALREADY OPEN agent window. \n\nUse this tool to REUSE an existing agent's context instead of creating a new window. Returns immediately. The agent starts generating in background. You can do other things or immediately call 'read_agent_chats' with index=-1 to wait for its result.",
+            description: "Send follow-up messages to an ALREADY OPEN agent window. \n\nUse this tool to REUSE an existing agent's context instead of creating a new window. Returns immediately. If the target is busy, the message is queued until its current response completes; otherwise it starts responding to this message in background. You can do other things or immediately call 'read_agent_chats' with index=-1 to wait for its result.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -3644,7 +3644,7 @@ ${agentStr}`;
             const res = await win.webContents.executeJavaScript(`window.__AGENT_API__.sendMessage(${JSON.stringify(text)}, ${JSON.stringify(file_paths || [])})`);
             return res;
         } catch (e) {
-            return `Error sending message: ${e.message}`;
+            return `Error sending message: ${typeof e === 'string' ? e : (e?.message || 'Unable to deliver the message to the target agent.')}`;
         }
     },
 

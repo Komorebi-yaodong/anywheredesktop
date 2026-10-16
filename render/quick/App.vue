@@ -437,10 +437,6 @@ const candidateSections = computed(() => {
     deduped.push(item)
   }
 
-  if (selectedPromptKey.value && !deduped.some((item) => item.key === selectedPromptKey.value)) {
-    selectedPromptKey.value = ''
-  }
-
   return deduped
 })
 
@@ -459,13 +455,12 @@ watch(
       return
     }
 
-    if (!selectedPromptKey.value || !list.some((item) => item.key === selectedPromptKey.value)) {
-      selectedPromptKey.value = list[0].key
-    }
+    // Input changes may reorder candidates while the old selection is still present.
+    selectedPromptKey.value = list[0].key
 
     shouldShowSelection.value = true
   },
-  { immediate: true }
+  { immediate: true, flush: 'sync' }
 )
 
 function getPromptGridColumnCount() {

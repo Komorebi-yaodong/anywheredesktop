@@ -233,17 +233,18 @@ export function createRemoteSessionManager({
     return found ? remember(conversationId, found) : null
   }
 
-  async function ready(windowRef, check = () => {}, timeoutMs = readinessTimeoutMs) {
+  async function ready(windowRef, check = () => {}, timeoutMs = readinessTimeoutMs, requireConversationId = false) {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       check()
       const item = windowItem(windowRef)
       if (!item) throw remoteError('remote_renderer_closed')
       if (item.readOnly) throw remoteError('remote_conversation_read_only')
-      if (item.rendererReady === true && item.leasePending !== true) return item
+      if (item.rendererReady === true && item.leasePending !== true &&
+        (!requireConversationId || typeof item.conversationId === 'string' && item.conversationId)) return item
       await new Promise((resolve) => setTimeout(resolve, 40))
     }
-    throw remoteError('remote_renderer_not_ready')
+    throw remoteError(requireConversationId ? 'remote_conversation_create_timeout' : 'remote_renderer_not_ready')
   }
 
   async function ensureSession(conversationId, check) {
@@ -363,7 +364,7 @@ export function createRemoteSessionManager({
         if (!created?.ok || !created.id) throw remoteError('remote_hidden_window_create_failed')
         windowRef = created.id
         record.windowRef = windowRef
-        const item = await ready(windowRef, check, Math.max(readinessTimeoutMs, 45_000))
+        const item = await ready(windowRef, check, Math.max(readinessTimeoutMs, 45_000), true)
         check()
         const conversationId = id(item.conversationId, 'conversationId')
         const session = remember(conversationId, item)

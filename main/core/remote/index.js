@@ -48,6 +48,7 @@ const MAX_PAIRING_ATTEMPTS_PER_CODE = 4
 const MAX_UNAUTHENTICATED_SOCKETS = 32
 const MAX_AUTHENTICATED_SOCKETS = REMOTE_MAX_DEVICES * 2
 const SESSION_HELLO_REPLAY_TTL_MS = 10 * 60 * 1000
+const AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -296,6 +297,7 @@ export function createRemoteGateway({
     }
     if (activeSessionManager) {
       capabilities.push(
+        'remote.device.profile.update',
         'conversation.assistants.list', 'conversation.create',
         'conversation.send', 'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
         'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask',
@@ -469,21 +471,30 @@ export function createRemoteGateway({
     await storageSet(DEVICES_STORAGE_KEY, { version: REMOTE_PROTOCOL_VERSION, devices })
   }
 
+  function recentAuditEntries(entries = []) {
+    const cutoff = Date.now() - AUDIT_RETENTION_MS
+    return (Array.isArray(entries) ? entries : []).filter((entry) => {
+      const timestamp = Date.parse(String(entry?.at || ''))
+      return Number.isFinite(timestamp) && timestamp >= cutoff
+    }).slice(0, MAX_AUDIT_ENTRIES)
+  }
+
   async function appendAudit(type, details = {}) {
     try {
       const existing = await storageGet(AUDIT_STORAGE_KEY, { version: REMOTE_PROTOCOL_VERSION, entries: [] })
-      const entries = Array.isArray(existing?.entries) ? existing.entries : []
+      const entries = recentAuditEntries(existing?.entries)
       const entry = {
         at: nowIso(),
         type: String(type || 'remote.unknown').slice(0, 80),
         deviceId: typeof details?.deviceId === 'string' ? details.deviceId.slice(0, 160) : '',
+        deviceName: typeof details?.deviceName === 'string' ? normalizeDisplayName(details.deviceName).slice(0, 80) : '',
         result: typeof details?.result === 'string' ? details.result.slice(0, 80) : '',
         meta: details?.meta && typeof details.meta === 'object' ? clone(details.meta) : {}
       }
       entries.unshift(entry)
       await storageSet(AUDIT_STORAGE_KEY, {
         version: REMOTE_PROTOCOL_VERSION,
-        entries: entries.slice(0, MAX_AUDIT_ENTRIES)
+        entries: recentAuditEntries(entries)
       })
     } catch {
       // audit storage is best effort and must not interrupt a trusted action
@@ -496,6 +507,7 @@ export function createRemoteGateway({
       deviceId: device.deviceId,
       displayName: normalizeDisplayName(device.displayName),
       platform: normalizeDisplayName(device.platform, 'unknown').slice(0, 40),
+      deviceModel: normalizeDisplayName(device.deviceModel, '').slice(0, 80),
       appVersion: typeof device.appVersion === 'string' ? device.appVersion : '',
       createdAt: typeof device.createdAt === 'string' ? device.createdAt : '',
       lastSeenAt: typeof device.lastSeenAt === 'string' ? device.lastSeenAt : '',
@@ -520,6 +532,26 @@ export function createRemoteGateway({
     if (index < 0) return
     data.devices[index] = { ...data.devices[index], lastSeenAt: nowIso() }
     await writeDevices(data)
+  }
+
+
+  async function updateDeviceProfile(deviceId, params = {}) {
+    if (!params || typeof params !== 'object' || Array.isArray(params)) throw remoteError('remote_parameter_invalid')
+    const allowed = new Set(['platform', 'deviceModel', 'appVersion'])
+    if (Object.keys(params).some((key) => !allowed.has(key))) throw remoteError('remote_parameter_unknown')
+    const data = await readDevices()
+    const index = data.devices.findIndex((device) => device.deviceId === deviceId)
+    if (index < 0) throw remoteError('remote_device_not_found')
+    const current = data.devices[index]
+    const next = {
+      ...current,
+      platform: Object.hasOwn(params, 'platform') ? normalizeDisplayName(params.platform, 'unknown').slice(0, 40) : current.platform,
+      deviceModel: Object.hasOwn(params, 'deviceModel') ? normalizeDisplayName(params.deviceModel, '').slice(0, 80) : current.deviceModel,
+      appVersion: Object.hasOwn(params, 'appVersion') ? normalizeDisplayName(params.appVersion, '').slice(0, 80) : current.appVersion
+    }
+    data.devices.splice(index, 1, next)
+    await writeDevices(data)
+    return { ok: true, device: publicDevice(next) }
   }
 
   function zeroPairingAttempt(attempt) {
@@ -668,7 +700,7 @@ export function createRemoteGateway({
     const endpoint = runtime.endpoints[0]
     if (!endpoint) throw remoteError('remote_endpoint_unavailable')
 
-    const payload = {
+    const pairingPayload = {
       v: REMOTE_PROTOCOL_VERSION,
       desktopId: identity.desktopId,
       desktopName: app.getName?.() || 'Anywhere Desktop',
@@ -678,11 +710,20 @@ export function createRemoteGateway({
       pairingChallenge,
       certificateFingerprint: runtime.certificateFingerprint,
       desktopIdentityPublicKey: identity.publicKey,
-      transportHints: {
-        lan: 'certificate-pin+e2ee',
-        tunnel: 'system-tls+e2ee'
-      },
       expiresAt: new Date(expiresAtMs).toISOString()
+    }
+    // Compact public QR format. Every security binding remains present; optional
+    // endpoint alternatives and explanatory data stay out of the optical payload.
+    const payload = {
+      v: pairingPayload.v,
+      d: pairingPayload.desktopId,
+      n: pairingPayload.desktopName,
+      e: pairingPayload.endpoint,
+      i: pairingPayload.pairingId,
+      c: pairingPayload.pairingChallenge,
+      f: pairingPayload.certificateFingerprint,
+      k: pairingPayload.desktopIdentityPublicKey,
+      x: pairingPayload.expiresAt
     }
 
     pairings.set(pairingId, {
@@ -697,7 +738,7 @@ export function createRemoteGateway({
     await appendAudit('remote.pairing.created', { result: 'ok' })
     if (typeof onPairingCreated === 'function') {
       try {
-        onPairingCreated(clone(payload))
+        onPairingCreated(clone(pairingPayload))
       } catch {
         // Test/diagnostic observer failures cannot affect the production pairing flow.
       }
@@ -706,9 +747,9 @@ export function createRemoteGateway({
     const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), {
       // The P-256 identity makes the public payload intentionally dense. Keep
       // enough module pixels for phone cameras instead of shrinking a 320px QR.
-      errorCorrectionLevel: 'H',
+      errorCorrectionLevel: 'M',
       margin: 4,
-      width: 720,
+      width: 1024,
       color: { dark: '#000000', light: '#ffffff' }
     })
 
@@ -719,7 +760,7 @@ export function createRemoteGateway({
       pairingCode: `${pairingCode.slice(0, 3)} ${pairingCode.slice(3)}`,
       qrDataUrl,
       qrPayload: JSON.stringify(payload),
-      expiresAt: payload.expiresAt,
+      expiresAt: payload.x,
       certificateFingerprint: runtime.certificateFingerprint,
       desktopIdentityPublicKey: identity.publicKey
     }
@@ -940,6 +981,11 @@ export function createRemoteGateway({
           break
         case 'remote.device.self.get':
           result = { device: publicDevice(context.device) }
+          break
+
+        case 'remote.device.profile.update':
+          result = await updateDeviceProfile(context.device.deviceId, params)
+          context.device = { ...context.device, ...result.device }
           break
         case 'business.config.get':
           if (!businessConfigService) throw remoteError('remote_method_unavailable')
@@ -1411,6 +1457,7 @@ export function createRemoteGateway({
   async function revokeDevice(deviceId) {
     const normalizedId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
     const data = await readDevices()
+    const removedDevice = data.devices.find((device) => device.deviceId === normalizedId)
     const nextDevices = data.devices.filter((device) => device.deviceId !== normalizedId)
     const removed = nextDevices.length !== data.devices.length
     if (removed) {
@@ -1420,7 +1467,7 @@ export function createRemoteGateway({
       await activeSessionManager?.revokeDevice?.(normalizedId)
       await uploadManager?.cleanupDevice?.(normalizedId)
 
-      await appendAudit('remote.device.revoked', { deviceId: normalizedId, result: 'ok' })
+      await appendAudit('remote.device.revoked', { deviceId: normalizedId, deviceName: normalizeDisplayName(removedDevice?.displayName), result: 'ok' })
       notifyStatus()
     }
     return { ok: true, removed, deviceId: normalizedId }
@@ -1442,9 +1489,21 @@ export function createRemoteGateway({
 
   async function getAuditLog() {
     const stored = await storageGet(AUDIT_STORAGE_KEY, { version: REMOTE_PROTOCOL_VERSION, entries: [] })
+    const devices = await readDevices()
+    const names = new Map(devices.devices.map((device) => [device.deviceId, normalizeDisplayName(device.displayName)]))
+    const labels = {
+      'remote.device.paired': '新手机已配对',
+      'remote.device.revoked': '已撤销设备',
+      'remote.device.renamed': '已更新设备名称',
+      'remote.session.opened': '手机已连接',
+      'remote.pairing.created': '已生成配对码',
+      'remote.gateway.started': '远程服务已启动'
+    }
     return {
       ok: true,
-      entries: Array.isArray(stored?.entries) ? stored.entries.map((entry) => clone(entry)) : []
+      entries: recentAuditEntries(stored?.entries)
+        .filter((entry) => Object.hasOwn(labels, entry.type))
+        .map((entry) => ({ at: entry.at, action: labels[entry.type], deviceName: names.get(entry.deviceId) || normalizeDisplayName(entry.deviceName, '') }))
     }
   }
 

@@ -205,6 +205,7 @@ export function normalizeRemoteDevice(input = {}) {
     deviceId,
     displayName: normalizeDisplayName(input.displayName),
     platform: normalizePlatform(input.platform),
+    deviceModel: normalizeDisplayName(input.deviceModel, '').slice(0, 80),
     appVersion: normalizeAppVersion(input.appVersion),
     publicKey
   }

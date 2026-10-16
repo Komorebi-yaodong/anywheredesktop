@@ -430,11 +430,13 @@ async function main() {
     assert.equal(pairing.ok, true)
     assert.ok(observedPairing)
 
-    assert.deepEqual(JSON.parse(pairing.qrPayload), observedPairing)
     assert.equal(Object.hasOwn(JSON.parse(pairing.qrPayload), 'pairingCode'), false)
     const qrPng = Buffer.from(pairing.qrDataUrl.split(',')[1], 'base64')
-    assert.equal(qrPng.readUInt32BE(16), 720)
-    assert.equal(qrPng.readUInt32BE(20), 720)
+    assert.equal(qrPng.readUInt32BE(16), 1024)
+    assert.equal(qrPng.readUInt32BE(20), 1024)
+    const compactQr = JSON.parse(pairing.qrPayload)
+    assert.deepEqual(Object.keys(compactQr).sort(), ['c', 'd', 'e', 'f', 'i', 'k', 'n', 'v', 'x'])
+    assert.ok(JSON.stringify(compactQr).length < JSON.stringify(observedPairing).length)
 
     assert.equal(Object.hasOwn(observedPairing, 'pairingCode'), false, 'QR payload must not contain the human confirmation code')
     assert.equal(pairing.qrDataUrl.includes(pairing.pairingCode.replace(/\s/g, '')), false, 'PNG transport must not contain the human code as plain text')
@@ -446,6 +448,7 @@ async function main() {
       deviceId,
       displayName: 'Test Phone',
       platform: 'android',
+      deviceModel: 'Fixture Phone Model',
       appVersion: 'test',
       publicKey: device.publicKey
     }
@@ -638,6 +641,19 @@ async function main() {
     })
     assert.equal(statusResponse.kind, 'response')
     assert.equal(statusResponse.result.device.deviceId, deviceId)
+
+    const profileUpdated = await sendEncryptedRequest({
+      socket, session, requestId: 'request-device-profile-update-0001', method: 'remote.device.profile.update',
+      params: { platform: 'android', deviceModel: 'Fixture Phone Model', appVersion: 'test.1' }
+    })
+    assert.equal(profileUpdated.result.device.deviceModel, 'Fixture Phone Model')
+    const invalidProfile = await sendEncryptedRequest({
+      socket, session, requestId: 'request-device-profile-invalid-0001', method: 'remote.device.profile.update',
+      params: { serial: 'MUST_NOT_ACCEPT' }
+    })
+    assert.equal(invalidProfile.ok, false)
+    assert.equal(invalidProfile.error.code, 'remote_parameter_unknown')
+
     assert.ok(statusResponse.result.capabilities.includes('conversation.list'))
 
     const listResponse = await sendEncryptedRequest({
@@ -962,7 +978,8 @@ async function main() {
     assert.equal(uploadManager.getUpload(pendingRevokeUploadId), null, 'device revocation must delete pending uploads')
 
     const audit = await gateway.getAuditLog()
-    assert.ok(audit.entries.some((entry) => entry.type === 'remote.device.paired'))
+    assert.ok(audit.entries.some((entry) => entry.action === '新手机已配对'))
+    assert.ok(audit.entries.every((entry) => !Object.hasOwn(entry, 'deviceId')))
     assert.ok(audit.entries.every((entry) => !JSON.stringify(entry).includes(mobilePairing2.rootSecret)))
 
     const stopped = await gateway.configure({ remote: { enabled: false, host: '127.0.0.1', port, publicEndpoint: 'https://tunnel.example.test' } })

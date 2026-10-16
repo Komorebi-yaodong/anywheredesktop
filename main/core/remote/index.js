@@ -311,7 +311,7 @@ export function createRemoteGateway({
     if (businessConfigService) capabilities.push('business.config.get', 'business.config.replace')
     if (mobileWorkspaceService) capabilities.push(
       'workspace.bootstrap.get', 'workspace.assistants.list', 'workspace.assistant.get', 'workspace.assistant.patch',
-      'workspace.project.create', 'workspace.management.catalog.get'
+      'workspace.project.create', 'workspace.management.catalog.get', 'workspace.management.details.get'
     )
     return capabilities
   }
@@ -1021,6 +1021,11 @@ export function createRemoteGateway({
         case 'workspace.management.catalog.get':
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
           result = await mobileWorkspaceService.managementCatalog({ params })
+          break
+
+        case 'workspace.management.details.get':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.managementDetails({ params })
           break
 
 

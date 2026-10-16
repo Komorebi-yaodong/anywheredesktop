@@ -17,7 +17,8 @@ const service = createMobileWorkspaceService({
   updateConfig: async ({ config: next }) => { config = structuredClone(next); return { success: true } },
   getUser: async () => ({ nickname: 'Komorebi', avatar: 'file:///PRIVATE_AVATAR.png' }),
   readLocalProjects: async () => structuredClone(projects),
-  writeLocalProjects: async (_dir, next) => { projects = structuredClone(next); return { ok: true } }
+  writeLocalProjects: async (_dir, next) => { projects = structuredClone(next); return { ok: true } },
+  listSkills: () => [{ id: 's1', name: 'Skill One', description: 'Safe description', disabled: false, path: 'PRIVATE_SKILL_PATH' }]
 })
 const bootstrap = await service.bootstrap({ params: {} })
 assert.equal(bootstrap.profile.displayName, 'Komorebi')
@@ -36,4 +37,15 @@ await assert.rejects(service.projectCreate({ deviceId: 'device-mobile-workspace-
 const catalog = await service.managementCatalog({ params: {} })
 assert.deepEqual(catalog.sections.map((item) => item.id), ['assistants', 'providers', 'mcp', 'skills', 'tasks', 'general', 'about'])
 assert.equal(JSON.stringify(catalog).includes('PRIVATE'), false)
+
+const providers = await service.managementDetails({ params: { section: 'providers' } })
+assert.equal(providers.items[0].hasApiKey, true)
+assert.equal(JSON.stringify(providers).includes('PRIVATE_KEY'), false)
+const mcp = await service.managementDetails({ params: { section: 'mcp' } })
+assert.equal(JSON.stringify(mcp).includes('PRIVATE_COMMAND'), false)
+const skills = await service.managementDetails({ params: { section: 'skills' } })
+assert.equal(skills.items[0].name, 'Skill One')
+assert.equal(JSON.stringify(skills).includes('PRIVATE_SKILL_PATH'), false)
+const generalDetails = await service.managementDetails({ params: { section: 'general' } })
+assert.equal(JSON.stringify(generalDetails).includes('PRIVATE_LOCAL_PATH'), false)
 console.log(JSON.stringify({ ok: true, suite: 'mobile-workspace' }))

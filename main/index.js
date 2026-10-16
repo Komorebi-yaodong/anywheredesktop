@@ -88,7 +88,8 @@ const mobileWorkspaceService = createMobileWorkspaceService({
   updateConfig: dataApi.updateConfigWithoutFeatures,
   getUser: dataApi.getUser,
   readLocalProjects: projectsApi.readLocalProjects,
-  writeLocalProjects: projectsApi.writeLocalProjects
+  writeLocalProjects: projectsApi.writeLocalProjects,
+  listSkills: (skillPath) => skillApi.listSkills(skillPath)
 })
 
 

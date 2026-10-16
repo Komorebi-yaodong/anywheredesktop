@@ -95,7 +95,7 @@ function safeAssistantPatch(input = {}) {
  * Structured Mobile workspace facade. It intentionally exposes display DTOs only:
  * no local paths, process commands, TLS material, Remote identities or root secrets.
  */
-export function createMobileWorkspaceService({ getConfig, updateConfig, getUser, readLocalProjects, writeLocalProjects } = {}) {
+export function createMobileWorkspaceService({ getConfig, updateConfig, getUser, readLocalProjects, writeLocalProjects, listSkills = () => [] } = {}) {
   if ([getConfig, updateConfig, getUser, readLocalProjects, writeLocalProjects].some((item) => typeof item !== 'function')) {
     throw new Error('remote_mobile_workspace_dependencies_required')
   }
@@ -226,6 +226,28 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     try { return await record.promise } catch (error) { requests.delete(key); throw error }
   }
 
+  async function managementDetails({ params = {} } = {}) {
+    parameters(params, ['section'])
+    const section = text(params.section, 32)
+    const { config } = await current()
+    if (section === 'providers') return { ok: true, section, items: Object.entries(object(config.providers)).map(([id, value]) => {
+      const item = object(value)
+      return { id: text(id), name: text(item.name) || text(id), url: text(item.url, 2048), models: Array.isArray(item.modelList) ? item.modelList.map((model) => text(model, 320)).filter(Boolean) : [], hasApiKey: Boolean(text(item.api_key, 1)) }
+    }) }
+    if (section === 'mcp') return { ok: true, section, items: Object.entries(object(config.mcpServers)).map(([id, value]) => {
+      const item = object(value)
+      return { id: text(id), name: text(item.name) || text(id), enabled: item.isActive !== false, transport: text(item.transport || item.type, 32) || 'local' }
+    }) }
+    if (section === 'skills') return { ok: true, section, items: (Array.isArray(listSkills(text(config.skillPath, 32768))) ? listSkills(text(config.skillPath, 32768)) : []).map((item) => ({ id: text(item.id), name: text(item.name), description: text(item.description, 240), enabled: item.disabled !== true })) }
+    if (section === 'tasks') return { ok: true, section, items: Object.entries(object(config.tasks)).map(([id, value]) => {
+      const item = object(value)
+      return { id: text(id), name: text(item.name || item.title) || text(id), enabled: item.enabled === true, schedule: text(item.triggerType, 32) || 'manual', assistant: text(item.promptCode || item.assistant, 160) }
+    }) }
+    if (section === 'general') return { ok: true, section, value: { language: text(config.language, 16) || 'zh', themeMode: text(config.themeMode, 32) || 'system', displayName: text(config?.desktop?.profile?.nickname, 80) || 'User', avatarUrl: publicAvatar(config?.desktop?.profile?.avatar) } }
+    throw remoteError('remote_workspace_section_invalid')
+  }
+
+
   async function managementCatalog({ params = {} } = {}) {
     parameters(params, [])
     const { config, projects } = await current()
@@ -249,5 +271,5 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     }
   }
 
-  return { bootstrap, profile, assistantList, assistantGet, mutate, projectCreate, managementCatalog }
+  return { bootstrap, profile, assistantList, assistantGet, mutate, projectCreate, managementCatalog, managementDetails }
 }

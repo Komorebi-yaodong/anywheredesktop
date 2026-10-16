@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import https from 'node:https'
+import { isIP } from 'node:net'
 import os from 'node:os'
 import QRCode from 'qrcode'
 import selfsigned from 'selfsigned'
@@ -96,6 +97,25 @@ function certificateFingerprint(cert = '') {
   return normalizeFingerprint(parsed.fingerprint256)
 }
 
+
+function certificateCoversHost(cert = '', host = '') {
+  const target = String(host || '').trim()
+  if (!target) return false
+  try {
+    const parsed = new crypto.X509Certificate(cert)
+    return isIP(target) ? parsed.checkIP(target) === target : parsed.checkHost(target) === target
+  } catch {
+    return false
+  }
+}
+
+function certificateCoversLanAddresses(cert = '', addresses = getLanIpv4Addresses()) {
+  const hosts = Array.isArray(addresses) ? addresses : []
+  return hosts.every((host) => certificateCoversHost(cert, host))
+}
+
+
+
 function createStoppedRuntime() {
   return {
     running: false,
@@ -113,14 +133,17 @@ function createStoppedRuntime() {
   }
 }
 
-function buildEndpoints(settings = {}) {
+function buildEndpoints(settings = {}, { cert = '', lanAddresses = getLanIpv4Addresses() } = {}) {
   const endpoints = []
+  // A configured tunnel is authenticated by system TLS plus the application
+  // identity/E2EE layer. It intentionally does not use the LAN self-signed cert.
   if (settings.publicEndpoint) endpoints.push(settings.publicEndpoint)
 
   const hosts = settings.host === '0.0.0.0' || settings.host === '::'
-    ? getLanIpv4Addresses()
+    ? (Array.isArray(lanAddresses) ? lanAddresses : [])
     : [settings.host]
   for (const host of hosts) {
+    if (!certificateCoversHost(cert, host)) continue
     const endpoint = `https://${host}:${settings.port}`
     if (!endpoints.includes(endpoint)) endpoints.push(endpoint)
   }
@@ -211,6 +234,7 @@ export function createRemoteGateway({
   businessConfigService = null,
   onStatusChanged = null,
   onPairingCreated = null,
+  getLanAddresses = getLanIpv4Addresses,
   logger = console
 } = {}) {
   if (!app || typeof app.getPath !== 'function') throw new Error('remote_app_required')
@@ -272,6 +296,7 @@ export function createRemoteGateway({
     }
     if (activeSessionManager) {
       capabilities.push(
+        'conversation.assistants.list', 'conversation.create',
         'conversation.send', 'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
         'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask',
         'conversation.rename', 'conversation.delete',
@@ -345,27 +370,13 @@ export function createRemoteGateway({
     return identityCache
   }
 
-  async function getTlsMaterial() {
-    if (tlsCache) return tlsCache
-    const stored = await storageGet(TLS_STORAGE_KEY, null)
-    if (stored && typeof stored === 'object') {
-      try {
-        const decoded = JSON.parse(decryptLocalSecret(stored.encryptedPem))
-        const key = typeof decoded?.key === 'string' ? decoded.key : ''
-        const cert = typeof decoded?.cert === 'string' ? decoded.cert : ''
-        if (!key || !cert) throw remoteError('remote_secure_record_invalid')
-        tlsCache = { key, cert, fingerprint: certificateFingerprint(cert) }
-        return tlsCache
-      } catch (error) {
-        log('warn', 'stored TLS material unavailable; regenerating certificate', { code: error?.code || 'unknown' })
-      }
-    }
-
+  async function generateTlsMaterial(lanAddresses = getLanAddresses()) {
     assertSecureStorage()
+    const safeLanAddresses = Array.isArray(lanAddresses) ? lanAddresses : []
     const altNames = [
       { type: 2, value: 'localhost' },
       { type: 7, ip: '127.0.0.1' },
-      ...getLanIpv4Addresses().map((ip) => ({ type: 7, ip }))
+      ...safeLanAddresses.map((ip) => ({ type: 7, ip }))
     ]
     const generated = await selfsigned.generate(
       [{ name: 'commonName', value: 'Anywhere Desktop Remote v2' }],
@@ -383,13 +394,65 @@ export function createRemoteGateway({
     const key = typeof generated?.private === 'string' ? generated.private : generated?.privateKey
     const cert = generated?.cert
     if (typeof key !== 'string' || typeof cert !== 'string') throw remoteError('remote_certificate_generate_failed')
-    tlsCache = { key, cert, fingerprint: certificateFingerprint(cert) }
+    const material = { key, cert, fingerprint: certificateFingerprint(cert) }
     await storageSet(TLS_STORAGE_KEY, {
       version: REMOTE_PROTOCOL_VERSION,
       encryptedPem: encryptLocalSecret(JSON.stringify({ key, cert })),
       createdAt: nowIso()
     })
-    return tlsCache
+    tlsCache = material
+    return material
+  }
+
+  async function getTlsMaterial(lanAddresses = getLanAddresses()) {
+    if (tlsCache) return tlsCache
+    const stored = await storageGet(TLS_STORAGE_KEY, null)
+    if (stored && typeof stored === 'object') {
+      try {
+        const decoded = JSON.parse(decryptLocalSecret(stored.encryptedPem))
+        const key = typeof decoded?.key === 'string' ? decoded.key : ''
+        const cert = typeof decoded?.cert === 'string' ? decoded.cert : ''
+        if (!key || !cert) throw remoteError('remote_secure_record_invalid')
+        tlsCache = { key, cert, fingerprint: certificateFingerprint(cert) }
+        return tlsCache
+      } catch (error) {
+        log('warn', 'stored TLS material unavailable; regenerating certificate', { code: error?.code || 'unknown' })
+      }
+    }
+    return generateTlsMaterial(lanAddresses)
+  }
+
+  async function refreshTlsForCurrentLanIfSafe(lanAddresses = getLanAddresses()) {
+    const current = await getTlsMaterial(lanAddresses)
+    if (certificateCoversLanAddresses(current.cert, lanAddresses)) return current
+    const devices = await readDevices()
+    // Preserve existing device pins. Uncovered LAN addresses will be filtered out.
+    if (devices.devices.length > 0) return current
+    const rotated = await generateTlsMaterial(lanAddresses)
+    await appendAudit('remote.tls.rotated', { result: 'lan_address_changed' })
+    return rotated
+  }
+
+  async function refreshPairingTransport() {
+    const lanAddresses = getLanAddresses()
+    const previousFingerprint = runtime.certificateFingerprint
+    const tls = await refreshTlsForCurrentLanIfSafe(lanAddresses)
+    if (tls.fingerprint !== previousFingerprint) {
+      // Serialize with pair/start and pair/confirm, so no device can acquire the
+      // old pin between the empty-device check and this secure-context switch.
+      server.setSecureContext({ key: tls.key, cert: tls.cert })
+      pairings.clear()
+      for (const attempt of pairingAttempts.values()) zeroPairingAttempt(attempt)
+      pairingAttempts.clear()
+      server.closeIdleConnections?.()
+    }
+    const endpoints = buildEndpoints(configuredSettings, { cert: tls.cert, lanAddresses })
+    const uncoveredLan = !certificateCoversLanAddresses(tls.cert, lanAddresses)
+    runtime = { ...runtime, endpoints, certificateFingerprint: tls.fingerprint,
+      lastError: uncoveredLan ? 'remote_certificate_lan_address_changed' : '' }
+    notifyStatus()
+    if (!endpoints.length) throw remoteError(uncoveredLan
+      ? 'remote_certificate_lan_address_changed' : 'remote_endpoint_unavailable')
   }
 
   async function readDevices() {
@@ -596,6 +659,7 @@ export function createRemoteGateway({
   async function createPairing() {
     if (!runtime.running) throw remoteError(runtime.lastError || 'remote_gateway_not_running')
     cleanupExpiredPairings()
+    await refreshPairingTransport()
     const identity = await getIdentity()
     const pairingId = randomBase64Url(24)
     const pairingCode = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0')
@@ -640,10 +704,12 @@ export function createRemoteGateway({
     }
 
     const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 320,
-      color: { dark: '#171717', light: '#ffffff' }
+      // The P-256 identity makes the public payload intentionally dense. Keep
+      // enough module pixels for phone cameras instead of shrinking a 320px QR.
+      errorCorrectionLevel: 'H',
+      margin: 4,
+      width: 720,
+      color: { dark: '#000000', light: '#ffffff' }
     })
 
     return {
@@ -652,6 +718,7 @@ export function createRemoteGateway({
       endpoints: [...runtime.endpoints],
       pairingCode: `${pairingCode.slice(0, 3)} ${pairingCode.slice(3)}`,
       qrDataUrl,
+      qrPayload: JSON.stringify(payload),
       expiresAt: payload.expiresAt,
       certificateFingerprint: runtime.certificateFingerprint,
       desktopIdentityPublicKey: identity.publicKey
@@ -900,6 +967,16 @@ export function createRemoteGateway({
           if (!uploadManager) throw remoteError('remote_method_unavailable')
           result = await uploadManager.abort({ deviceId: context.device.deviceId, params })
           break
+
+        case 'conversation.assistants.list':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.listAssistants({ deviceId: context.device.deviceId, params })
+          break
+        case 'conversation.create':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.createConversation({ deviceId: context.device.deviceId, requestId, params })
+          break
+
 
         case 'conversation.list':
           if (!conversationReadService) throw remoteError('remote_method_unavailable')
@@ -1157,7 +1234,8 @@ export function createRemoteGateway({
 
   async function startServer(settings) {
     assertSecureStorage()
-    const [identity, tls] = await Promise.all([getIdentity(), getTlsMaterial()])
+    const lanAddresses = getLanAddresses()
+    const [identity, tls] = await Promise.all([getIdentity(), refreshTlsForCurrentLanIfSafe(lanAddresses)])
     await uploadManager?.initialize?.()
     const nextServer = https.createServer({ key: tls.key, cert: tls.cert }, handleHttp)
     const nextWebSocketServer = new WebSocketServer({
@@ -1205,7 +1283,7 @@ export function createRemoteGateway({
       host: settings.host,
       port: settings.port,
       publicEndpoint: settings.publicEndpoint,
-      endpoints: buildEndpoints(settings),
+      endpoints: buildEndpoints(settings, { cert: tls.cert, lanAddresses }),
       certificateFingerprint: tls.fingerprint,
       desktopId: identity.desktopId,
       desktopPublicKey: identity.publicKey,
@@ -1286,14 +1364,15 @@ export function createRemoteGateway({
     }
 
     if (sameListener) {
-
+      const lanAddresses = getLanAddresses()
+      const tls = await getTlsMaterial(lanAddresses)
       activeSessionManager?.resume?.()
 
       runtime = {
         ...runtime,
         enabled: true,
         publicEndpoint: settings.publicEndpoint,
-        endpoints: buildEndpoints(settings),
+        endpoints: buildEndpoints(settings, { cert: tls.cert, lanAddresses }),
         lastError: ''
       }
       notifyStatus()
@@ -1311,7 +1390,7 @@ export function createRemoteGateway({
         host: settings.host,
         port: settings.port,
         publicEndpoint: settings.publicEndpoint,
-        endpoints: buildEndpoints(settings),
+        endpoints: buildEndpoints(settings, { cert: tlsCache?.cert || '' }),
         lastError: statusErrorCode(error),
         protocolVersion: REMOTE_PROTOCOL_VERSION
       }
@@ -1382,7 +1461,7 @@ export function createRemoteGateway({
     },
     handleRendererEvent: (input = {}) => activeSessionManager?.handleRendererEvent(input) || { ok: false, error: 'remote_session_manager_unavailable' },
     handleWindowClosed: (windowRef = '') => activeSessionManager?.handleWindowClosed(windowRef) || { ok: true },
-    createPairing: () => queue(() => createPairing()),
+    createPairing: () => queue(() => queuePairing(() => createPairing())),
     listDevices,
     revokeDevice: (deviceId) => queue(() => revokeDevice(deviceId)),
     renameDevice: (deviceId, displayName) => queue(() => renameDevice(deviceId, displayName)),

@@ -233,8 +233,8 @@ export function createRemoteSessionManager({
     return found ? remember(conversationId, found) : null
   }
 
-  async function ready(windowRef, check = () => {}) {
-    const deadline = Date.now() + readinessTimeoutMs
+  async function ready(windowRef, check = () => {}, timeoutMs = readinessTimeoutMs) {
+    const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       check()
       const item = windowItem(windowRef)
@@ -313,6 +313,79 @@ export function createRemoteSessionManager({
     const record = requests.get(requestKey(session.activeDeviceId, session.activeRequestId))
     if (record && !record.terminal) publish(record, 'assistant.failed', { code: 'remote_renderer_closed' })
   }
+
+  async function listAssistants({ deviceId, params = {} } = {}) {
+    parameters(params, [])
+    const epoch = generation
+    assertActive(epoch, id(deviceId, 'deviceId'))
+    const config = await getConfig()
+    assertActive(epoch, deviceId)
+    return { ok: true, assistants: Object.entries(object(config?.config?.prompts))
+      .filter(([code, prompt]) => code.length > 0 && code.length <= 160 && prompt && typeof prompt === 'object' && prompt.enable !== false)
+      .map(([code]) => ({ code, name: code })) }
+  }
+
+  async function createConversation({ deviceId, requestId, params = {} } = {}) {
+    parameters(params, ['promptCode'])
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const safeRequestId = id(requestId, 'requestId')
+    const promptCode = typeof params.promptCode === 'string' ? params.promptCode : ''
+    if (!promptCode || promptCode.length > 160) throw remoteError('remote_assistant_invalid')
+    const epoch = generation
+    const check = () => assertActive(epoch, safeDeviceId)
+    check()
+    const key = requestKey(safeDeviceId, safeRequestId)
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation: 'conversation.create', promptCode })).digest('hex')
+    const previous = requests.get(key)
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
+      return { ...await previous.dispatched, duplicate: true }
+    }
+    pruneRequests()
+    if (creations.size >= 8 || windows().length >= 64) throw remoteError('remote_window_limit_reached')
+    const record = { deviceId: safeDeviceId, requestId: safeRequestId, conversationId: '',
+      fingerprint, event: 'conversation.command.pending', eventSequence: 0, terminal: false,
+      text: '', reasoning: '', truncated: false, updatedAtMs: Date.now(), windowRef: '' }
+    requests.set(key, record)
+    const creationKey = `new:${key}`
+    record.dispatched = (async () => {
+      let windowRef = ''
+      try {
+        const config = await getConfig()
+        check()
+        const prompts = object(config?.config?.prompts)
+        if (!Object.hasOwn(prompts, promptCode) || !prompts[promptCode] || prompts[promptCode].enable === false) {
+          throw remoteError('remote_assistant_invalid')
+        }
+        if (!text(config?.config?.webdav?.localChatPath, 32768).trim()) throw remoteError('remote_conversation_directory_not_configured')
+        const created = await openWindow('window', { code: promptCode, type: 'empty', remoteCreate: true,
+          conversationTitle: `${promptCode} - 新会话`, remoteHidden: true, alwaysOnTop: false, isAlwaysOnTop: false })
+        if (!created?.ok || !created.id) throw remoteError('remote_hidden_window_create_failed')
+        windowRef = created.id
+        record.windowRef = windowRef
+        const item = await ready(windowRef, check, Math.max(readinessTimeoutMs, 45_000))
+        check()
+        const conversationId = id(item.conversationId, 'conversationId')
+        const session = remember(conversationId, item)
+        record.conversationId = conversationId
+        const result = { ok: true, conversationId, windowId: windowRef, hidden: session.hidden, created: true,
+          promptCode, title: text(item.conversationTitle, 240) || `${promptCode} - 新会话` }
+        publish(record, 'conversation.operation.completed', { operation: 'conversation.create' })
+        return result
+      } catch (error) {
+        if (windowRef) {
+          // Normal window-close lifecycle only; never destroy a writer mid-save.
+          try { getWindowByRef(windowRef)?.close?.() } catch { /* lifecycle owns final cleanup */ }
+        }
+        publish(record, 'conversation.operation.failed', { code: /^remote_/.test(error?.code || '') ? error.code : 'remote_conversation_create_failed' })
+        throw error
+      }
+    })()
+    creations.set(creationKey, record.dispatched)
+    record.dispatched.finally(() => { if (creations.get(creationKey) === record.dispatched) creations.delete(creationKey) }).catch(() => {})
+    return record.dispatched
+  }
+
 
   async function send({ deviceId, requestId, params = {} } = {}) {
     parameters(params, ['conversationId', 'text', 'uploadIds'])
@@ -777,6 +850,8 @@ export function createRemoteSessionManager({
 
   return {
     send,
+    listAssistants, createConversation,
+
     editMessage: (input) => mutate({ ...input, operation: 'conversation.message.edit' }),
     deleteMessage: (input) => mutate({ ...input, operation: 'conversation.message.delete' }),
     reaskMessage: (input) => mutate({ ...input, operation: 'conversation.message.reask' }),

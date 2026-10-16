@@ -20,6 +20,7 @@ const status = ref({
 })
 const settings = ref({ enabled: false, host: '0.0.0.0', port: 17860, publicEndpoint: '' })
 const pairing = ref(null)
+const qrZoomVisible = ref(false)
 const devices = ref([])
 const auditEntries = ref([])
 let removeStatusListener = null
@@ -41,7 +42,8 @@ function statusErrorText(code = '') {
     remote_port_in_use: '端口已被占用，请更换端口后重试。',
     remote_secure_storage_unavailable: '系统安全存储不可用，无法安全保存远程身份密钥。',
     remote_start_failed: '远程服务启动失败。',
-    remote_endpoint_invalid: '公开连接地址必须是完整 HTTPS 地址。'
+    remote_endpoint_invalid: '公开连接地址必须是完整 HTTPS 地址。',
+    remote_certificate_lan_address_changed: '网络地址已变化；已保留现有设备的证书信任，仅显示证书覆盖地址。请使用可用地址或 Tunnel；若需换证，请先明确撤销全部设备后重新生成二维码。'
   }
   return map[code] || (code ? `服务异常：${code}` : '')
 }
@@ -97,10 +99,12 @@ async function createPairing() {
     return
   }
   pairingLoading.value = true
+  pairing.value = null
+  qrZoomVisible.value = false
   try {
     pairing.value = await window.api.createRemotePairing()
   } catch (error) {
-    ElMessage.error(`生成配对二维码失败：${error.message || error}`)
+    ElMessage.error(statusErrorText(error?.message) || '生成配对二维码失败，请重新打开远程设置。')
   } finally {
     pairingLoading.value = false
   }
@@ -232,13 +236,17 @@ defineExpose({ openDialog })
           </div>
 
           <div v-if="pairing" class="pairing-card">
-            <img :src="pairing.qrDataUrl" alt="手机远程配对二维码">
+            <button class="qr-preview" type="button" aria-label="放大配对二维码" @click="qrZoomVisible = true">
+              <img :src="pairing.qrDataUrl" alt="手机远程配对二维码">
+              <span>点击放大二维码</span>
+            </button>
             <div class="pairing-details">
               <h3>扫描二维码配对</h3>
               <span class="pairing-label">在手机上输入验证码</span>
               <strong>{{ pairing.pairingCode }}</strong>
               <small>有效至 {{ formatTime(pairing.expiresAt) }}</small>
               <small>证书指纹：{{ pairing.certificateFingerprint }}</small>
+              <el-button link :icon="CopyDocument" @click="copyText(pairing.qrPayload, '二维码公开内容已复制，可在手机中粘贴。')">复制二维码内容</el-button>
               <el-button link :icon="CopyDocument" @click="copyText(primaryEndpoint, '连接地址已复制。')">复制当前连接地址</el-button>
             </div>
           </div>
@@ -288,6 +296,11 @@ defineExpose({ openDialog })
           </div>
         </section>
       </template>
+      <el-dialog v-model="qrZoomVisible" title="扫描配对二维码" width="min(92vw, 780px)" append-to-body>
+        <img v-if="pairing" class="qr-fullsize" :src="pairing.qrDataUrl" alt="放大的手机配对二维码">
+        <p>二维码两分钟有效；验证码请从原配对面板单独读取。</p>
+      </el-dialog>
+
     </div>
   </el-dialog>
 </template>
@@ -308,7 +321,10 @@ p { margin-top: 5px; color: var(--el-text-color-secondary); font-size: 13px; lin
 .endpoint-row { justify-content: space-between; }
 .endpoint-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pairing-card { display: flex; align-items: center; gap: 16px; padding: 14px; border: 1px solid var(--el-border-color-lighter); border-radius: 12px; background: var(--el-fill-color-lighter); }
-.pairing-card img { width: 152px; height: 152px; border-radius: 8px; background: white; image-rendering: pixelated; }
+.pairing-card img { width: 320px; height: 320px; max-width: 100%; object-fit: contain; border-radius: 8px; background: white; image-rendering: pixelated; }
+.qr-preview { flex: 0 0 320px; width: 320px; max-width: 100%; display: grid; gap: 6px; padding: 0; border: 0; background: transparent; cursor: zoom-in; color: var(--el-color-primary); }
+.qr-fullsize { display: block; width: 720px; max-width: 100%; height: auto; margin: auto; image-rendering: pixelated; background: white; }
+
 .pairing-details { display: grid; gap: 6px; min-width: 0; }
 .pairing-details strong { font-size: 28px; letter-spacing: 4px; }
 .pairing-label, .pairing-details small { color: var(--el-text-color-secondary); font-size: 12px; word-break: break-all; }
@@ -323,7 +339,8 @@ p { margin-top: 5px; color: var(--el-text-color-secondary); font-size: 13px; lin
 @media (max-width: 640px) {
   .remote-service-card, .pairing-card { align-items: stretch; flex-direction: column; }
   .remote-service-actions { justify-content: space-between; }
-  .pairing-card img { width: 180px; height: 180px; align-self: center; }
+  .qr-preview { flex-basis: auto; align-self: center; }
+  .pairing-card img { height: auto; aspect-ratio: 1; }
   .audit-row > span { width: auto; }
 }
 </style>

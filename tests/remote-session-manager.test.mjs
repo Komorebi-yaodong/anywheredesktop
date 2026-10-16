@@ -43,6 +43,50 @@ function renderer(f, event, payload = {}, requestId = 'request-fixture-0001', wi
 }
 
 async function run() {
+  {
+    const items = [], opens = [];
+    let config = {config: {webdav: {localChatPath: 'PRIVATE_FIXTURE_PATH'}, prompts: {
+      Code: {prompt: 'PRIVATE_PROMPT', apiKey: 'PRIVATE_KEY'}, Disabled: {enable: false}, Moon: {enable: true}
+    }}};
+    const manager = createRemoteSessionManager({
+      getConfig: async () => config,
+      openConversation: async () => { throw new Error('new creation must not read old conversations'); },
+      listWindows: () => items,
+      getWindowByRef: () => ({isDestroyed: () => false}),
+      openWindow: async (type, payload) => {
+        opens.push(payload);
+        await Promise.resolve();
+        const item = {id: `new-window-${opens.length}`, type, conversationId: `new-conversation-fixture-${opens.length}`,
+          conversationTitle: payload.conversationTitle, rendererReady: true, leasePending: false, remoteHidden: true};
+        items.push(item);
+        return {ok: true, id: item.id};
+      },
+      dispatchRemoteCommandToWindow: async () => ({ok: true}),
+      revealRemoteConversationWindow: () => ({ok: true}), broadcastToDevice() {}, readinessTimeoutMs: 100
+    });
+    const assistants = await manager.listAssistants({deviceId: DEVICE});
+    assert.deepEqual(assistants.assistants, [{code: 'Code', name: 'Code'}, {code: 'Moon', name: 'Moon'}]);
+    assert.equal(JSON.stringify(assistants).includes('PRIVATE'), false);
+    const input = {deviceId: DEVICE, requestId: 'request-create-fixture-0001', params: {promptCode: 'Code'}};
+    const [created, duplicate] = await Promise.all([manager.createConversation(input), manager.createConversation(input)]);
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(duplicate.conversationId, created.conversationId);
+    assert.equal(opens.length, 1);
+    assert.equal(opens[0].remoteCreate, true);
+    assert.equal(opens[0].code, 'Code');
+    assert.equal(opens[0].type, 'empty');
+    assert.equal(JSON.stringify(created).includes('PRIVATE'), false);
+    await assert.rejects(manager.createConversation({...input, params: {promptCode: 'Moon'}}), {code: 'remote_request_id_conflict'});
+    await assert.rejects(manager.createConversation({...input, requestId: 'request-create-disabled', params: {promptCode: 'Disabled'}}), {code: 'remote_assistant_invalid'});
+    await assert.rejects(manager.createConversation({...input, requestId: 'request-create-unknown', params: {promptCode: 'Missing'}}), {code: 'remote_assistant_invalid'});
+    await assert.rejects(manager.createConversation({...input, requestId: 'request-create-path', params: {promptCode: 'Code', dirPath: 'FORBIDDEN'}}), {code: 'remote_path_parameter_forbidden'});
+    config = {config: {prompts: {Code: {}}}};
+    await assert.rejects(manager.createConversation({...input, requestId: 'request-create-no-dir'}), {code: 'remote_conversation_directory_not_configured'});
+    await manager.revokeDevice(DEVICE);
+    await assert.rejects(manager.listAssistants({deviceId: DEVICE}), {code: 'remote_device_revoked'});
+  }
+
+
   const f = fixture()
   const results = await Promise.allSettled([send(f.manager), send(f.manager, 'request-fixture-0002')])
   assert.equal(results[0].status, 'fulfilled')

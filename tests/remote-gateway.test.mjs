@@ -160,7 +160,67 @@ async function sendEncryptedRequest({ socket, session, requestId, method, params
   return result
 }
 
+async function readServerCertificate(endpoint) {
+  return new Promise((resolve, reject) => {
+    // The fixture's public self-signed cert is inspected here. No global TLS override.
+    const request = https.get(`${endpoint}/health`, { rejectUnauthorized: false, agent: false }, (response) => {
+      const cert = new crypto.X509Certificate(response.socket.getPeerCertificate().raw)
+      response.resume()
+      response.on('end', () => resolve(cert))
+    })
+    request.on('error', reject)
+  })
+}
+
+
+async function verifyPersistedTlsLifecycle() {
+  const storage = createStorage()
+  const safeStorage = createMemorySecureStorage()
+  const port = await findFreePort()
+  let lanAddress = '127.0.0.2'
+  const makeGateway = () => createRemoteGateway({
+    app: { getPath: () => process.cwd(), getName: () => 'TLS Fixture' },
+    safeStorage, dbStorageGetItem: storage.get, dbStorageSetItem: storage.set,
+    getLanAddresses: () => [lanAddress],
+    logger: { log() {}, warn() {}, error() {} }
+  })
+  const config = { remote: { enabled: true, host: '127.0.0.1', port } }
+  let gateway = makeGateway()
+  try {
+    let status = await gateway.configure(config)
+    assert.equal(status.running, true)
+    const firstFingerprint = status.certificateFingerprint
+    await gateway.stop()
+    lanAddress = '127.0.0.3'
+    gateway = makeGateway()
+    status = await gateway.configure(config)
+    assert.notEqual(status.certificateFingerprint, firstFingerprint, 'a new process must refresh persisted stale SANs before advertising a QR')
+    const pinnedFingerprint = status.certificateFingerprint
+    await gateway.stop()
+    // Synthetic trusted-device metadata only: no actual device/root secrets.
+    await storage.set('remote:v2:devices', { version: 2, devices: [{ deviceId: 'device-tls-fixture-0001' }] })
+    lanAddress = '127.0.0.4'
+    gateway = makeGateway()
+    status = await gateway.configure({ remote: { enabled: true, host: '0.0.0.0', port } })
+    assert.equal(status.running, true)
+    assert.equal(status.certificateFingerprint, pinnedFingerprint)
+    assert.deepEqual(status.endpoints, [], 'an uncovered direct endpoint must never enter the QR')
+    await assert.rejects(gateway.createPairing(), { code: 'remote_certificate_lan_address_changed' })
+    assert.equal(gateway.getStatus().certificateFingerprint, pinnedFingerprint)
+    const tunnel = 'https://tunnel.fixture.test'
+    await gateway.configure({ remote: { enabled: true, host: '0.0.0.0', port, publicEndpoint: tunnel } })
+    const pairing = await gateway.createPairing()
+    assert.deepEqual(pairing.endpoints, [tunnel], 'system-TLS tunnels remain independent of the LAN certificate SAN')
+    assert.equal(pairing.certificateFingerprint, pinnedFingerprint)
+  } finally {
+    await gateway.stop()
+  }
+}
+
+
 async function main() {
+  await verifyPersistedTlsLifecycle()
+
   const storage = createStorage()
   const port = await findFreePort()
   const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-remote-gateway-test-'))
@@ -186,6 +246,8 @@ async function main() {
   }
   let observedPairing = null
   const conversationCalls = []
+  let fixtureLanAddress = '127.0.0.1'
+
   const conversationReadService = {
     async listConversations(params = {}) {
       conversationCalls.push({ method: 'conversation.list', params: structuredClone(params) })
@@ -237,6 +299,7 @@ async function main() {
     }
   }
 
+
   const gateway = createRemoteGateway({
     app,
     safeStorage: createMemorySecureStorage(),
@@ -246,6 +309,7 @@ async function main() {
     uploadManager,
     businessConfigService,
     onPairingCreated: (payload) => { observedPairing = payload },
+    getLanAddresses: () => [fixtureLanAddress],
     logger: { log() {}, warn() {}, error() {} }
   })
 
@@ -255,9 +319,16 @@ async function main() {
     { id: 'window-fixture-revoke', type: 'window', conversationId: 'conversation-gateway-fixture-0002', rendererReady: true, remoteHidden: false }
   ]
   const sessionManager = createRemoteSessionManager({
-    getConfig: async () => ({ config: {} }),
+    getConfig: async () => ({ config: {webdav: {localChatPath: 'PRIVATE_FIXTURE_PATH'}, prompts: {Code: {prompt: 'PRIVATE_FIXTURE_PROMPT'}, Disabled: {enable: false}}} }),
     openConversation: async () => { throw new Error('existing_writer_expected') },
-    openWindow: async () => { throw new Error('existing_writer_expected') },
+    openWindow: async (type, payload) => {
+      assert.equal(payload.remoteCreate, true)
+      assert.equal(payload.code, 'Code')
+      const item = {id: 'window-created-fixture', type, conversationId: 'conversation-created-gateway-fixture',
+        conversationTitle: payload.conversationTitle, rendererReady: true, remoteHidden: true}
+      writerWindows.push(item)
+      return {ok: true, id: item.id}
+    },
     listWindows: () => writerWindows,
     getWindowByRef: () => ({ isDestroyed: () => false }),
     revealRemoteConversationWindow: () => ({ ok: true }),
@@ -307,6 +378,13 @@ async function main() {
         } })
       }
 
+      if (command.type === 'remote.shutdown') {
+        const index = writerWindows.findIndex((item) => item.id === windowRef)
+        if (index >= 0) writerWindows.splice(index, 1)
+        sessionManager.handleWindowClosed(windowRef)
+      }
+
+
       if (command.type === 'conversation.cancel') {
         sessionManager.handleRendererEvent({ windowRef, payload: {
           conversationId: command.conversationId, requestId: command.targetRequestId,
@@ -330,9 +408,34 @@ async function main() {
     assert.equal(health.status, 200)
     assert.equal(health.body.protocolVersion, 2)
 
+    const initialCertificate = await readServerCertificate(endpoint)
+    const initialFingerprint = gateway.getStatus().certificateFingerprint
+    fixtureLanAddress = '127.0.0.2'
+    const rotatedPairing = await gateway.createPairing()
+    assert.notEqual(rotatedPairing.certificateFingerprint, initialFingerprint, 'zero-device LAN changes must refresh the persisted TLS certificate')
+    const rotatedCertificate = await readServerCertificate(endpoint)
+    assert.equal(rotatedCertificate.checkIP(fixtureLanAddress), fixtureLanAddress)
+    assert.notEqual(rotatedCertificate.fingerprint256, initialCertificate.fingerprint256, 'the active HTTPS context must use the new certificate')
+    fixtureLanAddress = '127.0.0.1'
+    await gateway.stop()
+    fixtureLanAddress = '127.0.0.4'
+    const restarted = await gateway.configure({ remote: { enabled: true, host: '127.0.0.1', port } })
+    assert.equal(restarted.running, true)
+    assert.notEqual(restarted.certificateFingerprint, rotatedPairing.certificateFingerprint, 'startup must also refresh stale persisted SANs with zero devices')
+    assert.equal((await readServerCertificate(endpoint)).checkIP(fixtureLanAddress), fixtureLanAddress)
+    fixtureLanAddress = '127.0.0.1'
+
+
     const pairing = await gateway.createPairing()
     assert.equal(pairing.ok, true)
     assert.ok(observedPairing)
+
+    assert.deepEqual(JSON.parse(pairing.qrPayload), observedPairing)
+    assert.equal(Object.hasOwn(JSON.parse(pairing.qrPayload), 'pairingCode'), false)
+    const qrPng = Buffer.from(pairing.qrDataUrl.split(',')[1], 'base64')
+    assert.equal(qrPng.readUInt32BE(16), 720)
+    assert.equal(qrPng.readUInt32BE(20), 720)
+
     assert.equal(Object.hasOwn(observedPairing, 'pairingCode'), false, 'QR payload must not contain the human confirmation code')
     assert.equal(pairing.qrDataUrl.includes(pairing.pairingCode.replace(/\s/g, '')), false, 'PNG transport must not contain the human code as plain text')
 
@@ -443,12 +546,32 @@ async function main() {
     assert.equal(devices.devices.length, 1)
     assert.equal(devices.devices[0].deviceId, deviceId)
 
+    fixtureLanAddress = '127.0.0.3'
+    const pairedFingerprint = gateway.getStatus().certificateFingerprint
+    await gateway.createPairing()
+    assert.equal(gateway.getStatus().certificateFingerprint, pairedFingerprint, 'LAN changes must never silently invalidate paired-device TLS pins')
+    assert.equal(gateway.getStatus().lastError, 'remote_certificate_lan_address_changed')
+    assert.deepEqual(gateway.getStatus().endpoints, [endpoint], 'only covered direct endpoints may be published')
+    assert.equal((await readServerCertificate(endpoint)).checkIP(fixtureLanAddress), undefined)
+    fixtureLanAddress = '127.0.0.1'
+
+
     const { socket, session, welcome } = await connectEncrypted({
       endpoint,
       rootSecret: mobilePairing2.rootSecret,
       deviceId,
       desktopId: qr2.desktopId
     })
+    assert.ok(welcome.payload.capabilities.includes('conversation.create'))
+    const assistantList = await sendEncryptedRequest({socket, session, requestId: 'request-list-assistants', method: 'conversation.assistants.list'})
+    assert.deepEqual(assistantList.result.assistants, [{code: 'Code', name: 'Code'}])
+    const createdConversation = await sendEncryptedRequest({socket, session, requestId: 'request-create-conversation',
+      method: 'conversation.create', params: {promptCode: 'Code'}})
+    assert.equal(createdConversation.result.conversationId, 'conversation-created-gateway-fixture')
+    assert.equal(createdConversation.result.promptCode, 'Code')
+    assert.equal(JSON.stringify(createdConversation.result).includes('PRIVATE'), false)
+
+
     assert.ok(welcome.payload.capabilities.includes('conversation.list'))
     assert.ok(welcome.payload.capabilities.includes('conversation.messages.list'))
     assert.ok(welcome.payload.capabilities.includes('conversation.windows.list'))

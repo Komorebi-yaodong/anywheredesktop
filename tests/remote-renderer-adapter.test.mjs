@@ -6,6 +6,28 @@ import { shallowRef, ref, computed, watch } from 'vue'
 const source = await fs.readFile(new URL('../render/window/App.vue', import.meta.url), 'utf8')
 const block = source.slice(source.indexOf('const activeRemoteCommand ='), source.indexOf('const stopConversationLeaseHeartbeat ='))
 assert.ok(block.includes('persistRemoteTranscript'))
+
+// Execute the actual response finalization path; adapter-only stubs miss TDZ bugs.
+const finalizationStart = source.indexOf('      emitRemoteAssistantDelta(', source.indexOf('// Chat Completions'));
+const bubbleStart = source.indexOf('      // --- 更新 UI 气泡 ---', source.indexOf('// Chat Completions'));
+const finalizationEnd = source.indexOf('      if (responseMessage.tool_calls', bubbleStart);
+assert.ok(finalizationStart > bubbleStart, 'terminal delta must follow currentBubble initialization');
+for (const responseMessage of [
+  { content: 'final plain reply', reasoning_content: '' },
+  { content: [{ type: 'text', text: 'tool reply' }], reasoning_content: 'final reason', tool_calls: [{}] }
+]) {
+  const emitted = [];
+  vm.runInNewContext(source.slice(bubbleStart, finalizationEnd), {
+    chat_show: { value: [{ id: 'bubble-fixture', content: [], status: 'retrying' }] },
+    currentAssistantChatShowIndex: 0, responseMessage, turnRemoteCommand: {},
+    applyTokenUsageToAssistantMessage() {},
+    extractRemoteText: (parts) => parts.map((part) => part.text || '').join(''),
+    emitRemoteAssistantDelta: (...args) => emitted.push(args)
+  });
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0][1], typeof responseMessage.content === 'string' ? responseMessage.content : 'tool reply');
+}
+
 const events = [], actions = [], consumedUploads = [], appendedMessages = []
 const context = {
   shallowRef, ref, computed, watch, console, setTimeout, clearTimeout,

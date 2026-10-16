@@ -2776,14 +2776,9 @@ const persistRemoteTranscript = async (reason) => {
   const version = ++sessionMutationVersion;
   const request = { reason, force: true, stateOnly: false, version };
   const saved = await executeAutoSaveRequest(request);
-  if (typeof autoSaveMutationQueue !== 'undefined') {
-    await autoSaveMutationQueue.whenIdle();
-  }
-  if (typeof conversationPersistenceTracker !== 'undefined') {
-    const state = conversationPersistenceTracker.getState();
-    return saved === true && state.persistedFullSnapshotVersion >= version;
-  }
-  return saved === true && (typeof lastPersistedSessionVersion === 'undefined' || lastPersistedSessionVersion >= version);
+  await autoSaveMutationQueue.whenIdle();
+  const state = conversationPersistenceTracker.getState();
+  return saved === true && state.persistedFullSnapshotVersion >= version;
 };
 
 
@@ -6436,6 +6431,15 @@ onMounted(async () => {
     }
 
     await fetchSkillsList();
+
+    if (data?.remoteCreate === true && remoteHiddenWriter.value && !currentConversationStorage.value?.conversationId) {
+      autoCloseOnBlur.value = false;
+      const saved = await persistRemoteTranscript('remote-create-conversation');
+      if (!saved || !currentConversationStorage.value?.conversationId || !ensureConversationWriteAccess(false)) {
+        throw new Error('remote_conversation_create_failed');
+      }
+    }
+
 
     isWindowBootstrapped.value = true;
     await flushPendingWindowPayloadQueue();
@@ -10359,14 +10363,6 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         }
       }
 
-      emitRemoteAssistantDelta(
-        turnRemoteCommand,
-        extractRemoteText(currentBubble.content),
-        typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
-        currentBubble.status || '',
-        currentBubble.id || ''
-      );
-
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
         responseMessage.tool_calls.forEach(tc => {
           if (tc.function && tc.function.arguments) {
@@ -10412,6 +10408,15 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         // 关键：非流式下如果存在思考内容，必须将 status 设为 end 才能正确显示
         currentBubble.status = 'end';
       }
+
+      emitRemoteAssistantDelta(
+        turnRemoteCommand,
+        extractRemoteText(currentBubble.content),
+        typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
+        currentBubble.status || '',
+        currentBubble.id || ''
+      );
+
 
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
         tool_calls_count++;

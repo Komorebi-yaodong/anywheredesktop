@@ -824,6 +824,7 @@ async function buildWindowInitMessage(payload = {}, senderId = '', fullConfig = 
         : null,
     senderId,
     remoteHidden: payload?.remoteHidden === true,
+    remoteCreate: payload?.remoteCreate === true,
     isAlwaysOnTop: payload?.isAlwaysOnTop ?? promptConfig?.isAlwaysOnTop ?? true
   }
 }

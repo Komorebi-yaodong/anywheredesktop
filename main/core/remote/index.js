@@ -1495,9 +1495,7 @@ export function createRemoteGateway({
       'remote.device.paired': '新手机已配对',
       'remote.device.revoked': '已撤销设备',
       'remote.device.renamed': '已更新设备名称',
-      'remote.session.opened': '手机已连接',
-      'remote.pairing.created': '已生成配对码',
-      'remote.gateway.started': '远程服务已启动'
+      'remote.session.opened': '手机已连接'
     }
     return {
       ok: true,

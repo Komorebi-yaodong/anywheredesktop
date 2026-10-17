@@ -229,6 +229,7 @@ export function createRemoteGateway({
   dbStorageGetItem,
   dbStorageSetItem,
   getAppVersion = () => '',
+  getDesktopDisplayName = async () => '',
   conversationReadService = null,
   sessionManager = null,
   uploadManager = null,
@@ -292,6 +293,18 @@ export function createRemoteGateway({
     return next
   }
 
+  async function desktopDisplayName() {
+    try {
+      const configured = normalizeDisplayName(await getDesktopDisplayName(), '')
+      if (configured) return configured
+    } catch {
+      // A display label must never block pairing.
+    }
+    const host = normalizeDisplayName(os.hostname(), '')
+    return host || 'Anywhere Desktop'
+  }
+
+
   function getCapabilities() {
     const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get']
     if (conversationReadService) {
@@ -312,7 +325,9 @@ export function createRemoteGateway({
     if (businessConfigService) capabilities.push('business.config.get', 'business.config.replace')
     if (mobileWorkspaceService) capabilities.push(
       'workspace.bootstrap.get', 'workspace.assistants.list', 'workspace.assistant.get', 'workspace.assistant.patch',
-      'workspace.project.create', 'workspace.management.catalog.get', 'workspace.management.details.get', 'workspace.management.patch'
+      'workspace.agent.catalog', 'workspace.agent.get', 'workspace.agent.mutate', 'workspace.agent.routes.mutate', 'workspace.agent.tags.mutate',
+      'workspace.provider.catalog', 'workspace.provider.get', 'workspace.provider.mutate', 'workspace.provider.folders.mutate', 'workspace.provider.models.fetch',
+      'workspace.project.create', 'workspace.project.update', 'workspace.project.remove', 'workspace.management.catalog.get', 'workspace.management.details.get', 'workspace.management.patch'
     )
     if (remoteManagementService) capabilities.push('management.catalog', 'management.mutate')
 
@@ -704,6 +719,7 @@ export function createRemoteGateway({
     cleanupExpiredPairings()
     await refreshPairingTransport()
     const identity = await getIdentity()
+    const desktopName = await desktopDisplayName()
     const pairingId = randomBase64Url(24)
     const pairingCode = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0')
     const pairingChallenge = randomBase64Url(32)
@@ -714,7 +730,7 @@ export function createRemoteGateway({
     const pairingPayload = {
       v: REMOTE_PROTOCOL_VERSION,
       desktopId: identity.desktopId,
-      desktopName: app.getName?.() || 'Anywhere Desktop',
+      desktopName,
       endpoint,
       endpoints: [...runtime.endpoints],
       pairingId,
@@ -741,6 +757,7 @@ export function createRemoteGateway({
       pairingId,
       pairingCodeHash: sha256Base64Url(pairingCode),
       pairingChallenge,
+      desktopName,
       endpoint,
       expiresAtMs,
       failureCount: 0,
@@ -855,7 +872,7 @@ export function createRemoteGateway({
       v: REMOTE_PROTOCOL_VERSION,
       pairingAttemptId: attemptId,
       desktopId: identity.desktopId,
-      desktopName: app.getName?.() || 'Anywhere Desktop',
+      desktopName: normalizeDisplayName(pairing.desktopName, 'Anywhere Desktop'),
       desktopIdentityPublicKey: identity.publicKey,
       serverEphemeralPublicKey: response.serverEphemeralPublicKey,
       desktopProof: response.desktopProof,
@@ -925,7 +942,7 @@ export function createRemoteGateway({
     return {
       v: REMOTE_PROTOCOL_VERSION,
       desktopId: identity.desktopId,
-      desktopName: app.getName?.() || 'Anywhere Desktop',
+      desktopName: normalizeDisplayName(pairing.desktopName, 'Anywhere Desktop'),
       device: publicDevice(nextDevice),
       certificateFingerprint: runtime.certificateFingerprint,
       desktopIdentityPublicKey: identity.publicKey
@@ -1026,10 +1043,62 @@ export function createRemoteGateway({
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
           result = await mobileWorkspaceService.mutate({ deviceId: context.device.deviceId, requestId, params })
           break
+        case 'workspace.agent.catalog':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.agentCatalog({ params })
+          break
+        case 'workspace.agent.get':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.agentGet({ params })
+          break
+        case 'workspace.agent.mutate':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.agentMutate({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'workspace.agent.routes.mutate':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.agentRoutesMutate({ deviceId: context.device.deviceId, requestId, params })
+          break
+
+        case 'workspace.agent.tags.mutate':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.agentTagsMutate({ deviceId: context.device.deviceId, requestId, params })
+          break
+
+        case 'workspace.provider.catalog':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.providerCatalog({ params })
+          break
+        case 'workspace.provider.get':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.providerGet({ params })
+          break
+        case 'workspace.provider.mutate':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.providerMutate({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'workspace.provider.folders.mutate':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.providerFoldersMutate({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'workspace.provider.models.fetch':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.providerModelsFetch({ params })
+          break
+
         case 'workspace.project.create':
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
           result = await mobileWorkspaceService.projectCreate({ deviceId: context.device.deviceId, requestId, params })
           break
+        case 'workspace.project.update':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.projectUpdate({ deviceId: context.device.deviceId, requestId, params })
+          break
+        case 'workspace.project.remove':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.projectRemove({ deviceId: context.device.deviceId, requestId, params })
+          break
+
         case 'workspace.management.catalog.get':
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
           result = await mobileWorkspaceService.managementCatalog({ params })

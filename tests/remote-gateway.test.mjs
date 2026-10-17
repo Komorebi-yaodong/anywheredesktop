@@ -317,6 +317,7 @@ async function main() {
     uploadManager,
     businessConfigService,
     remoteManagementService,
+    getDesktopDisplayName: async () => 'Fixture Workspace',
     onPairingCreated: (payload) => { observedPairing = payload },
     getLanAddresses: () => [fixtureLanAddress],
     logger: { log() {}, warn() {}, error() {} }
@@ -438,6 +439,9 @@ async function main() {
     const pairing = await gateway.createPairing()
     assert.equal(pairing.ok, true)
     assert.ok(observedPairing)
+    assert.equal(JSON.parse(pairing.qrPayload).n, 'Fixture Workspace')
+    assert.equal(observedPairing.desktopName, 'Fixture Workspace')
+
 
     assert.equal(Object.hasOwn(JSON.parse(pairing.qrPayload), 'pairingCode'), false)
     const qrPng = Buffer.from(pairing.qrDataUrl.split(',')[1], 'base64')
@@ -480,6 +484,8 @@ async function main() {
     assert.equal(start.status, 201, JSON.stringify(start.body))
     assert.equal(start.body.ok, true, JSON.stringify(start.body))
     assert.equal(start.body.desktopId, observedPairing.desktopId)
+    assert.equal(start.body.desktopName, 'Fixture Workspace')
+
 
     const mobilePairing = completeDevicePairing({
       devicePrivateKey: device.privateKey,
@@ -553,6 +559,8 @@ async function main() {
     })
     assert.equal(confirm.status, 201)
     assert.equal(confirm.body.ok, true)
+    assert.equal(confirm.body.desktopName, 'Fixture Workspace')
+
 
     const devices = await gateway.listDevices()
     assert.equal(devices.devices.length, 1)

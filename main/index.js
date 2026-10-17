@@ -86,13 +86,50 @@ const remoteBusinessConfigService = createRemoteBusinessConfigService({
 })
 
 
+function normalizeMobileProfileAvatar(dataUrl) {
+  const source = typeof dataUrl === 'string' ? dataUrl.trim() : ''
+  if (!/^data:image\/(png|jpe?g|webp);base64,/i.test(source)) return ''
+  try {
+    const image = nativeImage.createFromDataURL(source)
+    if (!image || image.isEmpty()) return ''
+    const size = image.getSize()
+    const longestSide = Math.max(size.width || 1, size.height || 1)
+    for (const target of [128, 112, 96, 80, 64]) {
+      const scale = Math.min(1, target / longestSide)
+      const thumbnail = scale < 1
+        ? image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) })
+        : image
+      const png = thumbnail.toPNG()
+      if (png.length > 0 && png.length <= 160 * 1024) return `data:image/png;base64,${png.toString('base64')}`
+    }
+  } catch {
+    // Invalid image input stays private and simply falls back to initials on Mobile.
+  }
+  return ''
+}
+
+async function remoteDesktopDisplayName() {
+  try {
+    const user = await dataApi.getUser()
+    const nickname = typeof user?.nickname === 'string' ? user.nickname.trim().replace(/\s+/g, ' ').slice(0, 80) : ''
+    if (nickname) return nickname
+  } catch {
+    // Pairing remains available even when profile configuration cannot be read.
+  }
+  return ''
+}
+
+
 const mobileWorkspaceService = createMobileWorkspaceService({
   getConfig: dataApi.getConfig,
   updateConfig: dataApi.updateConfigWithoutFeatures,
   getUser: dataApi.getUser,
   readLocalProjects: projectsApi.readLocalProjects,
   writeLocalProjects: projectsApi.writeLocalProjects,
-  listSkills: (skillPath) => skillApi.listSkills(skillPath)
+  normalizeAvatarDataUrl: normalizeMobileProfileAvatar,
+  getDefaultAgent: (code) => ({ ...dataApi.defaultConfig.config.prompts.AI, name: code }),
+  listSkills: (skillPath) => skillApi.listSkills(skillPath),
+  listProviderModels: (input) => chatApi.listProviderModels(input)
 })
 
 
@@ -125,6 +162,7 @@ const remoteGateway = createRemoteGateway({
   dbStorageGetItem: dbApi.dbStorageGetItem,
   dbStorageSetItem: dbApi.dbStorageSetItem,
   getAppVersion: () => app.getVersion(),
+  getDesktopDisplayName: remoteDesktopDisplayName,
   conversationReadService: remoteConversationReadService,
   uploadManager: remoteUploadManager,
   businessConfigService: remoteBusinessConfigService,

@@ -338,6 +338,10 @@ export const defaultConfig = {
       },
       guide: {
         quickStartOpened: false
+      },
+      quickAssistantUsage: {
+        activeDates: [],
+        prompts: {}
       }
     },
 
@@ -701,6 +705,10 @@ const rootDefaults = {
       },
       guide: {
         quickStartOpened: false
+      },
+      quickAssistantUsage: {
+        activeDates: [],
+        prompts: {}
       }
     },
     settingsCardOrder: ['general', 'desktop', 'networkProxy', 'voice', 'data', 'webdav'],
@@ -962,6 +970,12 @@ if (!Array.isArray(config.providerOrder) || config.providerOrder.length === 0) {
         changed = true
       }
     }
+
+    if (!config.desktop.quickAssistantUsage || typeof config.desktop.quickAssistantUsage !== 'object' || Array.isArray(config.desktop.quickAssistantUsage)) {
+      config.desktop.quickAssistantUsage = deepClone(rootDefaults.desktop.quickAssistantUsage)
+      changed = true
+    }
+
 
     if (!config.desktop.guide || typeof config.desktop.guide !== 'object') {
       config.desktop.guide = {

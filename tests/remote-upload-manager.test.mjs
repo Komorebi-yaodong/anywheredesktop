@@ -94,6 +94,12 @@ async function main() {
       requestId: REQUEST,
       uploadId: started.upload.uploadId
     }), { code: 'remote_upload_not_authorized' })
+    await manager.reserveForRequest({deviceId:DEVICE,requestId:REQUEST,uploadIds:[started.upload.uploadId]})
+    clock += 2000
+    await manager.cleanupExpired()
+    assert.ok(manager.getUpload(started.upload.uploadId),'queued attachments survive ordinary upload TTL')
+    await assert.rejects(manager.authorizeForRequest({deviceId:DEVICE,requestId:'request-other-reservation',windowRef:WINDOW,uploadIds:[started.upload.uploadId]}),{code:'remote_upload_unavailable'})
+
     const descriptors = await manager.authorizeForRequest({
       deviceId: DEVICE,
       requestId: REQUEST,

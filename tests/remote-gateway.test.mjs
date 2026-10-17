@@ -10,6 +10,7 @@ import { createRemoteGateway } from '../main/core/remote/index.js'
 import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
 import { createRemoteUploadManager } from '../main/core/remote/uploadManager.js'
 import { createRemoteBusinessConfigService } from '../main/core/remote/businessConfig.js'
+import { createRemoteManagementService } from '../main/core/remote/management.js'
 import {
   completeDevicePairing,
   completeSessionHello,
@@ -240,6 +241,13 @@ async function main() {
     getConfig: async () => ({ config: structuredClone(businessConfig) }),
     updateConfig: async ({ config }) => { businessConfig = structuredClone(config); return { success: true, config: structuredClone(config) } }
   })
+  const remoteManagementService = createRemoteManagementService({
+    getConfig: async () => ({config:structuredClone(businessConfig)}),
+    updateConfig: async ({config}) => {businessConfig=structuredClone(config);return {success:true}},
+    readProjects: async () => ({projects:[]}),
+    skills:{list:async()=>[],get:async()=>null},setTaskEnabled(){},getTaskDevice:()=>({})
+  })
+
   const app = {
     getPath: () => process.cwd(),
     getName: () => 'Anywhere Remote Test'
@@ -308,6 +316,7 @@ async function main() {
     conversationReadService,
     uploadManager,
     businessConfigService,
+    remoteManagementService,
     onPairingCreated: (payload) => { observedPairing = payload },
     getLanAddresses: () => [fixtureLanAddress],
     logger: { log() {}, warn() {}, error() {} }
@@ -583,6 +592,14 @@ async function main() {
     assert.ok(welcome.payload.capabilities.includes('attachment.chunk'))
     assert.ok(welcome.payload.capabilities.includes('attachment.complete'))
     assert.ok(welcome.payload.capabilities.includes('attachment.abort'))
+
+    assert.ok(welcome.payload.capabilities.includes('management.catalog'))
+    const structuredCatalog=await sendEncryptedRequest({socket,session,requestId:'request-management-catalog',method:'management.catalog',params:{section:'providers'}})
+    assert.equal(structuredCatalog.ok,true)
+    assert.equal(JSON.stringify(structuredCatalog).includes('PROVIDER_SECRET'),false)
+    const structuredCreate=await sendEncryptedRequest({socket,session,requestId:'request-management-create',method:'management.mutate',params:{section:'assistants',id:'GatewayAssistant',operation:'create',patch:{name:'Fixture'}}})
+    assert.equal(structuredCreate.ok,true)
+    assert.equal(businessConfig.prompts.GatewayAssistant.name,'Fixture')
 
     assert.ok(welcome.payload.capabilities.includes('business.config.get'))
     assert.ok(welcome.payload.capabilities.includes('business.config.replace'))

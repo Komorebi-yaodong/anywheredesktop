@@ -234,6 +234,7 @@ export function createRemoteGateway({
   uploadManager = null,
   businessConfigService = null,
   mobileWorkspaceService = null,
+  remoteManagementService = null,
   onStatusChanged = null,
   onPairingCreated = null,
   getLanAddresses = getLanIpv4Addresses,
@@ -313,6 +314,8 @@ export function createRemoteGateway({
       'workspace.bootstrap.get', 'workspace.assistants.list', 'workspace.assistant.get', 'workspace.assistant.patch',
       'workspace.project.create', 'workspace.management.catalog.get', 'workspace.management.details.get', 'workspace.management.patch'
     )
+    if (remoteManagementService) capabilities.push('management.catalog', 'management.mutate')
+
     return capabilities
   }
 
@@ -998,6 +1001,15 @@ export function createRemoteGateway({
           result = await updateDeviceProfile(context.device.deviceId, params)
           context.device = { ...context.device, ...result.device }
           break
+        case 'management.catalog':
+          if (!remoteManagementService) throw remoteError('remote_method_unavailable')
+          result = await remoteManagementService.catalog({params})
+          break
+        case 'management.mutate':
+          if (!remoteManagementService) throw remoteError('remote_method_unavailable')
+          result = await remoteManagementService.mutate({deviceId: context.device.deviceId, requestId, params})
+          break
+
         case 'workspace.bootstrap.get':
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
           result = await mobileWorkspaceService.bootstrap({ params })

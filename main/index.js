@@ -66,6 +66,9 @@ import { createRemoteSessionManager } from './core/remote/sessionManager.js'
 import { createRemoteUploadManager } from './core/remote/uploadManager.js'
 import { createRemoteBusinessConfigService } from './core/remote/businessConfig.js'
 import { createMobileWorkspaceService } from './core/remote/mobileWorkspace.js'
+import { createRemoteManagementService } from './core/remote/management.js'
+import { createRemoteSkillManagement } from './core/remote/skillManagement.js'
+import { setCurrentTaskDeviceEnabled } from './core/task_devices.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -90,6 +93,14 @@ const mobileWorkspaceService = createMobileWorkspaceService({
   readLocalProjects: projectsApi.readLocalProjects,
   writeLocalProjects: projectsApi.writeLocalProjects,
   listSkills: (skillPath) => skillApi.listSkills(skillPath)
+})
+
+
+const remoteManagementService = createRemoteManagementService({
+  getConfig: dataApi.getConfig, updateConfig: dataApi.updateConfigWithoutFeatures,
+  readProjects: projectsApi.readLocalProjects,
+  skills: createRemoteSkillManagement({listSkills: skillApi.listSkills, notify: dataApi.notifySkillsUpdated}),
+  setTaskEnabled: setCurrentTaskDeviceEnabled, getTaskDevice: dataApi.getTaskDeviceIdentity
 })
 
 
@@ -118,6 +129,7 @@ const remoteGateway = createRemoteGateway({
   uploadManager: remoteUploadManager,
   businessConfigService: remoteBusinessConfigService,
   mobileWorkspaceService,
+  remoteManagementService,
   onStatusChanged: (status) => {
     for (const item of listWindows('main')) {
       const win = getWindowByRef(item.id)

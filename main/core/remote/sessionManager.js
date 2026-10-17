@@ -297,6 +297,7 @@ export function createRemoteSessionManager({
     if (TERMINAL_EVENTS.has(event)) {
       record.terminal = true
       record.terminalPayload = payload
+      uploadManager?.releaseReservation?.({deviceId:record.deviceId,requestId:record.requestId})?.catch?.(() => {})
       uploadManager?.cleanupRequest?.({
         deviceId: record.deviceId, requestId: record.requestId, windowRef: record.windowRef
       })?.catch?.(() => {})
@@ -509,6 +510,7 @@ export function createRemoteSessionManager({
           publish(record, 'assistant.failed', { code: 'remote_send_queue_limit_reached' })
           throw remoteError('remote_send_queue_limit_reached')
         }
+        if (uploadIds.length) await uploadManager.reserveForRequest?.({deviceId: safeDeviceId, requestId: safeRequestId, uploadIds})
         session.pendingSends.push({ deviceId: safeDeviceId, requestId: safeRequestId, check })
         const result = queueResult(session, record)
         if (!session.activeRequestId) void dispatchNextSend(session)
@@ -786,7 +788,7 @@ export function createRemoteSessionManager({
       ok: true,
       conversationId,
       activeRequestId: session?.activeDeviceId === deviceId ? session.activeRequestId || '' : '',
-      items: pending.filter((item) => item.deviceId === deviceId).map((item, index) => ({ requestId: item.requestId, position: index + 1 }))
+      items: pending.filter((item) => item.deviceId === deviceId).map((item, index) => ({ requestId: item.requestId, position: index + 1, text: text(requests.get(requestKey(deviceId,item.requestId))?.body,240) }))
     }
   }
 
@@ -800,6 +802,7 @@ export function createRemoteSessionManager({
     const index = session.pendingSends.findIndex((item) => item.deviceId === deviceId && item.requestId === queuedRequestId)
     if (index < 0) throw remoteError('remote_send_queue_item_not_found')
     session.pendingSends.splice(index, 1)
+    uploadManager?.releaseReservation?.({deviceId, requestId: queuedRequestId})?.catch?.(() => {})
     const record = requests.get(requestKey(deviceId, queuedRequestId))
     if (record && !record.terminal) publish(record, 'assistant.cancelled', { code: 'remote_send_queue_removed' })
     return { ok: true, conversationId, requestId: queuedRequestId, removed: true }

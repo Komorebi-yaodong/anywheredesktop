@@ -163,7 +163,7 @@ export function createRemoteUploadManager({
     const safeUploadId = identifier(uploadId, 'uploadId')
     const record = uploads.get(safeUploadId)
     if (!record || record.deviceId !== safeDeviceId) throw remoteError('remote_upload_not_found')
-    if (record.expiresAtMs <= now()) throw remoteError('remote_upload_expired')
+    if (record.expiresAtMs <= now() && !record.reservation) throw remoteError('remote_upload_expired')
     return record
   }
 
@@ -181,7 +181,7 @@ export function createRemoteUploadManager({
     if (cleanupPromise) return cleanupPromise
     cleanupPromise = (async () => {
       const current = now()
-      const expired = [...uploads.values()].filter((record) => !Number.isFinite(record.expiresAtMs) || record.expiresAtMs <= current)
+      const expired = [...uploads.values()].filter((record) => !Number.isFinite(record.expiresAtMs) || record.expiresAtMs <= current && !record.reservation)
       await Promise.all(expired.map((record) => removeRecord(record)))
       return { ok: true, removed: expired.length }
     })().finally(() => { cleanupPromise = null })
@@ -329,6 +329,22 @@ export function createRemoteUploadManager({
     return { ok: true, uploadId: record.uploadId }
   }
 
+  async function reserveForRequest({deviceId, requestId, uploadIds = []}) {
+    await ensureInitialized()
+    await cleanupExpired()
+    const device = identifier(deviceId, 'deviceId'), request = identifier(requestId, 'requestId')
+    if (!Array.isArray(uploadIds) || uploadIds.length > 16 || new Set(uploadIds).size !== uploadIds.length) throw remoteError('remote_upload_ids_invalid')
+    const records = uploadIds.map(uploadId => getOwnedRecord(device, uploadId))
+    if (records.some(record => record.state !== 'completed' || record.authorization || record.reservation && record.reservation.requestId !== request)) throw remoteError('remote_upload_unavailable')
+    for (const record of records) {record.reservation = {deviceId: device, requestId: request}; touch(record)}
+    return {ok: true}
+  }
+  async function releaseReservation({deviceId, requestId}) {
+    for (const record of uploads.values()) if (record.reservation?.deviceId === deviceId && record.reservation.requestId === requestId) {record.reservation = null; touch(record)}
+    return {ok: true}
+  }
+
+
   async function authorizeForRequest({ deviceId, requestId, windowRef, uploadIds = [] } = {}) {
     await ensureInitialized()
     await cleanupExpired()
@@ -340,9 +356,10 @@ export function createRemoteUploadManager({
     if (new Set(normalizedIds).size !== normalizedIds.length) throw remoteError('remote_upload_ids_invalid')
     const records = normalizedIds.map((uploadId) => getOwnedRecord(safeDeviceId, uploadId))
     for (const record of records) {
-      if (record.state !== 'completed' || record.authorization) throw remoteError('remote_upload_unavailable')
+      if (record.state !== 'completed' || record.authorization || record.reservation && record.reservation.requestId !== safeRequestId) throw remoteError('remote_upload_unavailable')
     }
     for (const record of records) {
+      record.reservation = null
       record.authorization = { deviceId: safeDeviceId, requestId: safeRequestId, windowRef: safeWindowRef }
       touch(record)
     }
@@ -469,6 +486,9 @@ export function createRemoteUploadManager({
     chunk: (input) => queued(() => chunk(input)),
     complete: (input) => queued(() => complete(input)),
     abort: (input) => queued(() => abort(input)),
+    reserveForRequest: input => queued(() => reserveForRequest(input)),
+    releaseReservation: input => queued(() => releaseReservation(input)),
+
     authorizeForRequest: (input) => queued(() => authorizeForRequest(input)),
     releaseRequest: (input) => queued(() => releaseRequest(input)),
     cleanupRequest: (input) => queued(() => cleanupRequest(input)),

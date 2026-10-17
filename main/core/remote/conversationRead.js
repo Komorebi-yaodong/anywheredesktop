@@ -89,6 +89,7 @@ export function createRemoteConversationReadService({
   listLocalConversations,
   readLocalProjects,
   loadRemoteConversationPage,
+  registerMedia = null,
   listWindows
 } = {}) {
   if (typeof getConfig !== 'function') throw new Error('remote_read_get_config_required')
@@ -216,8 +217,9 @@ export function createRemoteConversationReadService({
     }
   }
 
-  async function listMessages(params = {}) {
+  async function listMessages({ deviceId, params = {} } = {}) {
     assertAllowedParameters(params, ['conversationId', 'beforeUiOrder', 'pageSize'])
+    const safeDeviceId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
     const conversationId = normalizeIdentifier(params.conversationId, 'conversationId', { minLength: 16, maxLength: 160 })
     if (conversationId.startsWith('legacy_')) throw remoteError('remote_conversation_migration_required')
     const directory = await getLocalDirectory()
@@ -226,7 +228,10 @@ export function createRemoteConversationReadService({
       dirPath: directory,
       conversationId,
       beforeUiOrder: params.beforeUiOrder,
-      pageSize: params.pageSize
+      pageSize: params.pageSize,
+      registerMedia: typeof registerMedia === 'function'
+        ? (source) => registerMedia({ deviceId: safeDeviceId, conversationId, source })
+        : null
     })
   }
 

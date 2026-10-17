@@ -456,6 +456,70 @@ function createRemoteAttachmentResolver(db) {
   }
 }
 
+const REMOTE_MEDIA_EXTENSION_PATTERN = /\.(?:png|jpe?g|webp|gif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg)(?:[?#].*)?$/i
+
+function remoteMediaReference(value, registerMedia) {
+  const source = typeof value === 'string' ? value.trim().replace(/^['"]|['"]$/g, '') : ''
+  if (!source || !REMOTE_MEDIA_EXTENSION_PATTERN.test(source) || typeof registerMedia !== 'function') return ''
+  try {
+    const media = registerMedia(source)
+    return typeof media?.uri === 'string' && /^anywhere-media:\/\/[A-Za-z0-9_-]{16,160}(?:\?type=(?:image|video|audio))?$/.test(media.uri) ? media.uri : ''
+  } catch {
+    return ''
+  }
+}
+
+function sanitizeRemoteText(value, context = {}) {
+  const source = typeof value === 'string' ? value : ''
+  const registerMedia = context.registerMedia
+  const replaceMedia = (rawPath) => remoteMediaReference(rawPath, registerMedia) || '[local-media-unavailable]'
+  const trim = source.trim()
+  const direct = remoteMediaReference(trim, registerMedia)
+  if (direct) return direct
+  let result = source
+  // Markdown image paths are already renderable on Desktop; replace only the
+  // source URL, keeping the user-authored alt text and never emitting the path.
+  result = result.replace(/(!\[[^\]\r\n]*\]\(\s*)(['"]?)(?:file:\/\/\/)?([A-Za-z]:[\\/][^\)\r\n'"]+)(\2\s*\))/gi, (_match, prefix, quote, localPath, suffix) => `${prefix}${quote}${replaceMedia(localPath)}${suffix}`)
+  // HTML media is used by the chat renderer for video/audio. Its src becomes
+  // the same opaque Mobile-only scheme.
+  result = result.replace(/(<(?:img|source|video|audio)\b[^>]*?\bsrc\s*=\s*['"])(?:file:\/\/\/)?([A-Za-z]:[\\/][^'">\r\n]+)(['"])/gi, (_match, prefix, localPath, suffix) => `${prefix}${replaceMedia(localPath)}${suffix}`)
+  // A plain local media reference is useful for structured image_url content.
+  const plain = remoteMediaReference(result, registerMedia)
+  if (plain) return plain
+  // Any remaining Windows/file URI is path-bearing content. Never expose it.
+  return result
+    .replace(/file:\/\/\/[^\s'"<>\])]+/gi, '[local-file-hidden]')
+    .replace(/[A-Za-z]:[\\/][^\s'"<>\])]+/g, '[local-file-hidden]')
+}
+
+function safeRemoteAvatar(value) {
+  const source = typeof value === 'string' ? value.trim() : ''
+  return /^https:\/\/[^\s?#]+(?:\?[^\s#]*)?$/i.test(source) ? source.slice(0, 2048) : ''
+}
+
+function safeRemoteAssistant(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return {
+    name: normalizeText(source.name).slice(0, 160),
+    avatarUrl: safeRemoteAvatar(source.icon)
+  }
+}
+
+
+function sanitizeRemoteTasks(value) {
+  if (!Array.isArray(value) || value.length > 128) return []
+  const status = (input) => ['pending', 'in_progress', 'completed'].includes(input) ? input : 'pending'
+  return value.map((task) => ({
+    content: normalizeText(task?.content).slice(0, 1200),
+    status: status(normalizeText(task?.status)),
+    steps: Array.isArray(task?.steps) ? task.steps.slice(0, 64).map((step) => ({
+      content: normalizeText(step?.content).slice(0, 1200),
+      status: status(normalizeText(step?.status))
+    })).filter((step) => step.content) : []
+  })).filter((task) => task.content)
+}
+
+
 function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
   if (typeof value === 'string') {
     const parsed = parseDataUrl(value)
@@ -467,8 +531,7 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
         sha256: parsed.sha256
       }
     }
-    if (/^file:/i.test(value)) return '[local-file-hidden]'
-    return value
+    return sanitizeRemoteText(value, context)
   }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeRemotePayload(item, resolveAttachment, context))
@@ -491,24 +554,45 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
     const next = {}
     for (const [key, item] of Object.entries(value)) {
       if (REMOTE_REDACTED_KEYS.has(String(key).toLowerCase())) continue
-      next[key] = sanitizeRemotePayload(item, resolveAttachment, { nameHint })
+      next[key] = sanitizeRemotePayload(item, resolveAttachment, { ...context, nameHint })
     }
     return next
   }
   return value
 }
 
-function sanitizeRemoteToolCalls(toolCalls = []) {
+function sanitizeRemoteToolCalls(toolCalls = [], context = {}) {
   return (Array.isArray(toolCalls) ? toolCalls : [])
-    .map((call) => ({
-      id: normalizeText(call?.id).trim(),
-      name: normalizeText(call?.name || call?.function?.name).trim(),
-      status: normalizeText(call?.approvalStatus || call?.status).trim()
-    }))
+    .slice(0, 32)
+    .map((call) => {
+      const source = call && typeof call === 'object' ? call : {}
+      const rawArgs = source.args ?? source.arguments ?? source.function?.arguments ?? {}
+      const rawResult = Object.hasOwn(source, 'result') ? source.result : source.content
+      const choiceQuestions = source.choiceData?.questions
+      return {
+        id: normalizeText(source.id || source.tool_call_id).trim(),
+        name: normalizeText(source.name || source.function?.name).trim(),
+        status: normalizeText(source.approvalStatus || source.status).trim(),
+        arguments: sanitizeRemotePayload(rawArgs, () => ({ type: 'attachment', unavailable: true }), context),
+        ...(Object.hasOwn(source, 'result') || Object.hasOwn(source, 'content')
+          ? { result: sanitizeRemotePayload(rawResult, () => ({ type: 'attachment', unavailable: true }), context) }
+          : {}),
+        ...(Array.isArray(choiceQuestions)
+          ? { choice: { questions: choiceQuestions.map((question) => ({
+            question: normalizeText(question?.question).slice(0, 1200),
+            header: normalizeText(question?.header).slice(0, 80),
+            options: Array.isArray(question?.options) ? question.options.slice(0, 12).map((option) => ({
+              label: normalizeText(option?.label).slice(0, 240),
+              description: normalizeText(option?.description).slice(0, 600)
+            })).filter((option) => option.label) : []
+          })).filter((question) => question.question && question.options.length) } }
+          : {})
+      }
+    })
     .filter((call) => call.id || call.name)
 }
 
-function toRemoteUiMessage(db, row, resolveAttachment) {
+function toRemoteUiMessage(db, row, resolveAttachment, context = {}) {
   let payload = {}
   try {
     payload = JSON.parse(row.payload_json)
@@ -517,16 +601,16 @@ function toRemoteUiMessage(db, row, resolveAttachment) {
   }
   const role = normalizeText(row.role_code || payload?.role, 'user')
   const remotePayload = {
-    content: sanitizeRemotePayload(payload.content, resolveAttachment),
-    reasoningContent: normalizeText(payload.reasoning_content),
-    summary: normalizeText(payload.summary),
+    content: sanitizeRemotePayload(payload.content, resolveAttachment, context),
+    reasoningContent: sanitizeRemoteText(normalizeText(payload.reasoning_content), context),
+    summary: sanitizeRemoteText(normalizeText(payload.summary), context),
     summaryPrefix: normalizeText(payload.summaryPrefix),
     timestamp: normalizeText(payload.timestamp || payload.createdAt),
     completedTimestamp: normalizeText(payload.completedTimestamp || payload.updatedAt),
     aiName: normalizeText(payload.aiName),
     voiceName: normalizeText(payload.voiceName),
     status: normalizeText(payload.status),
-    toolCalls: sanitizeRemoteToolCalls(payload.tool_calls)
+    toolCalls: sanitizeRemoteToolCalls(payload.tool_calls, context)
   }
   if (role === 'compaction') {
     remotePayload.compaction = {
@@ -1309,7 +1393,8 @@ export async function loadRemoteConversationPage({
   dirPath,
   conversationId,
   beforeUiOrder = null,
-  pageSize = 50
+  pageSize = 50,
+  registerMedia = null
 } = {}) {
   const rawDir = normalizeText(dirPath).trim()
   if (!rawDir) throw new Error('conversation_local_dir_required')
@@ -1344,17 +1429,23 @@ export async function loadRemoteConversationPage({
             ORDER BY ui_order DESC LIMIT ?
           ) ORDER BY ui_order
         `).all(safeBefore, limit)
-    const systemRows = safeBefore == null
-      ? db.prepare(`
-          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
-          FROM ui_messages WHERE role_code = 'system' ORDER BY ui_order
-        `).all()
-      : []
-    const rows = [...systemRows, ...pageRows]
+    // System prompt is session configuration, not a chat bubble. It remains
+    // available only through conversation.config.get/patch for Mobile.
+    const rows = pageRows
     const resolveAttachment = createRemoteAttachmentResolver(db)
+    const context = { registerMedia: typeof registerMedia === 'function' ? registerMedia : null }
     const messages = rows
       .filter((item) => item.role_code !== 'tool')
-      .map((item) => toRemoteUiMessage(db, item, resolveAttachment))
+      .map((item) => toRemoteUiMessage(db, item, resolveAttachment, context))
+    const taskState = db.prepare("SELECT value_json FROM session_state WHERE state_key = 'taskList' LIMIT 1").get()
+    const modelState = db.prepare("SELECT value_json FROM session_state WHERE state_key = 'model' LIMIT 1").get()
+    const promptState = db.prepare("SELECT value_json FROM session_state WHERE state_key = 'currentPromptConfig' LIMIT 1").get()
+    let tasks = []
+    let model = ''
+    let assistant = { name: '', avatarUrl: '' }
+    try { tasks = sanitizeRemoteTasks(taskState ? hydrateAttachments(db, JSON.parse(taskState.value_json)) : []) } catch { tasks = [] }
+    try { model = normalizeText(modelState ? JSON.parse(modelState.value_json) : '').slice(0, 320) } catch { model = '' }
+    try { assistant = safeRemoteAssistant(promptState ? hydrateAttachments(db, JSON.parse(promptState.value_json)) : {}) } catch { assistant = { name: '', avatarUrl: '' } }
     const oldestOrder = pageRows.length > 0
       ? Math.min(...pageRows.map((item) => Number(item.ui_order) || 0))
       : 0
@@ -1374,9 +1465,12 @@ export async function loadRemoteConversationPage({
         revision: Number(row.revision) || 0,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        model,
+        assistant,
         project: project ? { projectId: project.id, name: project.name } : null
       },
       messages,
+      tasks,
       page: {
         pageSize: limit,
         nextBeforeUiOrder: hasMore ? oldestOrder : null,

@@ -75,16 +75,24 @@ function safeSocketClose(socket, code = 1000, reason = '') {
   }
 }
 
+function normalizeLanIpv4Addresses(value = []) {
+  const values = Array.isArray(value) ? value : []
+  return [...new Set(values
+    .map((item) => typeof item === 'string' ? item.trim() : '')
+    .filter((address) => isIP(address) === 4 && !address.startsWith('169.254.')))]
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+}
+
+
 function getLanIpv4Addresses() {
-  const addresses = new Set()
+  const addresses = []
   for (const items of Object.values(os.networkInterfaces())) {
     for (const item of items || []) {
-      if (!item || item.family !== 'IPv4' || item.internal || !item.address) continue
-      if (item.address.startsWith('169.254.')) continue
-      addresses.add(item.address)
+      if (!item || (item.family !== 'IPv4' && item.family !== 4) || item.internal || !item.address) continue
+      addresses.push(item.address)
     }
   }
-  return [...addresses].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+  return normalizeLanIpv4Addresses(addresses)
 }
 
 function normalizeFingerprint(value = '') {
@@ -231,6 +239,7 @@ export function createRemoteGateway({
   getAppVersion = () => '',
   getDesktopDisplayName = async () => '',
   conversationReadService = null,
+  getConversationMedia = null,
   sessionManager = null,
   uploadManager = null,
   businessConfigService = null,
@@ -309,12 +318,13 @@ export function createRemoteGateway({
     const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get']
     if (conversationReadService) {
       capabilities.push('conversation.list', 'conversation.messages.list', 'conversation.windows.list')
+      if (typeof getConversationMedia === 'function') capabilities.push('conversation.media.get')
     }
     if (activeSessionManager) {
       capabilities.push(
         'remote.device.profile.update',
         'conversation.assistants.list', 'conversation.create',
-        'conversation.send', 'conversation.queue.list', 'conversation.queue.remove',
+        'conversation.send', 'conversation.queue.list', 'conversation.queue.remove', 'conversation.choice.submit',
         'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
         'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask',
         'conversation.rename', 'conversation.delete',
@@ -326,7 +336,7 @@ export function createRemoteGateway({
     if (mobileWorkspaceService) capabilities.push(
       'workspace.bootstrap.get', 'workspace.assistants.list', 'workspace.assistant.get', 'workspace.assistant.patch',
       'workspace.agent.catalog', 'workspace.agent.get', 'workspace.agent.mutate', 'workspace.agent.routes.mutate', 'workspace.agent.tags.mutate',
-      'workspace.provider.catalog', 'workspace.provider.get', 'workspace.provider.mutate', 'workspace.provider.folders.mutate', 'workspace.provider.models.fetch',
+      'workspace.provider.catalog', 'workspace.provider.get', 'workspace.provider.mutate', 'workspace.provider.folders.mutate', 'workspace.provider.order.mutate', 'workspace.provider.models.fetch',
       'workspace.project.create', 'workspace.project.update', 'workspace.project.remove', 'workspace.management.catalog.get', 'workspace.management.details.get', 'workspace.management.patch'
     )
     if (remoteManagementService) capabilities.push('management.catalog', 'management.mutate')
@@ -697,6 +707,10 @@ export function createRemoteGateway({
 
   function getStatus() {
     const devicesOnline = [...activeSocketsByDeviceId.values()].filter((sockets) => sockets.size > 0).length
+    const lanAddresses = normalizeLanIpv4Addresses(getLanAddresses())
+    const certificateCoveredLanAddresses = runtime.running && runtime.certificateFingerprint
+      ? lanAddresses.filter((address) => certificateCoversHost(tlsCache?.cert || '', address))
+      : []
     return {
       ...clone(runtime),
       ...clone(configuredSettings),
@@ -710,6 +724,11 @@ export function createRemoteGateway({
       running: runtime.running,
       enabled: configuredSettings.enabled,
       devicesOnline,
+      // UI-facing, read-only diagnostics: these never affect the QR endpoint
+      // selection nor the persisted Remote configuration.
+      lanAddresses,
+      certificateCoveredLanAddresses,
+      configuredSettings: sanitizeRemoteSettingsForConfig(configuredSettings),
       protocolVersion: REMOTE_PROTOCOL_VERSION
     }
   }
@@ -1081,6 +1100,11 @@ export function createRemoteGateway({
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
           result = await mobileWorkspaceService.providerFoldersMutate({ deviceId: context.device.deviceId, requestId, params })
           break
+        case 'workspace.provider.order.mutate':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.providerOrderMutate({ deviceId: context.device.deviceId, requestId, params })
+          break
+
         case 'workspace.provider.models.fetch':
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
           result = await mobileWorkspaceService.providerModelsFetch({ params })
@@ -1158,8 +1182,13 @@ export function createRemoteGateway({
           break
         case 'conversation.messages.list':
           if (!conversationReadService) throw remoteError('remote_method_unavailable')
-          result = await conversationReadService.listMessages(params)
+          result = await conversationReadService.listMessages({ deviceId: context.device.deviceId, params })
           break
+        case 'conversation.media.get':
+          if (typeof getConversationMedia !== 'function') throw remoteError('remote_method_unavailable')
+          result = await getConversationMedia({ deviceId: context.device.deviceId, params })
+          break
+
         case 'conversation.windows.list':
           if (!conversationReadService) throw remoteError('remote_method_unavailable')
           result = conversationReadService.getWindows(params)
@@ -1171,6 +1200,12 @@ export function createRemoteGateway({
         case 'conversation.queue.remove':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')
           result = activeSessionManager.removeQueuedSend({ deviceId: context.device.deviceId, params })
+          break
+
+
+        case 'conversation.choice.submit':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.submitChoice({ deviceId: context.device.deviceId, params })
           break
 
 

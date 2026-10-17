@@ -137,6 +137,28 @@ assert.equal(createdProvider.provider.name, 'Mobile Provider')
 assert.equal(config.providers['mobile-provider'].retryCount, 3)
 assert.deepEqual(config.providers['mobile-provider'].modelList, [])
 
+config.providers = {
+  alpha: { name: 'Alpha', enable: true, folderId: 'folder-a' },
+  beta: { name: 'Beta', enable: true, folderId: 'folder-a' },
+  gamma: { name: 'Gamma', enable: true, folderId: '' },
+  legacy: { name: 'Legacy', enable: true, folderId: 'missing-folder' }
+}
+config.providerFolders = { 'folder-a': { name: 'A', collapsed: false } }
+config.providerOrder = ['alpha', 'beta', 'gamma', 'legacy']
+await service.providerOrderMutate({ deviceId: 'device-mobile-workspace-0001', requestId: 'request-provider-order-0001', params: { folderId: 'folder-a', providerIds: ['beta', 'alpha'] } })
+assert.deepEqual(config.providerOrder, ['beta', 'alpha', 'gamma', 'legacy'])
+await service.providerOrderMutate({ deviceId: 'device-mobile-workspace-0001', requestId: 'request-provider-order-root-0001', params: { folderId: '', providerIds: ['legacy', 'gamma'] } })
+assert.deepEqual(config.providerOrder, ['beta', 'alpha', 'legacy', 'gamma'])
+await assert.rejects(service.providerOrderMutate({ deviceId: 'device-mobile-workspace-0001', requestId: 'request-provider-order-cross-folder-0001', params: { folderId: 'folder-a', providerIds: ['alpha', 'gamma'] } }), { code: 'remote_provider_order_invalid' })
+
+
+config.providers = {
+  p: { name: '安全 Provider', enable: true, url: 'https://provider.example.test/v1', api_key: 'PRIVATE_PROVIDER_KEY_1,PRIVATE_PROVIDER_KEY_2', apiType: 'chat_completions', headers: { 'X-Private': 'PRIVATE_HEADER_VALUE' }, retryCount: 3, modelList: ['model-z'], folderId: '' }
+}
+config.providerOrder = ['p']
+config.providerFolders = {}
+
+
 const catalog = await service.managementCatalog({ params: {} })
 assert.deepEqual(catalog.sections.map((item) => item.id), ['assistants', 'providers', 'mcp', 'skills', 'tasks', 'general', 'about'])
 assert.equal(JSON.stringify(catalog).includes('PRIVATE'), false)

@@ -66,9 +66,11 @@ import { createRemoteSessionManager } from './core/remote/sessionManager.js'
 import { createRemoteUploadManager } from './core/remote/uploadManager.js'
 import { createRemoteBusinessConfigService } from './core/remote/businessConfig.js'
 import { createMobileWorkspaceService } from './core/remote/mobileWorkspace.js'
+import { createRemoteConversationMediaService } from './core/remote/conversationMedia.js'
 import { createRemoteManagementService } from './core/remote/management.js'
 import { createRemoteSkillManagement } from './core/remote/skillManagement.js'
 import { setCurrentTaskDeviceEnabled } from './core/task_devices.js'
+import { getQuickAssistantWeight, recordQuickAssistantUsage } from './core/quickAssistantUsage.js'
 
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
@@ -146,11 +148,14 @@ const remoteUploadManager = createRemoteUploadManager({
 })
 
 
+const remoteConversationMediaService = createRemoteConversationMediaService()
+
 const remoteConversationReadService = createRemoteConversationReadService({
   getConfig: dataApi.getConfig,
   listLocalConversations: conversationApi.listLocalConversations,
   readLocalProjects: projectsApi.readLocalProjects,
   loadRemoteConversationPage: conversationApi.loadRemoteConversationPage,
+  registerMedia: remoteConversationMediaService.register,
   listWindows
 })
 
@@ -164,6 +169,7 @@ const remoteGateway = createRemoteGateway({
   getAppVersion: () => app.getVersion(),
   getDesktopDisplayName: remoteDesktopDisplayName,
   conversationReadService: remoteConversationReadService,
+  getConversationMedia: (input) => remoteConversationMediaService.get(input),
   uploadManager: remoteUploadManager,
   businessConfigService: remoteBusinessConfigService,
   mobileWorkspaceService,
@@ -187,9 +193,19 @@ const remoteSessionManager = createRemoteSessionManager({
   listWindows,
   openWindow,
   getWindowByRef,
+  readLocalProjects: projectsApi.readLocalProjects,
   dispatchRemoteCommandToWindow,
   revealRemoteConversationWindow,
   uploadManager: remoteUploadManager,
+  recordAssistantUsage: async (promptKey) => {
+    const current = await dataApi.getConfig()
+    const config = current?.config && typeof current.config === 'object' ? current.config : {}
+    const prompt = config?.prompts?.[promptKey]
+    if (!prompt || prompt.enable === false) return
+    const next = structuredClone(config)
+    next.desktop = { ...next.desktop, quickAssistantUsage: recordQuickAssistantUsage(next.desktop?.quickAssistantUsage, promptKey) }
+    await dataApi.updateConfigWithoutFeatures({ config: next })
+  },
   broadcastToDevice: (deviceId, event, payload) => remoteGateway.sendEventToDevice(deviceId, event, payload)
 })
 remoteGateway.setSessionManager(remoteSessionManager)

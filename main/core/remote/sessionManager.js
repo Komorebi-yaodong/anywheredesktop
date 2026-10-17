@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { normalizeIdentifier, remoteError } from './protocol.js'
+import { getQuickAssistantWeight } from '../quickAssistantUsage.js'
 
 const REQUEST_TTL_MS = 30 * 60 * 1000
 const MAX_REQUESTS = 256
@@ -11,7 +12,7 @@ const TERMINAL_EVENTS = new Set([
 ])
 const RENDERER_EVENTS = new Set([
   'conversation.command.acknowledged', 'assistant.started', 'assistant.delta',
-  'conversation.compact.progress', ...TERMINAL_EVENTS
+  'conversation.choice.required', 'conversation.tasks.updated', 'conversation.compact.progress', ...TERMINAL_EVENTS
 ])
 const PATH_KEYS = new Set([
   'path', 'filepath', 'file_path', 'dirpath', 'dir_path', 'dbfile', 'db_file',
@@ -123,6 +124,58 @@ function sanitizeConfigResult(source = {}) {
 }
 
 
+function sanitizeTasks(value) {
+  if (!Array.isArray(value) || value.length > 128) return []
+  const status = (input) => ['pending', 'in_progress', 'completed'].includes(input) ? input : 'pending'
+  return value.map((task) => ({
+    content: text(task?.content, 1200).trim(),
+    status: status(text(task?.status, 32)),
+    steps: Array.isArray(task?.steps) ? task.steps.slice(0, 64).map((step) => ({
+      content: text(step?.content, 1200).trim(),
+      status: status(text(step?.status, 32))
+    })).filter((step) => step.content) : []
+  })).filter((task) => task.content)
+}
+
+
+function sanitizeChoiceQuestions(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 12) return []
+  return value.map((question) => {
+    const source = object(question)
+    const options = Array.isArray(source.options) ? source.options.slice(0, 12).map((option) => ({
+      label: text(option?.label, 240).trim(),
+      description: text(option?.description, 600).trim()
+    })).filter((option) => option.label) : []
+    return {
+      question: text(source.question, 1200).trim(),
+      header: text(source.header, 80).trim(),
+      options
+    }
+  }).filter((question) => question.question && question.options.length > 0)
+}
+
+function normalizeChoiceResponses(value, questions) {
+  if (!Array.isArray(value) || value.length !== questions.length || questions.length === 0) throw remoteError('remote_choice_invalid')
+  return value.map((response, index) => {
+    const source = object(response)
+    const type = text(source.type, 16)
+    const question = questions[index]
+    if (Number(source.questionIndex) !== index || !['options', 'custom', 'discuss'].includes(type)) throw remoteError('remote_choice_invalid')
+    if (type === 'options') {
+      const selected = stringArray(source.selected, 'selected').slice(0, 1)
+      if (selected.length !== 1 || !question.options.some((option) => option.label === selected[0])) throw remoteError('remote_choice_invalid')
+      return { questionIndex: index, type, selected, question: question.question }
+    }
+    if (type === 'custom') {
+      const customText = text(source.customText, 4096).trim()
+      if (!customText) throw remoteError('remote_choice_invalid')
+      return { questionIndex: index, type, customText, question: question.question }
+    }
+    return { questionIndex: index, type, question: question.question }
+  })
+}
+
+
 function sanitizeEvent(event, payload) {
   const source = object(payload)
   if (event === 'assistant.delta') return {
@@ -135,6 +188,11 @@ function sanitizeEvent(event, payload) {
     code: /^remote_[a-z0-9_]+$/.test(source.code) ? source.code : 'remote_operation_failed'
   }
   if (event === 'assistant.started') return { startedAt: text(source.startedAt, 80) }
+  if (event === 'conversation.choice.required') return {
+    toolCallId: text(source.toolCallId, 160),
+    questions: sanitizeChoiceQuestions(source.questions)
+  }
+  if (event === 'conversation.tasks.updated') return { tasks: sanitizeTasks(source.tasks) }
   if (event === 'conversation.config.result') return sanitizeConfigResult(source)
 
   if (event === 'conversation.compact.progress') return {
@@ -159,12 +217,12 @@ function sanitizeEvent(event, payload) {
 /** Main-process routing only. Renderer remains the sole conversation writer/lease holder. */
 export function createRemoteSessionManager({
   getConfig, openConversation, listWindows, openWindow, getWindowByRef,
-  dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice,
-  uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null
+  readLocalProjects = async () => ({ projects: [] }), dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice,
+  recordAssistantUsage = async () => {}, uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null
 } = {}) {
   for (const [name, value] of Object.entries({
-    getConfig, openConversation, listWindows, openWindow, getWindowByRef,
-    dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice
+    getConfig, openConversation, listWindows, openWindow, getWindowByRef, readLocalProjects,
+    dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice, recordAssistantUsage
   })) {
     if (typeof value !== 'function') throw new Error(`remote_session_${name}_required`)
   }
@@ -209,7 +267,8 @@ export function createRemoteSessionManager({
 
   function remember(conversationId, item) {
     const current = sessions.get(conversationId)
-    const session = current || { conversationId, activeRequestId: '', activeDeviceId: '', pendingSends: [] }
+    const session = current || { conversationId, activeRequestId: '', activeDeviceId: '', pendingSends: [], pendingChoices: new Map() }
+    if (!(session.pendingChoices instanceof Map)) session.pendingChoices = new Map()
     session.windowRef = item.id
     session.hidden = item.remoteHidden === true
     sessions.set(conversationId, session)
@@ -312,6 +371,7 @@ export function createRemoteSessionManager({
   }
 
   function finishClosed(session) {
+    session.pendingChoices?.clear?.()
     if (session.queueTimer) clearTimeout(session.queueTimer)
     session.queueTimer = null
     for (const item of session.pendingSends || []) {
@@ -327,11 +387,31 @@ export function createRemoteSessionManager({
     parameters(params, [])
     const epoch = generation
     assertActive(epoch, id(deviceId, 'deviceId'))
-    const config = await getConfig()
+    const configResult = await getConfig()
     assertActive(epoch, deviceId)
-    return { ok: true, assistants: Object.entries(object(config?.config?.prompts))
-      .filter(([code, prompt]) => code.length > 0 && code.length <= 160 && prompt && typeof prompt === 'object' && prompt.enable !== false)
-      .map(([code]) => ({ code, name: code })) }
+    const config = object(configResult?.config)
+    const prompts = object(config.prompts)
+    const projectData = await readLocalProjects(text(config?.webdav?.localChatPath, 32768)).catch(() => ({ projects: [] }))
+    const projectNames = new Map((Array.isArray(projectData?.projects) ? projectData.projects : []).map((project) => [text(project?.id, 160), text(project?.name, 160)]))
+    const usage = config.desktop?.quickAssistantUsage
+    const assistants = Object.entries(prompts)
+      .filter(([code, prompt]) => code.length > 0 && code.length <= 160 && prompt && typeof prompt === 'object' && prompt.enable !== false && (text(prompt.showMode, 32) || 'window') === 'window')
+      .map(([code, prompt]) => {
+        const source = object(prompt)
+        const projectId = text(source.autoSaveProjectId, 160)
+        return {
+          code,
+          name: text(source.name, 160) || code,
+          icon: /^https:\/\//i.test(text(source.icon, 2048)) ? text(source.icon, 2048) : '',
+          model: text(source.model, 320),
+          defaultProjectName: projectNames.get(projectId) || '',
+          mcpCount: Array.isArray(source.defaultMcpServers) ? source.defaultMcpServers.length : 0,
+          skillCount: Array.isArray(source.skillIds || source.defaultSkills) ? (source.skillIds || source.defaultSkills).length : 0,
+          usageWeight: getQuickAssistantWeight(usage, code)
+        }
+      })
+      .sort((left, right) => right.usageWeight - left.usageWeight || left.name.localeCompare(right.name, 'zh-CN') || left.code.localeCompare(right.code))
+    return { ok: true, assistants }
   }
 
   async function createConversation({ deviceId, requestId, params = {} } = {}) {
@@ -379,6 +459,9 @@ export function createRemoteSessionManager({
         record.conversationId = conversationId
         const result = { ok: true, conversationId, windowId: windowRef, hidden: session.hidden, created: true,
           promptCode, title: text(item.conversationTitle, 240) || `${promptCode} - 新会话` }
+        // Mobile routes use the exact same Desktop-owned seven-day weight as
+        // the quick assistant panel. Recording must never block a valid chat.
+        await recordAssistantUsage(promptCode).catch(() => {})
         publish(record, 'conversation.operation.completed', { operation: 'conversation.create' })
         return result
       } catch (error) {
@@ -809,6 +892,27 @@ export function createRemoteSessionManager({
   }
 
 
+  async function submitChoice({ deviceId, params = {} } = {}) {
+    parameters(params, ['conversationId', 'toolCallId', 'responses'])
+    const conversationId = id(params.conversationId, 'conversationId')
+    const toolCallId = id(params.toolCallId, 'toolCallId')
+    assertActive(generation, deviceId)
+    const session = existingSession(conversationId)
+    if (!session?.activeRequestId || session.activeDeviceId !== deviceId || session.activeOperation !== 'conversation.send') {
+      throw remoteError('remote_choice_not_pending')
+    }
+    const questions = session.pendingChoices?.get(toolCallId)
+    if (!questions) throw remoteError('remote_choice_not_pending')
+    const responses = normalizeChoiceResponses(params.responses, questions)
+    const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+      type: 'conversation.choice.submit', conversationId, toolCallId, responses
+    })
+    if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+    session.pendingChoices.delete(toolCallId)
+    return { ok: true, conversationId, toolCallId, submitted: true }
+  }
+
+
   async function cancel({ deviceId, requestId, params = {} } = {}) {
     parameters(params, ['conversationId'])
     const conversationId = id(params.conversationId, 'conversationId')
@@ -859,6 +963,10 @@ export function createRemoteSessionManager({
     const record = requests.get(requestKey(session.activeDeviceId, data.requestId))
     if (!record || record.terminal) return { ok: false, error: 'remote_renderer_event_request_mismatch' }
     const sanitizedPayload = sanitizeEvent(data.event, data.payload)
+    if (data.event === 'conversation.choice.required') {
+      if (!sanitizedPayload.toolCallId || !sanitizedPayload.questions.length) return { ok: false, error: 'remote_choice_event_invalid' }
+      session.pendingChoices.set(sanitizedPayload.toolCallId, sanitizedPayload.questions)
+    }
     publish(record, data.event, sanitizedPayload)
     if (record.terminal) {
       if (session.activeOperation === 'conversation.delete' && data.event === 'conversation.operation.completed' && sanitizedPayload.deleted) {
@@ -867,6 +975,7 @@ export function createRemoteSessionManager({
       session.activeRequestId = ''
       session.activeDeviceId = ''
       session.activeOperation = ''
+      session.pendingChoices?.clear?.()
       void dispatchNextSend(session)
     }
     return { ok: true }
@@ -955,7 +1064,7 @@ export function createRemoteSessionManager({
 
   return {
     send,
-    listSendQueue, removeQueuedSend,
+    listSendQueue, removeQueuedSend, submitChoice,
     listAssistants, createConversation,
 
     editMessage: (input) => mutate({ ...input, operation: 'conversation.message.edit' }),

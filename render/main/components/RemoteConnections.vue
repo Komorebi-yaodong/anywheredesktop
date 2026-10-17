@@ -19,6 +19,7 @@ const status = ref({
   protocolVersion: 2
 })
 const settings = ref({ enabled: false, host: '0.0.0.0', port: 17860, publicEndpoint: '' })
+const settingsDirty = ref(false)
 const pairing = ref(null)
 const qrZoomVisible = ref(false)
 
@@ -41,6 +42,24 @@ function normalizeSettings(source = {}) {
   }
 }
 
+function applyConfiguredSettings(source = {}, { force = false } = {}) {
+  if (settingsDirty.value && !force) return
+  const persisted = source?.configuredSettings && typeof source.configuredSettings === 'object'
+    ? source.configuredSettings
+    : source
+  settings.value = normalizeSettings(persisted || settings.value)
+  settingsDirty.value = false
+}
+
+const uncoveredLanAddresses = computed(() => {
+  const all = Array.isArray(status.value?.lanAddresses) ? status.value.lanAddresses : []
+  const covered = new Set(Array.isArray(status.value?.certificateCoveredLanAddresses)
+    ? status.value.certificateCoveredLanAddresses
+    : [])
+  return all.filter((address) => !covered.has(address))
+})
+
+
 function statusErrorText(code = '') {
   const map = {
     remote_port_in_use: '端口已被占用，请更换端口后重试。',
@@ -61,7 +80,7 @@ async function refresh() {
       window.api.getRemoteAuditLog()
     ])
     status.value = nextStatus || status.value
-    settings.value = normalizeSettings(nextStatus || settings.value)
+    applyConfiguredSettings(nextStatus || status.value, { force: true })
     devices.value = Array.isArray(deviceResult?.devices) ? deviceResult.devices : []
     auditEntries.value = Array.isArray(auditResult?.entries) ? auditResult.entries.slice(0, 8) : []
   } catch (error) {
@@ -86,7 +105,7 @@ async function saveAndConfigure(enabled = settings.value.enabled) {
       throw new Error(result?.error?.message || result?.status?.lastError || 'remote_start_failed')
     }
     status.value = result.status || status.value
-    settings.value = normalizeSettings(status.value)
+    applyConfiguredSettings(status.value, { force: true })
     pairing.value = null
     await refresh()
     ElMessage.success(next.enabled ? '手机远程服务已启动。' : '手机远程服务已关闭，所有手机连接已断开。')
@@ -173,7 +192,7 @@ async function openDialog() {
   if (!removeStatusListener && window.api?.onRemoteStatusChanged) {
     removeStatusListener = window.api.onRemoteStatusChanged((nextStatus) => {
       status.value = nextStatus || status.value
-      settings.value = normalizeSettings(status.value)
+      applyConfiguredSettings(status.value)
       if (visible.value) {
         window.api.listRemoteDevices().then((result) => {
           devices.value = Array.isArray(result?.devices) ? result.devices : []
@@ -221,7 +240,7 @@ defineExpose({ openDialog })
         </button>
         <div v-show="advancedOpen" class="advanced-body">
           <p>填写 Cloudflare Tunnel、外网穿透或反向代理提供的 HTTPS 地址。</p>
-          <el-input v-model="settings.publicEndpoint" placeholder="https://remote.example.com" :disabled="loading" @change="saveAndConfigure(settings.enabled)" />
+          <el-input v-model="settings.publicEndpoint" placeholder="https://remote.example.com" :disabled="loading" @input="settingsDirty = true" @change="saveAndConfigure(settings.enabled)" />
         </div>
       </section>
 
@@ -245,6 +264,15 @@ defineExpose({ openDialog })
               </el-tooltip>
               <el-button type="primary" size="large" :icon="Refresh" :loading="pairingLoading" @click="createPairing">生成配对二维码</el-button>
             </div>
+          </div>
+
+          <div v-if="status.lanAddresses?.length" class="lan-addresses">
+            <span class="lan-addresses-label">检测到的本地地址</span>
+            <code v-for="address in status.lanAddresses" :key="address" :class="{ covered: status.certificateCoveredLanAddresses?.includes(address) }">
+              https://{{ address }}:{{ status.port }}
+              <em>{{ status.certificateCoveredLanAddresses?.includes(address) ? '证书已覆盖' : '当前证书未覆盖' }}</em>
+            </code>
+            <p v-if="uncoveredLanAddresses.length">未覆盖地址仅供网络诊断，不会进入二维码；为保留已配对手机的证书信任，请使用已覆盖地址或 Tunnel。若要为这些地址换证，请先撤销全部设备后重新生成二维码。</p>
           </div>
 
           <div v-if="pairing" class="pairing-card">
@@ -328,6 +356,14 @@ h3, p { margin: 0; } h3 { font-size: 15px; font-weight: 680; color: var(--el-tex
 .advanced-section { border: 1px solid var(--el-border-color-lighter); border-radius: 11px; overflow: hidden; background: var(--el-fill-color-lighter); }.section-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; color: var(--el-text-color-primary); font: inherit; font-size: 13px; font-weight: 650; border: 0; background: transparent; cursor: pointer; text-align: left; }.section-toggle:hover { background: var(--el-fill-color); }.section-toggle em { margin-left: 6px; color: var(--el-text-color-secondary); font-style: normal; font-weight: 500; }.advanced-body { display: grid; gap: 8px; padding: 0 13px 13px; border-top: 1px solid var(--el-border-color-lighter); }.advanced-body p { padding-top: 8px; }
 .pairing-card { display: grid; grid-template-columns: 240px 1fr; align-items: center; gap: 22px; padding: 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 15px; background: var(--el-fill-color-lighter); }.qr-preview { display: grid; justify-items: center; gap: 7px; padding: 9px; border: 1px solid var(--el-border-color-lighter); border-radius: 12px; background: #fff; cursor: zoom-in; color: var(--el-color-primary); font-size: 12px; font-weight: 600; }.qr-preview img { display: block; width: 220px; height: 220px; image-rendering: pixelated; }.pairing-details { display: grid; align-content: center; justify-items: start; gap: 8px; min-width: 0; }.pairing-kicker { color: var(--el-text-color-secondary); font-size: 12px; }.pairing-details strong { color: var(--el-text-color-primary); font-size: 31px; letter-spacing: 6px; line-height: 1; }.pairing-expiry { color: var(--el-text-color-secondary); font-size: 12px; }.pairing-divider { width: 100%; height: 1px; background: var(--el-border-color-lighter); margin: 3px 0; }.pairing-note { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.55; }.pairing-empty { display: grid; place-items: center; min-height: 105px; border: 1px dashed var(--el-border-color); border-radius: 12px; color: var(--el-text-color-secondary); font-size: 13px; }
 .endpoint-tooltip { display: grid; gap: 7px; max-width: 360px; }.endpoint-tooltip strong { font-size: 12px; }.endpoint-tooltip code { overflow-wrap: anywhere; font-size: 11px; opacity: .9; }
+.lan-addresses { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 11px; background: var(--el-fill-color-lighter); }
+.lan-addresses-label { color: var(--el-text-color-secondary); font-size: 12px; font-weight: 650; }
+.lan-addresses code { display: flex; align-items: center; justify-content: space-between; gap: 10px; overflow-wrap: anywhere; color: var(--el-text-color-secondary); font-size: 11px; }
+.lan-addresses code.covered { color: var(--el-color-success); }
+.lan-addresses em { flex: 0 0 auto; padding: 2px 6px; border-radius: 8px; background: var(--el-fill-color); color: var(--el-text-color-secondary); font-style: normal; font-size: 10px; }
+.lan-addresses code.covered em { background: color-mix(in srgb, var(--el-color-success) 13%, transparent); color: var(--el-color-success); }
+.lan-addresses p { margin: 1px 0 0; color: var(--el-text-color-secondary); font-size: 11px; line-height: 1.55; }
+
 .remote-device-list { display: grid; gap: 7px; }.remote-device-item { display: flex; align-items: center; gap: 10px; min-height: 50px; padding: 9px 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 11px; background: var(--el-fill-color-lighter); }.device-icon-wrap { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 9px; background: color-mix(in srgb, var(--el-color-primary) 10%, transparent); }.device-icon { font-size: 16px; color: var(--el-color-primary); }.device-meta { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }.device-meta strong { white-space: nowrap; font-size: 13px; }.device-meta > span:not(.device-status) { overflow: hidden; color: var(--el-text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.device-status { padding: 2px 6px; border-radius: 99px; background: var(--el-fill-color); color: var(--el-text-color-secondary); font-size: 10px; white-space: nowrap; }.device-status.is-online { background: color-mix(in srgb, var(--el-color-success) 13%, transparent); color: var(--el-color-success); }.device-actions { gap: 3px; flex: 0 0 auto; }
 .audit-section { background: transparent; }.audit-body { display: grid; gap: 7px; padding: 0 13px; max-height: 122px; overflow: hidden; }.audit-body.expanded { padding-bottom: 10px; overflow-y: auto; }.audit-list { display: grid; gap: 0; }.audit-row { display: grid; grid-template-columns: 17px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 34px; padding: 5px 0; border-bottom: 1px solid var(--el-border-color-lighter); }.audit-row:last-child { border-bottom: 0; }.audit-row strong, .audit-row span, .audit-row time { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.audit-row strong { font-weight: 600; }.audit-row span, .audit-row time { color: var(--el-text-color-secondary); }.audit-row time { font-size: 11px; }.qr-fullsize { display: block; width: min(100%, 680px); height: auto; margin: auto; image-rendering: pixelated; background: #fff; }.qr-dialog-note { margin-top: 10px; text-align: center; }
 @media (max-width: 640px) { .remote-service-card, .remote-service-actions { align-items: stretch; flex-direction: column; }.remote-service-actions :deep(.el-input-number) { width: 100%; }.pairing-card { grid-template-columns: 1fr; gap: 14px; }.qr-preview { justify-self: center; }.pairing-details { justify-items: center; text-align: center; }.device-meta { flex-wrap: wrap; }.device-actions { flex-direction: column; align-items: flex-end; }.audit-row { grid-template-columns: 17px minmax(0, 1fr) auto; }.audit-row strong { grid-column: 2; }.audit-row span { grid-column: 2; }.audit-row time { grid-column: 3; grid-row: 1 / span 2; }.pairing-actions :deep(.el-button--large) { font-size: 12px; } }

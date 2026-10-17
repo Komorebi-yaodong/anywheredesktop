@@ -2729,6 +2729,8 @@ const normalizeRemoteCommand = (input = {}) => {
       ? input.uploadIds.filter((item) => typeof item === 'string' && item.trim()).slice(0, 16)
       : [],
     autoApproveTools: input.autoApproveTools === true,
+    toolCallId: typeof input.toolCallId === 'string' ? input.toolCallId.trim() : '',
+    responses: Array.isArray(input.responses) ? input.responses.slice(0, 12) : [],
     targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : ''
   };
 };
@@ -2806,6 +2808,12 @@ const runRemoteConversationCommand = async (input = {}) => {
     }
     return;
   }
+  if (command.type === 'conversation.choice.submit') {
+    if (!isWindowBootstrapped.value || !command.toolCallId || pendingChoices.value.size === 0) return;
+    handleChoiceSubmit(command.toolCallId, { responses: command.responses });
+    return;
+  }
+
   if (!isWindowBootstrapped.value || !command.requestId) {
     emitRemoteRendererEvent('assistant.failed', command, { code: 'remote_renderer_not_ready' });
     return;
@@ -4343,6 +4351,11 @@ const applyTaskList = (tasks) => {
   if (taskList.value.length > 0) {
     taskPanelVisible.value = true;
   }
+  if (activeRemoteCommand.value) {
+    emitRemoteRendererEvent('conversation.tasks.updated', activeRemoteCommand.value, {
+      tasks: taskList.value
+    });
+  }
 };
 
 const serializeTaskListForModel = (tasks) => {
@@ -4372,7 +4385,15 @@ const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
       uiToolCall.result = '等待用户选择...';
     }
     const answer = await new Promise((resolve) => {
+      // Register before notifying Mobile so an immediate tap cannot arrive
+      // before this renderer has a resolver for the tool call.
       pendingChoices.value.set(toolCall.id, resolve);
+      if (activeRemoteCommand.value) {
+        emitRemoteRendererEvent('conversation.choice.required', activeRemoteCommand.value, {
+          toolCallId: toolCall.id,
+          questions
+        });
+      }
     });
     const resultText = buildChoiceResultText(questions, answer);
     if (uiToolCall) {

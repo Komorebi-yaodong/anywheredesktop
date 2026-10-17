@@ -680,6 +680,48 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     return safeFolderId(id)
   }
 
+  async function providerOrderMutate({ deviceId, requestId, params = {} } = {}) {
+    parameters(params, ['folderId', 'providerIds'])
+    const device = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
+    const request = normalizeIdentifier(requestId, 'requestId', { minLength: 8, maxLength: 160 })
+    const folderId = params.folderId === '' ? '' : safeFolderId(params.folderId)
+    if (!Array.isArray(params.providerIds) || params.providerIds.length > 500) throw remoteError('remote_provider_order_invalid')
+    const providerIds = params.providerIds.map(safeProviderId)
+    if (new Set(providerIds).size !== providerIds.length) throw remoteError('remote_provider_order_invalid')
+    const fingerprint = revision({ folderId, providerIds })
+    const key = `${device}:${request}`
+    const previous = requests.get(key)
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
+      return { ...(await previous.promise), duplicate: true }
+    }
+    pruneRequests()
+    const record = { fingerprint, updatedAt: Date.now(), promise: null }
+    record.promise = mutationTail.catch(() => {}).then(async () => {
+      const { config } = await current()
+      const folders = providerFolderSource(config.providerFolders)
+      if (folderId && !Object.hasOwn(folders, folderId)) throw remoteError('remote_provider_folder_not_found')
+      const providers = object(config.providers)
+      const order = orderedProviderIds(config, folders)
+      const groupIdFor = (provider) => {
+        const candidate = text(provider?.folderId, MAX_NAME)
+        return candidate && Object.hasOwn(folders, candidate) ? candidate : ''
+      }
+      const members = order.filter((id) => groupIdFor(providers[id]) === folderId)
+      if (members.length !== providerIds.length || members.some((id) => !providerIds.includes(id))) throw remoteError('remote_provider_order_invalid')
+      const iterator = providerIds[Symbol.iterator]()
+      const next = clone(config)
+      next.providerOrder = order.map((id) => (groupIdFor(providers[id]) === folderId ? iterator.next().value : id))
+      const saved = await updateConfig({ config: next })
+      if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
+      return { ok: true, folderId, providerIds }
+    })
+    mutationTail = record.promise.catch(() => {})
+    requests.set(key, record)
+    try { return await record.promise } catch (error) { requests.delete(key); throw error }
+  }
+
+
   async function providerModelsFetch({ params = {} } = {}) {
     parameters(params, ['id'])
     const id = safeProviderId(params.id)
@@ -1190,5 +1232,5 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     }
   }
 
-  return { bootstrap, profile, assistantList, assistantGet, mutate, agentCatalog, agentGet, agentMutate, agentRoutesMutate, agentTagsMutate, providerCatalog, providerGet, providerMutate, providerFoldersMutate, providerModelsFetch, projectCreate, projectUpdate, projectRemove, managementCatalog, managementDetails, managementPatch }
+  return { bootstrap, profile, assistantList, assistantGet, mutate, agentCatalog, agentGet, agentMutate, agentRoutesMutate, agentTagsMutate, providerCatalog, providerGet, providerMutate, providerFoldersMutate, providerOrderMutate, providerModelsFetch, projectCreate, projectUpdate, projectRemove, managementCatalog, managementDetails, managementPatch }
 }

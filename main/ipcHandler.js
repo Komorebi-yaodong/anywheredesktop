@@ -458,8 +458,16 @@ export function registerIpcHandlers({
   handleInvoke('remote:saveAndConfigure', async (_event, remoteSettings = {}) => {
     const current = await dataApi.getConfig()
     const currentConfig = current?.config && typeof current.config === 'object' ? current.config : {}
-    const candidateSettings = remoteSettings && typeof remoteSettings === 'object' ? remoteSettings : {}
-    const candidateConfig = { ...currentConfig, remote: candidateSettings }
+    const existingSettings = currentConfig.remote && typeof currentConfig.remote === 'object' && !Array.isArray(currentConfig.remote)
+      ? currentConfig.remote
+      : {}
+    // Remote configuration may be submitted by a status refresh or a partial
+    // UI update. Preserve the saved Tunnel endpoint unless the caller
+    // explicitly supplies publicEndpoint (including an intentional empty value).
+    const candidateSettings = remoteSettings && typeof remoteSettings === 'object' && !Array.isArray(remoteSettings)
+      ? remoteSettings
+      : {}
+    const candidateConfig = { ...currentConfig, remote: { ...existingSettings, ...candidateSettings } }
     const status = await remoteGateway.configure(candidateConfig)
     if (candidateSettings.enabled === true && !status.running) {
       await remoteGateway.configure(currentConfig)

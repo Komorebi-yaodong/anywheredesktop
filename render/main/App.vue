@@ -21,6 +21,9 @@ const header_text = ref(t('app.header.chats'));
 
 const config = ref(null);
 const remoteConnectionsRef = ref(null);
+const remoteStatus = ref({ devicesOnline: 0 });
+const hasOnlineMobile = computed(() => Number(remoteStatus.value?.devicesOnline) > 0);
+let removeRemoteStatusListener = null;
 
 function openRemoteConnections() {
   remoteConnectionsRef.value?.openDialog?.();
@@ -870,6 +873,18 @@ const handleDocLinks = (event) => {
 };
 
 onMounted(async () => {
+
+  try {
+    remoteStatus.value = await window.api.getRemoteStatus();
+  } catch {
+    // Remote status is auxiliary UI state; never block the Desktop shell.
+  }
+  if (window.api?.onRemoteStatusChanged) {
+    removeRemoteStatusListener = window.api.onRemoteStatusChanged((nextStatus) => {
+      remoteStatus.value = nextStatus || remoteStatus.value;
+    });
+  }
+
   // 异步获取文档更新时间，获取后会自动更新UI红点
   fetchAllDocsMetadata();
   fetchVersionInfo();
@@ -916,6 +931,10 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+
+  removeRemoteStatusListener?.();
+  removeRemoteStatusListener = null;
+
   if (versionCheckTimer) {
     window.clearInterval(versionCheckTimer);
     versionCheckTimer = null;
@@ -979,8 +998,10 @@ watch(locale, () => {
             </el-button>
           </el-tooltip>
           <el-tooltip content="手机远程" placement="bottom">
-            <el-button class="tab-button" text @click="openRemoteConnections">
-              <el-icon :size="20"><Connection /></el-icon>
+            <el-button class="tab-button" :class="{ 'remote-online': hasOnlineMobile }" text @click="openRemoteConnections">
+              <el-badge :is-dot="hasOnlineMobile" type="success" class="remote-online-badge">
+                <el-icon :size="20"><Connection /></el-icon>
+              </el-badge>
             </el-button>
           </el-tooltip>
         </el-col>
@@ -2055,6 +2076,27 @@ html.dark .tabs-container {
   color: var(--workspace-muted);
   transition: transform 0.18s ease, background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
+
+.tab-button.remote-online,
+.tab-button.remote-online:hover {
+  color: #c96849;
+  background: color-mix(in srgb, #c96849 13%, var(--workspace-surface-strong));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #c96849 24%, transparent), 0 8px 18px -16px rgba(201, 104, 73, 0.58);
+}
+
+html.dark .tab-button.remote-online,
+html.dark .tab-button.remote-online:hover {
+  color: #f3aa8e;
+  background: rgba(201, 104, 73, 0.17);
+  box-shadow: inset 0 0 0 1px rgba(243, 170, 142, 0.26), 0 8px 18px -16px rgba(0, 0, 0, 0.7);
+}
+
+.remote-online-badge :deep(.el-badge__content.is-fixed.is-dot) {
+  top: 4px;
+  right: 5px;
+  box-shadow: 0 0 0 2px var(--workspace-surface);
+}
+
 
 .tab-button:hover {
   transform: translateY(-1px);

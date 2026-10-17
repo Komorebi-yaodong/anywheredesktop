@@ -210,6 +210,12 @@ async function verifyPersistedTlsLifecycle() {
     assert.equal(gateway.getStatus().certificateFingerprint, pinnedFingerprint)
     const tunnel = 'https://tunnel.fixture.test'
     await gateway.configure({ remote: { enabled: true, host: '0.0.0.0', port, publicEndpoint: tunnel } })
+    const retainedTunnelStatus = gateway.getStatus()
+    assert.equal(retainedTunnelStatus.publicEndpoint, tunnel)
+    assert.equal(retainedTunnelStatus.configuredSettings.publicEndpoint, tunnel)
+    assert.deepEqual(retainedTunnelStatus.lanAddresses, ['127.0.0.4'])
+    assert.deepEqual(retainedTunnelStatus.certificateCoveredLanAddresses, [])
+
     const pairing = await gateway.createPairing()
     assert.deepEqual(pairing.endpoints, [tunnel], 'system-TLS tunnels remain independent of the LAN certificate SAN')
     assert.equal(pairing.certificateFingerprint, pinnedFingerprint)
@@ -324,12 +330,13 @@ async function main() {
   })
 
   const writerCommands = []
+  let mobileUsageRecords = 0
   const writerWindows = [
     { id: 'window-fixture', type: 'window', conversationId: 'conversation-gateway-fixture-0001', rendererReady: true, remoteHidden: false },
     { id: 'window-fixture-revoke', type: 'window', conversationId: 'conversation-gateway-fixture-0002', rendererReady: true, remoteHidden: false }
   ]
   const sessionManager = createRemoteSessionManager({
-    getConfig: async () => ({ config: {webdav: {localChatPath: 'PRIVATE_FIXTURE_PATH'}, prompts: {Code: {prompt: 'PRIVATE_FIXTURE_PROMPT'}, Disabled: {enable: false}}} }),
+    getConfig: async () => ({ config: {webdav: {localChatPath: 'PRIVATE_FIXTURE_PATH'}, desktop: {quickAssistantUsage: {}}, prompts: {Code: {name: 'Code Agent', prompt: 'PRIVATE_FIXTURE_PROMPT', model: 'fixture|model', icon: 'https://example.test/code.png', autoSaveProjectId: 'fixture-project', defaultMcpServers: ['mcp-a'], defaultSkills: ['skill-a']}, QuickOnly: {name: 'Quick Only', showMode: 'fastinput'}}} }),
     openConversation: async () => { throw new Error('existing_writer_expected') },
     openWindow: async (type, payload) => {
       assert.equal(payload.remoteCreate, true)
@@ -341,6 +348,8 @@ async function main() {
     },
     listWindows: () => writerWindows,
     getWindowByRef: () => ({ isDestroyed: () => false }),
+    readLocalProjects: async () => ({ projects: [{id: 'fixture-project', name: 'Fixture Project'}] }),
+    recordAssistantUsage: async () => { mobileUsageRecords += 1 },
     revealRemoteConversationWindow: () => ({ ok: true }),
     uploadManager,
     broadcastToDevice: (deviceId, event, payload) => gateway.sendEventToDevice(deviceId, event, payload),
@@ -584,12 +593,18 @@ async function main() {
     })
     assert.ok(welcome.payload.capabilities.includes('conversation.create'))
     const assistantList = await sendEncryptedRequest({socket, session, requestId: 'request-list-assistants', method: 'conversation.assistants.list'})
-    assert.deepEqual(assistantList.result.assistants, [{code: 'Code', name: 'Code'}])
+    assert.deepEqual(assistantList.result.assistants, [{code: 'Code', name: 'Code Agent', icon: 'https://example.test/code.png', model: 'fixture|model', defaultProjectName: 'Fixture Project', mcpCount: 1, skillCount: 1, usageWeight: 0}])
+    assert.equal(JSON.stringify(assistantList).includes('PRIVATE'), false)
     const createdConversation = await sendEncryptedRequest({socket, session, requestId: 'request-create-conversation',
       method: 'conversation.create', params: {promptCode: 'Code'}})
     assert.equal(createdConversation.result.conversationId, 'conversation-created-gateway-fixture')
     assert.equal(createdConversation.result.promptCode, 'Code')
     assert.equal(JSON.stringify(createdConversation.result).includes('PRIVATE'), false)
+    assert.equal(mobileUsageRecords, 1)
+    const duplicateCreate = await sendEncryptedRequest({socket, session, requestId: 'request-create-conversation', method: 'conversation.create', params: {promptCode: 'Code'}})
+    assert.equal(duplicateCreate.result.duplicate, true)
+    assert.equal(mobileUsageRecords, 1)
+
 
 
     assert.ok(welcome.payload.capabilities.includes('conversation.list'))

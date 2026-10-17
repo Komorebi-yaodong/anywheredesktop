@@ -340,6 +340,30 @@ const runtimeMode = computed(() => {
 
 const hasAttachment = computed(() => attachment.value.type !== 'none')
 const attachmentPreviewLabel = computed(() => getAttachmentPreviewLabel(attachment.value))
+
+function getQuickAssistantWeight(promptKey = '') {
+  const usage = currentConfig.value?.desktop?.quickAssistantUsage
+  const activeDates = Array.isArray(usage?.activeDates) ? usage.activeDates.slice(-7) : []
+  const counts = usage?.prompts?.[promptKey] || {}
+  return activeDates.reduce((total, dateKey, index) => {
+    const daysSinceLatestUse = activeDates.length - 1 - index
+    return total + (Math.max(0, Number(counts?.[dateKey]) || 0) * ((7 - daysSinceLatestUse) / 7))
+  }, 0)
+}
+
+async function recordQuickAssistantUsage(promptKey = '') {
+  const result = await window.api.recordQuickAssistantUsage?.(promptKey)
+  if (result?.usage && currentConfig.value) {
+    currentConfig.value = {
+      ...currentConfig.value,
+      desktop: {
+        ...(currentConfig.value.desktop || {}),
+        quickAssistantUsage: result.usage
+      }
+    }
+  }
+}
+
 const candidateSections = computed(() => {
   const prompts = allPrompts.value
   const rawQuery = queryText.value.trim()
@@ -348,7 +372,7 @@ const candidateSections = computed(() => {
   const hasQuery = Boolean(query)
   const attachmentInput = classifyAttachmentInput(attachment.value)
 
-  const sorter = (a, b) => b.score - a.score || a.key.localeCompare(b.key, 'zh-CN')
+  const sorter = (a, b) => b.score - a.score || getQuickAssistantWeight(b.key) - getQuickAssistantWeight(a.key) || a.key.localeCompare(b.key, 'zh-CN')
   const firstPass = []
   const secondPassNameMatches = []
 
@@ -636,6 +660,7 @@ async function openPrompt(prompt) {
       const existingImagePayload = await resolveExistingImagePayloadAsPng(payload)
       if (existingImagePayload) {
         await window.api.openWindow(showMode, existingImagePayload)
+        await recordQuickAssistantUsage(prompt.key)
         await hideQuick()
         return
       }
@@ -650,10 +675,12 @@ async function openPrompt(prompt) {
         source: 'quick-img-helper',
         quickHiddenAt: Date.now()
       })
+      await recordQuickAssistantUsage(prompt.key)
       return
     }
 
     await window.api.openWindow(showMode, payload)
+    await recordQuickAssistantUsage(prompt.key)
     await hideQuick()
   } catch (error) {
     ElMessage.error(getErrorMessage(error))

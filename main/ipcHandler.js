@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
 import { runTaskById } from './core/task_runner.js'
+import { getQuickAssistantWeight, recordQuickAssistantUsage } from './core/quickAssistantUsage.js'
 
 const GITHUB_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/Komorebi-yaodong/anywheredesktop/main/package.json'
 const GITEE_PACKAGE_JSON_URL = 'https://gitee.com/Komorebi-yaodong/anywheredesktop/raw/main/package.json'
@@ -573,6 +574,28 @@ handleInvoke('data:getUser', async () => {
       }
     }
   })
+
+  handleInvoke('quick:assistantUsage:record', async (_event, promptKey = '') => {
+    const normalizedPromptKey = typeof promptKey === 'string' ? promptKey.trim() : ''
+    if (!normalizedPromptKey) throw new Error('quick_assistant_key_required')
+
+    const configResult = await dataApi.getConfig()
+    const config = configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
+    const promptConfig = config?.prompts?.[normalizedPromptKey]
+    if (!promptConfig || promptConfig.enable === false) throw new Error('quick_assistant_not_available')
+
+    const currentUsage = config?.desktop?.quickAssistantUsage
+    const quickAssistantUsage = recordQuickAssistantUsage(currentUsage, normalizedPromptKey)
+    const saved = await dataApi.saveSetting('desktop.quickAssistantUsage', quickAssistantUsage)
+    if (!saved?.success) throw new Error(saved?.message || 'quick_assistant_usage_save_failed')
+
+    return {
+      ok: true,
+      usage: quickAssistantUsage,
+      weight: getQuickAssistantWeight(quickAssistantUsage, normalizedPromptKey)
+    }
+  })
+
 
 handleInvoke('data:getConfig', async () => {
     return dataApi.getConfig()

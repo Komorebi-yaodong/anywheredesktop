@@ -290,6 +290,10 @@ const syncThemeClass = (isDarkMode) => {
   document.documentElement.classList.toggle('dark', Boolean(isDarkMode));
 };
 
+const REASONING_EFFORT_VALUES = new Set(['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max']);
+const normalizeReasoningEffort = (value) => REASONING_EFFORT_VALUES.has(value) ? value : 'default';
+
+
 const applyPromptRuntimeConfig = async (config, options = {}) => {
   if (!config || !CODE.value || isClosingWindow.value) return;
   if (options.skipIfSavingWindowSettings && isSavingWindowSettings.value) return;
@@ -300,7 +304,7 @@ const applyPromptRuntimeConfig = async (config, options = {}) => {
   updateModelListAndMap(config);
 
   isAlwaysOnTop.value = promptConfig.isAlwaysOnTop ?? config.isAlwaysOnTop_global ?? true;
-  tempReasoningEffort.value = promptConfig.reasoning_effort || 'default';
+  tempReasoningEffort.value = normalizeReasoningEffort(promptConfig.reasoning_effort);
   selectedVoice.value = promptConfig.voice || null;
   if (!options.preserveCurrentModel) {
     model.value = promptConfig.model || modelList.value[0]?.value || '';
@@ -397,7 +401,7 @@ const buildConfigSnapshotPreservingWindowRuntime = (config) => {
         prompt: currentSystemPrompt.value,
         isAlwaysOnTop: isAlwaysOnTop.value,
         autoCloseOnBlur: currentTaskConfig.value ? false : autoCloseOnBlur.value,
-        reasoning_effort: tempReasoningEffort.value || 'default',
+        reasoning_effort: normalizeReasoningEffort(tempReasoningEffort.value),
         voice: selectedVoice.value || null
       }
     }
@@ -6773,7 +6777,7 @@ const getSessionRequestConfigStatePatch = () => {
     ...(currentConfig.value.prompts?.[CODE.value] || {}),
     ...(sourcePromptConfig.value || {}),
     model: model.value || '',
-    reasoning_effort: tempReasoningEffort.value || 'default',
+    reasoning_effort: normalizeReasoningEffort(tempReasoningEffort.value),
     voice: selectedVoice.value || null
   };
   sourcePromptConfig.value = { ...currentPromptConfig };
@@ -8457,9 +8461,7 @@ const loadSession = async (jsonData) => {
     selectedVoice.value = typeof jsonData.selectedVoice === 'string'
       ? jsonData.selectedVoice
       : (jsonData.currentPromptConfig?.voice || '');
-    tempReasoningEffort.value = typeof jsonData.currentPromptConfig?.reasoning_effort === 'string'
-      ? jsonData.currentPromptConfig.reasoning_effort
-      : 'default';
+    tempReasoningEffort.value = normalizeReasoningEffort(jsonData.currentPromptConfig?.reasoning_effort);
     isAutoApproveTools.value = typeof jsonData.isAutoApproveTools === 'boolean'
       ? jsonData.isAutoApproveTools
       : true;

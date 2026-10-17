@@ -311,6 +311,13 @@ export function createRemoteSessionManager({
   }
 
   function finishClosed(session) {
+    if (session.queueTimer) clearTimeout(session.queueTimer)
+    session.queueTimer = null
+    for (const item of session.pendingSends || []) {
+      const pending = requests.get(requestKey(item.deviceId, item.requestId))
+      if (pending && !pending.terminal) publish(pending, 'assistant.failed', { code: 'remote_renderer_closed' })
+    }
+    session.pendingSends = []
     const record = requests.get(requestKey(session.activeDeviceId, session.activeRequestId))
     if (record && !record.terminal) publish(record, 'assistant.failed', { code: 'remote_renderer_closed' })
   }
@@ -427,15 +434,27 @@ export function createRemoteSessionManager({
   }
 
   async function dispatchNextSend(session) {
-    if (session.activeRequestId || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
+    if (!enabled || sessions.get(session.conversationId) !== session || session.activeRequestId || session.dispatchingQueued || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
+    const item = windowItem(session.windowRef)
+    if (!item) { finishClosed(session); return }
+    if (item.busy || item.generating || item.compacting) {
+      if (!session.queueTimer) {
+        session.queueTimer = setTimeout(() => { session.queueTimer = null; void dispatchNextSend(session) }, 100)
+        session.queueTimer.unref?.()
+      }
+      return
+    }
     const next = session.pendingSends.shift()
     const record = requests.get(requestKey(next.deviceId, next.requestId))
     if (!record || record.terminal) return dispatchNextSend(session)
+    session.dispatchingQueued = true
     try {
       await dispatchSendRecord(session, record, next.check)
     } catch {
-      // The next queued record already received a terminal failure. Continue the queue.
-      await dispatchNextSend(session)
+      // The record already received a terminal failure; the following item may proceed.
+    } finally {
+      session.dispatchingQueued = false
+      if (!session.activeRequestId) void dispatchNextSend(session)
     }
   }
 
@@ -491,7 +510,9 @@ export function createRemoteSessionManager({
           throw remoteError('remote_send_queue_limit_reached')
         }
         session.pendingSends.push({ deviceId: safeDeviceId, requestId: safeRequestId, check })
-        return queueResult(session, record)
+        const result = queueResult(session, record)
+        if (!session.activeRequestId) void dispatchNextSend(session)
+        return result
       }
       return dispatchSendRecord(session, record, check)
     })
@@ -885,6 +906,15 @@ export function createRemoteSessionManager({
     enabled = false
     generation += 1
     if (closing) return closing
+    for (const session of sessions.values()) {
+      if (session.queueTimer) clearTimeout(session.queueTimer)
+      session.queueTimer = null
+      for (const item of session.pendingSends || []) {
+        const pending = requests.get(requestKey(item.deviceId, item.requestId))
+        if (pending && !pending.terminal) publish(pending, 'assistant.cancelled', { code: 'remote_gateway_stopped' })
+      }
+      session.pendingSends = []
+    }
     closing = (async () => {
       await Promise.allSettled([...creations.values()])
       await Promise.allSettled([...sessions.values()].map(async (session) => {

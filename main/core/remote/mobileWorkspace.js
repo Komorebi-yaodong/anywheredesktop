@@ -20,6 +20,11 @@ function parameters(input, allowed) {
   return input
 }
 
+function safeProviderUrl(value) {
+  try { const url = new URL(value); if (!['http:', 'https:'].includes(url.protocol)) return ''; url.username = ''; url.password = ''; url.search = ''; url.hash = ''; return url.toString() } catch { return '' }
+}
+
+
 function publicAvatar(value) {
   const avatar = typeof value === 'string' ? value.trim() : ''
   return /^https:\/\//i.test(avatar) ? avatar.slice(0, 2048) : ''
@@ -226,24 +231,95 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     try { return await record.promise } catch (error) { requests.delete(key); throw error }
   }
 
+  async function managementPatch({ deviceId, requestId, params = {} } = {}) {
+    parameters(params, ['section', 'id', 'expectedRevision', 'patch'])
+    const section = params.section
+    const sections = { providers: 'providers', mcp: 'mcpServers', tasks: 'tasks', general: '' }
+    if (!Object.hasOwn(sections, section)) throw remoteError('remote_workspace_section_invalid')
+    const device = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16 })
+    const request = normalizeIdentifier(requestId, 'requestId', { minLength: 8 })
+    const target = typeof params.id === 'string' ? params.id : ''
+    if (['__proto__', 'prototype', 'constructor'].includes(target)) throw remoteError('remote_workspace_invalid')
+    const allowed = { providers: ['name', 'url', 'models', 'enabled', 'apiKey'], mcp: ['name', 'enabled'], tasks: ['name', 'description'], general: ['language', 'themeMode', 'displayName'] }[section]
+    const patch = parameters(params.patch, allowed)
+    if (!Object.keys(patch).length) throw remoteError('remote_workspace_patch_empty')
+    for (const [field, value] of Object.entries(patch)) {
+      if (field === 'enabled') { if (typeof value !== 'boolean') throw remoteError('remote_workspace_invalid'); continue }
+      if (field === 'models') {
+        if (!Array.isArray(value) || value.length > 500 || value.some(model => typeof model !== 'string' || !model.trim() || model.length > 320)) throw remoteError('remote_workspace_invalid')
+        continue
+      }
+      const limit = field === 'description' ? 64 * 1024 : field === 'apiKey' ? 8192 : field === 'url' ? 2048 : 160
+      if (typeof value !== 'string' || value.length > limit) throw remoteError('remote_workspace_invalid')
+      if (field === 'url' && value) {
+        let url
+        try { url = new URL(value) } catch { throw remoteError('remote_workspace_invalid') }
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw remoteError('remote_workspace_invalid')
+      }
+      if (field === 'themeMode' && !['system', 'light', 'dark'].includes(value)) throw remoteError('remote_workspace_invalid')
+      if (field === 'language' && !['zh', 'en'].includes(value)) throw remoteError('remote_workspace_invalid')
+      if (field === 'displayName' && (!value.trim() || value.length > 12)) throw remoteError('remote_workspace_invalid')
+    }
+    const fingerprint = revision({ operation: 'management.patch', section, target, expectedRevision: params.expectedRevision, patch })
+    const key = `${device}:${request}`
+    const previous = requests.get(key)
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
+      return { ...(await previous.promise), duplicate: true }
+    }
+    pruneRequests()
+    const record = { fingerprint, updatedAt: Date.now(), promise: null }
+    record.promise = mutationTail.catch(() => {}).then(async () => {
+      const { config } = await current()
+      const source = section === 'general' ? generalSource(config) : object(config[sections[section]])[target]
+      if (!source || typeof source !== 'object') throw remoteError('remote_workspace_item_not_found')
+      if (revision(source) !== params.expectedRevision) throw remoteError('remote_workspace_revision_conflict')
+      const next = clone(config)
+      if (section === 'general') {
+        if (Object.hasOwn(patch, 'language')) next.language = patch.language
+        if (Object.hasOwn(patch, 'themeMode')) next.themeMode = patch.themeMode
+        if (Object.hasOwn(patch, 'displayName')) next.desktop = { ...object(next.desktop), profile: { ...object(next.desktop?.profile), nickname: patch.displayName.trim() } }
+      } else {
+        const item = { ...source }
+        const mapping = section === 'providers' ? { models: 'modelList', apiKey: 'api_key', enabled: 'enable' } : section === 'mcp' ? { enabled: 'isActive' } : {}
+        for (const [field, value] of Object.entries(patch)) item[mapping[field] || field] = value
+        next[sections[section]] = { ...object(next[sections[section]]), [target]: item }
+      }
+      const saved = await updateConfig({ config: next })
+      if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
+      return { ok: true, section, id: target }
+    })
+    requests.set(key, record)
+    mutationTail = record.promise.catch(() => {})
+    try { return await record.promise } catch (error) { requests.delete(key); throw error }
+  }
+
+  function generalSource(config) {
+    return { language: config.language || 'zh', themeMode: config.themeMode || 'system', displayName: config.desktop?.profile?.nickname || 'User' }
+  }
+
+
   async function managementDetails({ params = {} } = {}) {
     parameters(params, ['section'])
     const section = text(params.section, 32)
     const { config } = await current()
     if (section === 'providers') return { ok: true, section, items: Object.entries(object(config.providers)).map(([id, value]) => {
       const item = object(value)
-      return { id: text(id), name: text(item.name) || text(id), url: text(item.url, 2048), models: Array.isArray(item.modelList) ? item.modelList.map((model) => text(model, 320)).filter(Boolean) : [], hasApiKey: Boolean(text(item.api_key, 1)) }
+      return { id: text(id), revision: revision(item), name: text(item.name) || text(id), url: safeProviderUrl(item.url), enabled: item.enable !== false, models: Array.isArray(item.modelList) ? item.modelList.map((model) => text(model, 320)).filter(Boolean) : [], hasApiKey: Boolean(text(item.api_key, 1)) }
     }) }
     if (section === 'mcp') return { ok: true, section, items: Object.entries(object(config.mcpServers)).map(([id, value]) => {
       const item = object(value)
-      return { id: text(id), name: text(item.name) || text(id), enabled: item.isActive !== false, transport: text(item.transport || item.type, 32) || 'local' }
+      return { id: text(id), revision: revision(item), name: text(item.name) || text(id), enabled: item.isActive !== false, transport: text(item.transport || item.type, 32) || 'local' }
     }) }
-    if (section === 'skills') return { ok: true, section, items: (Array.isArray(listSkills(text(config.skillPath, 32768))) ? listSkills(text(config.skillPath, 32768)) : []).map((item) => ({ id: text(item.id), name: text(item.name), description: text(item.description, 240), enabled: item.disabled !== true })) }
+    if (section === 'skills') {
+      const skills = await listSkills(text(config.skillPath, 32768))
+      return { ok: true, section, items: (Array.isArray(skills) ? skills : []).map(item => ({ id: text(item.id), name: text(item.name), description: text(item.description, 240), enabled: item.disabled !== true })) }
+    }
     if (section === 'tasks') return { ok: true, section, items: Object.entries(object(config.tasks)).map(([id, value]) => {
       const item = object(value)
-      return { id: text(id), name: text(item.name || item.title) || text(id), enabled: item.enabled === true, schedule: text(item.triggerType, 32) || 'manual', assistant: text(item.promptCode || item.assistant, 160) }
+      return { id: text(id), revision: revision(item), name: text(item.name || item.title) || text(id), description: typeof item.description === 'string' ? item.description.slice(0, 64 * 1024) : '', enabled: item.enabled === true, schedule: text(item.triggerType, 32) || 'manual', assistant: text(item.promptKey, 160) }
     }) }
-    if (section === 'general') return { ok: true, section, value: { language: text(config.language, 16) || 'zh', themeMode: text(config.themeMode, 32) || 'system', displayName: text(config?.desktop?.profile?.nickname, 80) || 'User', avatarUrl: publicAvatar(config?.desktop?.profile?.avatar) } }
+    if (section === 'general') return { ok: true, section, revision: revision(generalSource(config)), value: { language: text(config.language, 16) || 'zh', themeMode: text(config.themeMode, 32) || 'system', displayName: text(config?.desktop?.profile?.nickname, 80) || 'User', avatarUrl: publicAvatar(config?.desktop?.profile?.avatar) } }
     throw remoteError('remote_workspace_section_invalid')
   }
 
@@ -271,5 +347,5 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     }
   }
 
-  return { bootstrap, profile, assistantList, assistantGet, mutate, projectCreate, managementCatalog, managementDetails }
+  return { bootstrap, profile, assistantList, assistantGet, mutate, projectCreate, managementCatalog, managementDetails, managementPatch }
 }

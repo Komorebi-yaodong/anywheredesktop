@@ -128,6 +128,18 @@ async function run() {
   assert.equal(f.commands.filter((command) => command.type === 'remote.shutdown').length, 0, 'revealed window belongs to Desktop')
   await assert.rejects(send(f.manager, 'request-stopped'), { code: 'remote_gateway_stopped' })
 
+  const delayedIdle = fixture()
+  await send(delayedIdle.manager, 'request-idle-active')
+  await send(delayedIdle.manager, 'request-idle-queued')
+  delayedIdle.items[0].busy = true
+  renderer(delayedIdle, 'assistant.completed', {}, 'request-idle-active')
+  assert.equal(delayedIdle.manager.listSendQueue({ deviceId: DEVICE, params: { conversationId: CID } }).items.length, 1)
+  delayedIdle.items[0].busy = false
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(delayedIdle.commands.at(-1).requestId, 'request-idle-queued')
+  renderer(delayedIdle, 'assistant.completed', {}, 'request-idle-queued')
+
+
   const removable = fixture()
   await send(removable.manager, 'request-queue-active')
   await send(removable.manager, 'request-queue-remove')

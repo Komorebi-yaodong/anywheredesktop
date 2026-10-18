@@ -686,6 +686,29 @@ export function createRemoteGateway({
     }
   }
 
+  function sendRpcResult(socket, context, requestId, result) {
+    if (!isOpen(socket) || !context?.session) return false
+    let frame
+    try {
+      frame = context.session.encrypt({ kind: 'response', requestId, ok: true, result })
+    } catch (error) {
+      // DTO encoding/size failures happen before the send sequence is committed.
+      // Reject this RPC only. Transport/crypto session failures still fail closed.
+      const code = error?.code === 'remote_payload_size_invalid'
+        ? 'remote_response_too_large'
+        : error?.code === 'remote_canonical_value_invalid'
+          ? 'remote_response_invalid'
+          : ''
+      if (!code) return false
+      // Use the existing RPC error path so the failure is not recorded as ok.
+      throw remoteError(code)
+    }
+    // Never try an error response once a frame has consumed a sequence and
+    // delivery is uncertain; that would create a gap on the same session.
+    return sendPlain(socket, frame)
+  }
+
+
   function sendEncryptedEventToDevice(deviceId = '', event, payload = {}) {
     const normalizedDeviceId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
     const eventName = typeof event === 'string' ? event.trim().slice(0, 120) : ''
@@ -1306,7 +1329,7 @@ export function createRemoteGateway({
           throw remoteError('remote_method_unavailable')
       }
 
-      if (!sendEncrypted(socket, context, { kind: 'response', requestId, ok: true, result })) {
+      if (!sendRpcResult(socket, context, requestId, result)) {
         safeSocketClose(socket, 1011, 'response_send_failed')
         return
       }

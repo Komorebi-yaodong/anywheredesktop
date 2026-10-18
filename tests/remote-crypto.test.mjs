@@ -167,6 +167,13 @@ function run() {
     desktopId: fixture.context.desktopId
   })
   expectCode(() => sequenceConnection.deviceSession.encrypt({ content: 'x'.repeat(300 * 1024) }), 'remote_payload_size_invalid')
+  // Base64url ciphertext + envelope can overflow even when plaintext fits.
+  expectCode(() => sequenceConnection.deviceSession.encrypt({ content: 'x'.repeat(200 * 1024) }), 'remote_payload_size_invalid')
+  expectCode(() => sequenceConnection.deviceSession.encrypt({ content: NaN }), 'remote_canonical_value_invalid')
+  const circularPayload = { kind: 'request' }
+  circularPayload.self = circularPayload
+  expectCode(() => sequenceConnection.deviceSession.encrypt(circularPayload), 'remote_canonical_value_invalid')
+
   const postFailureFrame = sequenceConnection.deviceSession.encrypt({ kind: 'request', method: 'remote.ping', requestId: 'request-sequence-safe-0001' })
   assert.equal(postFailureFrame.sequence, 1)
   assert.equal(sequenceConnection.accepted.session.decrypt(postFailureFrame).method, 'remote.ping')

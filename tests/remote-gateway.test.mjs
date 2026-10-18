@@ -262,9 +262,16 @@ async function main() {
   const conversationCalls = []
   let fixtureLanAddress = '127.0.0.1'
 
+  let responseFailureFixture = ''
+
   const conversationReadService = {
     async listConversations(params = {}) {
       conversationCalls.push({ method: 'conversation.list', params: structuredClone(params) })
+
+      if (responseFailureFixture === 'wire_size') return { ok: true, synthetic: 'x'.repeat(200 * 1024) }
+      if (responseFailureFixture === 'plaintext_size') return { ok: true, synthetic: 'x'.repeat(300 * 1024) }
+      if (responseFailureFixture === 'invalid_value') return { ok: true, synthetic: NaN }
+      if (responseFailureFixture === 'circular') { const value = { ok: true }; value.self = value; return value }
       if (Object.hasOwn(params, 'dirPath')) {
         const error = new Error('remote_path_parameter_forbidden')
         error.code = 'remote_path_parameter_forbidden'
@@ -709,6 +716,28 @@ async function main() {
     assert.equal(listResponse.ok, true)
     assert.equal(listResponse.result.conversations[0].conversationId, 'conversation-gateway-fixture-0001')
 
+    // An unrepresentable RPC response is not a transport failure. Reject only
+    // that request and prove the same strict-sequence session still works.
+    for (const [fixture, code] of [
+      ['wire_size', 'remote_response_too_large'],
+      ['plaintext_size', 'remote_response_too_large'],
+      ['invalid_value', 'remote_response_invalid'],
+      ['circular', 'remote_response_invalid']
+    ]) {
+      responseFailureFixture = fixture
+      const rejected = await sendEncryptedRequest({ socket, session,
+        requestId: `request-response-failure-${fixture}`, method: 'conversation.list' })
+      assert.equal(rejected.ok, false, fixture)
+      assert.equal(rejected.error.code, code, fixture)
+      assert.equal(socket.readyState, WebSocket.OPEN, fixture)
+      responseFailureFixture = ''
+      const ping = await sendEncryptedRequest({ socket, session,
+        requestId: `request-ping-after-${fixture}`, method: 'remote.ping' })
+      assert.equal(ping.ok, true, fixture)
+      assert.equal(socket.readyState, WebSocket.OPEN, fixture)
+    }
+
+
     const messagesResponse = await sendEncryptedRequest({
       socket,
       session,
@@ -759,6 +788,7 @@ async function main() {
 
     assert.deepEqual(conversationCalls.map((item) => item.method), [
       'conversation.list',
+      ...Array(4).fill('conversation.list'),
       'conversation.messages.list',
       'conversation.windows.list',
       'conversation.list'

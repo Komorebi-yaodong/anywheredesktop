@@ -572,17 +572,35 @@ export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, send
     encrypt(payload) {
       assertOpen()
       const sequence = nextSendSequence
-      const plaintext = canonicalBuffer(payload)
-      if (plaintext.length > REMOTE_MAX_FRAME_BYTES) throw remoteError('remote_payload_size_invalid')
-      const aad = buildFrameAad({ sessionId: safeSessionId, sequence, direction: sendDirection })
-      const encrypted = encryptAead({ key: sendKey, plaintext, aad })
-      nextSendSequence += 1
-      return {
-        v: REMOTE_PROTOCOL_VERSION,
-        type: 'remote.encrypted',
-        sessionId: safeSessionId,
-        sequence,
-        ...encrypted
+      let plaintext
+      try {
+        plaintext = canonicalBuffer(payload)
+      } catch {
+        // Invalid DTOs (including cycles) must fail before consuming a sequence.
+        throw remoteError('remote_canonical_value_invalid')
+      }
+      let aad
+      try {
+        if (plaintext.length > REMOTE_MAX_FRAME_BYTES) throw remoteError('remote_payload_size_invalid')
+        aad = buildFrameAad({ sessionId: safeSessionId, sequence, direction: sendDirection })
+        const encrypted = encryptAead({ key: sendKey, plaintext, aad })
+        const frame = {
+          v: REMOTE_PROTOCOL_VERSION,
+          type: 'remote.encrypted',
+          sessionId: safeSessionId,
+          sequence,
+          ...encrypted
+        }
+        // The transport limit applies to the envelope, not its plaintext.
+        // Base64url expansion must be checked before committing the sequence.
+        if (Buffer.byteLength(JSON.stringify(frame)) > REMOTE_MAX_FRAME_BYTES) {
+          throw remoteError('remote_payload_size_invalid')
+        }
+        nextSendSequence += 1
+        return frame
+      } finally {
+        plaintext.fill(0)
+        aad?.fill(0)
       }
     },
     decrypt(frame) {

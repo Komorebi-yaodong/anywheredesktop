@@ -2,6 +2,7 @@ import { createClient } from 'webdav'
 import yaml from 'js-yaml'
 
 import { fetchWithProxy } from './net.js'
+import { verifyRemoteFileInfo } from './webdavVerification.js'
 
 const CHAT_METADATA_FILENAME = 'chat-metadata.yaml'
 const CHAT_METADATA_VERSION = 1
@@ -565,9 +566,10 @@ function stringifyRemoteContent(content) {
 async function writeRemoteFileContents(client, remoteFilePath, content, options = {}) {
   const normalizedContent = stringifyRemoteContent(content)
 
-  await retryLockedWebdavWrite(() => client.putFileContents(remoteFilePath, normalizedContent, {
+  const writeResult = await retryLockedWebdavWrite(() => client.putFileContents(remoteFilePath, normalizedContent, {
     overwrite: options?.overwrite !== false
   }))
+  if (writeResult === false) throw new Error('webdav_write_rejected')
 
   const lastModified = normalizeText(options?.lastModified).trim()
   if (lastModified) {
@@ -590,6 +592,17 @@ async function writeRemoteFileContents(client, remoteFilePath, content, options 
   }
 
   return normalizedContent
+}
+
+
+export async function verifyRemoteFileWrite(client, remoteFilePath, expectedContent) {
+  let stat
+  try {
+    stat = await client.stat(remoteFilePath)
+  } catch (error) {
+    throw new Error(toErrorMessage(error, 'webdav_uploaded_file_missing'))
+  }
+  return verifyRemoteFileInfo(stat, expectedContent)
 }
 
 
@@ -868,8 +881,11 @@ async function writeBackupInternal(input = {}) {
     overwrite: input?.overwrite !== false,
     lastModified: input?.lastModified
   })
+  const verification = input?.verifyRemote === true
+    ? await verifyRemoteFileWrite(client, remoteFilePath, content)
+    : null
 
-  return { client, remoteDir, remoteFilePath, filename, content }
+  return { client, remoteDir, remoteFilePath, filename, content, verification }
 }
 
 export async function writeBackup(input = {}) {
@@ -889,6 +905,7 @@ export async function writeBackup(input = {}) {
       ok: true,
       path: result.remoteFilePath,
       filename,
+      verification: result.verification,
       chatMetadata: metadata.get(filename) || null
     }
   } catch (error) {

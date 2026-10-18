@@ -1460,16 +1460,28 @@ handleInvoke('conversation:saveSnapshot', async (_event, input = {}) => {
       dirPath: input?.dirPath,
       conversationId: descriptor.conversationId
     })
+    const snapshotBytes = Buffer.isBuffer(snapshot?.content)
+      ? snapshot.content.length
+      : snapshot?.content instanceof Uint8Array
+        ? snapshot.content.byteLength
+        : 0
+    if (snapshotBytes < 1) throw new Error('conversation_snapshot_empty')
+    const remote = input?.remote && typeof input.remote === 'object' ? input.remote : {}
     const result = await webdavApi.writeBackup({
-      ...(input?.remote || {}),
+      ...remote,
       filename: descriptor.dbFile,
       content: snapshot.content,
       overwrite: true,
-      ensureDirectory: input?.remote?.ensureDirectory !== false,
-      useChatMetadata: false
+      ensureDirectory: remote.ensureDirectory !== false,
+      useChatMetadata: false,
+      verifyRemote: true
     })
     if (!result || result.ok === false) throw new Error(result?.reason || 'webdav_write_failed')
-    return { ok: true, descriptor }
+    const verification = result.verification
+    if (!verification?.ok || Number(verification.bytes) !== snapshotBytes) {
+      throw new Error('webdav_upload_verify_failed')
+    }
+    return { ok: true, descriptor, filename: descriptor.dbFile, bytes: snapshotBytes }
   })
 
   handleInvoke('conversation:importCloudRemote', async (_event, input = {}) => {

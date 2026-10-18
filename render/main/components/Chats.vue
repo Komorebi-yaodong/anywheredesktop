@@ -383,8 +383,21 @@ const getSafeString = (value) => (typeof value === 'string' ? value : '');
 
 const formatSyncError = (error, fallback = '同步失败') => {
     if (!error) return fallback;
-    if (typeof error === 'string') return error;
-    if (typeof error?.message === 'string' && error.message) return error.message;
+    const message = typeof error === 'string'
+        ? error
+        : typeof error?.message === 'string' && error.message
+            ? error.message
+            : '';
+    const known = {
+        webdav_uploaded_file_missing: '上传后未在云端找到会话文件。',
+        webdav_uploaded_file_size_mismatch: '云端会话文件大小与本地快照不一致。',
+        webdav_upload_verify_failed: '云端未确认会话文件已上传完成。',
+        uploaded_database_descriptor_missing: '云端会话索引未写入，请重试。',
+        uploaded_database_project_assignment_missing: '云端会话项目归属未写入，请重试。',
+        conversation_snapshot_empty: '本地会话快照为空，无法上传。'
+    };
+    if (message && known[message]) return known[message];
+    if (message) return message;
 
     const status = Number(error?.status ?? error?.statusCode ?? error?.response?.status ?? error?.response?.statusCode);
     const statusText = [error?.statusText, error?.response?.statusText]
@@ -2330,6 +2343,18 @@ async function forceSyncFile(basename, direction, signal, options = {}) {
             const result = direction === 'upload'
                 ? await uploadDatabaseConversation(logicalFile, { ensureDirectory })
                 : await downloadDatabaseConversation(logicalFile);
+            // Batch uploads reconcile descriptors once after all workers finish.
+            // A direct force upload has no batch coordinator, so it must commit
+            // and verify the cloud conversation index before claiming success.
+            if (direction === 'upload' && syncProject) {
+                await reconcileUploadedCloudIndex({ projectDescriptors: result.projectDescriptors });
+                await fetchCloudFiles(true);
+                ElMessage.success(t('chats.alerts.syncSuccessUpload', { count: 1 }));
+            }
+            if (direction === 'download' && syncProject) {
+                await fetchLocalFiles();
+                ElMessage.success(t('chats.alerts.syncSuccessDownload', { count: 1 }));
+            }
             return result;
         }
         const localPath = `${localChatPath.value}/${normalizedBasename}`;
@@ -2364,8 +2389,16 @@ async function forceSyncFile(basename, direction, signal, options = {}) {
         // 单文件同步时，连带把该文件的项目归属同步到对端 projects.yaml（批量同步走末尾统一合并）
         if (syncProject) {
             await syncFileAssignmentAcross(normalizedBasename, direction);
+            if (direction === 'upload') await fetchCloudFiles(true);
+            else await fetchLocalFiles();
+            ElMessage.success(direction === 'upload'
+                ? t('chats.alerts.syncSuccessUpload', { count: 1 })
+                : t('chats.alerts.syncSuccessDownload', { count: 1 }));
         }
     } catch (error) {
+
+
+
         if (error.name === 'AbortError') throw new Error("Cancelled");
         ElMessage.error(t('chats.alerts.syncFileFailed', { filename: basename, message: formatSyncError(error) }));
         throw error;

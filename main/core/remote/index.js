@@ -765,6 +765,9 @@ export function createRemoteGateway({
       d: pairingPayload.desktopId,
       n: pairingPayload.desktopName,
       e: pairingPayload.endpoint,
+      // Fallbacks are emitted only from runtime.endpoints: LAN addresses are
+      // certificate-covered and public Tunnel addresses keep system TLS.
+      endpoints: pairingPayload.endpoints,
       i: pairingPayload.pairingId,
       c: pairingPayload.pairingChallenge,
       f: pairingPayload.certificateFingerprint,

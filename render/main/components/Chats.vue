@@ -1516,24 +1516,62 @@ async function syncProjectToCloud(projectId) {
     if (!isWebdavConfigValid.value) return ElMessage.warning(t('chats.alerts.webdavRequired'));
     const group = projectGroups.value.find((g) => g.id === projectId);
     if (!group) return;
-    const basenames = group.files.map((f) => f.basename);
+    const projectFiles = Array.isArray(group.files) ? group.files : [];
+    const legacyBasenames = projectFiles
+        .filter((file) => file?.format !== 'sqlite')
+        .map((file) => getSafeString(file?.basename))
+        .filter(Boolean);
+    const databaseFiles = projectFiles.filter((file) => file?.format === 'sqlite' && file?.conversationId);
     try {
-        if (basenames.length > 0) {
-            await executeSync([
-                {
-                    name: group.name || projectId,
-                    action: (signal) => uploadFilesToCloudInBatches(basenames, signal)
-                }
-            ], t('chats.alerts.syncConfirmUploadTitle'), { refreshAfter: false });
+        if (projectFiles.length > 0) {
+            const projectSyncResult = await executeSync(
+                projectFiles.map((file) => ({
+                    name: getConversationReference(file),
+                    action: (signal) => file?.format === 'sqlite' && file?.conversationId
+                        ? uploadDatabaseConversation(file, { ensureDirectory: true })
+                        : forceSyncFile(file.basename, 'upload', signal, { syncProject: false, ensureDirectory: true })
+                })),
+                t('chats.alerts.syncConfirmUploadTitle'),
+                { refreshAfter: false, announceResult: false }
+            );
+            if (projectSyncResult.cancelled) throw new Error('Cancelled');
+            if (projectSyncResult.failed > 0 || projectSyncResult.completed !== projectFiles.length) {
+                throw new Error(`project_upload_incomplete:${projectSyncResult.failed || projectFiles.length - projectSyncResult.completed}`);
+            }
         }
-        await window.api.mergeProjectCloudProjects(
+        const mergedProject = await window.api.mergeProjectCloudProjects(
             buildWebdavInput(),
-            { id: group.id, name: group.name, files: basenames }
+            {
+                id: group.id,
+                name: group.name,
+                files: legacyBasenames,
+                conversationIds: databaseFiles.map((file) => file.conversationId)
+            }
         );
+        const mergedConversations = mergedProject?.data?.conversations || {};
+        const missingDescriptors = databaseFiles.filter((file) =>
+            !mergedConversations[file.conversationId] ||
+            mergedConversations[file.conversationId].dbFile !== file.basename
+        );
+        if (missingDescriptors.length > 0) {
+            throw new Error(`uploaded_database_descriptor_missing:${missingDescriptors.length}`);
+        }
+        const verifiedCloudProjects = normalizeProjectsResult(
+            await window.api.readCloudProjects(buildWebdavInput())
+        );
+        const verifiedProject = verifiedCloudProjects.projects.find((project) => project.id === group.id);
+        const verifiedFiles = new Set(verifiedProject?.files || []);
+        const verifiedConversationIds = new Set(verifiedProject?.conversationIds || []);
+        const projectIndexIncomplete = legacyBasenames.some((basename) => !verifiedFiles.has(basename))
+            || databaseFiles.some((file) =>
+                !verifiedConversationIds.has(file.conversationId)
+                || verifiedCloudProjects.conversations?.[file.conversationId]?.dbFile !== file.basename
+            );
+        if (projectIndexIncomplete) throw new Error('uploaded_project_index_readback_failed');
         ElMessage.success(t('chats.projects.syncProjectSuccess'));
         await refreshData();
     } catch (error) {
-        if (error?.message !== 'Cancelled') ElMessage.error(String(error?.message || error));
+        if (error?.message !== 'Cancelled') ElMessage.error(formatSyncError(error));
     }
 }
 
@@ -2297,7 +2335,7 @@ async function syncProjectsBulk(basenames, direction) {
 }
 
 async function executeSync(tasks, title, options = {}) {
-    const { refreshAfter = true } = options;
+    const { refreshAfter = true, announceResult = true } = options;
     isSyncing.value = true;
     syncProgress.value = 0;
     syncAbortController.value = new AbortController();
@@ -2315,8 +2353,10 @@ async function executeSync(tasks, title, options = {}) {
         }
         let message = title === t('chats.alerts.syncConfirmUploadTitle') ? t('chats.alerts.syncSuccessUpload', { count: results.completed }) : t('chats.alerts.syncSuccessDownload', { count: results.completed });
         if (results.failed > 0) message += ` ${t('chats.alerts.syncFailedPartially', { failedCount: results.failed })}`;
-        if (results.cancelled) ElMessage.warning(t('chats.alerts.syncCancelled'));
-        else ElMessage.success(message);
+        if (announceResult) {
+            if (results.cancelled) ElMessage.warning(t('chats.alerts.syncCancelled'));
+            else ElMessage.success(message);
+        }
         if (refreshAfter) await refreshData();
         return results;
     } catch (error) {

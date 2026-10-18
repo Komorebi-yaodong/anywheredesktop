@@ -457,7 +457,8 @@ async function main() {
     assert.equal(qrPng.readUInt32BE(16), 1024)
     assert.equal(qrPng.readUInt32BE(20), 1024)
     const compactQr = JSON.parse(pairing.qrPayload)
-    assert.deepEqual(Object.keys(compactQr).sort(), ['c', 'd', 'e', 'f', 'i', 'k', 'n', 'v', 'x'])
+    assert.deepEqual(Object.keys(compactQr).sort(), ['c', 'd', 'e', 'endpoints', 'f', 'i', 'k', 'n', 'v', 'x'])
+    assert.deepEqual(compactQr.endpoints, pairing.endpoints)
     assert.ok(JSON.stringify(compactQr).length < JSON.stringify(observedPairing).length)
 
     assert.equal(Object.hasOwn(observedPairing, 'pairingCode'), false, 'QR payload must not contain the human confirmation code')

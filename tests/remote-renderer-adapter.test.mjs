@@ -4,6 +4,10 @@ import vm from 'node:vm'
 import { shallowRef, ref, computed, watch } from 'vue'
 
 const source = await fs.readFile(new URL('../render/window/App.vue', import.meta.url), 'utf8')
+
+const mobileControlDeclaration = source.indexOf('const mobileControlActive = ref(false);')
+const mobileControlWatch = source.indexOf('  mobileControlActive,', source.indexOf('watch(['))
+assert.ok(mobileControlDeclaration >= 0 && mobileControlWatch > mobileControlDeclaration, 'mobileControlActive must initialize before the status watch reads it')
 const block = source.slice(source.indexOf('const activeRemoteCommand ='), source.indexOf('const stopConversationLeaseHeartbeat ='))
 assert.ok(block.includes('persistRemoteTranscript'))
 

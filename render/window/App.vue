@@ -2587,6 +2587,7 @@ const defaultConversationName = ref("");
 const sessionCreatedAt = ref(new Date().toISOString());
 const currentConversationStorage = ref(null);
 const conversationReadOnly = ref(false);
+const mobileControlActive = ref(false);
 const conversationLeasePending = ref(false);
 const conversationLease = ref(null);
 const conversationInstanceId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
@@ -2642,7 +2643,6 @@ watch([
 const activeRemoteCommand = shallowRef(null);
 let remoteCommandExecutionPromise = null;
 const remoteHiddenWriter = ref(false);
-const mobileControlActive = ref(false);
 const remoteConversationDeleted = ref(false);
 
 const emitRemoteRendererEvent = (event, command = {}, payload = {}) => {

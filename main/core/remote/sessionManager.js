@@ -474,23 +474,30 @@ export function createRemoteSessionManager({
     const safeDeviceId = id(deviceId, 'deviceId')
     assertActive(generation, safeDeviceId)
     const result = []
-    // A session enters this registry only through a Mobile create/open/takeover
-    // flow. Do not enumerate arbitrary Desktop windows into the Mobile panel.
-    for (const conversationId of [...sessions.keys()]) {
-      const session = existingSession(conversationId)
-      const writer = session ? windowItem(session.windowRef) : null
-      if (!session?.mobileOpened || !writer) continue
-      const hasDesktopObserver = windows().some((candidate) =>
-        candidate.id !== writer.id && candidate.conversationId === conversationId && candidate.remoteHidden !== true
+    const seen = new Set()
+    // Every conversation already open on Desktop is listable so Mobile can take
+    // it over without opening it first. A read-only observer or a pending lease
+    // is never offered: the writable writer stays the only control target.
+    for (const item of windows()) {
+      if (item.type !== 'window' || !item.conversationId || seen.has(item.conversationId)) continue
+      const candidates = windows().filter((candidate) =>
+        candidate.type === 'window' && candidate.conversationId === item.conversationId
+      )
+      const writer = candidates.find((candidate) => !candidate.readOnly && !candidate.leasePending) || candidates[0]
+      if (!writer || writer.readOnly === true) continue
+      seen.add(item.conversationId)
+      const session = sessions.get(item.conversationId)
+      const hasDesktopObserver = candidates.some((candidate) =>
+        candidate.id !== writer.id && candidate.remoteHidden !== true
       )
       result.push({
-        conversationId,
+        conversationId: item.conversationId,
         title: text(writer.conversationTitle || writer.title, 240),
         windowId: writer.id,
         visible: writer.visible === true,
         busy: writer.busy === true || writer.generating === true || writer.compacting === true,
-        mobileControlled: session.mobileControlled === true,
-        controlledByThisDevice: session.mobileControlled === true && (!session.mobileDeviceId || session.mobileDeviceId === safeDeviceId),
+        mobileControlled: session?.mobileControlled === true,
+        controlledByThisDevice: session?.mobileControlled === true && (!session.mobileDeviceId || session.mobileDeviceId === safeDeviceId),
         hidden: writer.remoteHidden === true,
         hasDesktopObserver
       })

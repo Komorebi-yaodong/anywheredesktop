@@ -34,7 +34,9 @@ function buildSession() {
             },
             { type: 'image_url', image_url: { url: PIXEL_DATA_URL } }
           ]
-        : `message-${index}`,
+        : index === 1
+          ? 'opened E:\\TMP\\Images\\station_zero_poster.png for review'
+          : `message-${index}`,
       storageId: `message-${index}`,
       uiStorageId: `ui-${index}`,
       timestamp: `2026-01-01T00:00:0${index}.000Z`,
@@ -150,6 +152,10 @@ async function main() {
       pageSize: 1000
     })
     assert.deepEqual(third.messages.map((message) => message.uiMessageId), ['ui-1'])
+    // The paired developer device reads conversation text verbatim; absolute
+    // paths are no longer replaced by a placeholder.
+    assert.match(third.messages[0].payload.content, /E:\\TMP\\Images\\station_zero_poster\.png/)
+    assert.equal(third.messages[0].payload.content.includes('[local-file-hidden]'), false)
     assert.equal(third.page.pageSize, 100)
     assert.equal(third.page.hasMore, false)
     assert.equal(third.page.nextBeforeUiOrder, null)

@@ -456,11 +456,23 @@ function createRemoteAttachmentResolver(db) {
   }
 }
 
+
+function createRemoteImageReferenceResolver(db, registerMedia) {
+  const statement = db.prepare('SELECT data_url FROM attachments WHERE attachment_id = ?')
+  return (value) => {
+    const attachmentId = normalizeText(value?.[ATTACHMENT_REF_KEY]).trim()
+    if (!attachmentId || typeof registerMedia !== 'function') return ''
+    const dataUrl = statement.get(attachmentId)?.data_url
+    return remoteMediaReference(dataUrl, registerMedia)
+  }
+}
+
 const REMOTE_MEDIA_EXTENSION_PATTERN = /\.(?:png|jpe?g|webp|gif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg)(?:[?#].*)?$/i
 
 function remoteMediaReference(value, registerMedia) {
   const source = typeof value === 'string' ? value.trim().replace(/^['"]|['"]$/g, '') : ''
-  if (!source || !REMOTE_MEDIA_EXTENSION_PATTERN.test(source) || typeof registerMedia !== 'function') return ''
+  const isInlineImage = /^data:image\/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(source)
+  if (!source || (!REMOTE_MEDIA_EXTENSION_PATTERN.test(source) && !isInlineImage) || typeof registerMedia !== 'function') return ''
   try {
     const media = registerMedia(source)
     return typeof media?.uri === 'string' && /^anywhere-media:\/\/[A-Za-z0-9_-]{16,160}(?:\?type=(?:image|video|audio))?$/.test(media.uri) ? media.uri : ''
@@ -487,11 +499,10 @@ function sanitizeRemoteText(value, context = {}) {
   // A plain local media reference is useful for structured image_url content.
   const plain = remoteMediaReference(result, registerMedia)
   if (plain) return plain
-  // Any remaining Windows/file URI is path-bearing content. Never expose it.
+  // The paired developer device is allowed to read conversation text verbatim,
+  // including absolute local paths. Media sources are still rewritten above so
+  // Mobile renders real bytes instead of trying to open a Desktop-only path.
   return result
-    // Match only a path token boundary. Without the boundary, the final `a://`
-    // in an opaque `anywhere-media://…` URI looks like a Windows drive prefix.
-    .replace(/(^|[^A-Za-z0-9_-])(?:file:(?:\/\/)?\/?)?[A-Za-z]:[\\/][^\s'"<>\])]+/gi, (_match, prefix) => `${prefix}[local-file-hidden]`)
 }
 
 function safeRemoteAvatar(value) {
@@ -558,6 +569,34 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
     const attachmentId = normalizeText(value[ATTACHMENT_REF_KEY]).trim()
     if (attachmentId && Object.keys(value).length === 1) {
       return resolveAttachment(attachmentId, context.nameHint)
+    }
+    if (value.type === 'image_url' || value.type === 'image') {
+      const rawUrl = value.image_url ?? value.image ?? value.url
+      const sourcePath = typeof rawUrl === 'string' ? rawUrl.trim() : ''
+      if (sourcePath) {
+        if (/^anywhere-media:\/\/[A-Za-z0-9_-]{16,160}(?:\?type=(?:image|video|audio))?$/.test(sourcePath)) {
+          return { type: 'image', url: sourcePath }
+        }
+        const media = remoteMediaReference(sourcePath, context.registerMedia)
+        // Mobile cannot open a Desktop path directly, so always prefer the
+        // opaque media reference for rendering while keeping the path readable.
+        if (media) return { type: 'image', url: media, sourcePath }
+        return { type: 'image', sourcePath }
+      }
+      if (rawUrl && typeof rawUrl === 'object') {
+        // Attachment-backed history images. Desktop resolves the stored bytes
+        // into an opaque media reference so Mobile can render the picture
+        // without receiving the base64 payload or any local path.
+        const previewUrl = typeof context.resolveAttachmentImage === 'function'
+          ? context.resolveAttachmentImage(rawUrl)
+          : ''
+        const resolved = sanitizeRemotePayload(rawUrl, resolveAttachment, context)
+        if (resolved && typeof resolved === 'object' && resolved.attachmentId) {
+          return previewUrl
+            ? { type: 'image', url: previewUrl, attachmentId: resolved.attachmentId, mimeType: resolved.mimeType || '', name: resolved.name || '' }
+            : { type: 'image', attachmentId: resolved.attachmentId, mimeType: resolved.mimeType || '', name: resolved.name || '' }
+        }
+      }
     }
     if (value.type === 'input_audio' && value.input_audio && typeof value.input_audio === 'object') {
       const encoded = normalizeText(value.input_audio.data).replace(/\s+/g, '')
@@ -1471,7 +1510,11 @@ export async function loadRemoteConversationPage({
     // available only through conversation.config.get/patch for Mobile.
     const rows = pageRows
     const resolveAttachment = createRemoteAttachmentResolver(db)
-    const context = { registerMedia: typeof registerMedia === 'function' ? registerMedia : null }
+    const resolveAttachmentImage = createRemoteImageReferenceResolver(db, registerMedia)
+    const context = {
+      registerMedia: typeof registerMedia === 'function' ? registerMedia : null,
+      resolveAttachmentImage
+    }
     const messages = rows
       .filter((item) => item.role_code !== 'tool')
       .map((item) => toRemoteUiMessage(db, item, resolveAttachment, context))

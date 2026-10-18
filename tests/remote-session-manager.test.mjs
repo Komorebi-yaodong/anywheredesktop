@@ -179,14 +179,22 @@ async function run() {
 
 
   const takeoverFixture = fixture({ existing: true })
-  // A Desktop-only window must not be surfaced in Mobile's opened-session panel.
-  assert.equal(takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} }).sessions.length, 0)
+  // A conversation already open on Desktop is listable immediately, so Mobile
+  // can take it over without opening it first.
+  const desktopOpenList = takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} })
+  assert.equal(desktopOpenList.sessions.length, 1)
+  assert.equal(desktopOpenList.sessions[0].mobileControlled, false)
+  assert.equal(desktopOpenList.sessions[0].windowId, 'window-existing')
 
   await assert.rejects(
     takeoverFixture.manager.send({ deviceId: DEVICE, requestId: 'request-visible-without-takeover', params: { conversationId: CID, text: 'must be rejected before takeover' } }),
     { code: 'remote_conversation_takeover_required' }
   )
-  assert.equal(takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} }).sessions.length, 0, 'a rejected visible-writer write must not register as Mobile-opened')
+  assert.equal(
+    takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} }).sessions[0].mobileControlled,
+    false,
+    'a rejected visible-writer write must not grant Mobile control'
+  )
   const openedForMobile = await takeoverFixture.manager.openForMobile({ deviceId: DEVICE, params: { conversationId: CID } })
   assert.equal(openedForMobile.mobileControlled, false)
   const takeoverList = takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} })

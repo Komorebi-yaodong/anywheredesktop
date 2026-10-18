@@ -42,6 +42,21 @@ try {
     deviceId,
     params: { conversationId, mediaId: reference.mediaId, offset: 0, length: 128 * 1024 }
   }), { code: 'remote_media_range_invalid' })
+
+  // Inline base64 images stored in SQLite must still be previewable without
+  // sending the base64 payload into the message DTO.
+  const inlineBytes = Buffer.from('synthetic-inline-image-fixture')
+  const inlineSource = `data:image/png;base64,${inlineBytes.toString('base64')}`
+  const inline = service.register({ deviceId, conversationId, source: inlineSource })
+  assert.match(inline.mediaId, /^[A-Za-z0-9_-]{16,160}$/)
+  assert.equal(inline.mimeType, 'image/png')
+  assert.equal(inline.uri.includes('base64'), false)
+  const inlineChunk = await service.get({
+    deviceId,
+    params: { conversationId, mediaId: inline.mediaId, offset: 0, length: 96 * 1024 }
+  })
+  assert.equal(Buffer.from(inlineChunk.data, 'base64url').toString(), inlineBytes.toString())
+  assert.equal(service.register({ deviceId, conversationId, source: inlineSource }).mediaId, inline.mediaId)
   console.log(JSON.stringify({ ok: true, suite: 'conversation-media' }))
 } finally {
   await fs.rm(root, { recursive: true, force: true })

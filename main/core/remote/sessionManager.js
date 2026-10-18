@@ -24,6 +24,16 @@ const text = (value, limit = 160) => typeof value === 'string' ? value.slice(0, 
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 const id = (value, field) => normalizeIdentifier(value, field, { minLength: field === 'requestId' ? 8 : 16, maxLength: 160 })
 
+function displayModelLabel(value, providers = {}) {
+  const model = text(value, 320).trim()
+  const separator = model.indexOf('|')
+  if (separator <= 0 || separator >= model.length - 1) return model
+  const providerId = model.slice(0, separator).trim()
+  const modelName = model.slice(separator + 1).trim()
+  const providerName = text(object(providers)[providerId]?.name, 160).trim()
+  return providerName ? `${providerName} | ${modelName}`.slice(0, 320) : modelName
+}
+
 
 function normalizeUploadIds(value) {
   if (value === undefined) return []
@@ -220,7 +230,7 @@ function sanitizeEvent(event, payload) {
 export function createRemoteSessionManager({
   getConfig, openConversation, listWindows, openWindow, getWindowByRef,
   readLocalProjects = async () => ({ projects: [] }), dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice,
-  recordAssistantUsage = async () => {}, uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null
+  recordAssistantUsage = async () => {}, uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null, onConversationRevision = null
 } = {}) {
   for (const [name, value] of Object.entries({
     getConfig, openConversation, listWindows, openWindow, getWindowByRef, readLocalProjects,
@@ -269,10 +279,11 @@ export function createRemoteSessionManager({
 
   function remember(conversationId, item) {
     const current = sessions.get(conversationId)
-    const session = current || { conversationId, activeRequestId: '', activeDeviceId: '', pendingSends: [], pendingChoices: new Map() }
+    const session = current || { conversationId, activeRequestId: '', activeDeviceId: '', pendingSends: [], pendingChoices: new Map(), mobileOpened: false, mobileControlled: false, mobileDeviceId: '' }
     if (!(session.pendingChoices instanceof Map)) session.pendingChoices = new Map()
     session.windowRef = item.id
     session.hidden = item.remoteHidden === true
+    if (!current && item.mobileControlled === true) session.mobileControlled = true
     sessions.set(conversationId, session)
     return session
   }
@@ -425,7 +436,7 @@ export function createRemoteSessionManager({
   }
 
   function scheduleIdleRelease(session) {
-    if (!session || session.idleReleaseTimer || !session.hidden) return
+    if (!session || session.idleReleaseTimer || !session.hidden || session.mobileControlled) return
     session.idleReleaseTimer = setTimeout(() => {
       session.idleReleaseTimer = null
       if (!enabled || sessions.get(session.conversationId) !== session) return
@@ -436,10 +447,153 @@ export function createRemoteSessionManager({
 
   async function release({ deviceId, params = {} } = {}) {
     parameters(params, ['conversationId'])
+    const safeDeviceId = id(deviceId, 'deviceId')
     const conversationId = id(params.conversationId, 'conversationId')
-    assertActive(generation, id(deviceId, 'deviceId'))
-    const result = await releaseHiddenSession(existingSession(conversationId))
+    assertActive(generation, safeDeviceId)
+    const session = existingSession(conversationId)
+    if (!session) return { ok: true, conversationId, released: false }
+    if (session.mobileControlled) {
+      requireMobileController(session, safeDeviceId)
+      const { busy } = hiddenSessionState(session)
+      // Navigation is not an ownership transfer. Mobile may manage several
+      // opened sessions; only conversation.handoff explicitly returns control.
+      return { ok: true, conversationId, released: false, mobileControlled: true, ...(busy ? { busy: true } : {}) }
+    }
+    const result = await releaseHiddenSession(session)
     return { ok: true, conversationId, ...result }
+  }
+
+
+  function requireMobileController(session, deviceId) {
+    if (!session?.mobileControlled) throw remoteError('remote_conversation_takeover_required')
+    if (session.mobileDeviceId && session.mobileDeviceId !== deviceId) throw remoteError('remote_conversation_controlled_by_other_device')
+  }
+
+  function openedSessions({ deviceId, params = {} } = {}) {
+    parameters(params, [])
+    const safeDeviceId = id(deviceId, 'deviceId')
+    assertActive(generation, safeDeviceId)
+    const result = []
+    // A session enters this registry only through a Mobile create/open/takeover
+    // flow. Do not enumerate arbitrary Desktop windows into the Mobile panel.
+    for (const conversationId of [...sessions.keys()]) {
+      const session = existingSession(conversationId)
+      const writer = session ? windowItem(session.windowRef) : null
+      if (!session?.mobileOpened || !writer) continue
+      const hasDesktopObserver = windows().some((candidate) =>
+        candidate.id !== writer.id && candidate.conversationId === conversationId && candidate.remoteHidden !== true
+      )
+      result.push({
+        conversationId,
+        title: text(writer.conversationTitle || writer.title, 240),
+        windowId: writer.id,
+        visible: writer.visible === true,
+        busy: writer.busy === true || writer.generating === true || writer.compacting === true,
+        mobileControlled: session.mobileControlled === true,
+        controlledByThisDevice: session.mobileControlled === true && (!session.mobileDeviceId || session.mobileDeviceId === safeDeviceId),
+        hidden: writer.remoteHidden === true,
+        hasDesktopObserver
+      })
+    }
+    return { ok: true, sessions: result.sort((left, right) => left.title.localeCompare(right.title, 'zh-CN') || left.conversationId.localeCompare(right.conversationId)) }
+  }
+
+  async function openForMobile({ deviceId, params = {} } = {}) {
+    parameters(params, ['conversationId'])
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const conversationId = id(params.conversationId, 'conversationId')
+    const epoch = generation
+    const check = () => assertActive(epoch, safeDeviceId)
+    return serialize(conversationId, async () => {
+      let session = existingSession(conversationId)
+      const existed = Boolean(session)
+      if (!session) {
+        session = await ensureSession(conversationId, check)
+        ensureMobileControl(session, safeDeviceId)
+      } else if (session.mobileControlled) {
+        requireMobileController(session, safeDeviceId)
+      } else if (session.hidden) {
+        await ready(session.windowRef, check)
+        ensureMobileControl(session, safeDeviceId)
+      }
+      const item = windowItem(session.windowRef)
+      session.mobileOpened = true
+      return {
+        ok: true,
+        conversationId,
+        windowId: session.windowRef,
+        created: !existed,
+        mobileControlled: session.mobileControlled === true && (!session.mobileDeviceId || session.mobileDeviceId === safeDeviceId),
+        observingDesktop: item?.remoteHidden !== true && session.mobileControlled !== true
+      }
+    })
+  }
+
+
+  async function takeover({ deviceId, params = {} } = {}) {
+    parameters(params, ['conversationId'])
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const conversationId = id(params.conversationId, 'conversationId')
+    const epoch = generation
+    const check = () => assertActive(epoch, safeDeviceId)
+    return serialize(conversationId, async () => {
+      const session = await ensureSession(conversationId, check)
+      check()
+      const { item, busy } = hiddenSessionState(session)
+      if (!item) throw remoteError('remote_conversation_window_not_found')
+      if (session.mobileControlled && session.mobileDeviceId && session.mobileDeviceId !== safeDeviceId) {
+        throw remoteError('remote_conversation_controlled_by_other_device')
+      }
+      if (busy) throw remoteError('remote_conversation_busy')
+      const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+        type: 'conversation.mobile.takeover', conversationId
+      })
+      if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+      if (session.idleReleaseTimer) clearTimeout(session.idleReleaseTimer)
+      session.idleReleaseTimer = null
+      session.mobileOpened = true
+      session.mobileControlled = true
+      session.mobileDeviceId = safeDeviceId
+      return { ok: true, conversationId, windowId: session.windowRef, hidden: session.hidden, mobileControlled: true }
+    })
+  }
+
+  async function handoff({ deviceId, params = {} } = {}) {
+    parameters(params, ['conversationId'])
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const conversationId = id(params.conversationId, 'conversationId')
+    assertActive(generation, safeDeviceId)
+    return serialize(conversationId, async () => {
+      const session = existingSession(conversationId)
+      requireMobileController(session, safeDeviceId)
+      const { item, busy } = hiddenSessionState(session)
+      if (!item) throw remoteError('remote_conversation_window_not_found')
+      if (busy) throw remoteError('remote_conversation_busy')
+      const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+        type: 'conversation.mobile.handoff', conversationId, acquireLease: false, reload: false
+      })
+      if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+      if (item.remoteHidden === true) {
+        const revealed = revealRemoteConversationWindow(session.windowRef)
+        if (!revealed?.ok) throw remoteError('remote_window_reveal_failed')
+        session.hidden = false
+      }
+      session.mobileControlled = false
+      session.mobileDeviceId = ''
+      return { ok: true, conversationId, windowId: session.windowRef, hidden: false, mobileControlled: false }
+    })
+  }
+
+  function observeOnDesktop({ conversationId } = {}) {
+    const safeConversationId = id(conversationId, 'conversationId')
+    const session = existingSession(safeConversationId)
+    if (!session?.mobileControlled) return { ok: true, reused: false }
+    const item = windowItem(session.windowRef)
+    // A hidden Mobile writer deliberately remains hidden here. Desktop history
+    // opens its own read-only observer, which reloads persisted revisions and
+    // can never overwrite the authoritative writer on later handoff.
+    if (!item || item.remoteHidden === true) return { ok: true, reused: false }
+    return { ok: true, reused: true, conversationId: safeConversationId, windowId: session.windowRef, mobileControlled: true }
   }
 
 
@@ -451,6 +605,7 @@ export function createRemoteSessionManager({
     assertActive(epoch, deviceId)
     const config = object(configResult?.config)
     const prompts = object(config.prompts)
+    const providers = object(config.providers)
     const projectData = await readLocalProjects(text(config?.webdav?.localChatPath, 32768)).catch(() => ({ projects: [] }))
     const projectNames = new Map((Array.isArray(projectData?.projects) ? projectData.projects : []).map((project) => [text(project?.id, 160), text(project?.name, 160)]))
     const usage = config.desktop?.quickAssistantUsage
@@ -463,7 +618,7 @@ export function createRemoteSessionManager({
           code,
           name: text(source.name, 160) || code,
           icon: /^https:\/\//i.test(text(source.icon, 2048)) ? text(source.icon, 2048) : '',
-          model: text(source.model, 320),
+          model: displayModelLabel(source.model, providers),
           defaultProjectName: projectNames.get(projectId) || '',
           mcpCount: Array.isArray(source.defaultMcpServers) ? source.defaultMcpServers.length : 0,
           skillCount: Array.isArray(source.skillIds || source.defaultSkills) ? (source.skillIds || source.defaultSkills).length : 0,
@@ -516,6 +671,11 @@ export function createRemoteSessionManager({
         check()
         const conversationId = id(item.conversationId, 'conversationId')
         const session = remember(conversationId, item)
+        if (session.idleReleaseTimer) clearTimeout(session.idleReleaseTimer)
+        session.idleReleaseTimer = null
+        session.mobileOpened = true
+        session.mobileControlled = true
+        session.mobileDeviceId = safeDeviceId
         record.conversationId = conversationId
         const result = { ok: true, conversationId, windowId: windowRef, hidden: session.hidden, created: true,
           promptCode, title: text(item.conversationTitle, 240) || `${promptCode} - 新会话` }
@@ -540,6 +700,25 @@ export function createRemoteSessionManager({
     creations.set(creationKey, record.dispatched)
     record.dispatched.finally(() => { if (creations.get(creationKey) === record.dispatched) creations.delete(creationKey) }).catch(() => {})
     return record.dispatched
+  }
+
+
+  function ensureMobileControl(session, deviceId) {
+    if (session?.mobileControlled) {
+      if (session.mobileDeviceId && session.mobileDeviceId !== deviceId) throw remoteError('remote_conversation_controlled_by_other_device')
+      if (!session.mobileDeviceId) session.mobileDeviceId = deviceId
+      return
+    }
+    // A hidden writer only exists for Mobile. The first paired device that
+    // reaches a freshly created hidden session owns it; visible Desktop writers
+    // must be explicitly taken over instead of being silently commandeered.
+    if (session?.hidden) {
+      session.mobileOpened = true
+      session.mobileControlled = true
+      session.mobileDeviceId = deviceId
+      return
+    }
+    throw remoteError('remote_conversation_takeover_required')
   }
 
 
@@ -648,6 +827,7 @@ export function createRemoteSessionManager({
       const hadSession = Boolean(existingSession(conversationId))
       const session = await ensureSession(conversationId, check)
       check()
+      ensureMobileControl(session, safeDeviceId)
       record.created = !hadSession
       record.windowRef = session.windowRef
       const item = windowItem(session.windowRef)
@@ -704,6 +884,7 @@ export function createRemoteSessionManager({
         const hadSession = Boolean(existingSession(conversationId))
         const session = await ensureSession(conversationId, check)
         check()
+        ensureMobileControl(session, safeDeviceId)
         const item = windowItem(session.windowRef)
         if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
         session.activeRequestId = safeRequestId
@@ -765,6 +946,7 @@ export function createRemoteSessionManager({
         const hadSession = Boolean(existingSession(conversationId))
         const session = await ensureSession(conversationId, check)
         check()
+        ensureMobileControl(session, safeDeviceId)
         const item = windowItem(session.windowRef)
         if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
         session.activeRequestId = safeRequestId
@@ -829,6 +1011,7 @@ export function createRemoteSessionManager({
         const hadSession = Boolean(existingSession(conversationId))
         const session = await ensureSession(conversationId, check)
         check()
+        if (operation === 'conversation.config.patch') ensureMobileControl(session, safeDeviceId)
         const item = windowItem(session.windowRef)
         if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
         session.activeRequestId = safeRequestId
@@ -883,6 +1066,7 @@ export function createRemoteSessionManager({
         const hadSession = Boolean(existingSession(conversationId))
         const session = await ensureSession(conversationId, check)
         check()
+        ensureMobileControl(session, safeDeviceId)
         const item = windowItem(session.windowRef)
         if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
         session.activeRequestId = safeRequestId
@@ -1032,6 +1216,11 @@ export function createRemoteSessionManager({
       session.pendingChoices.set(sanitizedPayload.toolCallId, sanitizedPayload.questions)
     }
     publish(record, data.event, sanitizedPayload)
+
+    const revision = Math.max(0, Number(sanitizedPayload?.revision) || 0)
+    if (revision > 0 && typeof onConversationRevision === 'function') {
+      try { onConversationRevision({ windowRef, conversationId: session.conversationId, revision }) } catch { /* observers never affect the writer */ }
+    }
     if (record.terminal) {
       if (session.activeOperation === 'conversation.delete' && data.event === 'conversation.operation.completed' && sanitizedPayload.deleted) {
         deletedConversations.add(session.conversationId)
@@ -1141,7 +1330,7 @@ export function createRemoteSessionManager({
     patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),
     compact,
     cancelCompact,
-    cancel, release, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
+    cancel, release, openForMobile, takeover, handoff, openedSessions, observeOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
     resume: () => { enabled = true },
     authorizeDevice: (deviceId) => { revokedDevices.delete(deviceId) },

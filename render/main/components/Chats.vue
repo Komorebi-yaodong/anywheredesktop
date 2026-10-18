@@ -1933,6 +1933,13 @@ async function startChat(file) {
 
         if (activeView.value === 'local') {
             if (!localChatPath.value) throw new Error(t('chats.alerts.localPathRequired'));
+            const existingRemote = file?.format === 'sqlite' && file?.conversationId
+                ? await window.api.observeRemoteConversation(file.conversationId)
+                : { reused: false };
+            if (existingRemote?.reused) {
+                ElMessage.success('已打开 Mobile 托管的实时会话（Desktop 观察模式）');
+                return;
+            }
             const opened = await window.api.openConversation({
                 dirPath: localChatPath.value,
                 reference: file?.conversationId || basename,

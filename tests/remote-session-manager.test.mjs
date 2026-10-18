@@ -3,7 +3,7 @@ import { createRemoteSessionManager } from '../main/core/remote/sessionManager.j
 
 const CID = 'conversation-session-fixture-0001'
 const DEVICE = 'device-session-fixture-0001'
-function fixture({ existing = false, dispatchFailure = false, stalled = false, uploadManager = null } = {}) {
+function fixture({ existing = false, dispatchFailure = false, allowControlCommands = false, stalled = false, uploadManager = null } = {}) {
   const items = existing ? [{ id: 'window-existing', type: 'window', conversationId: CID, rendererReady: true, leasePending: false, remoteHidden: false }] : []
   const commands = [], events = [], opens = []
   let blocked = null
@@ -26,7 +26,7 @@ function fixture({ existing = false, dispatchFailure = false, stalled = false, u
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       commands.push({ windowRef, ...command })
       if (command.type === 'remote.shutdown') items.splice(items.findIndex((item) => item.id === windowRef), 1)
-      return { ok: !dispatchFailure }
+      return { ok: !dispatchFailure || (allowControlCommands && /^conversation\.mobile\.(takeover|handoff)$/.test(command.type)) }
     },
     revealRemoteConversationWindow: (ref) => { items.find((item) => item.id === ref).remoteHidden = false; return { ok: true } },
     broadcastToDevice: (deviceId, event, payload) => events.push({ deviceId, event, payload }),
@@ -148,10 +148,10 @@ async function run() {
   renderer(releasable, 'assistant.completed', {}, 'request-release-idle')
   assert.deepEqual(
     await releasable.manager.release({ deviceId: DEVICE, params: { conversationId: CID } }),
-    { ok: true, conversationId: CID, released: true }
+    { ok: true, conversationId: CID, released: false, mobileControlled: true }
   )
-  assert.equal(releasable.commands.at(-1).type, 'remote.shutdown')
-  assert.equal(releasable.items.length, 0, 'an idle hidden Remote writer must be closed to release its SQLite lease')
+  assert.equal(releasable.commands.some((command) => command.type === 'remote.shutdown'), false)
+  assert.equal(releasable.items.length, 1, 'navigation must not close a Mobile-controlled hidden writer; explicit handoff owns the transfer')
 
   const visibleRelease = fixture({ existing: true })
   assert.deepEqual(
@@ -178,7 +178,71 @@ async function run() {
   renderer(removable, 'assistant.completed', {}, 'request-queue-active')
 
 
+  const takeoverFixture = fixture({ existing: true })
+  // A Desktop-only window must not be surfaced in Mobile's opened-session panel.
+  assert.equal(takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} }).sessions.length, 0)
+
+  await assert.rejects(
+    takeoverFixture.manager.send({ deviceId: DEVICE, requestId: 'request-visible-without-takeover', params: { conversationId: CID, text: 'must be rejected before takeover' } }),
+    { code: 'remote_conversation_takeover_required' }
+  )
+  assert.equal(takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} }).sessions.length, 0, 'a rejected visible-writer write must not register as Mobile-opened')
+  const openedForMobile = await takeoverFixture.manager.openForMobile({ deviceId: DEVICE, params: { conversationId: CID } })
+  assert.equal(openedForMobile.mobileControlled, false)
+  const takeoverList = takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} })
+  assert.equal(takeoverList.sessions[0].mobileControlled, false)
+  const taken = await takeoverFixture.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
+  assert.equal(taken.mobileControlled, true)
+  assert.equal(takeoverFixture.commands.at(-1).type, 'conversation.mobile.takeover')
+  const controlledList = takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} })
+  assert.equal(controlledList.sessions[0].controlledByThisDevice, true)
+  await takeoverFixture.manager.send({ deviceId: DEVICE, requestId: 'request-takeover-write', params: { conversationId: CID, text: 'writer continues' } })
+  assert.equal(takeoverFixture.commands.at(-1).type, 'conversation.send')
+  renderer(takeoverFixture, 'assistant.completed', {}, 'request-takeover-write')
+  const handed = await takeoverFixture.manager.handoff({ deviceId: DEVICE, params: { conversationId: CID } })
+  assert.equal(handed.mobileControlled, false)
+  assert.equal(takeoverFixture.commands.at(-1).type, 'conversation.mobile.handoff')
+  await assert.rejects(takeoverFixture.manager.send({ deviceId: DEVICE, requestId: 'request-after-handoff', params: { conversationId: CID, text: 'must not commandeer desktop' } }), { code: 'remote_conversation_takeover_required' })
+
+  const hiddenTakeover = fixture()
+  await send(hiddenTakeover.manager, 'request-hidden-takeover')
+  renderer(hiddenTakeover, 'assistant.completed', {}, 'request-hidden-takeover')
+  const hiddenHandoff = await hiddenTakeover.manager.handoff({ deviceId: DEVICE, params: { conversationId: CID } })
+  assert.equal(hiddenHandoff.hidden, false)
+  assert.equal(hiddenTakeover.commands.at(-1).type, 'conversation.mobile.handoff')
+  assert.equal(hiddenTakeover.commands.some((command) => command.type === 'remote.shutdown'), false, 'handoff must reveal the same writer instead of replacing it')
+
+
+  const hiddenWriterWithObserver = fixture()
+  await send(hiddenWriterWithObserver.manager, 'request-hidden-observer')
+  renderer(hiddenWriterWithObserver, 'assistant.completed', {}, 'request-hidden-observer')
+  const hiddenWriterRef = hiddenWriterWithObserver.items[0].id
+  // Desktop history may open a second read-only observer while Mobile's hidden
+  // writer remains authoritative. It must never replace that writer on handoff.
+  hiddenWriterWithObserver.items.push({
+    id: 'window-readonly-observer', type: 'window', conversationId: CID,
+    rendererReady: true, leasePending: false, readOnly: true, remoteHidden: false
+  })
+  assert.deepEqual(
+    hiddenWriterWithObserver.manager.observeOnDesktop({ conversationId: CID }),
+    { ok: true, reused: false }
+  )
+  const observedSession = hiddenWriterWithObserver.manager.openedSessions({ deviceId: DEVICE, params: {} }).sessions[0]
+  assert.equal(observedSession.windowId, hiddenWriterRef)
+  assert.equal(observedSession.hasDesktopObserver, true)
+  const observerHandoff = await hiddenWriterWithObserver.manager.handoff({ deviceId: DEVICE, params: { conversationId: CID } })
+  assert.equal(observerHandoff.windowId, hiddenWriterRef)
+  assert.equal(hiddenWriterWithObserver.commands.at(-1).windowRef, hiddenWriterRef)
+  assert.equal(hiddenWriterWithObserver.items.find((item) => item.id === hiddenWriterRef)?.remoteHidden, false)
+  assert.equal(hiddenWriterWithObserver.items.find((item) => item.id === 'window-readonly-observer')?.readOnly, true)
+  assert.equal(hiddenWriterWithObserver.manager.getSession(CID)?.windowRef, hiddenWriterRef)
+  assert.equal(hiddenWriterWithObserver.manager.getSession(CID)?.mobileControlled, false)
+
+
+
   const mutations = fixture({ existing: true })
+
+  await mutations.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   const edited = await mutations.manager.editMessage({ deviceId: DEVICE, requestId: 'request-edit-fixture', params: {
     conversationId: CID, uiMessageId: 'ui-message-fixture-0001', content: 'Edited text'
   } })
@@ -215,6 +279,8 @@ async function run() {
 
 
   const metadata = fixture({ existing: true })
+
+  await metadata.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   await assert.rejects(metadata.manager.renameConversation({
     deviceId: DEVICE, requestId: 'request-rename-empty', params: { conversationId: CID, title: '   ' }
   }), { code: 'remote_conversation_title_invalid' })
@@ -257,6 +323,8 @@ async function run() {
 
 
   const configFixture = fixture({ existing: true })
+
+  await configFixture.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   await assert.rejects(configFixture.manager.patchConfig({ deviceId: DEVICE, requestId: 'request-config-bad-1', params: {
     conversationId: CID, patch: { compact: { unknown: true } }
   } }), { code: 'remote_parameter_unknown' })
@@ -288,6 +356,8 @@ async function run() {
 
 
   const compactFixture = fixture({ existing: true })
+
+  await compactFixture.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   await compactFixture.manager.compact({ deviceId: DEVICE, requestId: 'request-compact-fixture', params: { conversationId: CID } })
   assert.equal(compactFixture.commands.at(-1).type, 'conversation.compact')
   compactFixture.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
@@ -308,11 +378,13 @@ async function run() {
 
 
   const compactRevoked = fixture({ existing: true })
+  await compactRevoked.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   await compactRevoked.manager.compact({ deviceId: DEVICE, requestId: 'request-compact-revoke', params: { conversationId: CID } })
   await compactRevoked.manager.revokeDevice(DEVICE)
   assert.equal(compactRevoked.commands.at(-1).type, 'conversation.compact.cancel')
 
   const compactShutdown = fixture({ existing: true })
+  await compactShutdown.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   await compactShutdown.manager.compact({ deviceId: DEVICE, requestId: 'request-compact-shutdown', params: { conversationId: CID } })
   const compactClosing = compactShutdown.manager.closeAll()
   await new Promise((resolve) => setImmediate(resolve))
@@ -324,6 +396,7 @@ async function run() {
 
 
   const reused = fixture({ existing: true })
+  await reused.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   await send(reused.manager)
   assert.equal(reused.opens.length, 0)
   await reused.manager.revokeDevice(DEVICE)
@@ -358,6 +431,7 @@ async function run() {
     async cleanupWindow(windowRef) { uploadCalls.push({ method: 'cleanupWindow', windowRef }); return { ok: true } }
   }
   const withUploads = fixture({ existing: true, uploadManager })
+  await withUploads.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   const uploadIds = ['upload-session-fixture-0001', 'upload-session-fixture-0002']
   await withUploads.manager.send({
     deviceId: DEVICE, requestId: 'request-upload-session-1',
@@ -391,7 +465,8 @@ async function run() {
     async authorizeForRequest(input) { uploadFailureCalls.push({ method: 'authorize', ...structuredClone(input) }); return [] },
     async releaseRequest(input) { uploadFailureCalls.push({ method: 'release', ...structuredClone(input) }); return { ok: true } }
   }
-  const uploadDispatchFailed = fixture({ existing: true, dispatchFailure: true, uploadManager: uploadFailureManager })
+  const uploadDispatchFailed = fixture({ existing: true, dispatchFailure: true, allowControlCommands: true, uploadManager: uploadFailureManager })
+  await uploadDispatchFailed.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
   await assert.rejects(uploadDispatchFailed.manager.send({
     deviceId: DEVICE, requestId: 'request-upload-dispatch-fail',
     params: { conversationId: CID, text: 'retryable', uploadIds: [uploadIds[0]] }

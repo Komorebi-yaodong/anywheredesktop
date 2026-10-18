@@ -770,7 +770,7 @@ const flushPendingWindowPayloadQueue = async () => {
 
 
 const handleAppendMessageEvent = async (data, options = {}) => {
-  if (!data || !ensureConversationWriteAccess(true)) return;
+  if (!data || !ensureLocalConversationWriteAccess(true)) return;
 
   if (!options.deferSend && (loading.value || isPreparingSend.value)) {
     pendingAppendBuffer.value.push({
@@ -2221,7 +2221,7 @@ const handleRestoreCompact = async (payload = null) => {
 
   const storage = currentConversationStorage.value;
   if (storage?.format === 'sqlite' && storage?.conversationId && storage?.dirPath) {
-    if (!ensureConversationWriteAccess(true)) return;
+    if (!ensureLocalConversationWriteAccess(true)) return;
     try {
       const restored = await window.api.restoreConversationCompaction({
         dirPath: storage.dirPath,
@@ -2607,6 +2607,7 @@ const buildConversationWindowStatus = () => ({
   generating: loading.value,
   compacting: compacting.value,
   readOnly: conversationReadOnly.value,
+  mobileControlled: mobileControlActive.value,
   leasePending: conversationLeasePending.value,
   rendererReady: remoteCommandAdapterReady.value && isWindowBootstrapped.value
 });
@@ -2634,12 +2635,14 @@ watch([
   compacting,
   isPreparingSend,
   conversationReadOnly,
+  mobileControlActive,
   conversationLeasePending
 ], scheduleConversationWindowStatusSync, { immediate: true });
 
 const activeRemoteCommand = shallowRef(null);
 let remoteCommandExecutionPromise = null;
 const remoteHiddenWriter = ref(false);
+const mobileControlActive = ref(false);
 const remoteConversationDeleted = ref(false);
 
 const emitRemoteRendererEvent = (event, command = {}, payload = {}) => {
@@ -2731,7 +2734,9 @@ const normalizeRemoteCommand = (input = {}) => {
     autoApproveTools: input.autoApproveTools === true,
     toolCallId: typeof input.toolCallId === 'string' ? input.toolCallId.trim() : '',
     responses: Array.isArray(input.responses) ? input.responses.slice(0, 12) : [],
-    targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : ''
+    targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : '',
+    acquireLease: input.acquireLease === true,
+    reload: input.reload === true
   };
 };
 
@@ -2793,6 +2798,39 @@ const runRemoteConversationCommand = async (input = {}) => {
   if (!command) return;
   const activeConversationId = currentConversationStorage.value?.conversationId || '';
   if (command.conversationId !== activeConversationId) return;
+
+  if (command.type === 'conversation.mobile.takeover') {
+    if (!isWindowBootstrapped.value || loading.value || compacting.value || isPreparingSend.value || activeRemoteCommand.value) return;
+    if (conversationLease.value?.leaseEpoch && !conversationReadOnly.value) {
+      const saved = await persistRemoteTranscript('mobile-takeover').catch(() => false);
+      if (!saved) return;
+    }
+    mobileControlActive.value = true;
+    scheduleConversationWindowStatusSync();
+    showDismissibleMessage.info('该会话正在由 Mobile 控制，本窗口将实时观察更新');
+    return;
+  }
+  if (command.type === 'conversation.mobile.handoff') {
+    if (!isWindowBootstrapped.value || loading.value || compacting.value || isPreparingSend.value || activeRemoteCommand.value) return;
+    const storage = currentConversationStorage.value;
+    if (command.reload && storage?.conversationId) {
+      await reloadConversationWindowFromStore({ activeOnly: true, pageSize: Number(storage.pageSize) || 200 }).catch(() => {});
+    }
+    if (command.acquireLease && storage?.conversationId) {
+      conversationReadOnly.value = false;
+      await acquireCurrentConversationLease();
+      if (conversationReadOnly.value || !conversationLease.value?.leaseEpoch) return;
+    }
+    if (conversationLease.value?.leaseEpoch && !conversationReadOnly.value) {
+      const saved = await persistRemoteTranscript('mobile-handoff').catch(() => false);
+      if (!saved) return;
+    }
+    mobileControlActive.value = false;
+    scheduleConversationWindowStatusSync();
+    showDismissibleMessage.success('Mobile 已交还会话控制权');
+    return;
+  }
+
 
   if (command.type === 'remote.revealed') {
     remoteHiddenWriter.value = false;
@@ -3062,9 +3100,9 @@ const runRemoteConversationCommand = async (input = {}) => {
       let terminalPayload = { operation: command.type, uiMessageId: command.uiMessageId };
       try {
         if (command.type === 'conversation.message.edit') {
-          if (!handleEditMessage(targetIndex, command.content)) throw new Error('remote_message_state_changed');
+          if (!handleEditMessage(targetIndex, command.content, command)) throw new Error('remote_message_state_changed');
         } else if (command.type === 'conversation.message.delete') {
-          if (!deleteMessage(targetIndex)) throw new Error('remote_message_state_changed');
+          if (!deleteMessage(targetIndex, command)) throw new Error('remote_message_state_changed');
         } else {
           await reaskAI(target.id, command);
           terminalEvent = command.__remoteTerminalEvent || 'assistant.completed';
@@ -3232,6 +3270,15 @@ const ensureConversationWriteAccess = (message = '') => {
   }
   return true;
 };
+
+const ensureLocalConversationWriteAccess = (message = '') => {
+  if (mobileControlActive.value) {
+    if (message) showDismissibleMessage.warning('该会话正在由 Mobile 控制，本窗口保持实时观察');
+    return false;
+  }
+  return ensureConversationWriteAccess(message);
+};
+
 
 const acquireCurrentConversationLease = async () => {
   stopConversationLeaseHeartbeat();
@@ -5382,7 +5429,7 @@ const onAvatarClick = async (role, event) => {
 };
 
 const handleSubmit = () => {
-  if (!ensureConversationWriteAccess(true)) return;
+  if (!ensureLocalConversationWriteAccess(true)) return;
 
   if (compacting.value) {
     showDismissibleMessage.warning('压缩进行中，暂不可发送');
@@ -5416,7 +5463,7 @@ const handleUpload = async ({ fileList: newFiles }) => {
 const handleOpenMcpDialog = () => toggleMcpDialog();
 
 const handleSendAudio = async (audioFile) => {
-  if (!ensureConversationWriteAccess(true)) return;
+  if (!ensureLocalConversationWriteAccess(true)) return;
   fileList.value = [];
   await file2fileList(audioFile, 0);
   await askAI(false);
@@ -5690,8 +5737,8 @@ const handleDownloadImageFromViewer = async (url) => {
   }
 };
 
-const handleEditMessage = (index, newContent) => {
-  if (!ensureConversationWriteAccess(true)) return false;
+const handleEditMessage = (index, newContent, remoteCommand = null) => {
+  if (!(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return false;
 
   if (compacting.value) {
     showDismissibleMessage.warning('压缩进行中，暂不可编辑历史');
@@ -6507,6 +6554,17 @@ onMounted(async () => {
     // 优先接桌面端事件总线，同时保留原插件 preload 回退
   if (window.api && typeof window.api.onWindowEvent === 'function') {
     window.api.onWindowEvent(async (envelope) => {
+      if (envelope?.event === 'conversation.remote.updated' && envelope.sourceId === 'conversation-writer') {
+        const update = envelope.payload && typeof envelope.payload === 'object' ? envelope.payload : {};
+        const conversationId = typeof update.conversationId === 'string' ? update.conversationId : '';
+        const revision = Math.max(0, Number(update.revision) || 0);
+        const storage = currentConversationStorage.value;
+        if (conversationId && storage?.conversationId === conversationId && revision > Number(storage.revision || 0) && !loading.value && !compacting.value && !isPreparingSend.value) {
+          await reloadConversationWindowFromStore({ activeOnly: true, pageSize: Number(storage.pageSize) || 200 }).catch(() => {});
+        }
+        return;
+      }
+
       if (envelope?.event === 'remote:command') {
         if (envelope.sourceId !== 'remote-session-manager') return;
         await runRemoteConversationCommand(envelope.payload);
@@ -7833,7 +7891,7 @@ const saveSessionToCloud = async () => {
               currentConversationStorage.value = storage;
               await acquireCurrentConversationLease();
             } else if (finalBasename !== storage.title) {
-              if (!ensureConversationWriteAccess(true)) return;
+              if (!ensureLocalConversationWriteAccess(true)) return;
               const renamed = await window.api.renameConversation({
                 dirPath: storage.dirPath,
                 conversationId: storage.conversationId,
@@ -8456,7 +8514,7 @@ const saveSessionAsJson = async () => {
             if (localChatPath) {
               const projectName = projectsData.projects.find((p) => p.id === selectedProjectId.value)?.name || '';
               if (currentConversationStorage.value?.conversationId) {
-                if (!ensureConversationWriteAccess(true)) return;
+                if (!ensureLocalConversationWriteAccess(true)) return;
                 const storage = currentConversationStorage.value;
                 const renamed = await window.api.renameConversation({
                   dirPath: storage.dirPath || localChatPath,
@@ -8534,7 +8592,7 @@ const handleRenameSession = async () => {
     showDismissibleMessage.warning('当前对话尚未保存，无法重命名');
     return;
   }
-  if (!ensureConversationWriteAccess(true)) return;
+  if (!ensureLocalConversationWriteAccess(true)) return;
 
   const oldTitle = defaultConversationName.value || storage.title || '';
   const inputValue = ref(oldTitle);
@@ -9787,7 +9845,7 @@ const appendCurrentInputToHistory = async () => {
 
 const askAI = async (forceSend = false, remoteCommand = null) => {
   if (activeRemoteCommand.value && activeRemoteCommand.value !== remoteCommand) return;
-  if (isClosingWindow.value || !ensureConversationWriteAccess(true)) return;
+  if (isClosingWindow.value || !(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
   if (loading.value || isPreparingSend.value || compacting.value) return;
   if (isMcpLoading.value) {
     showDismissibleMessage.info('正在加载工具，请稍后再试...');
@@ -10917,7 +10975,7 @@ const cancelAskAI = () => {
 };
 const copyText = async (content, index) => { if (loading.value && index === chat_show.value.length - 1) return; await window.api.copyText(content); };
 const reaskAI = async (assistantMessageId = null, remoteCommand = null) => {
-  if (!ensureConversationWriteAccess(true)) return;
+  if (!(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
 
   if (loading.value || isReasking) return;
   if (isMcpLoading.value || compacting.value || isPreparingSend.value) {
@@ -10977,8 +11035,8 @@ const reaskAI = async (assistantMessageId = null, remoteCommand = null) => {
   }
 };
 
-const deleteMessage = (index) => {
-  if (!ensureConversationWriteAccess(true)) return;
+const deleteMessage = (index, remoteCommand = null) => {
+  if (!(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
 
   if (loading.value || compacting.value) {
     showDismissibleMessage.warning(compacting.value ? '压缩进行中，暂不可编辑历史' : '请等待当前回复完成后再操作');
@@ -11063,7 +11121,7 @@ const deleteMessage = (index) => {
 };
 
 const clearHistory = async () => {
-  if (!ensureConversationWriteAccess(true)) return;
+  if (!ensureLocalConversationWriteAccess(true)) return;
 
   if (loading.value) {
     return;

@@ -7,8 +7,8 @@ let config = {
   remote: { enabled: true, host: '0.0.0.0', port: 17860 },
   skillPath: 'PRIVATE_SKILLS',
   prompts: { Code: { name: '代码助手', icon: 'https://example.test/icon.png', prompt: 'PRIVATE_PROMPT', model: 'p|m', autoSaveProjectId: 'work', defaultMcpServers: ['m1'], skillIds: ['s1'] } },
-  providers: { p: { api_key: 'PRIVATE_KEY' } },
-  mcpServers: { m1: { name: 'MCP', command: 'PRIVATE_COMMAND' } }, tasks: { t1: { title: 'Task' }
+  providers: { p: { name: '安全服务商', api_key: 'PRIVATE_KEY' } },
+  mcpServers: { m1: { name: 'MCP', tags: ['文件', 'Research'], command: 'PRIVATE_COMMAND' } }, tasks: { t1: { title: 'Task' }
   }
 }
 let projects = { version: 2, conversations: {}, projects: [{ id: 'work', name: '工作', files: [], conversationIds: [] }] }
@@ -33,6 +33,7 @@ assert.equal(bootstrap.profile.displayName, 'Komorebi')
 assert.equal(bootstrap.profile.avatarUrl, '')
 assert.deepEqual(bootstrap.projects, [{ projectId: 'work', name: '工作', conversationCount: 0 }])
 assert.deepEqual(bootstrap.assistants[0].name, '代码助手')
+assert.equal(bootstrap.assistants[0].model, '安全服务商 | m')
 assert.equal(JSON.stringify(bootstrap).includes('PRIVATE'), false)
 profileAvatar = 'data:image/png;base64,AA=='
 const avatarBootstrap = await service.bootstrap({ params: {} })
@@ -171,6 +172,7 @@ const providers = await service.managementDetails({ params: { section: 'provider
 assert.equal(providers.items[0].hasApiKey, true)
 assert.equal(JSON.stringify(providers).includes('PRIVATE_KEY'), false)
 const mcp = await service.managementDetails({ params: { section: 'mcp' } })
+assert.deepEqual(mcp.items[0].tags, ['文件', 'Research'])
 assert.equal(JSON.stringify(mcp).includes('PRIVATE_COMMAND'), false)
 const skills = await service.managementDetails({ params: { section: 'skills' } })
 assert.equal(skills.items[0].name, 'Skill One')

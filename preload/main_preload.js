@@ -42,6 +42,8 @@ const api = {
 
   appWindowType: defaultWindowType,
   openWindow: (type, payload = null) => electronAPI.ipcRenderer.invoke('window:open', type, payload),
+
+  observeRemoteConversation: (conversationId = '') => electronAPI.ipcRenderer.invoke('conversation:observeRemote', { conversationId }),
   showMainWindow: () => electronAPI.ipcRenderer.invoke('window:showMain'),
   hideMainWindow: () => electronAPI.ipcRenderer.invoke('window:hideMain'),
   listWindows: (type = '') => electronAPI.ipcRenderer.invoke('window:list', type),

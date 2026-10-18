@@ -62,6 +62,23 @@ function publicAvatarDataUrl(value) {
   return bytes > 0 && bytes <= MAX_AVATAR_BYTES ? avatar : ''
 }
 
+function modelDisplayLabel(value, providers = {}) {
+  const model = text(value, 320)
+  const separator = model.indexOf('|')
+  if (separator <= 0 || separator >= model.length - 1) return model
+  const providerId = model.slice(0, separator).trim()
+  const modelName = model.slice(separator + 1).trim()
+  const providerName = text(object(providers)[providerId]?.name, MAX_NAME)
+  return providerName ? `${providerName} | ${modelName}`.slice(0, 320) : modelName
+}
+
+function safeMcpTags(value = {}) {
+  const source = object(value)
+  const raw = Array.isArray(source.tags) ? source.tags : Array.isArray(source.labels) ? source.labels : []
+  return [...new Set(raw.map((tag) => text(tag, MAX_TAG_NAME)).filter(Boolean))].slice(0, 32)
+}
+
+
 function skillToggleDto(skill = {}) {
   const id = text(skill?.id, MAX_NAME)
   return {
@@ -343,7 +360,7 @@ function agentDto(code, prompt = {}, projects = [], tags = {}) {
 }
 
 
-function assistantDto(code, prompt = {}, projects = []) {
+function assistantDto(code, prompt = {}, projects = [], providers = {}) {
   const source = object(prompt)
   const defaultProjectId = text(source.autoSaveProjectId, MAX_NAME)
   const defaultProject = projects.find((project) => project.projectId === defaultProjectId)
@@ -353,7 +370,7 @@ function assistantDto(code, prompt = {}, projects = []) {
     name: text(source.name, MAX_NAME) || text(code, MAX_NAME),
     icon,
     enabled: source.enable !== false,
-    model: text(source.model, 320),
+    model: modelDisplayLabel(source.model, providers),
     defaultProjectId: defaultProjectId || '',
     defaultProjectName: defaultProject?.name || '',
     mcpCount: Array.isArray(source.defaultMcpServers) ? source.defaultMcpServers.length : 0,
@@ -362,10 +379,10 @@ function assistantDto(code, prompt = {}, projects = []) {
   }
 }
 
-function assistantDetail(code, prompt = {}, projects = []) {
+function assistantDetail(code, prompt = {}, projects = [], providers = {}) {
   const source = object(prompt)
   return {
-    ...assistantDto(code, source, projects),
+    ...assistantDto(code, source, projects, providers),
     revision: revision(source),
     systemPrompt: typeof source.prompt === 'string' ? source.prompt.slice(0, 256 * 1024) : '',
     reasoningEffort: text(source.reasoning_effort, 32) || 'default',
@@ -445,8 +462,9 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     parameters(params, [])
     const [{ config, projects, directoryConfigured }, user] = await Promise.all([current(), profile()])
     const prompts = object(config.prompts)
+    const providers = object(config.providers)
     const assistants = Object.entries(prompts)
-      .map(([code, prompt]) => assistantDto(code, prompt, projects))
+      .map(([code, prompt]) => assistantDto(code, prompt, projects, providers))
       .filter((assistant) => assistant.code && assistant.enabled)
       .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
     return { ok: true, profile: user, projects, assistants, configured: directoryConfigured }
@@ -455,10 +473,11 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
   async function assistantList({ params = {} } = {}) {
     parameters(params, [])
     const { config, projects } = await current()
+    const providers = object(config.providers)
     return {
       ok: true,
       assistants: Object.entries(object(config.prompts))
-        .map(([code, prompt]) => assistantDto(code, prompt, projects))
+        .map(([code, prompt]) => assistantDto(code, prompt, projects, providers))
         .filter((assistant) => assistant.code)
         .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
     }
@@ -470,7 +489,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     const { config, projects } = await current()
     const prompt = object(config.prompts)[code]
     if (!code || !prompt || typeof prompt !== 'object') throw remoteError('remote_assistant_not_found')
-    return { ok: true, assistant: assistantDetail(code, prompt, projects) }
+    return { ok: true, assistant: assistantDetail(code, prompt, projects, object(config.providers)) }
   }
 
   function pruneRequests() {
@@ -507,7 +526,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
       const persisted = object((await getConfig())?.config)
       const result = object(persisted.prompts)[code]
-      return { ok: true, assistant: assistantDetail(code, result, projects) }
+      return { ok: true, assistant: assistantDetail(code, result, projects, object(persisted.providers)) }
     })
     mutationTail = record.promise.catch(() => {})
     requests.set(key, record)
@@ -877,7 +896,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     const prompt = object(config.prompts)[code]
     if (!prompt || typeof prompt !== 'object') throw remoteError('remote_agent_not_found')
     const tags = normalizeTags(config.tags)
-    return { ok: true, agent: await agentDetail(code, prompt, projects, tags), options: await agentOptions(config, projects) }
+    return { ok: true, agent: await agentDetail(code, prompt, projects, tags, object(config.providers)), options: await agentOptions(config, projects) }
   }
 
   async function agentMutate({ deviceId, requestId, params = {} } = {}) {
@@ -932,7 +951,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       return {
         ok: true,
         operation,
-        agent: await agentView(code, object(persisted.prompts)[code], projects, persistedTags)
+        agent: await agentView(code, object(persisted.prompts)[code], projects, persistedTags, object(persisted.providers))
       }
     })
     mutationTail = record.promise.catch(() => {})
@@ -1220,7 +1239,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     }) }
     if (section === 'mcp') return { ok: true, section, items: Object.entries(object(config.mcpServers)).map(([id, value]) => {
       const item = object(value)
-      return { id: text(id), revision: revision(item), name: text(item.name) || text(id), enabled: item.isActive !== false, transport: text(item.transport || item.type, 32) || 'local' }
+      return { id: text(id), revision: revision(item), name: text(item.name) || text(id), tags: safeMcpTags(item), enabled: item.isActive !== false, transport: text(item.transport || item.type, 32) || 'local' }
     }) }
     if (section === 'skills') {
       const skills = await listSkillsForToggle(text(config.skillPath, 32768))

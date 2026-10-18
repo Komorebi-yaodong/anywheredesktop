@@ -74,6 +74,7 @@ function toRemoteWindow(item = {}) {
     generating: item.generating === true,
     compacting: item.compacting === true,
     readOnly: item.readOnly === true,
+    mobileControlled: item.mobileControlled === true,
     leasePending: item.leasePending === true,
     promptCode: normalizeText(item.promptCode || '__DEFAULT__') || '__DEFAULT__'
   }

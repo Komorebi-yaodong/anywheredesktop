@@ -124,6 +124,7 @@ export function registerIpcHandlers({
   skillApi,
   compactApi,
   remoteGateway,
+  observeRemoteConversation = () => ({ ok: true, reused: false }),
   remoteUploadManager,
 
   updaterApi,
@@ -150,6 +151,15 @@ export function registerIpcHandlers({
     }
   })
 
+
+
+  handleInvoke('conversation:observeRemote', async (_event, input = {}) => {
+    const conversationId = typeof input?.conversationId === 'string' ? input.conversationId.trim() : ''
+    if (!conversationId || Object.keys(input || {}).some((key) => key !== 'conversationId')) {
+      return { ok: false, error: 'conversation_id_required' }
+    }
+    return observeRemoteConversation({ conversationId })
+  })
 
 
   handleInvoke('window:open', async (_event, type = 'main', payload = null) => {

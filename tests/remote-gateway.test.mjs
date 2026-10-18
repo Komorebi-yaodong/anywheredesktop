@@ -336,7 +336,7 @@ async function main() {
     { id: 'window-fixture-revoke', type: 'window', conversationId: 'conversation-gateway-fixture-0002', rendererReady: true, remoteHidden: false }
   ]
   const sessionManager = createRemoteSessionManager({
-    getConfig: async () => ({ config: {webdav: {localChatPath: 'PRIVATE_FIXTURE_PATH'}, desktop: {quickAssistantUsage: {}}, prompts: {Code: {name: 'Code Agent', prompt: 'PRIVATE_FIXTURE_PROMPT', model: 'fixture|model', icon: 'https://example.test/code.png', autoSaveProjectId: 'fixture-project', defaultMcpServers: ['mcp-a'], defaultSkills: ['skill-a']}, QuickOnly: {name: 'Quick Only', showMode: 'fastinput'}}} }),
+    getConfig: async () => ({ config: {webdav: {localChatPath: 'PRIVATE_FIXTURE_PATH'}, desktop: {quickAssistantUsage: {}}, providers: {fixture: {name: 'Fixture Provider'}}, prompts: {Code: {name: 'Code Agent', prompt: 'PRIVATE_FIXTURE_PROMPT', model: 'fixture|model', icon: 'https://example.test/code.png', autoSaveProjectId: 'fixture-project', defaultMcpServers: ['mcp-a'], defaultSkills: ['skill-a']}, QuickOnly: {name: 'Quick Only', showMode: 'fastinput'}}} }),
     openConversation: async () => { throw new Error('existing_writer_expected') },
     openWindow: async (type, payload) => {
       assert.equal(payload.remoteCreate, true)
@@ -594,7 +594,7 @@ async function main() {
     })
     assert.ok(welcome.payload.capabilities.includes('conversation.create'))
     const assistantList = await sendEncryptedRequest({socket, session, requestId: 'request-list-assistants', method: 'conversation.assistants.list'})
-    assert.deepEqual(assistantList.result.assistants, [{code: 'Code', name: 'Code Agent', icon: 'https://example.test/code.png', model: 'fixture|model', defaultProjectName: 'Fixture Project', mcpCount: 1, skillCount: 1, usageWeight: 0}])
+    assert.deepEqual(assistantList.result.assistants, [{code: 'Code', name: 'Code Agent', icon: 'https://example.test/code.png', model: 'Fixture Provider | model', defaultProjectName: 'Fixture Project', mcpCount: 1, skillCount: 1, usageWeight: 0}])
     assert.equal(JSON.stringify(assistantList).includes('PRIVATE'), false)
     const createdConversation = await sendEncryptedRequest({socket, session, requestId: 'request-create-conversation',
       method: 'conversation.create', params: {promptCode: 'Code'}})
@@ -765,12 +765,26 @@ async function main() {
     ])
 
     assert.ok(welcome.payload.capabilities.includes('conversation.request.get'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.open'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.opened.list'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.takeover'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.handoff'))
     const remoteRequestId = 'request-send-gateway-fixture'
     const sendInput = { conversationId: 'conversation-gateway-fixture-0001', text: 'Synthetic message only' }
+    const openedForMobile = await sendEncryptedRequest({ socket, session, requestId: 'request-open-gateway-fixture', method: 'conversation.open', params: {conversationId: sendInput.conversationId} })
+    assert.equal(openedForMobile.ok, true)
+    assert.equal(openedForMobile.result.mobileControlled, false)
+    const beforeTakeover = await sendEncryptedRequest({ socket, session, requestId: 'request-send-before-takeover', method: 'conversation.send', params: sendInput })
+    assert.equal(beforeTakeover.ok, false)
+    assert.equal(beforeTakeover.error.code, 'remote_conversation_takeover_required')
+    const takenOver = await sendEncryptedRequest({ socket, session, requestId: 'request-takeover-gateway-fixture', method: 'conversation.takeover', params: {conversationId: sendInput.conversationId} })
+    assert.equal(takenOver.ok, true)
+    assert.equal(takenOver.result.mobileControlled, true)
+    assert.equal(writerCommands.at(-1).type, 'conversation.mobile.takeover')
     const sent = await sendEncryptedRequest({ socket, session, requestId: remoteRequestId, method: 'conversation.send', params: sendInput })
     assert.equal(sent.ok, true)
     assert.equal(sent.events[0].event, 'conversation.command.accepted')
-    assert.equal(writerCommands[0].text, sendInput.text)
+    assert.equal(writerCommands.at(-1).text, sendInput.text)
     const deltaPromise = waitForMessage(socket, (frame) => frame.type === 'remote.encrypted')
     gateway.handleRendererEvent({ windowRef: 'window-fixture', payload: {
       event: 'assistant.delta', requestId: remoteRequestId, conversationId: sendInput.conversationId,
@@ -990,11 +1004,26 @@ async function main() {
     assert.equal(afterDelete.error.code, 'remote_conversation_not_found')
 
 
+    const revokeConversationId = 'conversation-gateway-fixture-0002'
+    const openedForRevoke = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-open-revoke-fixture',
+      method: 'conversation.open',
+      params: { conversationId: revokeConversationId }
+    })
+    assert.equal(openedForRevoke.result.mobileControlled, false)
+    const takenForRevoke = await sendEncryptedRequest({
+      ...reconnected,
+      requestId: 'request-takeover-revoke-fixture',
+      method: 'conversation.takeover',
+      params: { conversationId: revokeConversationId }
+    })
+    assert.equal(takenForRevoke.result.mobileControlled, true)
     await sendEncryptedRequest({
       ...reconnected,
       requestId: 'request-revoke-active',
       method: 'conversation.send',
-      params: { conversationId: 'conversation-gateway-fixture-0002', text: 'Revoke this active turn' }
+      params: { conversationId: revokeConversationId, text: 'Revoke this active turn' }
     })
 
     const pendingRevokePayload = Buffer.from('pending revoke')

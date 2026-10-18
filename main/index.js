@@ -37,6 +37,7 @@ import {
   appendPayloadToWindow,
   dispatchRemoteCommandToWindow,
   revealRemoteConversationWindow,
+  notifyConversationObservers,
   setMainWindowCloseBehavior,
   setWindowMetadataNotifier,
   updateConversationWindowMetadata,
@@ -203,6 +204,7 @@ const remoteSessionManager = createRemoteSessionManager({
   readLocalProjects: projectsApi.readLocalProjects,
   dispatchRemoteCommandToWindow,
   revealRemoteConversationWindow,
+  onConversationRevision: ({ windowRef, conversationId, revision }) => notifyConversationObservers(windowRef, conversationId, revision),
   uploadManager: remoteUploadManager,
   recordAssistantUsage: async (promptKey) => {
     const current = await dataApi.getConfig()
@@ -222,6 +224,10 @@ setWindowMetadataNotifier((change = {}) => {
   if (change.reason === 'closed' && typeof change.windowRef === 'string' && change.windowRef) {
     remoteGateway.handleWindowClosed(change.windowRef)
   }
+  if (change.reason === 'updated' && change.metadata?.conversationId && Number(change.metadata?.conversationRevision) > 0) {
+    notifyConversationObservers(change.windowRef, change.metadata.conversationId, change.metadata.conversationRevision)
+  }
+
   const windows = (Array.isArray(change.windows) ? change.windows : [])
     .filter((item) => typeof item?.conversationId === 'string' && item.conversationId)
     .map((item) => ({
@@ -234,6 +240,7 @@ setWindowMetadataNotifier((change = {}) => {
       generating: item.generating === true,
       compacting: item.compacting === true,
       readOnly: item.readOnly === true,
+      mobileControlled: item.mobileControlled === true,
       leasePending: item.leasePending === true,
       rendererReady: item.rendererReady === true,
       hidden: item.remoteHidden === true
@@ -903,6 +910,7 @@ app.whenReady().then(async () => {
     skillApi,
     compactApi,
     remoteGateway,
+    observeRemoteConversation: (input) => remoteSessionManager.observeOnDesktop(input),
     remoteUploadManager,
 
     updaterApi,

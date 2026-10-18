@@ -510,6 +510,7 @@ function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, pr
     readOnly: false,
     leasePending: Boolean(conversationDescriptor?.conversationId),
     remoteHidden: payload?.remoteHidden === true,
+    mobileControlled: false,
     rendererReady: false
   }
 }
@@ -1628,15 +1629,41 @@ export function setWindowMetadataNotifier(notifier) {
 function notifyWindowMetadataChanged(reason = 'updated', windowRef = '') {
   if (typeof windowMetadataNotifier !== 'function') return
   try {
+    const normalizedRef = typeof windowRef === 'string' ? windowRef : ''
+    const metadata = normalizedRef ? windowMetadataStore.get(normalizedRef) || null : null
     windowMetadataNotifier({
       reason,
-      windowRef: typeof windowRef === 'string' ? windowRef : '',
+      windowRef: normalizedRef,
+      metadata: metadata && typeof metadata === 'object' ? { ...metadata } : null,
       windows: listWindows('window')
     })
   } catch {
     // metadata observers cannot interrupt window lifecycle
   }
 }
+
+export function notifyConversationObservers(sourceWindowRef = '', conversationId = '', revision = 0) {
+  const source = typeof sourceWindowRef === 'string' ? sourceWindowRef.trim() : ''
+  const conversation = normalizeConversationMetadataId(conversationId)
+  if (!source || !conversation) return { ok: false, error: 'conversation_observer_invalid' }
+  let delivered = 0
+  for (const [windowRef, metadata] of windowMetadataStore.entries()) {
+    if (windowRef === source || metadata?.conversationId !== conversation) continue
+    const win = multiStore.get(windowRef)
+    if (!win || win.isDestroyed()) continue
+    try {
+      win.webContents.send(WINDOW_EVENT_CHANNEL, {
+        sourceId: 'conversation-writer', target: windowRef, event: 'conversation.remote.updated',
+        payload: { conversationId: conversation, revision: Math.max(0, Math.floor(Number(revision) || 0)) }, timestamp: Date.now()
+      })
+      delivered += 1
+    } catch {
+      // An observing window may be tearing down; the writer must stay unaffected.
+    }
+  }
+  return { ok: true, delivered }
+}
+
 
 export function updateConversationWindowMetadata(windowRef = '', input = {}) {
   const normalizedRef = typeof windowRef === 'string' ? windowRef.trim() : ''
@@ -1658,6 +1685,7 @@ export function updateConversationWindowMetadata(windowRef = '', input = {}) {
     generating: source.generating === true,
     compacting: source.compacting === true,
     readOnly: source.readOnly === true,
+    mobileControlled: source.mobileControlled === true,
     leasePending: source.leasePending === true,
     rendererReady: source.rendererReady === true
   }

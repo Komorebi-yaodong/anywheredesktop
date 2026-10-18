@@ -65,7 +65,10 @@ async function run() {
       revealRemoteConversationWindow: () => ({ok: true}), broadcastToDevice() {}, readinessTimeoutMs: 100
     });
     const assistants = await manager.listAssistants({deviceId: DEVICE});
-    assert.deepEqual(assistants.assistants, [{code: 'Code', name: 'Code'}, {code: 'Moon', name: 'Moon'}]);
+    assert.deepEqual(
+      assistants.assistants.map(({ code, name }) => ({ code, name })),
+      [{code: 'Code', name: 'Code'}, {code: 'Moon', name: 'Moon'}]
+    );
     assert.equal(JSON.stringify(assistants).includes('PRIVATE'), false);
     const input = {deviceId: DEVICE, requestId: 'request-create-fixture-0001', params: {promptCode: 'Code'}};
     const [created, duplicate] = await Promise.all([manager.createConversation(input), manager.createConversation(input)]);
@@ -138,6 +141,32 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 150))
   assert.equal(delayedIdle.commands.at(-1).requestId, 'request-idle-queued')
   renderer(delayedIdle, 'assistant.completed', {}, 'request-idle-queued')
+
+
+  const releasable = fixture()
+  await send(releasable.manager, 'request-release-idle')
+  renderer(releasable, 'assistant.completed', {}, 'request-release-idle')
+  assert.deepEqual(
+    await releasable.manager.release({ deviceId: DEVICE, params: { conversationId: CID } }),
+    { ok: true, conversationId: CID, released: true }
+  )
+  assert.equal(releasable.commands.at(-1).type, 'remote.shutdown')
+  assert.equal(releasable.items.length, 0, 'an idle hidden Remote writer must be closed to release its SQLite lease')
+
+  const visibleRelease = fixture({ existing: true })
+  assert.deepEqual(
+    await visibleRelease.manager.release({ deviceId: DEVICE, params: { conversationId: CID } }),
+    { ok: true, conversationId: CID, released: false }
+  )
+  assert.equal(visibleRelease.commands.length, 0, 'a Desktop-visible conversation must never be closed by Mobile release')
+
+  const activeRelease = fixture()
+  await send(activeRelease.manager, 'request-release-active')
+  const activeResult = await activeRelease.manager.release({ deviceId: DEVICE, params: { conversationId: CID } })
+  assert.equal(activeResult.released, false)
+  assert.equal(activeResult.busy, true)
+  assert.equal(activeRelease.commands.some((command) => command.type === 'remote.shutdown'), false)
+  renderer(activeRelease, 'assistant.completed', {}, 'request-release-active')
 
 
   const removable = fixture()

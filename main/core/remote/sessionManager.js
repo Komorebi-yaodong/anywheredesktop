@@ -5,6 +5,8 @@ import { getQuickAssistantWeight } from '../quickAssistantUsage.js'
 const REQUEST_TTL_MS = 30 * 60 * 1000
 const MAX_REQUESTS = 256
 const MAX_RECOVERY_CHARS = 64 * 1024
+
+const REMOTE_HIDDEN_IDLE_RELEASE_MS = 15_000
 const TERMINAL_EVENTS = new Set([
   'assistant.completed', 'assistant.cancelled', 'assistant.failed',
   'conversation.operation.completed', 'conversation.operation.failed', 'conversation.config.result',
@@ -373,7 +375,9 @@ export function createRemoteSessionManager({
   function finishClosed(session) {
     session.pendingChoices?.clear?.()
     if (session.queueTimer) clearTimeout(session.queueTimer)
+    if (session.idleReleaseTimer) clearTimeout(session.idleReleaseTimer)
     session.queueTimer = null
+    session.idleReleaseTimer = null
     for (const item of session.pendingSends || []) {
       const pending = requests.get(requestKey(item.deviceId, item.requestId))
       if (pending && !pending.terminal) publish(pending, 'assistant.failed', { code: 'remote_renderer_closed' })
@@ -382,6 +386,62 @@ export function createRemoteSessionManager({
     const record = requests.get(requestKey(session.activeDeviceId, session.activeRequestId))
     if (record && !record.terminal) publish(record, 'assistant.failed', { code: 'remote_renderer_closed' })
   }
+
+  function hiddenSessionState(session) {
+    const item = session ? windowItem(session.windowRef) : null
+    const hasPendingChoices = session?.pendingChoices instanceof Map && session.pendingChoices.size > 0
+    const busy = Boolean(
+      session?.releasing || session?.activeRequestId || hasPendingChoices ||
+      session?.pendingSends?.length || item?.busy || item?.generating || item?.compacting
+    )
+    return { item, busy }
+  }
+
+  async function releaseHiddenSession(session) {
+    const conversationId = session?.conversationId || ''
+    const { item, busy } = hiddenSessionState(session)
+    if (!session || !item || item.remoteHidden !== true || busy) {
+      return { released: false, ...(busy ? { busy: true } : {}) }
+    }
+    session.releasing = true
+    try {
+      const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+        type: 'remote.shutdown', conversationId, closeHidden: true
+      })
+      if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+      // The renderer owns transcript persistence and the SQLite lease. It removes
+      // the hidden window only after releasing that lease; visible Desktop windows
+      // are never closed by this code path.
+      const deadline = Date.now() + Math.max(10_000, readinessTimeoutMs)
+      while (windowItem(session.windowRef)) {
+        if (Date.now() >= deadline) throw remoteError('remote_writer_release_timeout')
+        await new Promise((resolve) => setTimeout(resolve, 40))
+      }
+      if (sessions.get(conversationId) === session) handleWindowClosed(session.windowRef)
+      return { released: true }
+    } finally {
+      if (sessions.get(conversationId) === session) session.releasing = false
+    }
+  }
+
+  function scheduleIdleRelease(session) {
+    if (!session || session.idleReleaseTimer || !session.hidden) return
+    session.idleReleaseTimer = setTimeout(() => {
+      session.idleReleaseTimer = null
+      if (!enabled || sessions.get(session.conversationId) !== session) return
+      void releaseHiddenSession(session).catch(() => {})
+    }, REMOTE_HIDDEN_IDLE_RELEASE_MS)
+    session.idleReleaseTimer.unref?.()
+  }
+
+  async function release({ deviceId, params = {} } = {}) {
+    parameters(params, ['conversationId'])
+    const conversationId = id(params.conversationId, 'conversationId')
+    assertActive(generation, id(deviceId, 'deviceId'))
+    const result = await releaseHiddenSession(existingSession(conversationId))
+    return { ok: true, conversationId, ...result }
+  }
+
 
   async function listAssistants({ deviceId, params = {} } = {}) {
     parameters(params, [])
@@ -463,6 +523,10 @@ export function createRemoteSessionManager({
         // the quick assistant panel. Recording must never block a valid chat.
         await recordAssistantUsage(promptCode).catch(() => {})
         publish(record, 'conversation.operation.completed', { operation: 'conversation.create' })
+        // A newly created hidden writer may remain idle if Mobile leaves before
+        // sending its first message. Release its Renderer lease after the same
+        // short idle window used for completed requests.
+        scheduleIdleRelease(session)
         return result
       } catch (error) {
         if (windowRef) {
@@ -977,6 +1041,7 @@ export function createRemoteSessionManager({
       session.activeOperation = ''
       session.pendingChoices?.clear?.()
       void dispatchNextSend(session)
+      scheduleIdleRelease(session)
     }
     return { ok: true }
   }
@@ -1076,7 +1141,7 @@ export function createRemoteSessionManager({
     patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),
     compact,
     cancelCompact,
-    cancel, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
+    cancel, release, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
     resume: () => { enabled = true },
     authorizeDevice: (deviceId) => { revokedDevices.delete(deviceId) },

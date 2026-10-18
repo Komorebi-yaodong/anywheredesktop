@@ -105,11 +105,11 @@ async function main() {
     })
     assert.equal(first.page.hasMore, true)
     assert.equal(first.page.nextBeforeUiOrder, 5)
-    assert.deepEqual(first.messages.map((message) => message.role), ['system', 'assistant', 'user'])
-    assert.deepEqual(first.messages.map((message) => message.uiMessageId), ['ui-system', 'ui-4', 'ui-5'])
+    assert.deepEqual(first.messages.map((message) => message.role), ['assistant', 'user'])
+    assert.deepEqual(first.messages.map((message) => message.uiMessageId), ['ui-4', 'ui-5'])
 
     const latest = first.messages.at(-1)
-    assert.deepEqual(latest.payload.toolCalls, [{ id: 'tool-secret', name: 'read_file', status: 'finished' }])
+    assert.deepEqual(latest.payload.toolCalls, [{ id: 'tool-secret', name: 'read_file', status: 'finished', arguments: {}, result: '[已隐藏敏感内容]' }])
     const serializedFirst = JSON.stringify(first)
     for (const forbidden of [
       PIXEL_DATA_URL,
@@ -153,6 +153,56 @@ async function main() {
     assert.equal(third.page.pageSize, 100)
     assert.equal(third.page.hasMore, false)
     assert.equal(third.page.nextBeforeUiOrder, null)
+
+
+    const mediaLease = await store.acquireWriteLease({
+      dirPath: root,
+      conversationId,
+      holderInstanceId: 'remote-read-media-fixture',
+      holderApp: 'desktop'
+    })
+    const mediaForms = await store.saveConversationSnapshot({
+      dirPath: root,
+      conversationId,
+      expectedRevision: 0,
+      holderInstanceId: 'remote-read-media-fixture',
+      leaseEpoch: mediaLease.leaseEpoch,
+      sessionData: {
+        ...buildSession(),
+        chat_show: [{
+          role: 'assistant',
+          content: [
+            '![one](file:///C:/synthetic/image.png)',
+            '<video><source src="file://C:/synthetic/clip.mp4"></video>',
+            '<audio src="file:C:/synthetic/sound.mp3"></audio>'
+          ].join('\n'),
+          storageId: 'media-forms',
+          uiStorageId: 'ui-media-forms'
+        }],
+        fullHistory: [{
+          role: 'assistant',
+          content: [
+            '![one](file:///C:/synthetic/image.png)',
+            '<video><source src="file://C:/synthetic/clip.mp4"></video>',
+            '<audio src="file:C:/synthetic/sound.mp3"></audio>'
+          ].join('\n'),
+          storageId: 'media-forms'
+        }]
+      }
+    })
+    assert.equal(mediaForms.ok, true)
+    let mediaIndex = 0
+    const mediaPage = await store.loadRemoteConversationPage({
+      dirPath: root,
+      conversationId,
+      pageSize: 10,
+      registerMedia: () => ({ uri: `anywhere-media://${String(++mediaIndex).padStart(16, 'a')}?type=image` })
+    })
+    const mediaText = JSON.stringify(mediaPage)
+    assert.equal(mediaText.includes('C:/synthetic'), false)
+    assert.equal(mediaText.includes('local-file-hidden'), false)
+    assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}/)
+    await store.releaseWriteLease({ dirPath: root, conversationId, holderInstanceId: 'remote-read-media-fixture', leaseEpoch: mediaLease.leaseEpoch })
 
     assert.equal(readActiveLease(created.databasePath), null)
     console.log(JSON.stringify({ ok: true, suite: 'remote-conversation-read', conversationId }))

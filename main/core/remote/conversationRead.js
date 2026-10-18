@@ -224,11 +224,19 @@ export function createRemoteConversationReadService({
     if (conversationId.startsWith('legacy_')) throw remoteError('remote_conversation_migration_required')
     const directory = await getLocalDirectory()
     if (!directory) throw remoteError('remote_conversation_directory_not_configured')
+    const configResult = await getConfig()
+    const providerNames = Object.fromEntries(
+      Object.entries(asObject(configResult?.config?.providers)).map(([providerId, provider]) => [
+        providerId,
+        normalizeText(asObject(provider).name).slice(0, 160)
+      ])
+    )
     return loadRemoteConversationPage({
       dirPath: directory,
       conversationId,
       beforeUiOrder: params.beforeUiOrder,
       pageSize: params.pageSize,
+      providerNames,
       registerMedia: typeof registerMedia === 'function'
         ? (source) => registerMedia({ deviceId: safeDeviceId, conversationId, source })
         : null

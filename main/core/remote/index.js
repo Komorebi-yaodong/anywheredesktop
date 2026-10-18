@@ -325,7 +325,7 @@ export function createRemoteGateway({
         'remote.device.profile.update',
         'conversation.assistants.list', 'conversation.create',
         'conversation.send', 'conversation.queue.list', 'conversation.queue.remove', 'conversation.choice.submit',
-        'conversation.cancel', 'conversation.showOnDesktop', 'conversation.request.get',
+        'conversation.cancel', 'conversation.release', 'conversation.showOnDesktop', 'conversation.request.get',
         'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask',
         'conversation.rename', 'conversation.delete',
         'conversation.config.get', 'conversation.config.patch', 'conversation.compact', 'conversation.compact.cancel'
@@ -1228,6 +1228,11 @@ export function createRemoteGateway({
             params
           })
           break
+        case 'conversation.release':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.release({ deviceId: context.device.deviceId, params })
+          break
+
         case 'conversation.compact':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')
           result = await activeSessionManager.compact({ deviceId: context.device.deviceId, requestId, params })

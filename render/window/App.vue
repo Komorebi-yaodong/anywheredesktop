@@ -2750,8 +2750,8 @@ const getRemoteSessionConfigSnapshot = (patched = []) => ({
       autoCompactEnabled: compactConfig.value.autoCompactEnabled !== false,
       triggerRatio: Number(compactConfig.value.triggerRatio) || 0.9,
       contextLength: Number(compactConfig.value.contextLength) || 262144,
+      contextLengthSource: compactConfig.value.contextLengthSource || 'default',
       keepRecentRounds: Number(compactConfig.value.keepRecentRounds) || 0,
-      hideCompactedMessages: compactConfig.value.hideCompactedMessages !== false,
       compactPrompt: compactConfig.value.compactPrompt || ''
     }
   },
@@ -7386,10 +7386,16 @@ const getSessionTransientStatePatch = () => ({
 });
 
 const getSessionRequestConfigStatePatch = () => {
+  const selectedModel = model.value || '';
+  const providerId = selectedModel.includes('|') ? selectedModel.split('|', 1)[0] : '';
+  const providerName = typeof currentConfig.value?.providers?.[providerId]?.name === 'string'
+    ? currentConfig.value.providers[providerId].name.trim().slice(0, 160)
+    : '';
   const currentPromptConfig = {
     ...(currentConfig.value.prompts?.[CODE.value] || {}),
     ...(sourcePromptConfig.value || {}),
-    model: model.value || '',
+    model: selectedModel,
+    modelProviderName: providerName,
     reasoning_effort: normalizeReasoningEffort(tempReasoningEffort.value),
     voice: selectedVoice.value || null
   };

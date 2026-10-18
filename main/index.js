@@ -122,6 +122,11 @@ async function remoteDesktopDisplayName() {
 }
 
 
+const remoteSkillManagement = createRemoteSkillManagement({
+  listSkills: skillApi.listSkills,
+  notify: dataApi.notifySkillsUpdated
+})
+
 const mobileWorkspaceService = createMobileWorkspaceService({
   getConfig: dataApi.getConfig,
   updateConfig: dataApi.updateConfigWithoutFeatures,
@@ -131,6 +136,8 @@ const mobileWorkspaceService = createMobileWorkspaceService({
   normalizeAvatarDataUrl: normalizeMobileProfileAvatar,
   getDefaultAgent: (code) => ({ ...dataApi.defaultConfig.config.prompts.AI, name: code }),
   listSkills: (skillPath) => skillApi.listSkills(skillPath),
+  listToggleSkills: (skillPath) => remoteSkillManagement.list(skillPath),
+  toggleSkill: (skillPath, skillId, enabled) => remoteSkillManagement.setEnabled(skillPath, skillId, enabled),
   listProviderModels: (input) => chatApi.listProviderModels(input)
 })
 
@@ -138,7 +145,7 @@ const mobileWorkspaceService = createMobileWorkspaceService({
 const remoteManagementService = createRemoteManagementService({
   getConfig: dataApi.getConfig, updateConfig: dataApi.updateConfigWithoutFeatures,
   readProjects: projectsApi.readLocalProjects,
-  skills: createRemoteSkillManagement({listSkills: skillApi.listSkills, notify: dataApi.notifySkillsUpdated}),
+  skills: remoteSkillManagement,
   setTaskEnabled: setCurrentTaskDeviceEnabled, getTaskDevice: dataApi.getTaskDeviceIdentity
 })
 

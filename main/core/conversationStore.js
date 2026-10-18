@@ -479,23 +479,41 @@ function sanitizeRemoteText(value, context = {}) {
   let result = source
   // Markdown image paths are already renderable on Desktop; replace only the
   // source URL, keeping the user-authored alt text and never emitting the path.
-  result = result.replace(/(!\[[^\]\r\n]*\]\(\s*)(['"]?)(?:file:\/\/\/)?([A-Za-z]:[\\/][^\)\r\n'"]+)(\2\s*\))/gi, (_match, prefix, quote, localPath, suffix) => `${prefix}${quote}${replaceMedia(localPath)}${suffix}`)
+  result = result.replace(/(!\[[^\]\r\n]*\]\(\s*)(['"]?)(?:file:(?:\/\/)?\/?)?([A-Za-z]:[\\/][^\)\r\n'"]+)(\2\s*\))/gi, (_match, prefix, quote, localPath, suffix) => `${prefix}${quote}${replaceMedia(localPath)}${suffix}`)
   // HTML media is used by the chat renderer for video/audio. Its src becomes
-  // the same opaque Mobile-only scheme.
-  result = result.replace(/(<(?:img|source|video|audio)\b[^>]*?\bsrc\s*=\s*['"])(?:file:\/\/\/)?([A-Za-z]:[\\/][^'">\r\n]+)(['"])/gi, (_match, prefix, localPath, suffix) => `${prefix}${replaceMedia(localPath)}${suffix}`)
+  // the same opaque Mobile-only scheme. Renderer history has emitted file:///,
+  // file://C:/, and file:C:/ variants; normalize all of them Desktop-side.
+  result = result.replace(/(<(?:img|source|video|audio)\b[^>]*?\bsrc\s*=\s*['"])(?:file:(?:\/\/)?\/?)?([A-Za-z]:[\\/][^'">\r\n]+)(['"])/gi, (_match, prefix, localPath, suffix) => `${prefix}${replaceMedia(localPath)}${suffix}`)
   // A plain local media reference is useful for structured image_url content.
   const plain = remoteMediaReference(result, registerMedia)
   if (plain) return plain
   // Any remaining Windows/file URI is path-bearing content. Never expose it.
   return result
-    .replace(/file:\/\/\/[^\s'"<>\])]+/gi, '[local-file-hidden]')
-    .replace(/[A-Za-z]:[\\/][^\s'"<>\])]+/g, '[local-file-hidden]')
+    // Match only a path token boundary. Without the boundary, the final `a://`
+    // in an opaque `anywhere-media://…` URI looks like a Windows drive prefix.
+    .replace(/(^|[^A-Za-z0-9_-])(?:file:(?:\/\/)?\/?)?[A-Za-z]:[\\/][^\s'"<>\])]+/gi, (_match, prefix) => `${prefix}[local-file-hidden]`)
 }
 
 function safeRemoteAvatar(value) {
   const source = typeof value === 'string' ? value.trim() : ''
   return /^https:\/\/[^\s?#]+(?:\?[^\s#]*)?$/i.test(source) ? source.slice(0, 2048) : ''
 }
+
+function remoteModelLabel(modelValue, promptConfig = {}, providerNames = {}) {
+  const model = normalizeText(modelValue).trim()
+  if (!model) return ''
+  const separator = model.indexOf('|')
+  if (separator <= 0 || separator >= model.length - 1) return model.slice(0, 320)
+  const providerId = model.slice(0, separator).trim()
+  const modelName = model.slice(separator + 1).trim()
+  // Renderer persists this display-only label with the session state. For
+  // older sessions, a Main-process-only lookup supplies the display name.
+  // Never return the Provider ID when no safe display label is available.
+  const providerName = normalizeText(promptConfig?.modelProviderName).trim()
+    || normalizeText(providerNames?.[providerId]).trim()
+  return providerName ? `${providerName} | ${modelName}`.slice(0, 320) : modelName.slice(0, 320)
+}
+
 
 function safeRemoteAssistant(value = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -561,6 +579,25 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
   return value
 }
 
+const REMOTE_SENSITIVE_TEXT_PATTERN = /(?:api[_ -]?key|secret|password|authorization|bearer\s+[A-Za-z0-9._-]+|token|credential|cookie|private[_ -]?key)/i
+
+
+function sanitizeRemoteToolDetail(value, context = {}) {
+  if (typeof value !== 'string') return sanitizeRemotePayload(value, () => ({ type: 'attachment', unavailable: true }), context)
+  const source = value.trim()
+  if (!source) return ''
+  try {
+    const parsed = JSON.parse(source)
+    return sanitizeRemotePayload(parsed, () => ({ type: 'attachment', unavailable: true }), context)
+  } catch {
+    if (REMOTE_SENSITIVE_TEXT_PATTERN.test(source)) return '[已隐藏敏感内容]'
+    const cleaned = sanitizeRemoteText(source, context)
+    if (/\[local-file-hidden\]|\[local-media-unavailable\]/.test(cleaned)) return '[已隐藏本地路径]'
+    return cleaned.slice(0, 16 * 1024)
+  }
+}
+
+
 function sanitizeRemoteToolCalls(toolCalls = [], context = {}) {
   return (Array.isArray(toolCalls) ? toolCalls : [])
     .slice(0, 32)
@@ -573,9 +610,9 @@ function sanitizeRemoteToolCalls(toolCalls = [], context = {}) {
         id: normalizeText(source.id || source.tool_call_id).trim(),
         name: normalizeText(source.name || source.function?.name).trim(),
         status: normalizeText(source.approvalStatus || source.status).trim(),
-        arguments: sanitizeRemotePayload(rawArgs, () => ({ type: 'attachment', unavailable: true }), context),
+        arguments: sanitizeRemoteToolDetail(rawArgs, context),
         ...(Object.hasOwn(source, 'result') || Object.hasOwn(source, 'content')
-          ? { result: sanitizeRemotePayload(rawResult, () => ({ type: 'attachment', unavailable: true }), context) }
+          ? { result: sanitizeRemoteToolDetail(rawResult, context) }
           : {}),
         ...(Array.isArray(choiceQuestions)
           ? { choice: { questions: choiceQuestions.map((question) => ({
@@ -1394,7 +1431,8 @@ export async function loadRemoteConversationPage({
   conversationId,
   beforeUiOrder = null,
   pageSize = 50,
-  registerMedia = null
+  registerMedia = null,
+  providerNames = {}
 } = {}) {
   const rawDir = normalizeText(dirPath).trim()
   if (!rawDir) throw new Error('conversation_local_dir_required')
@@ -1444,8 +1482,10 @@ export async function loadRemoteConversationPage({
     let model = ''
     let assistant = { name: '', avatarUrl: '' }
     try { tasks = sanitizeRemoteTasks(taskState ? hydrateAttachments(db, JSON.parse(taskState.value_json)) : []) } catch { tasks = [] }
-    try { model = normalizeText(modelState ? JSON.parse(modelState.value_json) : '').slice(0, 320) } catch { model = '' }
-    try { assistant = safeRemoteAssistant(promptState ? hydrateAttachments(db, JSON.parse(promptState.value_json)) : {}) } catch { assistant = { name: '', avatarUrl: '' } }
+    let promptConfig = {}
+    try { promptConfig = promptState ? hydrateAttachments(db, JSON.parse(promptState.value_json)) : {} } catch { promptConfig = {} }
+    try { model = remoteModelLabel(modelState ? JSON.parse(modelState.value_json) : '', promptConfig, providerNames) } catch { model = '' }
+    try { assistant = safeRemoteAssistant(promptConfig) } catch { assistant = { name: '', avatarUrl: '' } }
     const oldestOrder = pageRows.length > 0
       ? Math.min(...pageRows.map((item) => Number(item.ui_order) || 0))
       : 0

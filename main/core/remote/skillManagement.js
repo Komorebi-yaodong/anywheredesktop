@@ -74,6 +74,14 @@ export function createRemoteSkillManagement({ listSkills, notify = () => {} }) {
     }
     notify()
   }
+  async function setEnabled(root, id, enabled) {
+    const current = await get(root, id)
+    if (!current) throw remoteError('remote_workspace_item_not_found')
+    await save(root, id, { ...current, enabled: enabled === true })
+    return { ok: true }
+  }
+
+
   async function remove(root, id) {
     const { file, exists } = await location(root, id)
     if (exists) await fs.unlink(file)
@@ -93,5 +101,5 @@ export function createRemoteSkillManagement({ listSkills, notify = () => {} }) {
     }
     return results
   }
-  return { get, save, remove, list }
+  return { get, save, setEnabled, remove, list }
 }

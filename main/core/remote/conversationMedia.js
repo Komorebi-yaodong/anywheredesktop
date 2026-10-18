@@ -21,15 +21,16 @@ function mediaTypeFor(filePath = '') {
 function normalizeLocalMediaPath(value = '') {
   const source = typeof value === 'string' ? value.trim() : ''
   if (!source || source.length > 4096) return ''
-  if (/^file:\/\//i.test(source)) {
-    try {
-      const url = new URL(source)
-      if (url.protocol !== 'file:' || url.hostname) return ''
-      const pathname = decodeURIComponent(url.pathname || '').replace(/^\//, '')
-      return /^[A-Za-z]:[\\/]/.test(pathname) ? pathname : ''
-    } catch { return '' }
-  }
-  return /^[A-Za-z]:[\\/]/.test(source) ? source : ''
+  // Renderer history may contain file:///C:/..., file://C:/..., or file:C:/...
+  // forms. Normalize them only inside Desktop before issuing an opaque media ID.
+  const decoded = (() => {
+    try { return decodeURIComponent(source) } catch { return '' }
+  })()
+  if (!decoded) return ''
+  const local = /^file:/i.test(decoded)
+    ? decoded.replace(/^file:(?:\/\/)?/i, '').replace(/^\//, '')
+    : decoded
+  return /^[A-Za-z]:[\\/]/.test(local) ? local : ''
 }
 
 /**

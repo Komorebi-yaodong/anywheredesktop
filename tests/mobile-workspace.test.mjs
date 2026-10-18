@@ -14,6 +14,8 @@ let config = {
 let projects = { version: 2, conversations: {}, projects: [{ id: 'work', name: '工作', files: [], conversationIds: [] }] }
 let profileAvatar = 'file:///PRIVATE_AVATAR.png'
 let normalizeAvatarDataUrl = (value) => value
+
+let skillEnabled = true
 const service = createMobileWorkspaceService({
   getConfig: async () => ({ config: structuredClone(config) }),
   updateConfig: async ({ config: next }) => { config = structuredClone(next); return { success: true } },
@@ -22,6 +24,8 @@ const service = createMobileWorkspaceService({
   writeLocalProjects: async (_dir, next) => { projects = structuredClone(next); return { ok: true } },
   normalizeAvatarDataUrl: async (value) => normalizeAvatarDataUrl(value),
   listSkills: () => [{ id: 's1', name: 'Skill One', description: 'Safe description', disabled: false, path: 'PRIVATE_SKILL_PATH' }],
+  listToggleSkills: () => [{ id: 's1', name: 'Skill One', enabled: skillEnabled !== false }],
+  toggleSkill: async (_root, id, enabled) => { if (id === 's1') skillEnabled = enabled },
   listProviderModels: async () => ({ models: [{ id: 'z-model' }, { id: 'a-model' }] })
 })
 const bootstrap = await service.bootstrap({ params: {} })
@@ -171,6 +175,12 @@ assert.equal(JSON.stringify(mcp).includes('PRIVATE_COMMAND'), false)
 const skills = await service.managementDetails({ params: { section: 'skills' } })
 assert.equal(skills.items[0].name, 'Skill One')
 assert.equal(JSON.stringify(skills).includes('PRIVATE_SKILL_PATH'), false)
+
+assert.equal(skills.items[0].enabled, true)
+await service.managementPatch({ deviceId: 'device-mobile-workspace-0001', requestId: 'request-management-skill-disable', params: { section: 'skills', id: 's1', expectedRevision: skills.items[0].revision, patch: { enabled: false } } })
+assert.equal(skillEnabled, false)
+const disabledSkills = await service.managementDetails({ params: { section: 'skills' } })
+assert.equal(disabledSkills.items[0].enabled, false)
 const generalDetails = await service.managementDetails({ params: { section: 'general' } })
 assert.equal(JSON.stringify(generalDetails).includes('PRIVATE_LOCAL_PATH'), false)
 const patchInput = { deviceId: 'device-mobile-workspace-0001', requestId: 'request-management-patch-0001', params: { section: 'providers', id: 'p', expectedRevision: providers.items[0].revision, patch: { name: 'New Provider', apiKey: 'NEW_SYNTHETIC_KEY' } } }
@@ -181,8 +191,12 @@ assert.equal(config.webdav.localChatPath, 'PRIVATE_LOCAL_PATH')
 assert.equal((await service.managementPatch(patchInput)).duplicate, true)
 await assert.rejects(service.managementPatch({ ...patchInput, requestId: 'request-management-stale-0001' }), { code: 'remote_workspace_revision_conflict' })
 await assert.rejects(service.managementPatch({ ...patchInput, requestId: 'request-management-command', params: { ...patchInput.params, patch: { command: 'not-allowed' } } }), { code: 'remote_parameter_unknown' })
-await service.managementPatch({ deviceId: patchInput.deviceId, requestId: 'request-management-general', params: { section: 'general', expectedRevision: generalDetails.revision, patch: { displayName: 'Test', themeMode: 'dark' } } })
+await service.managementPatch({ deviceId: patchInput.deviceId, requestId: 'request-management-general', params: { section: 'general', expectedRevision: generalDetails.revision, patch: { displayName: 'Test' } } })
 assert.equal(config.desktop.profile.nickname, 'Test')
-assert.equal(config.themeMode, 'dark')
+assert.equal(config.themeMode, 'system')
+await assert.rejects(
+  service.managementPatch({ deviceId: patchInput.deviceId, requestId: 'request-management-general-forbidden', params: { section: 'general', expectedRevision: generalDetails.revision, patch: { themeMode: 'dark' } } }),
+  { code: 'remote_parameter_unknown' }
+)
 
 console.log(JSON.stringify({ ok: true, suite: 'mobile-workspace' }))

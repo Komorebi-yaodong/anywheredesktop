@@ -62,6 +62,16 @@ function publicAvatarDataUrl(value) {
   return bytes > 0 && bytes <= MAX_AVATAR_BYTES ? avatar : ''
 }
 
+function skillToggleDto(skill = {}) {
+  const id = text(skill?.id, MAX_NAME)
+  return {
+    id,
+    name: text(skill?.name, MAX_NAME) || id,
+    enabled: typeof skill?.enabled === 'boolean' ? skill.enabled : skill?.disabled !== true
+  }
+}
+
+
 function projectDto(project = {}) {
   return {
     projectId: text(project.id, MAX_NAME),
@@ -395,7 +405,7 @@ function safeAssistantPatch(input = {}) {
  * Structured Mobile workspace facade. It intentionally exposes display DTOs only:
  * no local paths, process commands, TLS material, Remote identities or root secrets.
  */
-export function createMobileWorkspaceService({ getConfig, updateConfig, getUser, readLocalProjects, writeLocalProjects, normalizeAvatarDataUrl = (value) => value, getDefaultAgent = (code) => agentDefault(code), listSkills = () => [], listProviderModels = async () => ({ models: [] }) } = {}) {
+export function createMobileWorkspaceService({ getConfig, updateConfig, getUser, readLocalProjects, writeLocalProjects, normalizeAvatarDataUrl = (value) => value, getDefaultAgent = (code) => agentDefault(code), listSkills = () => [], listToggleSkills = null, toggleSkill = null, listProviderModels = async () => ({ models: [] }) } = {}) {
   if ([getConfig, updateConfig, getUser, readLocalProjects, writeLocalProjects, normalizeAvatarDataUrl, getDefaultAgent, listProviderModels].some((item) => typeof item !== 'function')) {
     throw new Error('remote_mobile_workspace_dependencies_required')
   }
@@ -1116,16 +1126,22 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
   }
 
 
+  const listSkillsForToggle = async (root) => {
+    if (typeof listToggleSkills === 'function') return listToggleSkills(root)
+    return listSkills(root)
+  }
+
+
   async function managementPatch({ deviceId, requestId, params = {} } = {}) {
     parameters(params, ['section', 'id', 'expectedRevision', 'patch'])
     const section = params.section
-    const sections = { providers: 'providers', mcp: 'mcpServers', tasks: 'tasks', general: '' }
+    const sections = { providers: 'providers', mcp: 'mcpServers', skills: '', tasks: 'tasks', general: '' }
     if (!Object.hasOwn(sections, section)) throw remoteError('remote_workspace_section_invalid')
     const device = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16 })
     const request = normalizeIdentifier(requestId, 'requestId', { minLength: 8 })
     const target = typeof params.id === 'string' ? params.id : ''
     if (['__proto__', 'prototype', 'constructor'].includes(target)) throw remoteError('remote_workspace_invalid')
-    const allowed = { providers: ['name', 'url', 'models', 'enabled', 'apiKey'], mcp: ['name', 'enabled'], tasks: ['name', 'description'], general: ['language', 'themeMode', 'displayName'] }[section]
+    const allowed = { providers: ['name', 'url', 'models', 'enabled', 'apiKey'], mcp: ['name', 'enabled'], skills: ['enabled'], tasks: ['name', 'description'], general: ['displayName'] }[section]
     const patch = parameters(params.patch, allowed)
     if (!Object.keys(patch).length) throw remoteError('remote_workspace_patch_empty')
     for (const [field, value] of Object.entries(patch)) {
@@ -1156,14 +1172,24 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     const record = { fingerprint, updatedAt: Date.now(), promise: null }
     record.promise = mutationTail.catch(() => {}).then(async () => {
       const { config } = await current()
-      const source = section === 'general' ? generalSource(config) : object(config[sections[section]])[target]
+      const skillItems = section === 'skills' ? await listSkillsForToggle(text(config.skillPath, 32768)) : []
+      const skill = section === 'skills'
+        ? skillItems.find((item) => text(item?.id, MAX_NAME) === target)
+        : null
+      const source = section === 'general'
+        ? generalSource(config)
+        : section === 'skills'
+          ? (skill ? skillToggleDto(skill) : null)
+          : object(config[sections[section]])[target]
       if (!source || typeof source !== 'object') throw remoteError('remote_workspace_item_not_found')
       if (revision(source) !== params.expectedRevision) throw remoteError('remote_workspace_revision_conflict')
       const next = clone(config)
       if (section === 'general') {
-        if (Object.hasOwn(patch, 'language')) next.language = patch.language
-        if (Object.hasOwn(patch, 'themeMode')) next.themeMode = patch.themeMode
         if (Object.hasOwn(patch, 'displayName')) next.desktop = { ...object(next.desktop), profile: { ...object(next.desktop?.profile), nickname: patch.displayName.trim() } }
+      } else if (section === 'skills') {
+        if (typeof toggleSkill !== 'function') throw remoteError('remote_skill_toggle_unavailable')
+        await toggleSkill(text(config.skillPath, 32768), target, patch.enabled === true)
+        return { ok: true, section, id: target }
       } else {
         const item = { ...source }
         const mapping = section === 'providers' ? { models: 'modelList', apiKey: 'api_key', enabled: 'enable' } : section === 'mcp' ? { enabled: 'isActive' } : {}
@@ -1197,14 +1223,21 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       return { id: text(id), revision: revision(item), name: text(item.name) || text(id), enabled: item.isActive !== false, transport: text(item.transport || item.type, 32) || 'local' }
     }) }
     if (section === 'skills') {
-      const skills = await listSkills(text(config.skillPath, 32768))
-      return { ok: true, section, items: (Array.isArray(skills) ? skills : []).map(item => ({ id: text(item.id), name: text(item.name), description: text(item.description, 240), enabled: item.disabled !== true })) }
+      const skills = await listSkillsForToggle(text(config.skillPath, 32768))
+      return {
+        ok: true,
+        section,
+        items: (Array.isArray(skills) ? skills : []).map(item => {
+          const view = skillToggleDto(item)
+          return { ...view, revision: revision(view) }
+        })
+      }
     }
     if (section === 'tasks') return { ok: true, section, items: Object.entries(object(config.tasks)).map(([id, value]) => {
       const item = object(value)
       return { id: text(id), revision: revision(item), name: text(item.name || item.title) || text(id), description: typeof item.description === 'string' ? item.description.slice(0, 64 * 1024) : '', enabled: item.enabled === true, schedule: text(item.triggerType, 32) || 'manual', assistant: text(item.promptKey, 160) }
     }) }
-    if (section === 'general') return { ok: true, section, revision: revision(generalSource(config)), value: { language: text(config.language, 16) || 'zh', themeMode: text(config.themeMode, 32) || 'system', displayName: text(config?.desktop?.profile?.nickname, 80) || 'User', avatarUrl: publicAvatar(config?.desktop?.profile?.avatar) } }
+    if (section === 'general') return { ok: true, section, revision: revision(generalSource(config)), value: { displayName: text(config?.desktop?.profile?.nickname, 80) || 'User' } }
     throw remoteError('remote_workspace_section_invalid')
   }
 

@@ -64,7 +64,14 @@ function buildSession() {
 
   return {
     anywhere_history: true,
-    CODE: 'AI',
+    CODE: 'Zero',
+    model: 'fixture-provider|fixture-model',
+    currentPromptConfig: {
+      // This stale snapshot deliberately reproduces the Mobile-only display bug.
+      name: 'Fixture Provider | fixture-model',
+      icon: 'https://snapshot.example/incorrect-agent.png',
+      modelProviderName: 'Fixture Provider'
+    },
     sessionMetadata: { title: 'remote read fixture' },
     fullHistory: messages,
     history: [],
@@ -97,13 +104,36 @@ async function main() {
     const first = await store.loadRemoteConversationPage({
       dirPath: root,
       conversationId,
-      pageSize: 2
+      pageSize: 2,
+      providerNames: {'fixture-provider': 'Fixture Provider'},
+      agentIdentities: {
+        Zero: {name: 'Zero', avatarUrl: 'https://agents.example/zero.png'}
+      }
     })
     assert.equal(first.ok, true)
     assert.equal(first.conversation.conversationId, conversationId)
     assert.deepEqual(first.conversation.project, {
       projectId: 'project-fixture',
       name: 'Remote Fixture Project'
+    })
+
+    assert.deepEqual(first.conversation.assistant, {
+      name: 'Zero',
+      avatarUrl: 'https://agents.example/zero.png'
+    })
+    assert.equal(first.conversation.model, 'Fixture Provider | fixture-model')
+
+
+    const fallback = await store.loadRemoteConversationPage({
+      dirPath: root,
+      conversationId,
+      pageSize: 2,
+      providerNames: {'fixture-provider': 'Fixture Provider'},
+      agentIdentities: {}
+    })
+    assert.deepEqual(fallback.conversation.assistant, {
+      name: 'Fixture Provider | fixture-model',
+      avatarUrl: 'https://snapshot.example/incorrect-agent.png'
     })
     assert.equal(first.page.hasMore, true)
     assert.equal(first.page.nextBeforeUiOrder, 5)

@@ -530,7 +530,7 @@ function safeRemoteAssistant(value = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   return {
     name: normalizeText(source.name).slice(0, 160),
-    avatarUrl: safeRemoteAvatar(source.icon)
+    avatarUrl: safeRemoteAvatar(source.avatarUrl || source.icon)
   }
 }
 
@@ -1471,7 +1471,8 @@ export async function loadRemoteConversationPage({
   beforeUiOrder = null,
   pageSize = 50,
   registerMedia = null,
-  providerNames = {}
+  providerNames = {},
+  agentIdentities = {}
 } = {}) {
   const rawDir = normalizeText(dirPath).trim()
   if (!rawDir) throw new Error('conversation_local_dir_required')
@@ -1521,14 +1522,22 @@ export async function loadRemoteConversationPage({
     const taskState = db.prepare("SELECT value_json FROM session_state WHERE state_key = 'taskList' LIMIT 1").get()
     const modelState = db.prepare("SELECT value_json FROM session_state WHERE state_key = 'model' LIMIT 1").get()
     const promptState = db.prepare("SELECT value_json FROM session_state WHERE state_key = 'currentPromptConfig' LIMIT 1").get()
+    const agentCodeState = db.prepare("SELECT value_json FROM session_state WHERE state_key = 'CODE' LIMIT 1").get()
     let tasks = []
     let model = ''
     let assistant = { name: '', avatarUrl: '' }
+    let agentCode = ''
     try { tasks = sanitizeRemoteTasks(taskState ? hydrateAttachments(db, JSON.parse(taskState.value_json)) : []) } catch { tasks = [] }
     let promptConfig = {}
     try { promptConfig = promptState ? hydrateAttachments(db, JSON.parse(promptState.value_json)) : {} } catch { promptConfig = {} }
+    try { agentCode = normalizeText(agentCodeState ? JSON.parse(agentCodeState.value_json) : '').slice(0, 160) } catch { agentCode = '' }
     try { model = remoteModelLabel(modelState ? JSON.parse(modelState.value_json) : '', promptConfig, providerNames) } catch { model = '' }
-    try { assistant = safeRemoteAssistant(promptConfig) } catch { assistant = { name: '', avatarUrl: '' } }
+    try {
+      const currentAgent = agentCode && agentIdentities && typeof agentIdentities === 'object'
+        ? agentIdentities[agentCode]
+        : null
+      assistant = safeRemoteAssistant(currentAgent || promptConfig)
+    } catch { assistant = { name: '', avatarUrl: '' } }
     const oldestOrder = pageRows.length > 0
       ? Math.min(...pageRows.map((item) => Number(item.ui_order) || 0))
       : 0

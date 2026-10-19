@@ -583,13 +583,14 @@ const getQuickStartDocHtml = () => {
 
 const getAboutDocHtml = () => {
   const links = [
-    { left: t('doc.about.clientGithub'), leftUrl: 'https://github.com/Komorebi-yaodong/anywheredesktop', right: 'Gitee', rightUrl: 'https://gitee.com/Komorebi-yaodong/anywheredesktop' },
+    { left: 'Anywhere Desktop', leftUrl: 'https://github.com/Komorebi-yaodong/anywheredesktop', right: 'Gitee', rightUrl: 'https://gitee.com/Komorebi-yaodong/anywheredesktop' },
+    { left: 'Anywhere Mobile', leftUrl: 'https://github.com/Komorebi-yaodong/anywhere-mobile', right: '', rightUrl: '' },
     { left: t('doc.about.pluginGithub'), leftUrl: 'https://github.com/Komorebi-yaodong/Anywhere', right: 'Gitee', rightUrl: 'https://gitee.com/Komorebi-yaodong/Anywhere' },
     { left: t('doc.about.docGithub'), leftUrl: 'https://github.com/Komorebi-yaodong/anywhere_doc', right: 'Gitee', rightUrl: 'https://gitee.com/Komorebi-yaodong/anywhere_' }
   ];
 
   const linkHtml = links
-    .map(item => `<li><span>${escapeHtml(item.left)}</span> <a href="${item.leftUrl}" target="_blank" rel="noreferrer">GitHub</a> <a href="${item.rightUrl}" target="_blank" rel="noreferrer">${escapeHtml(item.right)}</a></li>`)
+    .map(item => `<li><span>${escapeHtml(item.left)}</span> <a href="${item.leftUrl}" target="_blank" rel="noreferrer">GitHub</a>${item.rightUrl ? ` <a href="${item.rightUrl}" target="_blank" rel="noreferrer">${escapeHtml(item.right)}</a>` : ''}</li>`)
     .join('');
 
   return `

@@ -85,6 +85,25 @@ function sortConversations(left, right) {
   return byTime || left.conversationId.localeCompare(right.conversationId)
 }
 
+
+function safeAgentIdentities(config = {}) {
+  const prompts = asObject(asObject(config).prompts)
+  return Object.fromEntries(
+    Object.entries(prompts)
+      .map(([code, prompt]) => {
+        const promptCode = normalizeText(code).slice(0, 160)
+        if (!promptCode) return null
+        const source = asObject(prompt)
+        const icon = normalizeText(source.icon)
+        return [promptCode, {
+          name: normalizeText(source.name).slice(0, 160) || promptCode,
+          avatarUrl: /^https:\/\/[^\s?#]+(?:\?[^\s#]*)?$/i.test(icon) ? icon.slice(0, 2048) : ''
+        }]
+      })
+      .filter(Boolean)
+  )
+}
+
 export function createRemoteConversationReadService({
   getConfig,
   listLocalConversations,
@@ -232,12 +251,14 @@ export function createRemoteConversationReadService({
         normalizeText(asObject(provider).name).slice(0, 160)
       ])
     )
+    const agentIdentities = safeAgentIdentities(configResult?.config)
     return loadRemoteConversationPage({
       dirPath: directory,
       conversationId,
       beforeUiOrder: params.beforeUiOrder,
       pageSize: params.pageSize,
       providerNames,
+      agentIdentities,
       registerMedia: typeof registerMedia === 'function'
         ? (source) => registerMedia({ deviceId: safeDeviceId, conversationId, source })
         : null

@@ -36,8 +36,13 @@ async function main() {
       updatedAt: '2026-01-01T00:00:00.000Z'
     }
   ]
+  const deviceId = 'device-conversation-service-fixture-0001'
   const service = createRemoteConversationReadService({
-    getConfig: async () => ({ config: { webdav: { localChatPath: 'E:/DesktopOnly/Chats' } } }),
+    getConfig: async () => ({ config: {
+      webdav: { localChatPath: 'E:/DesktopOnly/Chats' },
+      providers: {fixture: {name: 'Fixture Provider'}},
+      prompts: {Zero: {name: 'Zero', icon: 'https://agents.example/zero.png'}}
+    } }),
     listLocalConversations: async (dirPath) => {
       assert.equal(dirPath, 'E:/DesktopOnly/Chats')
       return localFiles
@@ -113,24 +118,34 @@ async function main() {
   await expectCode(() => service.listConversations({ unexpected: true }), 'remote_parameter_unknown')
   await expectCode(async () => service.getWindows({ includeSecrets: true }), 'remote_parameter_unknown')
   await expectCode(() => service.listMessages({
-    conversationId: 'conversation-fixture-000000000001',
-    path: 'C:/attacker'
+    deviceId,
+    params: {
+      conversationId: 'conversation-fixture-000000000001',
+      path: 'C:/attacker'
+    }
   }), 'remote_path_parameter_forbidden')
   await expectCode(() => service.listMessages({
-    conversationId: first.conversations[1].conversationId
+    deviceId,
+    params: {conversationId: first.conversations[1].conversationId}
   }), 'remote_conversation_migration_required')
 
   const messages = await service.listMessages({
-    conversationId: 'conversation-fixture-000000000001',
-    beforeUiOrder: 10,
-    pageSize: 25
+    deviceId,
+    params: {
+      conversationId: 'conversation-fixture-000000000001',
+      beforeUiOrder: 10,
+      pageSize: 25
+    }
   })
   assert.equal(messages.ok, true)
   assert.deepEqual(messageCalls, [{
     dirPath: 'E:/DesktopOnly/Chats',
     conversationId: 'conversation-fixture-000000000001',
     beforeUiOrder: 10,
-    pageSize: 25
+    pageSize: 25,
+    providerNames: {fixture: 'Fixture Provider'},
+    agentIdentities: {Zero: {name: 'Zero', avatarUrl: 'https://agents.example/zero.png'}},
+    registerMedia: null
   }])
 
   const unconfigured = createRemoteConversationReadService({
@@ -144,7 +159,8 @@ async function main() {
   assert.equal(empty.configured, false)
   assert.deepEqual(empty.conversations, [])
   await expectCode(() => unconfigured.listMessages({
-    conversationId: 'conversation-fixture-000000000001'
+    deviceId,
+    params: {conversationId: 'conversation-fixture-000000000001'}
   }), 'remote_conversation_directory_not_configured')
 
   console.log(JSON.stringify({ ok: true, suite: 'remote-conversation-service' }))

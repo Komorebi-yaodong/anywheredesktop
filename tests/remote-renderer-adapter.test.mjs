@@ -84,8 +84,19 @@ const context = {
   currentSystemPrompt: ref('Old system'), sourcePromptConfig: ref({ prompt: 'Old system' }),
   defaultConversationName: ref('Fixture conversation'),
   compactConfig: ref({ autoCompactEnabled: true, triggerRatio: 0.9, contextLength: 262144, keepRecentRounds: 3, hideCompactedMessages: true, compactPrompt: '' }),
-  currentConfig: ref({ voiceList: ['Voice A'], mcpServers: { 'mcp-a': { isActive: true, name: 'MCP A' }, 'mcp-b': { isActive: true, name: 'MCP B' } } }),
-  availableMcpServers: computed(() => [{ id: 'mcp-a', name: 'MCP A' }, { id: 'mcp-b', name: 'MCP B' }]),
+  CODE: ref('FixtureAgent'),
+  currentConfig: ref({
+    voiceList: ['Voice A'],
+    prompts: { FixtureAgent: { defaultMcpServers: ['mcp-a'] } },
+    mcpServers: {
+      'mcp-a': { isActive: true, name: 'MCP A', tags: ['Research'], env: { SECRET: 'MUST_NOT_LEAK' } },
+      'mcp-b': { isActive: true, name: 'MCP B', labels: ['文件'] }
+    }
+  }),
+  availableMcpServers: computed(() => [
+    { id: 'mcp-a', name: 'MCP A', tags: ['Research'], env: { SECRET: 'MUST_NOT_LEAK' } },
+    { id: 'mcp-b', name: 'MCP B', labels: ['文件'] }
+  ]),
   allSkillsList: ref([{ id: 'skill-a', name: 'Skill A' }, { id: 'skill-b', name: 'Skill B' }]),
   fullHistory: ref([{ role: 'system', content: 'Old system' }]),
   messageIdCounter: ref(20),
@@ -243,6 +254,11 @@ const saveCountBeforeConfigGet = actions.filter((item) => item === 'remote-turn-
 await adapter.runRemoteConversationCommand({ type: 'conversation.config.get', conversationId: command.conversationId, requestId: 'renderer-config-get' })
 assert.equal(events.at(-1).event, 'conversation.config.result')
 assert.equal(events.at(-1).payload.config.model, 'provider|model-a')
+assert.deepEqual(events.at(-1).payload.options.mcpServers, [
+  { id: 'mcp-a', name: 'MCP A', tags: ['Research'], preset: true },
+  { id: 'mcp-b', name: 'MCP B', tags: ['文件'], preset: false }
+])
+assert.equal(JSON.stringify(events.at(-1).payload.options.mcpServers).includes('MUST_NOT_LEAK'), false)
 assert.equal(actions.filter((item) => item === 'remote-turn-finalized' || item === 'remote-config-patch').length, saveCountBeforeConfigGet)
 await adapter.runRemoteConversationCommand({
   type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-config-patch',

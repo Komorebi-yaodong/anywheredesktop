@@ -527,12 +527,13 @@ function sanitizeRemoteText(value, context = {}) {
   const trim = source.trim()
   // Only a one-line, standalone source can be converted as a whole. A chat
   // message may end in .mp3 while still containing Markdown, HTML and prose.
-  const direct = !/[\r\n]/.test(trim) ? localMediaReference(trim, registerMedia) : ''
-  if (direct) {
-    // Keep a paired user's explicit local path readable, then attach an opaque
-    // preview reference. Mobile never receives a file read capability for it.
-    if (normalizeConversationLocalMediaPath(trim)) return `${source}\n![本地媒体](${direct})`
-    return direct
+  const directLocalPath = !/[\r\n]/.test(trim) ? normalizeConversationLocalMediaPath(trim) : ''
+  if (directLocalPath) {
+    // A bare path is conversation text, not an explicit media directive. Keep
+    // it readable for the paired device but do not append a second preview
+    // block below the message; explicit Markdown/HTML/structured media still
+    // use their existing scoped opaque preview path below.
+    return source
   }
   let result = source
   const exposedLocalMediaPaths = []
@@ -554,18 +555,12 @@ function sanitizeRemoteText(value, context = {}) {
     exposedLocalMediaPaths.push(localPath)
     return `${prefix}${replaceMedia(localPath)}${suffix}`
   })
-  // Explicit local media paths in prose remain readable to the paired device.
-  // Attach a separately authorized preview instead of letting Mobile read the
-  // path directly.
-  result = result.replace(REMOTE_BARE_LOCAL_MEDIA_PATTERN, (match, prefix, sourcePath) => {
-    const localPath = normalizeConversationLocalMediaPath(sourcePath)
-    if (!localPath) return match
-    const media = localMediaReference(localPath, registerMedia)
-    return media ? `${prefix}${sourcePath}\n![本地媒体](${media})` : match
-  })
-  // Markdown/HTML sources already contain their opaque preview. Add their
-  // original paths only after the bare-path replacement to avoid a duplicate
-  // preview for the same source.
+  // Bare local paths embedded in prose stay readable as text. Unlike explicit
+  // Markdown/HTML media they do not append a synthetic bottom preview block.
+  // This avoids rendering a second copy when the response already contains a
+  // renderable image or audio/video element.
+  // Markdown/HTML sources already contain their scoped opaque preview. Add their
+  // original paths as readable text below without creating another media node.
   if (exposedLocalMediaPaths.length) result += `\n${[...new Set(exposedLocalMediaPaths)].map((localPath) => `本地媒体：${localPath}`).join('\n')}`
   // The paired developer device is allowed to read conversation text verbatim,
   // including absolute local paths. Media sources are still rewritten above so

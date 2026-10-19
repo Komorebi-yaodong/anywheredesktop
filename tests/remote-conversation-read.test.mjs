@@ -255,6 +255,7 @@ async function main() {
     assert.match(mediaText, /C:\/synthetic\/clip\.mp4/)
     assert.match(mediaText, /C:\/synthetic\/sound\.mp3/)
     assert.match(mediaText, /C:\/synthetic\/prose\.mp3/)
+    assert.equal(registeredSources.includes('C:/synthetic/prose.mp3'), false, 'bare prose paths must not append a duplicate scoped media preview')
     assert.equal(mediaText.includes('local-file-hidden'), false)
     assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}\?type=image/)
     assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}\?type=video/)

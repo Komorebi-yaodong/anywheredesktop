@@ -62,6 +62,13 @@ function stringArray(value, field) {
   return [...new Set(list)]
 }
 
+/** Only display tags may cross the Remote conversation-config boundary. */
+function safeMcpTags(value = {}) {
+  const source = object(value)
+  const raw = Array.isArray(source.tags) ? source.tags : Array.isArray(source.labels) ? source.labels : []
+  return [...new Set(raw.map((tag) => text(tag, 80).trim()).filter(Boolean))].slice(0, 32)
+}
+
 function normalizeConfigPatch(value) {
   const source = object(value)
   for (const key of Object.keys(source)) {
@@ -129,7 +136,12 @@ function sanitizeConfigResult(source = {}) {
       models: (Array.isArray(options.models) ? options.models : []).slice(0, 1000).map((item) => ({ value: text(item?.value, 320), label: text(item?.label, 240) })),
       reasoningEfforts: stringArray(options.reasoningEfforts || [], 'reasoningEfforts'),
       voices: stringArray(options.voices || [], 'voices'),
-      mcpServers: (Array.isArray(options.mcpServers) ? options.mcpServers : []).slice(0, 256).map((item) => ({ id: text(item?.id, 160), name: text(item?.name, 240) })),
+      mcpServers: (Array.isArray(options.mcpServers) ? options.mcpServers : []).slice(0, 256).map((item) => ({
+        id: text(item?.id, 160),
+        name: text(item?.name, 240),
+        tags: safeMcpTags(item),
+        preset: item?.preset === true
+      })),
       skills: (Array.isArray(options.skills) ? options.skills : []).slice(0, 512).map((item) => ({ id: text(item?.id, 160), name: text(item?.name, 240) }))
     }
   }

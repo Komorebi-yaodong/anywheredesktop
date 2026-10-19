@@ -2764,7 +2764,12 @@ const getRemoteSessionConfigSnapshot = (patched = []) => ({
     models: modelList.value.map((item) => ({ value: item.value, label: item.label || item.value })),
     reasoningEfforts: [...REMOTE_REASONING_EFFORTS],
     voices: (currentConfig.value.voiceList || []).filter((item) => typeof item === 'string'),
-    mcpServers: availableMcpServers.value.map((item) => ({ id: item.id, name: item.name || item.id })),
+    mcpServers: availableMcpServers.value.map((item) => ({
+      id: item.id,
+      name: item.name || item.id,
+      tags: Array.isArray(item.tags) || Array.isArray(item.labels) ? [...new Set((Array.isArray(item.tags) ? item.tags : item.labels).filter((tag) => typeof tag === 'string').map((tag) => tag.trim().slice(0, 80)).filter(Boolean))].slice(0, 32) : [],
+      preset: Array.isArray(currentConfig.value?.prompts?.[CODE.value]?.defaultMcpServers) && currentConfig.value.prompts[CODE.value].defaultMcpServers.includes(item.id)
+    })),
     skills: allSkillsList.value.map((item) => ({ id: item.id || item.name, name: item.name }))
   }
 });

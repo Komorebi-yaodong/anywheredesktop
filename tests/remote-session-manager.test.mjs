@@ -349,11 +349,18 @@ async function run() {
     conversationId: CID, requestId: 'request-config-patch', event: 'conversation.config.result', payload: {
       revision: 10, patched: ['model', 'systemPrompt'],
       config: { model: 'provider|model', reasoningEffort: 'high', voice: '', mcpServerIds: ['mcp-1'], skillIds: ['Skill One'], systemPrompt: 'Session only', compact: { triggerRatio: 0.8, keepRecentRounds: 4, secret: 'NO' } },
-      options: { models: [{ value: 'provider|model', label: 'Model', api_key: 'NO' }], reasoningEfforts: ['default', 'high'], voices: [], mcpServers: [{ id: 'mcp-1', name: 'MCP', env: { SECRET: 'NO' } }], skills: [{ id: 'skill-1', name: 'Skill One', path: 'NO' }] }
+      options: {
+        models: [{ value: 'provider|model', label: 'Model', api_key: 'NO' }],
+        reasoningEfforts: ['default', 'high'],
+        voices: [],
+        mcpServers: [{ id: 'mcp-1', name: 'MCP', tags: ['Research', '文件'], preset: true, env: { SECRET: 'NO' }, cwd: 'NO' }],
+        skills: [{ id: 'skill-1', name: 'Skill One', path: 'NO' }]
+      }
     }
   } })
   const configState = configFixture.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-config-patch' } })
   assert.equal(configState.result.config.systemPrompt, 'Session only')
+  assert.deepEqual(configState.result.options.mcpServers, [{ id: 'mcp-1', name: 'MCP', tags: ['Research', '文件'], preset: true }])
   assert.equal(JSON.stringify(configState).includes('NO'), false)
   await configFixture.manager.getConfig({ deviceId: DEVICE, requestId: 'request-config-get', params: { conversationId: CID } })
   assert.equal(configFixture.commands.at(-1).type, 'conversation.config.get')

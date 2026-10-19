@@ -211,6 +211,9 @@ async function main() {
             '![one](file:///C:/synthetic/image.png)',
             '<video><source src="file://C:/synthetic/clip.mp4"></video>',
             '<audio src="file:C:/synthetic/sound.mp3"></audio>',
+
+            '![remote](https://media.example/fixture.png)',
+            '<audio controls><source src="https://media.example/fixture.mp3" type="audio/mpeg"></audio>',
             '已存储：C:/synthetic/prose.mp3'
           ].join('\n'),
           storageId: 'media-forms',
@@ -230,16 +233,22 @@ async function main() {
     })
     assert.equal(mediaForms.ok, true)
     let mediaIndex = 0
+    const registeredSources = []
     const mediaPage = await store.loadRemoteConversationPage({
       dirPath: root,
       conversationId,
       pageSize: 10,
       registerMedia: (source) => {
+        registeredSources.push(String(source))
         const kind = /\.mp3$/i.test(String(source)) ? 'audio' : /\.(?:mp4|webm|mov|m4v)$/i.test(String(source)) ? 'video' : 'image'
         return { uri: `anywhere-media://${String(++mediaIndex).padStart(16, 'a')}?type=${kind}` }
       }
     })
     const mediaText = JSON.stringify(mediaPage)
+
+    assert.match(mediaText, /https:\/\/media\.example\/fixture\.png/)
+    assert.match(mediaText, /https:\/\/media\.example\/fixture\.mp3/)
+    assert.equal(registeredSources.some((source) => /^https?:\/\//i.test(source)), false)
     assert.match(mediaText, /C:\/synthetic\/image\.png/)
     assert.match(mediaText, /C:\/synthetic\/clip\.mp4/)
     assert.match(mediaText, /C:\/synthetic\/sound\.mp3/)

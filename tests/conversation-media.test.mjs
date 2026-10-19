@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createRemoteConversationMediaService } from '../main/core/remote/conversationMedia.js'
+import { createRemoteConversationMediaService, normalizeLocalMediaPath } from '../main/core/remote/conversationMedia.js'
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-conversation-media-'))
 const mediaPath = path.join(root, 'fixture.png')
@@ -11,10 +11,25 @@ const otherDeviceId = 'device-media-fixture-0002'
 const conversationId = 'conversation-media-fixture-0001'
 const otherConversationId = 'conversation-media-fixture-0002'
 
+
+assert.equal(normalizeLocalMediaPath('C:\\Fixture\\image.png'), 'C:\\Fixture\\image.png')
+assert.equal(normalizeLocalMediaPath('file:///C:/Fixture/image.png'), 'C:/Fixture/image.png')
+assert.equal(normalizeLocalMediaPath('file://C:/Fixture/image.png'), 'C:/Fixture/image.png')
+assert.equal(normalizeLocalMediaPath('file:///Users/fixture/image.png'), '/Users/fixture/image.png')
+assert.equal(normalizeLocalMediaPath('/home/fixture/audio.mp3'), '/home/fixture/audio.mp3')
+assert.equal(normalizeLocalMediaPath('/tmp/fixture/video.mp4'), '/tmp/fixture/video.mp4')
+assert.equal(normalizeLocalMediaPath('https://media.example/fixture.png'), '')
+assert.equal(normalizeLocalMediaPath('http://media.example/fixture.png'), '')
+assert.equal(normalizeLocalMediaPath('file://server/share/fixture.png'), '')
+
+
 try {
   const fixture = Buffer.from('synthetic-png-media-fixture')
   await fs.writeFile(mediaPath, fixture)
   const service = createRemoteConversationMediaService()
+
+  assert.equal(service.register({ deviceId, conversationId, source: 'https://media.example/fixture.png' }), null)
+  assert.equal(service.register({ deviceId, conversationId, source: 'http://media.example/fixture.png' }), null)
   const reference = service.register({ deviceId, conversationId, source: mediaPath })
   assert.match(reference.mediaId, /^[A-Za-z0-9_-]{16,160}$/)
   assert.equal(reference.uri.includes(root), false)

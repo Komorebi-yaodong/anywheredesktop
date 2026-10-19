@@ -21,19 +21,34 @@ function mediaTypeFor(filePath = '') {
   return MEDIA_TYPES.get(path.extname(filePath).toLowerCase()) || ''
 }
 
-function normalizeLocalMediaPath(value = '') {
+export function normalizeLocalMediaPath(value = '') {
   const source = typeof value === 'string' ? value.trim() : ''
-  if (!source || source.length > 4096) return ''
-  // Renderer history may contain file:///C:/..., file://C:/..., or file:C:/...
-  // forms. Normalize them only inside Desktop before issuing an opaque media ID.
+  if (!source || source.length > 4096 || /^https?:\/\//i.test(source)) return ''
   const decoded = (() => {
     try { return decodeURIComponent(source) } catch { return '' }
   })()
   if (!decoded) return ''
-  const local = /^file:/i.test(decoded)
-    ? decoded.replace(/^file:(?:\/\/)?/i, '').replace(/^\//, '')
-    : decoded
-  return /^[A-Za-z]:[\\/]/.test(local) ? local : ''
+  const normalizeBarePath = (candidate = '') => {
+    // The second slash guard is essential: without it, the `s://` inside an
+    // HTTPS URL can be mistaken for a Windows S: drive path.
+    if (/^[A-Za-z]:[\\/](?![\\/])/.test(candidate)) return candidate
+    if (/^\/[A-Za-z]:[\\/](?![\\/])/.test(candidate)) return candidate.slice(1)
+    return /^\/(?!\/)/.test(candidate) ? candidate : ''
+  }
+  if (/^file:/i.test(decoded)) {
+    try {
+      const url = new URL(decoded)
+      if (url.protocol !== 'file:') return ''
+      const pathname = decodeURIComponent(url.pathname || '')
+      if (!url.host || url.host.toLowerCase() === 'localhost') return normalizeBarePath(pathname)
+      // Support legacy Windows file://C:/… spelling, but not UNC hosts.
+      if (/^[A-Za-z]$/.test(url.host)) return normalizeBarePath(`${url.host.toUpperCase()}:${pathname}`)
+      return ''
+    } catch {
+      return normalizeBarePath(decoded.replace(/^file:(?:\/\/)?/i, ''))
+    }
+  }
+  return normalizeBarePath(decoded)
 }
 
 

@@ -469,14 +469,51 @@ function createRemoteImageReferenceResolver(db, registerMedia) {
 
 const REMOTE_MEDIA_EXTENSION_PATTERN = /\.(?:png|jpe?g|webp|gif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg)(?:[?#].*)?$/i
 
-const REMOTE_BARE_LOCAL_MEDIA_PATTERN = /[A-Za-z]:[\\/][^\r\n<>|?*"']+?\.(?:png|jpe?g|webp|gif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg)(?:[?#][^\s<>"']*)?/gi
+const REMOTE_BARE_LOCAL_MEDIA_PATTERN = /(^|[\s("'=：])((?:file:[^\s<>"']+|[A-Za-z]:[\\/](?![\\/])|\/(?!\/))[^\r\n<>|?*"']+?\.(?:png|jpe?g|webp|gif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg)(?:[?#][^\s<>"']*)?)/gim
+
+
+function normalizeConversationLocalMediaPath(value = '') {
+  const source = typeof value === 'string' ? value.trim().replace(/^['"]|['"]$/g, '') : ''
+  if (!source || source.length > 4096 || /^https?:\/\//i.test(source)) return ''
+  const decoded = (() => {
+    try { return decodeURIComponent(source) } catch { return '' }
+  })()
+  if (!decoded) return ''
+  const normalizeBarePath = (candidate = '') => {
+    // Do not accept `s://` as a Windows S: drive; that sequence occurs inside
+    // every HTTPS URL and caused the previous false local-media rewrite.
+    if (/^[A-Za-z]:[\\/](?![\\/])/.test(candidate)) return candidate
+    if (/^\/[A-Za-z]:[\\/](?![\\/])/.test(candidate)) return candidate.slice(1)
+    return /^\/(?!\/)/.test(candidate) ? candidate : ''
+  }
+  if (/^file:/i.test(decoded)) {
+    try {
+      const url = new URL(decoded)
+      if (url.protocol !== 'file:') return ''
+      const pathname = decodeURIComponent(url.pathname || '')
+      if (!url.host || url.host.toLowerCase() === 'localhost') return normalizeBarePath(pathname)
+      if (/^[A-Za-z]$/.test(url.host)) return normalizeBarePath(`${url.host.toUpperCase()}:${pathname}`)
+      return ''
+    } catch {
+      return normalizeBarePath(decoded.replace(/^file:(?:\/\/)?/i, ''))
+    }
+  }
+  return normalizeBarePath(decoded)
+}
+
+function localMediaReference(value, registerMedia) {
+  const localPath = normalizeConversationLocalMediaPath(value)
+  return localPath ? remoteMediaReference(localPath, registerMedia) : ''
+}
 
 function remoteMediaReference(value, registerMedia) {
   const source = typeof value === 'string' ? value.trim().replace(/^['"]|['"]$/g, '') : ''
+  const localPath = normalizeConversationLocalMediaPath(source)
   const isInlineImage = /^data:image\/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(source)
-  if (!source || (!REMOTE_MEDIA_EXTENSION_PATTERN.test(source) && !isInlineImage) || typeof registerMedia !== 'function') return ''
+  if (!source || (!REMOTE_MEDIA_EXTENSION_PATTERN.test(localPath || source) && !isInlineImage) || typeof registerMedia !== 'function') return ''
+  if (!isInlineImage && !localPath) return ''
   try {
-    const media = registerMedia(source)
+    const media = registerMedia(localPath || source)
     return typeof media?.uri === 'string' && /^anywhere-media:\/\/[A-Za-z0-9_-]{16,160}(?:\?type=(?:image|video|audio))?$/.test(media.uri) ? media.uri : ''
   } catch {
     return ''
@@ -486,15 +523,15 @@ function remoteMediaReference(value, registerMedia) {
 function sanitizeRemoteText(value, context = {}) {
   const source = typeof value === 'string' ? value : ''
   const registerMedia = context.registerMedia
-  const replaceMedia = (rawPath) => remoteMediaReference(rawPath, registerMedia) || '[local-media-unavailable]'
+  const replaceMedia = (rawPath) => localMediaReference(rawPath, registerMedia) || '[local-media-unavailable]'
   const trim = source.trim()
   // Only a one-line, standalone source can be converted as a whole. A chat
   // message may end in .mp3 while still containing Markdown, HTML and prose.
-  const direct = !/[\r\n]/.test(trim) ? remoteMediaReference(trim, registerMedia) : ''
+  const direct = !/[\r\n]/.test(trim) ? localMediaReference(trim, registerMedia) : ''
   if (direct) {
     // Keep a paired user's explicit local path readable, then attach an opaque
     // preview reference. Mobile never receives a file read capability for it.
-    if (/^(?:file:)?(?:\/{0,3})?[A-Za-z]:[\\/]/i.test(trim)) return `${source}\n![本地媒体](${direct})`
+    if (normalizeConversationLocalMediaPath(trim)) return `${source}\n![本地媒体](${direct})`
     return direct
   }
   let result = source
@@ -502,23 +539,29 @@ function sanitizeRemoteText(value, context = {}) {
   // Replace only the source in Markdown, preserving its display text. The
   // paired Mobile can also see the original local path as conversation text,
   // while bytes remain reachable only through the opaque media reference.
-  result = result.replace(/(!\[[^\]\r\n]*\]\(\s*)(['"]?)(?:file:(?:\/\/)?\/?)?([A-Za-z]:[\\/][^\)\r\n'"]+)(\2\s*\))/gi, (_match, prefix, quote, localPath, suffix) => {
+  result = result.replace(/(!\[[^\]\r\n]*\]\(\s*)(['"]?)([^\)\r\n'"]+)(\2\s*\))/gi, (match, prefix, quote, sourcePath, suffix) => {
+    const localPath = normalizeConversationLocalMediaPath(sourcePath)
+    if (!localPath) return match
     exposedLocalMediaPaths.push(localPath)
     return `${prefix}${quote}${replaceMedia(localPath)}${suffix}`
   })
   // HTML media is used by the chat renderer for video/audio. Renderer history
   // has emitted file:///, file://C:/, and file:C:/ variants. Convert only the
   // source to an opaque ID and expose the original path as regular text below.
-  result = result.replace(/(<(?:img|source|video|audio)\b[^>]*?\bsrc\s*=\s*['"])(?:file:(?:\/\/)?\/?)?([A-Za-z]:[\\/][^'">\r\n]+)(['"])/gi, (_match, prefix, localPath, suffix) => {
+  result = result.replace(/(<(?:img|source|video|audio)\b[^>]*?\bsrc\s*=\s*['"])([^'">\r\n]+)(['"])/gi, (match, prefix, sourcePath, suffix) => {
+    const localPath = normalizeConversationLocalMediaPath(sourcePath)
+    if (!localPath) return match
     exposedLocalMediaPaths.push(localPath)
     return `${prefix}${replaceMedia(localPath)}${suffix}`
   })
   // Explicit local media paths in prose remain readable to the paired device.
   // Attach a separately authorized preview instead of letting Mobile read the
   // path directly.
-  result = result.replace(REMOTE_BARE_LOCAL_MEDIA_PATTERN, (localPath) => {
-    const media = remoteMediaReference(localPath, registerMedia)
-    return media ? `${localPath}\n![本地媒体](${media})` : localPath
+  result = result.replace(REMOTE_BARE_LOCAL_MEDIA_PATTERN, (match, prefix, sourcePath) => {
+    const localPath = normalizeConversationLocalMediaPath(sourcePath)
+    if (!localPath) return match
+    const media = localMediaReference(localPath, registerMedia)
+    return media ? `${prefix}${sourcePath}\n![本地媒体](${media})` : match
   })
   // Markdown/HTML sources already contain their opaque preview. Add their
   // original paths only after the bare-path replacement to avoid a duplicate

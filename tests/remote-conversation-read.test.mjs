@@ -107,7 +107,7 @@ async function main() {
       pageSize: 2,
       providerNames: {'fixture-provider': 'Fixture Provider'},
       agentIdentities: {
-        Zero: {name: 'Zero', avatarUrl: 'https://agents.example/zero.png'}
+        Zero: {code: 'Zero', name: 'Zero', avatarUrl: 'https://agents.example/zero.png'}
       }
     })
     assert.equal(first.ok, true)
@@ -118,6 +118,7 @@ async function main() {
     })
 
     assert.deepEqual(first.conversation.assistant, {
+      code: 'Zero',
       name: 'Zero',
       avatarUrl: 'https://agents.example/zero.png'
     })
@@ -132,6 +133,7 @@ async function main() {
       agentIdentities: {}
     })
     assert.deepEqual(fallback.conversation.assistant, {
+      code: '',
       name: 'Fixture Provider | fixture-model',
       avatarUrl: 'https://snapshot.example/incorrect-agent.png'
     })

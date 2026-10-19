@@ -103,7 +103,7 @@ function normalizeMobileProfileAvatar(dataUrl) {
         ? image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) })
         : image
       const png = thumbnail.toPNG()
-      if (png.length > 0 && png.length <= 160 * 1024) return `data:image/png;base64,${png.toString('base64')}`
+      if (png.length > 0 && png.length <= 48 * 1024) return `data:image/png;base64,${png.toString('base64')}`
     }
   } catch {
     // Invalid image input stays private and simply falls back to initials on Mobile.

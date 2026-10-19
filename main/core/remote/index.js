@@ -334,7 +334,7 @@ export function createRemoteGateway({
     if (uploadManager) capabilities.push('attachment.begin', 'attachment.chunk', 'attachment.complete', 'attachment.abort')
     if (businessConfigService) capabilities.push('business.config.get', 'business.config.replace')
     if (mobileWorkspaceService) capabilities.push(
-      'workspace.bootstrap.get', 'workspace.assistants.list', 'workspace.assistant.get', 'workspace.assistant.patch',
+      'workspace.bootstrap.get', 'workspace.avatar.get', 'workspace.assistants.list', 'workspace.assistant.get', 'workspace.assistant.patch',
       'workspace.agent.catalog', 'workspace.agent.get', 'workspace.agent.mutate', 'workspace.agent.routes.mutate', 'workspace.agent.tags.mutate',
       'workspace.provider.catalog', 'workspace.provider.get', 'workspace.provider.mutate', 'workspace.provider.folders.mutate', 'workspace.provider.order.mutate', 'workspace.provider.models.fetch',
       'workspace.project.create', 'workspace.project.update', 'workspace.project.remove', 'workspace.management.catalog.get', 'workspace.management.details.get', 'workspace.management.patch'
@@ -1075,6 +1075,10 @@ export function createRemoteGateway({
         case 'workspace.bootstrap.get':
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
           result = await mobileWorkspaceService.bootstrap({ params })
+          break
+        case 'workspace.avatar.get':
+          if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.avatarGet({ params })
           break
         case 'workspace.assistants.list':
           if (!mobileWorkspaceService) throw remoteError('remote_method_unavailable')

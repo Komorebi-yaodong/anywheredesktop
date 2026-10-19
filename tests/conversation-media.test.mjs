@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -42,7 +43,15 @@ try {
     deviceId,
     params: { conversationId, mediaId: reference.mediaId, offset: 0, length: 96 * 1024 }
   })
+  const metadata = await service.get({
+    deviceId,
+    params: { conversationId, mediaId: reference.mediaId, offset: 0, length: 0 }
+  })
+  assert.equal(metadata.byteLength, 0)
+  assert.equal(metadata.data, '')
+  assert.equal(metadata.sha256, crypto.createHash('sha256').update(fixture).digest('hex'))
   assert.equal(chunk.mimeType, 'image/png')
+  assert.equal(chunk.sha256, crypto.createHash('sha256').update(fixture).digest('hex'))
   assert.equal(Buffer.from(chunk.data, 'base64url').toString(), fixture.toString())
   assert.equal(JSON.stringify(chunk).includes(root), false)
   await assert.rejects(service.get({

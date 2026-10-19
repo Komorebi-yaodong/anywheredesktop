@@ -144,7 +144,7 @@ async function main() {
     beforeUiOrder: 10,
     pageSize: 25,
     providerNames: {fixture: 'Fixture Provider'},
-    agentIdentities: {Zero: {name: 'Zero', avatarUrl: 'https://agents.example/zero.png'}},
+    agentIdentities: {Zero: {code: 'Zero', name: 'Zero', avatarUrl: 'https://agents.example/zero.png'}},
     registerMedia: null
   }])
 

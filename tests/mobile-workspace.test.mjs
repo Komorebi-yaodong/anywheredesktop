@@ -37,16 +37,32 @@ assert.equal(bootstrap.assistants[0].model, '安全服务商 | m')
 assert.equal(JSON.stringify(bootstrap).includes('PRIVATE'), false)
 profileAvatar = 'data:image/png;base64,AA=='
 const avatarBootstrap = await service.bootstrap({ params: {} })
-assert.equal(avatarBootstrap.profile.avatarDataUrl, profileAvatar)
-assert.match(avatarBootstrap.profile.avatarVersion, /^[A-Za-z0-9_-]{16,}$/)
+assert.equal(Object.hasOwn(avatarBootstrap.profile, 'avatarDataUrl'), false)
+assert.match(avatarBootstrap.profile.avatar?.version || '', /^[A-Za-z0-9_-]{16,}$/)
+assert.equal(avatarBootstrap.profile.avatar?.byteLength, 1)
+const profileAvatarResponse = await service.avatarGet({ params: {kind: 'profile', version: avatarBootstrap.profile.avatar.version} })
+assert.equal(profileAvatarResponse.dataUrl, profileAvatar)
+await assert.rejects(service.avatarGet({ params: {kind: 'profile', version: 'invalid-avatar-version'} }), { code: 'remote_avatar_version_mismatch' })
 normalizeAvatarDataUrl = () => 'data:image/png;base64,AA=='
 profileAvatar = `data:image/png;base64,${'A'.repeat(220000)}`
 const normalizedAvatarBootstrap = await service.bootstrap({ params: {} })
-assert.equal(normalizedAvatarBootstrap.profile.avatarDataUrl, 'data:image/png;base64,AA==')
+assert.equal(Object.hasOwn(normalizedAvatarBootstrap.profile, 'avatarDataUrl'), false)
+assert.equal(normalizedAvatarBootstrap.profile.avatar?.byteLength, 1)
 normalizeAvatarDataUrl = (value) => value
 
 profileAvatar = 'data:image/svg+xml;base64,PHN2Zy8+'
-assert.equal((await service.bootstrap({ params: {} })).profile.avatarDataUrl, '')
+assert.equal((await service.bootstrap({ params: {} })).profile.avatar, null)
+
+config.prompts.Code.icon = 'data:image/png;base64,AA=='
+const embeddedAgentBootstrap = await service.bootstrap({ params: {} })
+const embeddedAgent = embeddedAgentBootstrap.assistants.find((item) => item.code === 'Code')
+assert.equal(embeddedAgent.icon, '')
+assert.equal(Object.hasOwn(embeddedAgent, 'iconDataUrl'), false)
+assert.match(embeddedAgent.avatar?.version || '', /^[A-Za-z0-9_-]{16,}$/)
+const agentAvatarResponse = await service.avatarGet({ params: {kind: 'agent', code: 'Code', version: embeddedAgent.avatar.version} })
+assert.equal(agentAvatarResponse.dataUrl, 'data:image/png;base64,AA==')
+await assert.rejects(service.avatarGet({ params: {kind: 'agent', code: 'Code', version: 'AAAAAAAAAAAAAAAAAAAAAA'} }), { code: 'remote_avatar_version_mismatch' })
+config.prompts.Code.icon = 'https://example.test/icon.png'
 
 const detail = await service.assistantGet({ params: { code: 'Code' } })
 assert.equal(detail.assistant.defaultProjectName, '工作')

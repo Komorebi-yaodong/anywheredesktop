@@ -10,6 +10,7 @@ const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 const MAX_MEMORY_MEDIA_BYTES = 256 * 1024 * 1024
 const MAX_CHUNK_BYTES = 96 * 1024
 const MAX_REFS = 2048
+const MEDIA_VERSION_ALGORITHM = 'sha256'
 
 const MEDIA_TYPES = new Map([
   ['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.webp', 'image/webp'], ['.gif', 'image/gif'],
@@ -132,6 +133,18 @@ export function createRemoteConversationMediaService() {
     return { mediaId, mimeType, uri: `anywhere-media://${mediaId}?type=${kind}` }
   }
 
+  async function contentHash(entry, stats = null) {
+    if (Buffer.isBuffer(entry.buffer)) return crypto.createHash(MEDIA_VERSION_ALGORITHM).update(entry.buffer).digest('hex')
+    const marker = `${stats?.size || 0}:${stats?.mtimeMs || 0}:${stats?.ctimeMs || 0}`
+    if (entry.contentHash && entry.contentHashMarker === marker) return entry.contentHash
+    const bytes = await fs.readFile(entry.filePath)
+    if (!stats || bytes.length !== stats.size || bytes.length < 1 || bytes.length > MAX_MEDIA_BYTES) throw remoteError('remote_media_not_available')
+    entry.contentHash = crypto.createHash(MEDIA_VERSION_ALGORITHM).update(bytes).digest('hex')
+    entry.contentHashMarker = marker
+    return entry.contentHash
+  }
+
+
   async function get({ deviceId, params = {} } = {}) {
     if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some((key) => !['conversationId', 'mediaId', 'offset', 'length'].includes(key))) {
       throw remoteError('remote_parameter_unknown')
@@ -141,39 +154,45 @@ export function createRemoteConversationMediaService() {
     const mediaId = normalizeIdentifier(params.mediaId, 'mediaId', { minLength: 16, maxLength: 160 })
     const offset = Math.floor(Number(params.offset))
     const length = Math.floor(Number(params.length))
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > MAX_CHUNK_BYTES) throw remoteError('remote_media_range_invalid')
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > MAX_CHUNK_BYTES || (length === 0 && offset !== 0)) throw remoteError('remote_media_range_invalid')
     prune()
     const entry = refs.get(mediaId)
     if (!entry || entry.deviceId !== safeDeviceId || entry.conversationId !== conversationId) throw remoteError('remote_media_not_found')
     let handle
     try {
       if (Buffer.isBuffer(entry.buffer)) {
-        if (entry.buffer.length < 1 || entry.buffer.length > MAX_MEDIA_BYTES || offset >= entry.buffer.length) throw remoteError('remote_media_not_available')
-        const chunk = entry.buffer.subarray(offset, Math.min(offset + length, entry.buffer.length))
+        if (entry.buffer.length < 1 || entry.buffer.length > MAX_MEDIA_BYTES || (length > 0 && offset >= entry.buffer.length)) throw remoteError('remote_media_not_available')
+        const version = await contentHash(entry)
+        const chunk = length === 0 ? Buffer.alloc(0) : entry.buffer.subarray(offset, Math.min(offset + length, entry.buffer.length))
         entry.expiresAtMs = Date.now() + REF_TTL_MS
         return {
           ok: true,
           mediaId,
           mimeType: entry.mimeType,
           totalBytes: entry.buffer.length,
+          sha256: version,
           offset,
           byteLength: chunk.length,
           data: chunk.toString('base64url')
         }
       }
       const [stats, linkStats] = await Promise.all([fs.stat(entry.filePath), fs.lstat(entry.filePath)])
-      if (linkStats.isSymbolicLink() || !stats.isFile() || stats.size < 1 || stats.size > MAX_MEDIA_BYTES || offset >= stats.size) throw remoteError('remote_media_not_available')
-      const byteLength = Math.min(length, stats.size - offset)
+      if (linkStats.isSymbolicLink() || !stats.isFile() || stats.size < 1 || stats.size > MAX_MEDIA_BYTES || (length > 0 && offset >= stats.size)) throw remoteError('remote_media_not_available')
+      const version = await contentHash(entry, stats)
+      const byteLength = length === 0 ? 0 : Math.min(length, stats.size - offset)
       const buffer = Buffer.allocUnsafe(byteLength)
-      handle = await fs.open(entry.filePath, 'r')
-      const result = await handle.read(buffer, 0, byteLength, offset)
-      if (result.bytesRead !== byteLength) throw remoteError('remote_media_not_available')
+      if (byteLength > 0) {
+        handle = await fs.open(entry.filePath, 'r')
+        const result = await handle.read(buffer, 0, byteLength, offset)
+        if (result.bytesRead !== byteLength) throw remoteError('remote_media_not_available')
+      }
       entry.expiresAtMs = Date.now() + REF_TTL_MS
       return {
         ok: true,
         mediaId,
         mimeType: entry.mimeType,
         totalBytes: stats.size,
+        sha256: version,
         offset,
         byteLength,
         data: buffer.toString('base64url')

@@ -96,6 +96,7 @@ function safeAgentIdentities(config = {}) {
         const source = asObject(prompt)
         const icon = normalizeText(source.icon)
         return [promptCode, {
+          code: promptCode,
           name: normalizeText(source.name).slice(0, 160) || promptCode,
           avatarUrl: /^https:\/\/[^\s?#]+(?:\?[^\s#]*)?$/i.test(icon) ? icon.slice(0, 2048) : ''
         }]

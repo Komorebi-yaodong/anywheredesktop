@@ -31,9 +31,9 @@ function safeProviderUrl(value) {
 }
 
 
-const MAX_AVATAR_BYTES = 160 * 1024
-const MAX_AGENT_ICON_BYTES = 16 * 1024
+const MAX_REMOTE_AVATAR_BYTES = 48 * 1024
 const MAX_SOURCE_AVATAR_BYTES = 2 * 1024 * 1024
+const MAX_AVATAR_RESOURCES = 64
 
 function publicAvatar(value) {
   const avatar = typeof value === 'string' ? value.trim() : ''
@@ -41,25 +41,35 @@ function publicAvatar(value) {
 }
 
 /**
- * The Desktop profile editor stores its crop as a Data URL. The Mobile DTO
- * accepts only small raster image payloads; no file/resource URL or SVG markup
- * can cross this boundary. Large source images are reduced by the injected
- * normalizer before they are returned over the E2EE workspace response.
+ * Mobile never receives a Desktop path or an arbitrary URL-read capability.
+ * Embedded raster avatars are normalized by Main, represented by SHA-256 of
+ * their decoded bytes, and transferred only on an exact-version cache miss.
  */
-function avatarSourceDataUrl(value) {
+function parseAvatarDataUrl(value, maxBytes) {
   const avatar = typeof value === 'string' ? value.trim() : ''
   const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(avatar)
-  if (!match) return ''
-  const bytes = Math.floor((match[2].length * 3) / 4) - (match[2].endsWith('==') ? 2 : match[2].endsWith('=') ? 1 : 0)
-  return bytes > 0 && bytes <= MAX_SOURCE_AVATAR_BYTES ? avatar : ''
+  if (!match) return null
+  const bytes = Buffer.from(match[2], 'base64')
+  if (bytes.length <= 0 || bytes.length > maxBytes) return null
+  const subtype = match[1].toLowerCase()
+  return {
+    dataUrl: `data:image/${subtype};base64,${match[2]}`,
+    mimeType: `image/${subtype}`,
+    bytes
+  }
 }
 
-function publicAvatarDataUrl(value) {
-  const avatar = typeof value === 'string' ? value.trim() : ''
-  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(avatar)
-  if (!match) return ''
-  const bytes = Math.floor((match[2].length * 3) / 4) - (match[2].endsWith('==') ? 2 : match[2].endsWith('=') ? 1 : 0)
-  return bytes > 0 && bytes <= MAX_AVATAR_BYTES ? avatar : ''
+function avatarSourceDataUrl(value) {
+  return parseAvatarDataUrl(value, MAX_SOURCE_AVATAR_BYTES)?.dataUrl || ''
+}
+
+function avatarMetadata(avatar) {
+  if (!avatar) return null
+  return {
+    version: crypto.createHash('sha256').update(avatar.bytes).digest('base64url'),
+    mimeType: avatar.mimeType,
+    byteLength: avatar.bytes.length
+  }
 }
 
 function modelDisplayLabel(value, providers = {}) {
@@ -334,15 +344,17 @@ function safeAgentPatch(input = {}) {
   return patch
 }
 
-function agentDto(code, prompt = {}, projects = [], tags = {}) {
+function agentDto(code, prompt = {}, projects = [], tags = {}, avatar = null) {
   const source = object(prompt)
   const defaultProjectId = text(source.autoSaveProjectId, MAX_NAME)
   const defaultProject = projects.find((project) => project.projectId === defaultProjectId)
+  const metadata = avatarMetadata(avatar)
   return {
     code: text(code, MAX_NAME),
     name: text(source.name, MAX_NAME) || text(code, MAX_NAME),
     enabled: source.enable !== false,
     icon: publicAvatar(source.icon),
+    avatar: metadata ? { kind: 'agent', code: text(code, MAX_NAME), ...metadata } : null,
     model: text(source.model, 320),
     type: text(source.type, 32) || 'general',
     showMode: text(source.showMode, 32) || 'window',
@@ -360,15 +372,17 @@ function agentDto(code, prompt = {}, projects = [], tags = {}) {
 }
 
 
-function assistantDto(code, prompt = {}, projects = [], providers = {}) {
+function assistantDto(code, prompt = {}, projects = [], providers = {}, avatar = null) {
   const source = object(prompt)
   const defaultProjectId = text(source.autoSaveProjectId, MAX_NAME)
   const defaultProject = projects.find((project) => project.projectId === defaultProjectId)
   const icon = publicAvatar(source.icon)
+  const metadata = avatarMetadata(avatar)
   return {
     code: text(code, MAX_NAME),
     name: text(source.name, MAX_NAME) || text(code, MAX_NAME),
     icon,
+    avatar: metadata ? { kind: 'agent', code: text(code, MAX_NAME), ...metadata } : null,
     enabled: source.enable !== false,
     model: modelDisplayLabel(source.model, providers),
     defaultProjectId: defaultProjectId || '',
@@ -379,10 +393,10 @@ function assistantDto(code, prompt = {}, projects = [], providers = {}) {
   }
 }
 
-function assistantDetail(code, prompt = {}, projects = [], providers = {}) {
+function assistantDetail(code, prompt = {}, projects = [], providers = {}, avatar = null) {
   const source = object(prompt)
   return {
-    ...assistantDto(code, source, projects, providers),
+    ...assistantDto(code, source, projects, providers, avatar),
     revision: revision(source),
     systemPrompt: typeof source.prompt === 'string' ? source.prompt.slice(0, 256 * 1024) : '',
     reasoningEffort: text(source.reasoning_effort, 32) || 'default',
@@ -427,7 +441,28 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     throw new Error('remote_mobile_workspace_dependencies_required')
   }
   const requests = new Map()
+  const avatarNormalizationCache = new Map()
   let mutationTail = Promise.resolve()
+
+  async function embeddedAvatar(value) {
+    const source = avatarSourceDataUrl(value)
+    if (!source) return null
+    const sourceKey = crypto.createHash('sha256').update(source).digest('base64url')
+    const cached = avatarNormalizationCache.get(sourceKey)
+    if (cached) return cached
+    let avatar = null
+    try {
+      avatar = parseAvatarDataUrl(await normalizeAvatarDataUrl(source), MAX_REMOTE_AVATAR_BYTES)
+    } catch {
+      avatar = null
+    }
+    if (!avatar) return null
+    avatarNormalizationCache.set(sourceKey, avatar)
+    while (avatarNormalizationCache.size > MAX_AVATAR_RESOURCES) {
+      avatarNormalizationCache.delete(avatarNormalizationCache.keys().next().value)
+    }
+    return avatar
+  }
 
   async function current() {
     const result = await getConfig()
@@ -441,21 +476,21 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
 
   async function profile() {
     const user = await getUser()
-    const sourceAvatar = avatarSourceDataUrl(user?.avatar)
-    let avatarDataUrl = ''
-    if (sourceAvatar) {
-      try {
-        avatarDataUrl = publicAvatarDataUrl(await normalizeAvatarDataUrl(sourceAvatar))
-      } catch {
-        avatarDataUrl = ''
-      }
-    }
+    const avatar = await embeddedAvatar(user?.avatar)
+    const metadata = avatarMetadata(avatar)
     return {
       displayName: text(user?.nickname, 80) || 'User',
       avatarUrl: publicAvatar(user?.avatar),
-      avatarDataUrl,
-      avatarVersion: avatarDataUrl ? crypto.createHash('sha256').update(avatarDataUrl).digest('base64url') : ''
+      avatar: metadata ? { kind: 'profile', ...metadata } : null
     }
+  }
+
+  async function assistantWithAvatar(code, prompt, projects, providers) {
+    return assistantDto(code, prompt, projects, providers, await embeddedAvatar(prompt?.icon))
+  }
+
+  async function agentWithAvatar(code, prompt, projects, tags) {
+    return agentDto(code, prompt, projects, tags, await embeddedAvatar(prompt?.icon))
   }
 
   async function bootstrap({ params = {} } = {}) {
@@ -463,8 +498,8 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     const [{ config, projects, directoryConfigured }, user] = await Promise.all([current(), profile()])
     const prompts = object(config.prompts)
     const providers = object(config.providers)
-    const assistants = Object.entries(prompts)
-      .map(([code, prompt]) => assistantDto(code, prompt, projects, providers))
+    const assistants = (await Promise.all(Object.entries(prompts)
+      .map(([code, prompt]) => assistantWithAvatar(code, prompt, projects, providers))))
       .filter((assistant) => assistant.code && assistant.enabled)
       .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
     return { ok: true, profile: user, projects, assistants, configured: directoryConfigured }
@@ -476,8 +511,8 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     const providers = object(config.providers)
     return {
       ok: true,
-      assistants: Object.entries(object(config.prompts))
-        .map(([code, prompt]) => assistantDto(code, prompt, projects, providers))
+      assistants: (await Promise.all(Object.entries(object(config.prompts))
+        .map(([code, prompt]) => assistantWithAvatar(code, prompt, projects, providers))))
         .filter((assistant) => assistant.code)
         .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
     }
@@ -489,7 +524,33 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     const { config, projects } = await current()
     const prompt = object(config.prompts)[code]
     if (!code || !prompt || typeof prompt !== 'object') throw remoteError('remote_assistant_not_found')
-    return { ok: true, assistant: assistantDetail(code, prompt, projects, object(config.providers)) }
+    return { ok: true, assistant: assistantDetail(code, prompt, projects, object(config.providers), await embeddedAvatar(prompt.icon)) }
+  }
+
+  async function avatarGet({ params = {} } = {}) {
+    parameters(params, ['kind', 'code', 'version'])
+    const kind = text(params.kind, 16)
+    const expectedVersion = text(params.version, 128)
+    if (!['profile', 'agent'].includes(kind) || !/^[A-Za-z0-9_-]{16,128}$/.test(expectedVersion)) throw remoteError('remote_avatar_invalid')
+    let avatar = null
+    let response = null
+    if (kind === 'profile') {
+      if (Object.hasOwn(params, 'code')) throw remoteError('remote_avatar_invalid')
+      const user = await getUser()
+      avatar = await embeddedAvatar(user?.avatar)
+      const metadata = avatarMetadata(avatar)
+      response = metadata ? { kind, ...metadata } : null
+    } else {
+      const code = normalizedAgentCode(params.code)
+      const { config } = await current()
+      const prompt = object(config.prompts)[code]
+      if (!prompt || typeof prompt !== 'object') throw remoteError('remote_agent_not_found')
+      avatar = await embeddedAvatar(prompt.icon)
+      const metadata = avatarMetadata(avatar)
+      response = metadata ? { kind, code, ...metadata } : null
+    }
+    if (!avatar || !response || response.version !== expectedVersion) throw remoteError('remote_avatar_version_mismatch')
+    return { ok: true, avatar: response, dataUrl: avatar.dataUrl }
   }
 
   function pruneRequests() {
@@ -803,16 +864,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
   }
 
   async function agentView(code, prompt, projects, tags) {
-    const view = agentDto(code, prompt, projects, tags)
-    const sourceIcon = avatarSourceDataUrl(prompt?.icon)
-    if (!sourceIcon) return { ...view, iconDataUrl: '' }
-    try {
-      const normalized = publicAvatarDataUrl(await normalizeAvatarDataUrl(sourceIcon))
-      const bytes = normalized ? Math.floor((normalized.split(',')[1].length * 3) / 4) : 0
-      return { ...view, iconDataUrl: bytes > 0 && bytes <= MAX_AGENT_ICON_BYTES ? normalized : '' }
-    } catch {
-      return { ...view, iconDataUrl: '' }
-    }
+    return agentWithAvatar(code, prompt, projects, tags)
   }
 
   function normalizedAgentCode(value, fallback = '') {
@@ -1284,5 +1336,5 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     }
   }
 
-  return { bootstrap, profile, assistantList, assistantGet, mutate, agentCatalog, agentGet, agentMutate, agentRoutesMutate, agentTagsMutate, providerCatalog, providerGet, providerMutate, providerFoldersMutate, providerOrderMutate, providerModelsFetch, projectCreate, projectUpdate, projectRemove, managementCatalog, managementDetails, managementPatch }
+  return { bootstrap, profile, avatarGet, assistantList, assistantGet, mutate, agentCatalog, agentGet, agentMutate, agentRoutesMutate, agentTagsMutate, providerCatalog, providerGet, providerMutate, providerFoldersMutate, providerOrderMutate, providerModelsFetch, projectCreate, projectUpdate, projectRemove, managementCatalog, managementDetails, managementPatch }
 }

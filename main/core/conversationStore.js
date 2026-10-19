@@ -597,6 +597,7 @@ function remoteModelLabel(modelValue, promptConfig = {}, providerNames = {}) {
 function safeRemoteAssistant(value = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   return {
+    code: normalizeText(source.code).slice(0, 160),
     name: normalizeText(source.name).slice(0, 160),
     avatarUrl: safeRemoteAvatar(source.avatarUrl || source.icon)
   }
@@ -1593,7 +1594,7 @@ export async function loadRemoteConversationPage({
     const agentCodeState = db.prepare("SELECT value_json FROM session_state WHERE state_key = 'CODE' LIMIT 1").get()
     let tasks = []
     let model = ''
-    let assistant = { name: '', avatarUrl: '' }
+    let assistant = { code: '', name: '', avatarUrl: '' }
     let agentCode = ''
     try { tasks = sanitizeRemoteTasks(taskState ? hydrateAttachments(db, JSON.parse(taskState.value_json)) : []) } catch { tasks = [] }
     let promptConfig = {}
@@ -1605,7 +1606,7 @@ export async function loadRemoteConversationPage({
         ? agentIdentities[agentCode]
         : null
       assistant = safeRemoteAssistant(currentAgent || promptConfig)
-    } catch { assistant = { name: '', avatarUrl: '' } }
+    } catch { assistant = { code: '', name: '', avatarUrl: '' } }
     const oldestOrder = pageRows.length > 0
       ? Math.min(...pageRows.map((item) => Number(item.ui_order) || 0))
       : 0

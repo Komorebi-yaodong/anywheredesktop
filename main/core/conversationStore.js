@@ -469,6 +469,8 @@ function createRemoteImageReferenceResolver(db, registerMedia) {
 
 const REMOTE_MEDIA_EXTENSION_PATTERN = /\.(?:png|jpe?g|webp|gif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg)(?:[?#].*)?$/i
 
+const REMOTE_BARE_LOCAL_MEDIA_PATTERN = /[A-Za-z]:[\\/][^\r\n<>|?*"']+?\.(?:png|jpe?g|webp|gif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg)(?:[?#][^\s<>"']*)?/gi
+
 function remoteMediaReference(value, registerMedia) {
   const source = typeof value === 'string' ? value.trim().replace(/^['"]|['"]$/g, '') : ''
   const isInlineImage = /^data:image\/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(source)
@@ -486,19 +488,42 @@ function sanitizeRemoteText(value, context = {}) {
   const registerMedia = context.registerMedia
   const replaceMedia = (rawPath) => remoteMediaReference(rawPath, registerMedia) || '[local-media-unavailable]'
   const trim = source.trim()
-  const direct = remoteMediaReference(trim, registerMedia)
-  if (direct) return direct
+  // Only a one-line, standalone source can be converted as a whole. A chat
+  // message may end in .mp3 while still containing Markdown, HTML and prose.
+  const direct = !/[\r\n]/.test(trim) ? remoteMediaReference(trim, registerMedia) : ''
+  if (direct) {
+    // Keep a paired user's explicit local path readable, then attach an opaque
+    // preview reference. Mobile never receives a file read capability for it.
+    if (/^(?:file:)?(?:\/{0,3})?[A-Za-z]:[\\/]/i.test(trim)) return `${source}\n![本地媒体](${direct})`
+    return direct
+  }
   let result = source
-  // Markdown image paths are already renderable on Desktop; replace only the
-  // source URL, keeping the user-authored alt text and never emitting the path.
-  result = result.replace(/(!\[[^\]\r\n]*\]\(\s*)(['"]?)(?:file:(?:\/\/)?\/?)?([A-Za-z]:[\\/][^\)\r\n'"]+)(\2\s*\))/gi, (_match, prefix, quote, localPath, suffix) => `${prefix}${quote}${replaceMedia(localPath)}${suffix}`)
-  // HTML media is used by the chat renderer for video/audio. Its src becomes
-  // the same opaque Mobile-only scheme. Renderer history has emitted file:///,
-  // file://C:/, and file:C:/ variants; normalize all of them Desktop-side.
-  result = result.replace(/(<(?:img|source|video|audio)\b[^>]*?\bsrc\s*=\s*['"])(?:file:(?:\/\/)?\/?)?([A-Za-z]:[\\/][^'">\r\n]+)(['"])/gi, (_match, prefix, localPath, suffix) => `${prefix}${replaceMedia(localPath)}${suffix}`)
-  // A plain local media reference is useful for structured image_url content.
-  const plain = remoteMediaReference(result, registerMedia)
-  if (plain) return plain
+  const exposedLocalMediaPaths = []
+  // Replace only the source in Markdown, preserving its display text. The
+  // paired Mobile can also see the original local path as conversation text,
+  // while bytes remain reachable only through the opaque media reference.
+  result = result.replace(/(!\[[^\]\r\n]*\]\(\s*)(['"]?)(?:file:(?:\/\/)?\/?)?([A-Za-z]:[\\/][^\)\r\n'"]+)(\2\s*\))/gi, (_match, prefix, quote, localPath, suffix) => {
+    exposedLocalMediaPaths.push(localPath)
+    return `${prefix}${quote}${replaceMedia(localPath)}${suffix}`
+  })
+  // HTML media is used by the chat renderer for video/audio. Renderer history
+  // has emitted file:///, file://C:/, and file:C:/ variants. Convert only the
+  // source to an opaque ID and expose the original path as regular text below.
+  result = result.replace(/(<(?:img|source|video|audio)\b[^>]*?\bsrc\s*=\s*['"])(?:file:(?:\/\/)?\/?)?([A-Za-z]:[\\/][^'">\r\n]+)(['"])/gi, (_match, prefix, localPath, suffix) => {
+    exposedLocalMediaPaths.push(localPath)
+    return `${prefix}${replaceMedia(localPath)}${suffix}`
+  })
+  // Explicit local media paths in prose remain readable to the paired device.
+  // Attach a separately authorized preview instead of letting Mobile read the
+  // path directly.
+  result = result.replace(REMOTE_BARE_LOCAL_MEDIA_PATTERN, (localPath) => {
+    const media = remoteMediaReference(localPath, registerMedia)
+    return media ? `${localPath}\n![本地媒体](${media})` : localPath
+  })
+  // Markdown/HTML sources already contain their opaque preview. Add their
+  // original paths only after the bare-path replacement to avoid a duplicate
+  // preview for the same source.
+  if (exposedLocalMediaPaths.length) result += `\n${[...new Set(exposedLocalMediaPaths)].map((localPath) => `本地媒体：${localPath}`).join('\n')}`
   // The paired developer device is allowed to read conversation text verbatim,
   // including absolute local paths. Media sources are still rewritten above so
   // Mobile renders real bytes instead of trying to open a Desktop-only path.

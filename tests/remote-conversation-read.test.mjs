@@ -210,7 +210,8 @@ async function main() {
           content: [
             '![one](file:///C:/synthetic/image.png)',
             '<video><source src="file://C:/synthetic/clip.mp4"></video>',
-            '<audio src="file:C:/synthetic/sound.mp3"></audio>'
+            '<audio src="file:C:/synthetic/sound.mp3"></audio>',
+            '已存储：C:/synthetic/prose.mp3'
           ].join('\n'),
           storageId: 'media-forms',
           uiStorageId: 'ui-media-forms'
@@ -220,7 +221,8 @@ async function main() {
           content: [
             '![one](file:///C:/synthetic/image.png)',
             '<video><source src="file://C:/synthetic/clip.mp4"></video>',
-            '<audio src="file:C:/synthetic/sound.mp3"></audio>'
+            '<audio src="file:C:/synthetic/sound.mp3"></audio>',
+            '已存储：C:/synthetic/prose.mp3'
           ].join('\n'),
           storageId: 'media-forms'
         }]
@@ -232,12 +234,20 @@ async function main() {
       dirPath: root,
       conversationId,
       pageSize: 10,
-      registerMedia: () => ({ uri: `anywhere-media://${String(++mediaIndex).padStart(16, 'a')}?type=image` })
+      registerMedia: (source) => {
+        const kind = /\.mp3$/i.test(String(source)) ? 'audio' : /\.(?:mp4|webm|mov|m4v)$/i.test(String(source)) ? 'video' : 'image'
+        return { uri: `anywhere-media://${String(++mediaIndex).padStart(16, 'a')}?type=${kind}` }
+      }
     })
     const mediaText = JSON.stringify(mediaPage)
-    assert.equal(mediaText.includes('C:/synthetic'), false)
+    assert.match(mediaText, /C:\/synthetic\/image\.png/)
+    assert.match(mediaText, /C:\/synthetic\/clip\.mp4/)
+    assert.match(mediaText, /C:\/synthetic\/sound\.mp3/)
+    assert.match(mediaText, /C:\/synthetic\/prose\.mp3/)
     assert.equal(mediaText.includes('local-file-hidden'), false)
-    assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}/)
+    assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}\?type=image/)
+    assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}\?type=video/)
+    assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}\?type=audio/)
     await store.releaseWriteLease({ dirPath: root, conversationId, holderInstanceId: 'remote-read-media-fixture', leaseEpoch: mediaLease.leaseEpoch })
 
     assert.equal(readActiveLease(created.databasePath), null)

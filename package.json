@@ -35,7 +35,8 @@
     "test:remote": "pnpm run test:mobile-workspace && pnpm run test:remote-crypto && pnpm run test:remote-upload && pnpm run test:remote-business-config && pnpm run test:remote-gateway && pnpm run test:remote-config && pnpm run test:remote-conversation-read && pnpm run test:remote-conversation-service && pnpm run test:remote-session",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm run build && electron-builder --dir --publish never",
-    "build:win": "pnpm run build && electron-builder --win nsis --publish never",
+    "verify:win-package": "node scripts/verify-win-package.mjs",
+    "build:win": "pnpm run build && electron-builder --win nsis --publish never && pnpm run verify:win-package",
     "build:mac": "pnpm run build && electron-builder --mac dmg zip --publish never",
     "build:linux": "pnpm run build && electron-builder --linux AppImage --publish never",
     "release:win": "pnpm run build && electron-builder --win nsis --publish always",
@@ -50,6 +51,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
+
+    "@peculiar/utils": "2.0.3",
     "@aws-sdk/client-s3": "^3.1064.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",

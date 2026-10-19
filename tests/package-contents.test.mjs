@@ -24,6 +24,11 @@ for (const exclusion of requiredExclusions) {
   assert.ok(files.includes(exclusion), `missing package exclusion: ${exclusion}`)
 }
 
+assert.equal(packageJson?.dependencies?.['@peculiar/utils'], '2.0.3', 'selfsigned runtime utility must be a direct production dependency')
+assert.equal(typeof packageJson?.scripts?.['verify:win-package'], 'string', true, 'Windows packaged dependency verification must remain runnable')
+assert.match(packageJson?.scripts?.['build:win'] || '', /verify:win-package/, 'Windows package builds must verify their runtime dependency closure')
+
+
 assert.equal(typeof packageJson?.scripts?.['test:remote'], 'string', true, 'source test scripts must remain available')
 assert.equal(typeof packageJson?.scripts?.['test:package-contents'], 'string', true, 'package-content regression must remain runnable')
 

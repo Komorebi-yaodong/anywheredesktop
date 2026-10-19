@@ -175,6 +175,10 @@ jobs:
           BUILD_ARTIFACT_NAME: ${{ env.BUILD_ARTIFACT_NAME }}
           BUILD_SUFFIX: ${{ env.BUILD_SUFFIX }}
 
+      - name: Verify packaged Windows runtime dependency closure
+        if: matrix.target == 'win'
+        run: pnpm run verify:win-package
+
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v5
         with:
@@ -285,6 +289,10 @@ jobs:
           npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
           BUILD_ARTIFACT_NAME: ${{ env.BUILD_ARTIFACT_NAME }}
           BUILD_SUFFIX: ${{ env.BUILD_SUFFIX }}
+
+      - name: Verify packaged Windows runtime dependency closure
+        if: matrix.target == 'win'
+        run: pnpm run verify:win-package
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v5

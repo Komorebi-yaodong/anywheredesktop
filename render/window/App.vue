@@ -10203,7 +10203,8 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         const responsesItemIdToIndexMap = new Map();
 
         const flushStreamingDisplay = (force = false) => {
-          if ((!force && isTurnAborted()) || currentAssistantChatShowIndex < 0 || !chat_show.value[currentAssistantChatShowIndex]) {
+          const streamingBubble = chat_show.value[currentAssistantChatShowIndex];
+          if ((!force && isTurnAborted()) || currentAssistantChatShowIndex < 0 || !streamingBubble) {
             return;
           }
 
@@ -10211,17 +10212,17 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
           if (aggregatedContent) currentDisplayContent.push({ type: 'text', text: aggregatedContent });
           if (aggregatedMedia.length > 0) currentDisplayContent.push(...aggregatedMedia);
 
-          chat_show.value[currentAssistantChatShowIndex].content = currentDisplayContent;
+          streamingBubble.content = currentDisplayContent;
           if (aggregatedReasoningContent) {
-            chat_show.value[currentAssistantChatShowIndex].reasoning_content = aggregatedReasoningContent;
+            streamingBubble.reasoning_content = aggregatedReasoningContent;
           }
           lastUpdateTime = Date.now();
           emitRemoteAssistantDelta(
             turnRemoteCommand,
             aggregatedContent,
             aggregatedReasoningContent,
-            chat_show.value[currentAssistantChatShowIndex]?.status || '',
-            currentBubble.storageId || String(currentBubble.id || '')
+            streamingBubble.status || '',
+            streamingBubble.storageId || String(streamingBubble.id || '')
           );
           syncStickyScrollAfterRender();
           scheduleLoadingAutoSave('assistant-stream');

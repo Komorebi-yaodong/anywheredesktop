@@ -31,6 +31,25 @@ for (const responseMessage of [
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0][1], typeof responseMessage.content === 'string' ? responseMessage.content : 'tool reply');
   assert.equal(emitted[0][4], 'bubble-fixture');
+
+  const streamed = [];
+  vm.runInNewContext(`
+    const chat_show = { value: [{ id: 'stream-bubble', storageId: 'stream-storage', content: [], status: '' }] };
+    let currentAssistantChatShowIndex = 0;
+    let aggregatedContent = 'delta';
+    let aggregatedReasoningContent = 'thinking';
+    const aggregatedMedia = [];
+    let lastUpdateTime = 0;
+    const isTurnAborted = () => false;
+    const turnRemoteCommand = {};
+    const syncStickyScrollAfterRender = () => {};
+    const scheduleLoadingAutoSave = () => {};
+    const emitRemoteAssistantDelta = (...args) => streamed.push(args);
+    ${source.slice(source.indexOf('        const flushStreamingDisplay ='), source.indexOf('        // Receive every chunk immediately', source.indexOf('        const flushStreamingDisplay =')))}
+    flushStreamingDisplay();
+  `, {streamed, Date});
+  assert.equal(streamed.length, 1);
+  assert.equal(streamed[0][4], 'stream-storage');
 }
 
 const events = [], actions = [], consumedUploads = [], appendedMessages = []

@@ -11183,6 +11183,7 @@ const deleteMessage = (index, remoteCommand = null) => {
 
   focusedMessageIndex.value = null;
   scheduleAutoSave({ reason: 'message-deleted', immediate: true });
+  return true;
 };
 
 const clearHistory = async () => {

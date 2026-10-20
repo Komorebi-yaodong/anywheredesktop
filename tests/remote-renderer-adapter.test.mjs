@@ -240,7 +240,19 @@ context.chat_show.value = [
   { id: 13, uiStorageId: 'ui-assistant-last01', role: 'assistant', content: 'latest assistant' }
 ]
 context.handleEditMessage = (index, content) => { context.chat_show.value[index].content = content; actions.push(`edit:${index}`); return true }
-context.deleteMessage = (index) => { context.chat_show.value.splice(index, 1); actions.push(`delete:${index}`); return true }
+// Run the real deletion function: a stub returning true masked the missing
+// success return even though Desktop had already mutated and persisted history.
+context.ensureLocalConversationWriteAccess = () => true
+context.showDismissibleMessage = { warning() {}, info() {} }
+context.resolveSafeConversationMutationTarget = (_history, ui, index) => context.fullHistory.value.findIndex(item => item.storageId === ui[index]?.storageId)
+context.isToolMediaMessage = () => false
+context.markOutermostCanRestore = () => {}
+context.collapsedMessages = ref(new Set())
+context.focusedMessageIndex = ref(null)
+context.scheduleAutoSave = () => actions.push('delete-save-scheduled')
+vm.runInContext(source.slice(source.indexOf('const deleteMessage ='), source.indexOf('const clearHistory =')) + '\nglobalThis.deleteMessage = deleteMessage;', ctx)
+for (const item of context.chat_show.value) item.storageId = item.uiStorageId
+context.fullHistory.value = context.chat_show.value.map(item => ({...item}))
 context.reaskAI = async (_id, remoteCommand) => {
   remoteCommand.__remoteStarted = true
   remoteCommand.__remoteTerminalEvent = 'assistant.completed'

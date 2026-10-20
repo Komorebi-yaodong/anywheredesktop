@@ -701,7 +701,7 @@ function sanitizeRemoteToolDetail(value, context = {}) {
 }
 
 
-function sanitizeRemoteToolCalls(toolCalls = [], context = {}) {
+export function sanitizeRemoteToolCalls(toolCalls = [], context = {}) {
   return (Array.isArray(toolCalls) ? toolCalls : [])
     .slice(0, 32)
     .map((call) => {

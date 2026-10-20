@@ -2705,14 +2705,36 @@ const extractRemoteText = (content) => {
     .join('');
 };
 
-const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = '', reasoning = '', status = '', segmentId = '') => {
+const remoteToolSnapshot = (toolCalls = []) => (Array.isArray(toolCalls) ? toolCalls : [])
+  .slice(0, 16)
+  .map((call) => {
+    const source = call && typeof call === 'object' ? call : {};
+    const id = String(source.id || '').slice(0, 160);
+    const name = String(source.name || '').slice(0, 240);
+    if (!id && !name) return null;
+    return {
+      id, name, approvalStatus: String(source.approvalStatus || source.status || '').slice(0, 80),
+      // Live Remote deltas are progress-only: never copy raw tool args/results
+      // out of Renderer. The durable Desktop record is separately sanitized.
+      args: source.args == null && source.arguments == null ? '' : '[参数已隐藏]'
+    };
+  })
+  .filter(Boolean);
+
+const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = '', reasoning = '', status = '', segmentId = '', toolCalls = []) => {
   if (!command || command !== activeRemoteCommand.value) return;
   const safeSegmentId = String(segmentId || 'assistant');
   if (command.__remoteSegmentId !== safeSegmentId) {
     command.__remoteSegmentId = safeSegmentId;
     command.__remoteTextOffset = 0;
     command.__remoteReasoningOffset = 0;
+    command.__remoteToolSnapshot = '';
   }
+  const safeTools = remoteToolSnapshot(toolCalls);
+  const toolFingerprint = safeTools.length ? JSON.stringify(safeTools) : '';
+  const toolChanged = Boolean(toolFingerprint && toolFingerprint !== command.__remoteToolSnapshot);
+  if (toolChanged) command.__remoteToolSnapshot = toolFingerprint;
+  let emittedToolSnapshot = false;
   const emitChunks = (value, key, offsetKey) => {
     const safeValue = typeof value === 'string' ? value : '';
     let offset = Math.min(Number(command[offsetKey]) || 0, safeValue.length);
@@ -2720,14 +2742,22 @@ const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = ''
       const nextOffset = Math.min(safeValue.length, offset + 12 * 1024);
       emitRemoteRendererEvent('assistant.delta', command, {
         [key]: safeValue.slice(offset, nextOffset), segmentId: safeSegmentId,
-        status: typeof status === 'string' ? status.slice(0, 80) : ''
+        status: typeof status === 'string' ? status.slice(0, 80) : '',
+        ...(toolChanged && !emittedToolSnapshot ? { toolCalls: safeTools } : {})
       });
+      if (toolChanged) emittedToolSnapshot = true;
       offset = nextOffset;
     }
     command[offsetKey] = safeValue.length;
   };
   emitChunks(text, 'textDelta', '__remoteTextOffset');
   emitChunks(reasoning, 'reasoningDelta', '__remoteReasoningOffset');
+  if (toolChanged && !emittedToolSnapshot) {
+    emitRemoteRendererEvent('assistant.delta', command, {
+      textDelta: '', reasoningDelta: '', segmentId: safeSegmentId,
+      status: typeof status === 'string' ? status.slice(0, 80) : '', toolCalls: safeTools
+    });
+  }
 };
 
 const normalizeRemoteCommand = (input = {}) => {
@@ -4483,17 +4513,18 @@ const serializeTaskListForModel = (tasks) => {
   return 'Current task list:\n' + lines.join('\n');
 };
 
-const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
+const handleBetterWorkTool = async (toolCall, args, uiToolCall, onToolUpdate = () => {}) => {
   if (toolCall.function.name === 'ask_user_choice') {
     const questions = Array.isArray(args?.questions) ? args.questions : [];
     if (questions.length === 0) {
-      if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = 'No questions were provided.'; }
+      if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = 'No questions were provided.'; onToolUpdate(); }
       return 'No questions were provided.';
     }
     if (uiToolCall) {
       uiToolCall.choiceData = { questions };
       uiToolCall.approvalStatus = 'choosing';
       uiToolCall.result = '等待用户选择...';
+      onToolUpdate();
     }
     const answer = await new Promise((resolve) => {
       // Register before notifying Mobile so an immediate tap cannot arrive
@@ -4510,6 +4541,7 @@ const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
     if (uiToolCall) {
       uiToolCall.approvalStatus = answer ? 'finished' : 'rejected';
       uiToolCall.result = resultText;
+      onToolUpdate();
     }
     return resultText;
   }
@@ -4519,12 +4551,12 @@ const handleBetterWorkTool = async (toolCall, args, uiToolCall) => {
     const total = taskList.value.length;
     const done = taskList.value.filter(t => t.status === 'completed').length;
     const ack = `Task list updated: ${total} task(s) total, ${done} completed.`;
-    if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = ack; }
+    if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = ack; onToolUpdate(); }
     return ack;
   }
   if (toolCall.function.name === 'task_read') {
     const text = serializeTaskListForModel(taskList.value);
-    if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = text; }
+    if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = text; onToolUpdate(); }
     return text;
   }
   return '';
@@ -10262,7 +10294,8 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
             aggregatedContent,
             aggregatedReasoningContent,
             streamingBubble.status || '',
-            streamingBubble.storageId || String(streamingBubble.id || '')
+            streamingBubble.storageId || String(streamingBubble.id || ''),
+            streamingBubble.tool_calls || []
           );
           syncStickyScrollAfterRender();
           scheduleLoadingAutoSave('assistant-stream');
@@ -10566,7 +10599,8 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         extractRemoteText(currentBubble.content),
         typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
         currentBubble.status || '',
-        currentBubble.storageId || String(currentBubble.id || '')
+        currentBubble.storageId || String(currentBubble.id || ''),
+        currentBubble.tool_calls || []
       );
 
 
@@ -10579,6 +10613,15 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
           result: '等待批准...',
           approvalStatus: autoApproveThisTurn() ? 'approved' : 'waiting'
         }));
+        const emitToolSnapshot = () => emitRemoteAssistantDelta(
+          turnRemoteCommand,
+          extractRemoteText(currentBubble.content),
+          typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
+          currentBubble.status || '',
+          currentBubble.storageId || String(currentBubble.id || ''),
+          currentBubble.tool_calls || []
+        );
+        emitToolSnapshot();
 
         await nextTick();
         throwIfTurnAborted();
@@ -10596,14 +10639,14 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
             if (BETTERWORK_FRONTEND_TOOLS.has(toolCall.function.name)) {
               try {
                 const bwArgs = JSON.parse(toolCall.function.arguments || '{}');
-                toolContent = await handleBetterWorkTool(toolCall, bwArgs, uiToolCall);
+                toolContent = await handleBetterWorkTool(toolCall, bwArgs, uiToolCall, emitToolSnapshot);
                 throwIfTurnAborted();
               } catch (e) {
                 if (isTurnAborted()) {
                   throw createAbortError();
                 }
                 toolContent = `{'result':'Better Work tool error: ${e.message}'}`;
-                if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = toolContent; }
+                if (uiToolCall) { uiToolCall.approvalStatus = 'finished'; uiToolCall.result = toolContent; emitToolSnapshot(); }
               }
               return { tool_call_id: toolCall.id, role: "tool", name: toolCall.function.name, content: toolContent };
             }
@@ -10618,6 +10661,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
                   if (uiToolCall) {
                     uiToolCall.approvalStatus = 'rejected';
                     uiToolCall.result = requestSignal.aborted ? '[System Note]: Tool call was aborted by user.' : '用户已取消执行';
+                    emitToolSnapshot();
                   }
                   return {
                     tool_call_id: toolCall.id,
@@ -10635,6 +10679,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
             if (uiToolCall) {
               uiToolCall.approvalStatus = 'executing';
               uiToolCall.result = '执行中...';
+              emitToolSnapshot();
             }
             const controller = new AbortController();
             toolCallControllers.value.set(toolCall.id, controller);
@@ -10647,7 +10692,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
               const toolArgs = JSON.parse(toolCall.function.arguments);
 
               if (toolCall.function.name === 'Skill') {
-                if (uiToolCall) uiToolCall.result = `Activating skill: ${toolArgs.skill}...`;
+                if (uiToolCall) { uiToolCall.result = `Activating skill: ${toolArgs.skill}...`; emitToolSnapshot(); }
 
                 let executionContext = null;
                 const currentApiKey = api_key.value;
@@ -10674,7 +10719,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
 
                 throwIfTurnAborted();
 
-                if (uiToolCall) uiToolCall.result = toolContent;
+                if (uiToolCall) { uiToolCall.result = toolContent; emitToolSnapshot(); }
 
               } else {
                 let executionContext = null;
@@ -10724,7 +10769,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
                 }
                 throwIfTurnAborted();
 
-                if (uiToolCall) uiToolCall.result = toolContent;
+                if (uiToolCall) { uiToolCall.result = toolContent; emitToolSnapshot(); }
               }
 
 
@@ -10735,17 +10780,17 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
                 registerSubAgentFromToolContent(toolContent, taskText);
               }
 
-              if (!isTurnAborted() && uiToolCall) uiToolCall.approvalStatus = 'finished';
+              if (!isTurnAborted() && uiToolCall) { uiToolCall.approvalStatus = 'finished'; emitToolSnapshot(); }
 
             } catch (e) {
               if (e.name === 'AbortError') {
                 toolContent = "[System Note]: Tool call was aborted by user.";
-                if (uiToolCall) uiToolCall.approvalStatus = 'rejected';
+                if (uiToolCall) { uiToolCall.approvalStatus = 'rejected'; emitToolSnapshot(); }
               } else {
                 toolContent = `{'result':'工具执行或参数解析错误: ${e.message}'}`;
-                if (!isTurnAborted() && uiToolCall) uiToolCall.approvalStatus = 'finished';
+                if (!isTurnAborted() && uiToolCall) { uiToolCall.approvalStatus = 'finished'; }
               }
-              if (!isTurnAborted() && uiToolCall) uiToolCall.result = toolContent;
+              if (!isTurnAborted() && uiToolCall) { uiToolCall.result = toolContent; emitToolSnapshot(); }
             } finally {
               toolCallControllers.value.delete(toolCall.id);
             }
@@ -10767,6 +10812,8 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
             }
           });
         }
+        emitToolSnapshot();
+
         const toolMediaMessages = responseMessage.tool_calls
           .map((toolCall) => toolMediaMessagesByToolCallId.get(toolCall.id))
           .filter(Boolean);

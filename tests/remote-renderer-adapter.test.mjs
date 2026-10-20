@@ -151,6 +151,15 @@ context.askAI = async () => {
   adapter.emitRemoteAssistantDelta(adapter.activeRemoteCommand.value, 'second', '', 'end', 'bubble-2')
 }
 const command = { type: 'conversation.send', conversationId: 'conversation-renderer-fixture', requestId: 'renderer-request-1', text: 'Hello', autoApproveTools: true }
+
+const liveTools = [{ id: 'tool-live-renderer-0001', name: 'safe_tool', approvalStatus: 'executing', args: '{"query":"fixture"}', result: 'SECRET result' }]
+adapter.activeRemoteCommand.value = { ...command, requestId: 'renderer-tool-snapshot', __remoteStarted: true }
+adapter.emitRemoteAssistantDelta(adapter.activeRemoteCommand.value, '', '', '', 'tool-only-bubble', liveTools)
+assert.equal(events.at(-1).event, 'assistant.delta')
+assert.equal(events.at(-1).payload.textDelta, '')
+assert.deepEqual(events.at(-1).payload.toolCalls, [{ id: 'tool-live-renderer-0001', name: 'safe_tool', approvalStatus: 'executing', args: '[参数已隐藏]' }])
+adapter.activeRemoteCommand.value = null
+
 await adapter.runRemoteConversationCommand(command)
 assert.equal(adapter.activeRemoteCommand.value, null, 'shallowRef preserves identity for finalization')
 assert.equal(events.at(-1).event, 'assistant.completed')

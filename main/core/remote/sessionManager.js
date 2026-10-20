@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { normalizeIdentifier, remoteError } from './protocol.js'
 import { getQuickAssistantWeight } from '../quickAssistantUsage.js'
+import { sanitizeRemoteToolCalls } from '../conversationStore.js'
 
 const REQUEST_TTL_MS = 30 * 60 * 1000
 const MAX_REQUESTS = 256
@@ -203,6 +204,24 @@ function normalizeChoiceResponses(value, questions) {
 }
 
 
+const LIVE_TOOL_STATUSES = new Set(['waiting', 'approved', 'executing', 'finished', 'rejected', 'choosing'])
+const LIVE_TOOL_CALLS_LIMIT = 16
+
+/** Renderer data is always re-sanitized before crossing the paired-device boundary. */
+function sanitizeLiveToolCalls(value) {
+  return sanitizeRemoteToolCalls(Array.isArray(value) ? value.slice(0, LIVE_TOOL_CALLS_LIMIT) : [])
+    .map((call) => ({
+      id: text(call.id, 160),
+      name: text(call.name, 240),
+      status: LIVE_TOOL_STATUSES.has(call.status) ? call.status : '',
+      // Mobile must never receive local MCP command/argument/cwd/env details.
+      // The name and lifecycle state are enough for real-time progress feedback.
+      arguments: call.arguments == null || call.arguments === '' ? '' : '[参数已隐藏]'
+    }))
+    .filter((call) => call.id || call.name)
+}
+
+
 function sanitizeEvent(event, payload) {
   const source = object(payload)
   if (event === 'assistant.delta') return {
@@ -211,7 +230,8 @@ function sanitizeEvent(event, payload) {
     // Renderer uses the canonical Assistant storage ID only. It lets Mobile
     // reconcile a persisted tool-call bubble with its current live segment.
     segmentId: text(source.segmentId, 160),
-    status: text(source.status, 80)
+    status: text(source.status, 80),
+    ...(Object.hasOwn(source, 'toolCalls') ? { toolCalls: sanitizeLiveToolCalls(source.toolCalls) } : {})
   }
   if (event === 'assistant.failed' || event === 'conversation.operation.failed') return {
     code: /^remote_[a-z0-9_]+$/.test(source.code) ? source.code : 'remote_operation_failed'
@@ -385,6 +405,7 @@ export function createRemoteSessionManager({
         record.segmentId = segmentId
         record.text = ''
         record.reasoning = ''
+        record.toolCalls = []
         record.truncated = false
       }
       const append = (key, value) => {
@@ -394,6 +415,7 @@ export function createRemoteSessionManager({
       }
       append('text', payload.textDelta || '')
       append('reasoning', payload.reasoningDelta || '')
+      if (Object.hasOwn(payload, 'toolCalls')) record.toolCalls = payload.toolCalls
     }
     if (TERMINAL_EVENTS.has(event)) {
       record.terminal = true
@@ -1301,7 +1323,8 @@ export function createRemoteSessionManager({
       ok: true, requestId: record.requestId, conversationId: record.conversationId,
       windowId: record.windowRef, event: record.event, eventSequence: record.eventSequence,
       terminal: record.terminal, text: record.text, reasoning: record.reasoning,
-      segmentId: record.segmentId || '', truncated: record.truncated, updatedAt: new Date(record.updatedAtMs).toISOString(),
+      segmentId: record.segmentId || '', toolCalls: Array.isArray(record.toolCalls) ? record.toolCalls : [],
+      truncated: record.truncated, updatedAt: new Date(record.updatedAtMs).toISOString(),
       ...(record.terminal ? { result: { ...record.terminalPayload } } : {})
     }
   }

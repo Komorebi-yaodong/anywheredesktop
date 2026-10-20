@@ -64,6 +64,14 @@ function buildSession() {
     messages.push(message)
     const uiMessage = { ...message }
     if (isToolOnlyAssistant) delete uiMessage.timestamp
+    if (isToolOnlyAssistant) {
+      // Actual Desktop tool-loop bubbles carry startTime, while both canonical
+      // and UI timestamp fields can be absent. Never synthesize a read-time clock.
+      delete message.timestamp
+      uiMessage.startTime = Date.parse('2026-01-01T00:00:04.000Z')
+      uiMessage.endTime = Date.parse('2026-01-01T00:00:06.000Z')
+    }
+
     chatShow.push(uiMessage)
   }
 
@@ -149,7 +157,7 @@ async function main() {
 
     const toolOnlyAssistant = first.messages.find((message) => message.uiMessageId === 'ui-4')
     assert.equal(toolOnlyAssistant?.payload.timestamp, '2026-01-01T00:00:04.000Z')
-    assert.equal(toolOnlyAssistant?.payload.completedTimestamp, '2026-01-01T00:00:04.000Z')
+    assert.equal(toolOnlyAssistant?.payload.completedTimestamp, '2026-01-01T00:00:06.000Z')
     assert.deepEqual(toolOnlyAssistant?.payload.toolCalls, [{ id: 'tool-secret', name: 'read_file', status: 'finished', arguments: {}, result: '[已隐藏敏感内容]' }])
     const serializedFirst = JSON.stringify(first)
     for (const forbidden of [

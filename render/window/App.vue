@@ -2763,6 +2763,7 @@ const REMOTE_REASONING_EFFORTS = ['default', 'none', 'low', 'medium', 'high', 'x
 const getRemoteSessionConfigSnapshot = (patched = []) => ({
   revision: currentConversationStorage.value?.revision || 0,
   patched,
+  busy: Boolean(loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value),
   config: {
     model: model.value || '',
     reasoningEffort: tempReasoningEffort.value || 'default',
@@ -2775,6 +2776,7 @@ const getRemoteSessionConfigSnapshot = (patched = []) => ({
       triggerRatio: Number(compactConfig.value.triggerRatio) || 0.9,
       contextLength: Number(compactConfig.value.contextLength) || 262144,
       contextLengthSource: compactConfig.value.contextLengthSource || 'default',
+      contextLengthManual: compactConfig.value.contextLengthManual === true,
       keepRecentRounds: Number(compactConfig.value.keepRecentRounds) || 0,
       compactPrompt: compactConfig.value.compactPrompt || ''
     }
@@ -2929,7 +2931,18 @@ const runRemoteConversationCommand = async (input = {}) => {
   }
 
 
-  if (['conversation.config.get', 'conversation.config.patch'].includes(command.type)) {
+  if (command.type === 'conversation.config.get') {
+    // Snapshot reads must not replace or finalize the in-flight generation.
+    if (isClosingWindow.value) {
+      await emitRemoteRendererEventAndWait('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
+    } else {
+      await emitRemoteRendererEventAndWait('conversation.config.result', command, getRemoteSessionConfigSnapshot());
+    }
+    return;
+  }
+
+
+  if (['conversation.context.refresh', 'conversation.config.patch'].includes(command.type)) {
     if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
       emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
       return;
@@ -2975,10 +2988,34 @@ const runRemoteConversationCommand = async (input = {}) => {
             if (patch.mcpServerIds.some((item) => !sessionMcpServerIds.value.includes(item))) throw new Error('remote_mcp_apply_failed');
           }
           if (Object.hasOwn(patch, 'systemPrompt')) setSessionSystemPromptOnly(patch.systemPrompt);
-          if (Object.hasOwn(patch, 'compact')) compactConfig.value = normalizeCompactConfigState({ ...compactConfig.value, ...patch.compact });
+          if (Object.hasOwn(patch, 'compact')) {
+            const manualContext = Object.hasOwn(patch.compact, 'contextLength')
+              ? { contextLengthManual: true, contextLengthSource: 'manual' } : {};
+            compactConfig.value = normalizeCompactConfigState({ ...compactConfig.value, ...patch.compact, ...manualContext });
+            compactConfigLoadVersion += 1;
+            compactConfigModelValue = model.value;
+            if (window.api?.updateModelCompactConfig) {
+              const cached = await window.api.updateModelCompactConfig(model.value, { ...patch.compact, ...manualContext });
+              if (cached?.ok === false) throw new Error('remote_session_config_apply_failed');
+            }
+          }
           const saved = await persistRemoteTranscript('remote-config-patch');
           if (!saved) throw new Error('remote_conversation_save_failed');
-          terminalPayload = getRemoteSessionConfigSnapshot(patched);
+          terminalPayload = { ...getRemoteSessionConfigSnapshot(patched), busy: false };
+        } else if (command.type === 'conversation.context.refresh') {
+          if (!window.api?.resolveModelContext) throw new Error('remote_context_resolve_unavailable');
+          const resolved = await window.api.resolveModelContext(model.value, { forceRefresh: true, preferManual: false });
+          const contextLength = Number(resolved?.contextLength);
+          if (!resolved?.ok || resolved.source !== 'api' || !Number.isFinite(contextLength) || contextLength < 4096 || contextLength > 10_000_000) {
+            throw new Error('remote_context_resolve_failed');
+          }
+          compactConfigLoadVersion += 1;
+          compactConfigModelValue = model.value;
+          compactConfig.value = normalizeCompactConfigState({ ...compactConfig.value, contextLength: Math.floor(contextLength), contextLengthManual: false, contextLengthSource: 'api' });
+          const saved = await persistRemoteTranscript('remote-context-refresh');
+          if (!saved) throw new Error('remote_conversation_save_failed');
+          await refreshPromptTokenBreakdown();
+          terminalPayload = { ...getRemoteSessionConfigSnapshot(['compact']), busy: false };
         }
       } catch (error) {
         if (rollback.model && modelMap.value[rollback.model]) handleChangeModel(rollback.model);
@@ -2989,6 +3026,9 @@ const runRemoteConversationCommand = async (input = {}) => {
         sessionMcpServerIds.value = [...rollback.mcpServerIds];
         tempSessionMcpServerIds.value = [...rollback.mcpServerIds];
         compactConfig.value = { ...rollback.compact };
+        if ((command.patch?.compact || command.type === 'conversation.context.refresh') && window.api?.updateModelCompactConfig) {
+          await window.api.updateModelCompactConfig(model.value, rollback.compact).catch(() => {});
+        }
         setSessionSystemPromptOnly(rollback.systemPrompt);
         await requestApplyMcpTools(false, 'remote-config-rollback').catch(() => {});
         terminalEvent = 'conversation.operation.failed';

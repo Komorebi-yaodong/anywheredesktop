@@ -385,6 +385,21 @@ async function run() {
   } })
 
 
+  const parallelRead = fixture({ existing: true })
+  await parallelRead.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
+  await send(parallelRead.manager, 'request-busy-generation')
+  await parallelRead.manager.getConfig({ deviceId: DEVICE, requestId: 'request-busy-read', params: { conversationId: CID } })
+  assert.equal(parallelRead.manager.getSession(CID).activeRequestId, 'request-busy-generation')
+  renderer(parallelRead, 'conversation.config.result', { busy: true, config: {}, options: {} }, 'request-busy-read')
+  assert.equal(parallelRead.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-busy-read' } }).result.busy, true)
+  assert.equal(parallelRead.manager.getSession(CID).activeRequestId, 'request-busy-generation')
+  await assert.rejects(parallelRead.manager.patchConfig({ deviceId: DEVICE, requestId: 'request-busy-patch', params: { conversationId: CID, patch: { model: 'p|new' } } }), { code: 'remote_conversation_busy' })
+  renderer(parallelRead, 'assistant.completed', {}, 'request-busy-generation')
+  await parallelRead.manager.refreshContext({ deviceId: DEVICE, requestId: 'request-context-refresh', params: { conversationId: CID } })
+  renderer(parallelRead, 'conversation.config.result', { config: { compact: { contextLength: 131072, contextLengthSource: 'api' } }, options: {} }, 'request-context-refresh')
+  assert.equal(parallelRead.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-context-refresh' } }).result.config.compact.contextLengthSource, 'api')
+
+
   const compactFixture = fixture({ existing: true })
 
   await compactFixture.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })

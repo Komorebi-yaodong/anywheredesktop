@@ -119,6 +119,7 @@ function sanitizeConfigResult(source = {}) {
   const options = object(source.options)
   return {
     revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
+    busy: source.busy === true,
     patched: stringArray(Array.isArray(source.patched) ? source.patched : [], 'patched'),
     config: {
       model: text(config.model, 320), reasoningEffort: text(config.reasoningEffort, 32), voice: text(config.voice, 160),
@@ -127,6 +128,8 @@ function sanitizeConfigResult(source = {}) {
         autoCompactEnabled: config.compact?.autoCompactEnabled !== false,
         triggerRatio: Number(config.compact?.triggerRatio) || 0.9,
         contextLength: Math.max(0, Math.floor(Number(config.compact?.contextLength) || 0)),
+        contextLengthSource: ['api', 'manual', 'default'].includes(config.compact?.contextLengthSource) ? config.compact.contextLengthSource : 'default',
+        contextLengthManual: config.compact?.contextLengthManual === true,
         keepRecentRounds: Math.max(0, Math.floor(Number(config.compact?.keepRecentRounds) || 0)),
         hideCompactedMessages: config.compact?.hideCompactedMessages !== false,
         compactPrompt: text(config.compact?.compactPrompt, 128 * 1024)
@@ -256,6 +259,7 @@ export function createRemoteSessionManager({
   const creations = new Map()
   const queues = new Map()
   const requests = new Map()
+  const configReads = new Map()
   const revokedDevices = new Set()
   const deletedConversations = new Set()
   const closingConversations = new Set()
@@ -411,6 +415,12 @@ export function createRemoteSessionManager({
   function finishClosed(session) {
     closingConversations.delete(session.conversationId)
     session.closing = false
+    for (const [key, read] of configReads) {
+      if (read.windowRef !== session.windowRef) continue
+      if (!read.terminal) publish(read, 'conversation.operation.failed', { code: 'remote_renderer_closed' })
+      configReads.delete(key)
+    }
+
     session.pendingChoices?.clear?.()
     if (session.queueTimer) clearTimeout(session.queueTimer)
     if (session.idleReleaseTimer) clearTimeout(session.idleReleaseTimer)
@@ -1094,12 +1104,22 @@ export function createRemoteSessionManager({
         const hadSession = Boolean(existingSession(conversationId))
         const session = await ensureSession(conversationId, check)
         check()
-        if (operation === 'conversation.config.patch') ensureMobileControl(session, safeDeviceId)
+        const readOnly = operation === 'conversation.config.get'
+        if (!readOnly) ensureMobileControl(session, safeDeviceId)
         const item = windowItem(session.windowRef)
-        if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
-        session.activeRequestId = safeRequestId
-        session.activeDeviceId = safeDeviceId
+        if (!readOnly && (session.activeRequestId || item?.busy || item?.generating || item?.compacting)) throw remoteError('remote_conversation_busy')
+        if (session.activeRequestId === safeRequestId || configReads.has(`${session.windowRef}:${safeRequestId}`)) throw remoteError('remote_request_id_conflict')
         record.windowRef = session.windowRef
+        record.readOnly = readOnly
+        if (readOnly) {
+          const readKey = `${session.windowRef}:${safeRequestId}`
+          if (configReads.has(readKey)) throw remoteError('remote_request_id_conflict')
+          configReads.set(readKey, record)
+        } else {
+          session.activeRequestId = safeRequestId
+          session.activeDeviceId = safeDeviceId
+          session.activeOperation = operation
+        }
         const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
           type: operation, requestId: safeRequestId, deviceId: safeDeviceId,
           conversationId, ...(patch ? { patch } : {})
@@ -1110,9 +1130,10 @@ export function createRemoteSessionManager({
         if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
         return result
       } catch (error) {
+        configReads.delete(`${record.windowRef}:${safeRequestId}`)
         const session = sessions.get(conversationId)
         if (session?.activeRequestId === safeRequestId && session.activeDeviceId === safeDeviceId) {
-          session.activeRequestId = ''; session.activeDeviceId = ''
+          session.activeRequestId = ''; session.activeDeviceId = ''; session.activeOperation = ''
         }
         publish(record, 'conversation.operation.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
         throw error
@@ -1290,6 +1311,18 @@ export function createRemoteSessionManager({
     if (!RENDERER_EVENTS.has(data.event)) return { ok: false, error: 'remote_renderer_event_invalid' }
     const session = sessions.get(data.conversationId)
     if (!session || session.windowRef !== windowRef) return { ok: false, error: 'remote_renderer_event_window_mismatch' }
+    const readKey = `${windowRef}:${data.requestId}`
+    const read = configReads.get(readKey)
+    if (read && read.conversationId === data.conversationId && !read.terminal) {
+      if (!['conversation.config.result', 'conversation.operation.failed'].includes(data.event)) {
+        return { ok: false, error: 'remote_renderer_event_invalid' }
+      }
+      publish(read, data.event, sanitizeEvent(data.event, data.payload))
+      configReads.delete(readKey)
+      scheduleIdleRelease(session)
+      return { ok: true }
+    }
+
     if (!session.activeRequestId || session.activeRequestId !== data.requestId) return { ok: false, error: 'remote_renderer_event_request_mismatch' }
     const record = requests.get(requestKey(session.activeDeviceId, data.requestId))
     if (!record || record.terminal) return { ok: false, error: 'remote_renderer_event_request_mismatch' }
@@ -1331,6 +1364,11 @@ export function createRemoteSessionManager({
 
   async function revokeDevice(deviceId) {
     revokedDevices.add(deviceId)
+    for (const [key, read] of configReads) {
+      if (read.deviceId !== deviceId) continue
+      publish(read, 'conversation.operation.failed', { code: 'remote_device_revoked' })
+      configReads.delete(key)
+    }
     for (const session of sessions.values()) {
       if (Array.isArray(session.pendingSends)) {
         const removed = session.pendingSends.filter((item) => item.deviceId === deviceId)
@@ -1355,6 +1393,8 @@ export function createRemoteSessionManager({
     enabled = false
     generation += 1
     if (closing) return closing
+    for (const read of configReads.values()) publish(read, 'conversation.operation.failed', { code: 'remote_gateway_stopped' })
+    configReads.clear()
     for (const session of sessions.values()) {
       if (session.queueTimer) clearTimeout(session.queueTimer)
       session.queueTimer = null
@@ -1411,6 +1451,7 @@ export function createRemoteSessionManager({
     deleteConversation: (input) => conversationMetadataCommand({ ...input, operation: 'conversation.delete' }),
     getConfig: (input) => configCommand({ ...input, operation: 'conversation.config.get' }),
     patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),
+    refreshContext: (input) => configCommand({ ...input, operation: 'conversation.context.refresh' }),
     compact,
     cancelCompact,
     cancel, release, openForMobile, takeover, handoff, closeConversation, openedSessions, observeOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,

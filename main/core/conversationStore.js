@@ -743,8 +743,8 @@ function toRemoteUiMessage(db, row, resolveAttachment, context = {}) {
   // UI-only assistant/tool cards may omit timestamps even though their linked
   // canonical message row has them. Preserve the Desktop timeline without
   // synthesizing a new clock value or exposing any additional message fields.
-  const timestamp = normalizeText(payload.timestamp || payload.createdAt || row.created_at)
-  const completedTimestamp = normalizeText(payload.completedTimestamp || payload.updatedAt || row.updated_at || timestamp)
+  const timestamp = normalizeTimestamp(payload.startTime) || normalizeText(payload.timestamp || payload.createdAt || row.created_at)
+  const completedTimestamp = normalizeText(payload.completedTimestamp || payload.updatedAt) || normalizeTimestamp(payload.endTime) || normalizeText(row.updated_at || timestamp)
   const remotePayload = {
     content: sanitizeRemotePayload(payload.content, resolveAttachment, context),
     reasoningContent: sanitizeRemoteText(normalizeText(payload.reasoning_content), context),

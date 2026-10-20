@@ -125,6 +125,8 @@ const context = {
   applyNormalizedSkillSelection: (values) => { context.sessionSkillIds.value = values.map((item) => item === 'skill-b' ? 'Skill B' : item); context.tempSessionSkillIds.value = [...context.sessionSkillIds.value]; return context.sessionSkillIds.value },
   requestApplyMcpTools: async () => {},
   normalizeCompactConfigState: (value) => ({ ...value }),
+  compactConfigLoadVersion: 0,
+  compactConfigModelValue: '',
 
   compactProgress: ref({ percent: 0, stage: '', message: '' }),
   runConversationCompact: async () => { context.compacting.value = true; context.compactProgress.value = { percent: 55, stage: 'cascade', message: 'fixture' }; await Promise.resolve(); context.compacting.value = false; return true },
@@ -213,6 +215,12 @@ context.askAI = async () => {
 }
 const pending = adapter.runRemoteConversationCommand({ ...command, requestId: 'renderer-cancel' })
 await enter
+
+const activeBeforeRead = adapter.activeRemoteCommand.value
+await adapter.runRemoteConversationCommand({ type: 'conversation.config.get', conversationId: command.conversationId, requestId: 'renderer-busy-config-read' })
+assert.equal(events.at(-1).event, 'conversation.config.result')
+assert.equal(events.at(-1).payload.busy, true)
+assert.equal(adapter.activeRemoteCommand.value, activeBeforeRead)
 await adapter.runRemoteConversationCommand({ type: 'conversation.cancel', conversationId: command.conversationId, requestId: 'cancel-1', targetRequestId: 'renderer-cancel' })
 assert.equal(adapter.activeRemoteCommand.value.requestId, 'renderer-cancel', 'keep ownership until save completes')
 release()
@@ -300,6 +308,24 @@ await adapter.runRemoteConversationCommand({
 assert.equal(events.at(-1).event, 'conversation.operation.failed')
 assert.equal(events.at(-1).payload.code, 'remote_model_unavailable')
 assert.equal(context.model.value, 'provider|model-b', 'invalid patch rolls back')
+
+
+const cachedContextWrites = []
+context.window.api.updateModelCompactConfig = async (_model, patch) => { cachedContextWrites.push(structuredClone(patch)); return { ok: true } }
+await adapter.runRemoteConversationCommand({ type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-manual-context', patch: { compact: { contextLength: 65536 } } })
+assert.equal(context.compactConfig.value.contextLength, 65536)
+assert.equal(context.compactConfig.value.contextLengthSource, 'manual')
+assert.equal(cachedContextWrites.at(-1).contextLengthManual, true)
+context.window.api.resolveModelContext = async () => ({ ok: true, contextLength: 131072, source: 'api' })
+context.refreshPromptTokenBreakdown = async () => {}
+await adapter.runRemoteConversationCommand({ type: 'conversation.context.refresh', conversationId: command.conversationId, requestId: 'renderer-fetch-context' })
+assert.equal(context.compactConfig.value.contextLength, 131072)
+assert.equal(events.at(-1).payload.config.compact.contextLengthSource, 'api')
+context.window.api.resolveModelContext = async () => ({ ok: true, contextLength: 262144, source: 'default' })
+await adapter.runRemoteConversationCommand({ type: 'conversation.context.refresh', conversationId: command.conversationId, requestId: 'renderer-fetch-context-failed' })
+assert.equal(events.at(-1).event, 'conversation.operation.failed')
+assert.equal(events.at(-1).payload.code, 'remote_context_resolve_failed')
+assert.equal(context.compactConfig.value.contextLength, 131072, 'failed lookup preserves the prior context length')
 
 
 const compactEventStart = events.length

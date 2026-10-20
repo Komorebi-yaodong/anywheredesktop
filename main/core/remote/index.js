@@ -328,7 +328,7 @@ export function createRemoteGateway({
         'conversation.cancel', 'conversation.release', 'conversation.open', 'conversation.opened.list', 'conversation.takeover', 'conversation.handoff', 'conversation.close', 'conversation.showOnDesktop', 'conversation.request.get',
         'conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask',
         'conversation.rename', 'conversation.delete',
-        'conversation.config.get', 'conversation.config.patch', 'conversation.compact', 'conversation.compact.cancel'
+        'conversation.config.get', 'conversation.config.patch', 'conversation.context.refresh', 'conversation.compact', 'conversation.compact.cancel'
       )
     }
     if (uploadManager) capabilities.push('attachment.begin', 'attachment.chunk', 'attachment.complete', 'attachment.abort')
@@ -1282,6 +1282,11 @@ export function createRemoteGateway({
           result = await activeSessionManager.closeConversation({ deviceId: context.device.deviceId, params })
           break
 
+
+        case 'conversation.context.refresh':
+          if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.refreshContext({ deviceId: context.device.deviceId, requestId, params })
+          break
 
         case 'conversation.compact':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')

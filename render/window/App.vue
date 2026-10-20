@@ -3176,10 +3176,9 @@ const runRemoteConversationCommand = async (input = {}) => {
       return;
     }
     if (command.type === 'conversation.message.reask') {
-      const latestAssistantIndex = chat_show.value.findLastIndex((message) => message?.role === 'assistant');
       const latestVisibleIndex = chat_show.value.findLastIndex((message) => message?.role === 'user' || message?.role === 'assistant');
-      if (target.role !== 'assistant' || targetIndex !== latestAssistantIndex || targetIndex !== latestVisibleIndex) {
-        emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_reask_latest_assistant_required' });
+      if (!['user', 'assistant'].includes(target.role) || targetIndex !== latestVisibleIndex) {
+        emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_reask_latest_visible_required' });
         return;
       }
     }

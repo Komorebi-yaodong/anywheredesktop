@@ -290,13 +290,30 @@ await adapter.runRemoteConversationCommand({
   type: 'conversation.message.reask', conversationId: command.conversationId, requestId: 'renderer-reask-old',
   uiMessageId: 'ui-assistant-old-01'
 })
-assert.equal(events.at(-1).payload.code, 'remote_reask_latest_assistant_required')
+assert.equal(events.at(-1).payload.code, 'remote_reask_latest_visible_required')
 await adapter.runRemoteConversationCommand({
   type: 'conversation.message.reask', conversationId: command.conversationId, requestId: 'renderer-reask-last',
   uiMessageId: 'ui-assistant-last01'
 })
 assert.equal(events.at(-1).event, 'assistant.completed')
 assert.ok(events.some((item) => item.requestId === 'renderer-reask-last' && item.event === 'assistant.delta' && item.payload.textDelta === 'reasked'))
+
+context.chat_show.value = [
+  { id: 20, uiStorageId: 'ui-user-before-reask', role: 'user', content: 'before resend' },
+  { id: 21, uiStorageId: 'ui-user-final-reask', role: 'user', content: 'final user resend' }
+]
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.message.reask', conversationId: command.conversationId, requestId: 'renderer-reask-user-old',
+  uiMessageId: 'ui-user-before-reask'
+})
+assert.equal(events.at(-1).payload.code, 'remote_reask_latest_visible_required')
+await adapter.runRemoteConversationCommand({
+  type: 'conversation.message.reask', conversationId: command.conversationId, requestId: 'renderer-reask-user-final',
+  uiMessageId: 'ui-user-final-reask'
+})
+assert.equal(events.at(-1).event, 'assistant.completed')
+assert.ok(events.some((item) => item.requestId === 'renderer-reask-user-final' && item.event === 'assistant.delta' && item.payload.textDelta === 'reasked'))
+
 
 
 const saveCountBeforeConfigGet = actions.filter((item) => item === 'remote-turn-finalized' || item === 'remote-config-patch').length

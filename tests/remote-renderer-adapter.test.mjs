@@ -30,6 +30,7 @@ for (const responseMessage of [
   });
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0][1], typeof responseMessage.content === 'string' ? responseMessage.content : 'tool reply');
+  assert.equal(emitted[0][4], 'bubble-fixture');
 }
 
 const events = [], actions = [], consumedUploads = [], appendedMessages = []

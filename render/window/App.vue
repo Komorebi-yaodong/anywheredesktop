@@ -2754,7 +2754,8 @@ const normalizeRemoteCommand = (input = {}) => {
     responses: Array.isArray(input.responses) ? input.responses.slice(0, 12) : [],
     targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : '',
     acquireLease: input.acquireLease === true,
-    reload: input.reload === true
+    reload: input.reload === true,
+    closeWindow: input.closeWindow === true
   };
 };
 
@@ -2864,7 +2865,7 @@ const runRemoteConversationCommand = async (input = {}) => {
     if (compacting.value) handleCancelCompact();
     if (loading.value) cancelAskAI();
     await remoteCommandExecutionPromise;
-    if (remoteHiddenWriter.value) {
+    if (remoteHiddenWriter.value || command.closeWindow) {
       if (await persistRemoteTranscript('remote-shutdown')) await closePage(true);
     }
     return;
@@ -10220,7 +10221,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
             aggregatedContent,
             aggregatedReasoningContent,
             chat_show.value[currentAssistantChatShowIndex]?.status || '',
-            chat_show.value[currentAssistantChatShowIndex]?.id || ''
+            currentBubble.storageId || String(currentBubble.id || '')
           );
           syncStickyScrollAfterRender();
           scheduleLoadingAutoSave('assistant-stream');
@@ -10524,7 +10525,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         extractRemoteText(currentBubble.content),
         typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
         currentBubble.status || '',
-        currentBubble.id || ''
+        currentBubble.storageId || String(currentBubble.id || '')
       );
 
 

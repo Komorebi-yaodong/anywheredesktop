@@ -205,7 +205,9 @@ function sanitizeEvent(event, payload) {
   if (event === 'assistant.delta') return {
     textDelta: text(source.textDelta, 16 * 1024),
     reasoningDelta: text(source.reasoningDelta, 16 * 1024),
-    segmentId: text(source.segmentId, 80),
+    // Renderer uses the canonical Assistant storage ID only. It lets Mobile
+    // reconcile a persisted tool-call bubble with its current live segment.
+    segmentId: text(source.segmentId, 160),
     status: text(source.status, 80)
   }
   if (event === 'assistant.failed' || event === 'conversation.operation.failed') return {
@@ -256,6 +258,7 @@ export function createRemoteSessionManager({
   const requests = new Map()
   const revokedDevices = new Set()
   const deletedConversations = new Set()
+  const closingConversations = new Set()
   let enabled = true
   let generation = 0
   let closing = null
@@ -333,6 +336,7 @@ export function createRemoteSessionManager({
 
   async function ensureSession(conversationId, check) {
     check()
+    if (closingConversations.has(conversationId)) throw remoteError('remote_conversation_closing')
     if (deletedConversations.has(conversationId)) throw remoteError('remote_conversation_not_found')
     let session = existingSession(conversationId)
     if (!session) {
@@ -370,6 +374,15 @@ export function createRemoteSessionManager({
     record.updatedAtMs = Date.now()
     record.eventSequence += 1
     if (event === 'assistant.delta') {
+      const segmentId = text(payload.segmentId, 160)
+      if (segmentId && record.segmentId !== segmentId) {
+        // A tool loop creates a new Assistant bubble. Recovery state must
+        // describe that current bubble, never concatenate prior reasoning.
+        record.segmentId = segmentId
+        record.text = ''
+        record.reasoning = ''
+        record.truncated = false
+      }
       const append = (key, value) => {
         const combined = record[key] + value
         if (combined.length > MAX_RECOVERY_CHARS) record.truncated = true
@@ -396,6 +409,8 @@ export function createRemoteSessionManager({
   }
 
   function finishClosed(session) {
+    closingConversations.delete(session.conversationId)
+    session.closing = false
     session.pendingChoices?.clear?.()
     if (session.queueTimer) clearTimeout(session.queueTimer)
     if (session.idleReleaseTimer) clearTimeout(session.idleReleaseTimer)
@@ -603,6 +618,55 @@ export function createRemoteSessionManager({
     })
   }
 
+  async function closeConversation({ deviceId, params = {} } = {}) {
+    parameters(params, ['conversationId'])
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const conversationId = id(params.conversationId, 'conversationId')
+    assertActive(generation, safeDeviceId)
+    return serialize(conversationId, async () => {
+      const session = existingSession(conversationId)
+      if (!session) throw remoteError('remote_conversation_window_not_found')
+      requireMobileController(session, safeDeviceId)
+      if (session.closing || closingConversations.has(conversationId)) {
+        return { ok: true, conversationId, windowId: session.windowRef, closing: true }
+      }
+      const item = windowItem(session.windowRef)
+      if (!item) throw remoteError('remote_conversation_window_not_found')
+
+      session.closing = true
+      closingConversations.add(conversationId)
+      if (session.queueTimer) clearTimeout(session.queueTimer)
+      session.queueTimer = null
+      const pending = Array.isArray(session.pendingSends) ? session.pendingSends.splice(0) : []
+      try {
+        for (const queued of pending) {
+          const record = requests.get(requestKey(queued.deviceId, queued.requestId))
+          if (record && !record.terminal) publish(record, 'assistant.cancelled', { code: 'remote_conversation_closed' })
+        }
+        const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+          type: 'remote.shutdown', conversationId, closeWindow: true
+        })
+        if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+
+        // Renderer owns cancellation, final persistence, lease release and the
+        // actual close. Main only waits for that normal window lifecycle.
+        const deadline = Date.now() + Math.max(15_000, readinessTimeoutMs)
+        while (windowItem(session.windowRef)) {
+          if (Date.now() >= deadline) throw remoteError('remote_conversation_close_timeout')
+          await new Promise((resolve) => setTimeout(resolve, 40))
+        }
+        if (sessions.get(conversationId) === session) handleWindowClosed(session.windowRef)
+        return { ok: true, conversationId, windowId: session.windowRef, closed: true }
+      } catch (error) {
+        if (sessions.get(conversationId) === session) session.closing = false
+        closingConversations.delete(conversationId)
+        throw error
+      }
+    })
+  }
+
+
+
   function observeOnDesktop({ conversationId } = {}) {
     const safeConversationId = id(conversationId, 'conversationId')
     const session = existingSession(safeConversationId)
@@ -780,7 +844,7 @@ export function createRemoteSessionManager({
   }
 
   async function dispatchNextSend(session) {
-    if (!enabled || sessions.get(session.conversationId) !== session || session.activeRequestId || session.dispatchingQueued || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
+    if (!enabled || session?.closing || sessions.get(session.conversationId) !== session || session.activeRequestId || session.dispatchingQueued || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
     const item = windowItem(session.windowRef)
     if (!item) { finishClosed(session); return }
     if (item.busy || item.generating || item.compacting) {
@@ -1216,7 +1280,7 @@ export function createRemoteSessionManager({
       ok: true, requestId: record.requestId, conversationId: record.conversationId,
       windowId: record.windowRef, event: record.event, eventSequence: record.eventSequence,
       terminal: record.terminal, text: record.text, reasoning: record.reasoning,
-      truncated: record.truncated, updatedAt: new Date(record.updatedAtMs).toISOString(),
+      segmentId: record.segmentId || '', truncated: record.truncated, updatedAt: new Date(record.updatedAtMs).toISOString(),
       ...(record.terminal ? { result: { ...record.terminalPayload } } : {})
     }
   }
@@ -1349,7 +1413,7 @@ export function createRemoteSessionManager({
     patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),
     compact,
     cancelCompact,
-    cancel, release, openForMobile, takeover, handoff, openedSessions, observeOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
+    cancel, release, openForMobile, takeover, handoff, closeConversation, openedSessions, observeOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
     resume: () => { enabled = true },
     authorizeDevice: (deviceId) => { revokedDevices.delete(deviceId) },

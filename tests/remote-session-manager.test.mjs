@@ -109,8 +109,9 @@ async function run() {
   renderer(f, 'assistant.delta', { textDelta: 'Hello', reasoningDelta: 'Thought', password: 'SECRET', segmentId: 'bubble-1' })
   renderer(f, 'assistant.delta', { textDelta: ' World', segmentId: 'bubble-2' })
   const state = f.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-fixture-0001' } })
-  assert.equal(state.text, 'Hello World')
-  assert.equal(state.reasoning, 'Thought')
+  assert.equal(state.text, ' World')
+  assert.equal(state.reasoning, '')
+  assert.equal(state.segmentId, 'bubble-2')
   assert.equal(state.terminal, false)
   assert.equal(JSON.stringify(f.events).includes('SECRET'), false)
   assert.throws(() => f.manager.getRequest({ deviceId: 'device-other-fixture', params: { requestId: 'request-fixture-0001' } }), { code: 'remote_request_not_found' })
@@ -211,6 +212,20 @@ async function run() {
   assert.equal(handed.mobileControlled, false)
   assert.equal(takeoverFixture.commands.at(-1).type, 'conversation.mobile.handoff')
   await assert.rejects(takeoverFixture.manager.send({ deviceId: DEVICE, requestId: 'request-after-handoff', params: { conversationId: CID, text: 'must not commandeer desktop' } }), { code: 'remote_conversation_takeover_required' })
+
+  const closable = fixture({ existing: true })
+  await closable.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
+  await assert.rejects(
+    closable.manager.closeConversation({ deviceId: 'device-other-fixture', params: { conversationId: CID } }),
+    { code: 'remote_conversation_controlled_by_other_device' },
+  )
+  const closed = await closable.manager.closeConversation({ deviceId: DEVICE, params: { conversationId: CID } })
+  assert.equal(closed.closed, true)
+  assert.equal(closable.commands.at(-1).type, 'remote.shutdown')
+  assert.equal(closable.commands.at(-1).closeWindow, true)
+  assert.equal(closable.items.length, 0)
+
+
 
   const hiddenTakeover = fixture()
   await send(hiddenTakeover.manager, 'request-hidden-takeover')

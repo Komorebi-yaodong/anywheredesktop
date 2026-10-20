@@ -799,6 +799,7 @@ async function main() {
     assert.ok(welcome.payload.capabilities.includes('conversation.opened.list'))
     assert.ok(welcome.payload.capabilities.includes('conversation.takeover'))
     assert.ok(welcome.payload.capabilities.includes('conversation.handoff'))
+    assert.ok(welcome.payload.capabilities.includes('conversation.close'))
     const remoteRequestId = 'request-send-gateway-fixture'
     const sendInput = { conversationId: 'conversation-gateway-fixture-0001', text: 'Synthetic message only' }
     const openedForMobile = await sendEncryptedRequest({ socket, session, requestId: 'request-open-gateway-fixture', method: 'conversation.open', params: {conversationId: sendInput.conversationId} })

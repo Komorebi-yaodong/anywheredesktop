@@ -1,4 +1,5 @@
 import { app, net, session } from 'electron'
+import { createIdempotentSerialApplier } from './idempotentApply.js'
 
 function buildHeadersCompat(inputHeaders = {}) {
   try {
@@ -59,8 +60,7 @@ async function applyProxyToSession(targetSession, proxyConfig) {
   await targetSession.closeAllConnections?.()
 }
 
-export async function applyNetworkProxyConfig(input = {}) {
-  const config = normalizeNetworkProxyConfig(input)
+async function applyNormalizedNetworkProxyConfig(config) {
   const proxyConfig = config.enabled
     ? { mode: 'fixed_servers', proxyRules: config.server, proxyBypassRules: config.bypassRules }
     : { mode: 'direct' }
@@ -77,8 +77,16 @@ export async function applyNetworkProxyConfig(input = {}) {
     ? session.fromPartition(UPDATER_SESSION_PARTITION, { cache: false })
     : null
   await applyProxyToSession(updaterSession, proxyConfig)
+}
 
-  return config
+const applyNetworkProxyConfigOnce = createIdempotentSerialApplier({
+  normalize: normalizeNetworkProxyConfig,
+  getFingerprint: (config) => JSON.stringify(config),
+  apply: applyNormalizedNetworkProxyConfig
+})
+
+export async function applyNetworkProxyConfig(input = {}) {
+  return await applyNetworkProxyConfigOnce(input)
 }
 
 

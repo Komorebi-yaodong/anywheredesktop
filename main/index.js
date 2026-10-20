@@ -883,9 +883,10 @@ app.whenReady().then(async () => {
       }
     }
 
-    if (channel === 'window:configUpdated' || channel === 'config-updated') {
+    // data.js emits both channels for renderer compatibility. Runtime side effects must run once.
+    if (channel === 'window:configUpdated') {
       syncDesktopRuntimeFromConfig().catch((error) => {
-        console.error('desktop-shortcuts:resync-failed', error)
+        console.error('desktop-runtime:resync-failed', error)
       })
     }
   })

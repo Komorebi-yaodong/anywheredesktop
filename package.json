@@ -22,6 +22,7 @@
     "test:window-manager-scope": "node tests/window-manager-scope.test.mjs",
     "test:package-contents": "node tests/package-contents.test.mjs",
     "test:compaction-interaction": "node tests/compaction-interaction-restore.test.mjs",
+    "test:compaction-checkpoint": "node tests/conversation-checkpoint-insert.test.mjs && node tests/compaction-completion.test.mjs",
     "test:conversation-compaction-restore": "node tests/conversation-compaction-restore.test.mjs",
     "test:remote-crypto": "node tests/remote-crypto.test.mjs",
     "test:remote-upload": "node tests/remote-upload-manager.test.mjs",

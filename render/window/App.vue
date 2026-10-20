@@ -1382,7 +1382,7 @@ const projectFullHistoryToRequestHistory = (messages = fullHistory.value) => {
   return out;
 };
 
-const reloadConversationWindowFromStore = async ({ activeOnly = true, pageSize = 200 } = {}) => {
+const reloadConversationWindowFromStore = async ({ activeOnly = true, pageSize = 200, expectedSnapshotId = '' } = {}) => {
   const storage = currentConversationStorage.value;
   if (!storage?.conversationId || !storage?.dirPath) return false;
   const opened = await window.api.openConversation({
@@ -1391,6 +1391,13 @@ const reloadConversationWindowFromStore = async ({ activeOnly = true, pageSize =
     activeOnly,
     pageSize
   });
+  if (expectedSnapshotId) {
+    const restoredMarkers = (opened.sessionData?.fullHistory || []).filter((message) => message?.role === 'compaction');
+    const uiMarkers = (opened.sessionData?.chat_show || []).filter((message) => message?.role === 'compaction');
+    if (restoredMarkers[restoredMarkers.length - 1]?.snapshotId !== expectedSnapshotId || uiMarkers[uiMarkers.length - 1]?.snapshotId !== expectedSnapshotId) {
+      throw new Error('压缩检查点保存后校验失败，已保留内存中的压缩结果');
+    }
+  }
   replaceFullHistory(opened.sessionData?.fullHistory || []);
   chat_show.value = Array.isArray(opened.sessionData?.chat_show) ? opened.sessionData.chat_show : [];
   syncHistoryFromFullHistory();
@@ -2288,6 +2295,8 @@ const runConversationCompact = async ({
   quiet = false
 } = {}) => {
   let hydratedPagedConversation = false;
+  let hasUnpersistedCompaction = false;
+  let expectedSnapshotId = '';
 
   if (compacting.value) return false;
   if (loading.value && !allowDuringLoading) {
@@ -2409,6 +2418,8 @@ const runConversationCompact = async ({
       };
       // UI keeps the original messages; fullHistory receives the checkpoint at the same logical cut.
       applyCascadeCompactStep(marker, uiSplit.insertIndex, uiSplit.prefix, fullInsertIndex);
+      hasUnpersistedCompaction = true;
+      expectedSnapshotId = fullHistory.value[fullInsertIndex]?.snapshotId || '';
       didAny = true;
 
       if (result.modelConfig) {
@@ -2439,8 +2450,15 @@ const runConversationCompact = async ({
     autoCompactSuppressedForTurn.value = false;
     // Persist first, then always reload only the active SQLite window. Canonical compressed prefixes
     // stay untouched in SQLite but no longer remain reactive in this renderer after compaction.
-    await executeAutoSaveRequest({ reason: 'conversation-compacted', force: true, version: ++sessionMutationVersion });
-    await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 });
+    const saved = await executeAutoSaveRequest({ reason: 'conversation-compacted', force: true, version: ++sessionMutationVersion });
+    if (saved !== true) {
+      throw new Error('压缩结果保存失败，已保留内存中的压缩结果，请重试保存');
+    }
+    if (!expectedSnapshotId) throw new Error('压缩检查点缺失，无法确认压缩结果');
+    const restored = await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200, expectedSnapshotId });
+    if (restored !== true) throw new Error('压缩结果重载失败');
+    hasUnpersistedCompaction = false;
+    await refreshPromptTokenBreakdown();
     if (!quiet) {
       showDismissibleMessage.success(manual ? `手动级联压缩完成（${steps} 步）` : `自动级联压缩完成（${steps} 步）`);
     }
@@ -2456,7 +2474,7 @@ const runConversationCompact = async ({
     if (!quiet) showDismissibleMessage.error(`压缩失败: ${error?.message || error}`);
     return false;
   } finally {
-    if (hydratedPagedConversation && currentConversationStorage.value?.isPaged === false) {
+    if (hydratedPagedConversation && !hasUnpersistedCompaction && currentConversationStorage.value?.isPaged === false) {
       await reloadConversationWindowFromStore({ activeOnly: true, pageSize: 200 }).catch(() => {});
     }
     compacting.value = false;

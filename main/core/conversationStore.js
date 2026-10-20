@@ -740,13 +740,18 @@ function toRemoteUiMessage(db, row, resolveAttachment, context = {}) {
     payload = { role: row.role_code, content: '[invalid-message-payload]' }
   }
   const role = normalizeText(row.role_code || payload?.role, 'user')
+  // UI-only assistant/tool cards may omit timestamps even though their linked
+  // canonical message row has them. Preserve the Desktop timeline without
+  // synthesizing a new clock value or exposing any additional message fields.
+  const timestamp = normalizeText(payload.timestamp || payload.createdAt || row.created_at)
+  const completedTimestamp = normalizeText(payload.completedTimestamp || payload.updatedAt || row.updated_at || timestamp)
   const remotePayload = {
     content: sanitizeRemotePayload(payload.content, resolveAttachment, context),
     reasoningContent: sanitizeRemoteText(normalizeText(payload.reasoning_content), context),
     summary: sanitizeRemoteText(normalizeText(payload.summary), context),
     summaryPrefix: normalizeText(payload.summaryPrefix),
-    timestamp: normalizeText(payload.timestamp || payload.createdAt),
-    completedTimestamp: normalizeText(payload.completedTimestamp || payload.updatedAt),
+    timestamp,
+    completedTimestamp,
     aiName: normalizeText(payload.aiName),
     voiceName: normalizeText(payload.voiceName),
     status: normalizeText(payload.status),
@@ -1558,17 +1563,23 @@ export async function loadRemoteConversationPage({
       : null
     const pageRows = safeBefore == null
       ? db.prepare(`
-          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json FROM (
-            SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
-            FROM ui_messages WHERE role_code NOT IN ('system', 'tool')
-            ORDER BY ui_order DESC LIMIT ?
+          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json, created_at, updated_at FROM (
+            SELECT ui.ui_order, ui.ui_uuid, ui.message_uuid, ui.role_code, ui.payload_json,
+              message.created_at, message.updated_at
+            FROM ui_messages AS ui
+            LEFT JOIN messages AS message ON message.message_uuid = ui.message_uuid
+            WHERE ui.role_code NOT IN ('system', 'tool')
+            ORDER BY ui.ui_order DESC LIMIT ?
           ) ORDER BY ui_order
         `).all(limit)
       : db.prepare(`
-          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json FROM (
-            SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json
-            FROM ui_messages WHERE role_code NOT IN ('system', 'tool') AND ui_order < ?
-            ORDER BY ui_order DESC LIMIT ?
+          SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json, created_at, updated_at FROM (
+            SELECT ui.ui_order, ui.ui_uuid, ui.message_uuid, ui.role_code, ui.payload_json,
+              message.created_at, message.updated_at
+            FROM ui_messages AS ui
+            LEFT JOIN messages AS message ON message.message_uuid = ui.message_uuid
+            WHERE ui.role_code NOT IN ('system', 'tool') AND ui.ui_order < ?
+            ORDER BY ui.ui_order DESC LIMIT ?
           ) ORDER BY ui_order
         `).all(safeBefore, limit)
     // System prompt is session configuration, not a chat bubble. It remains

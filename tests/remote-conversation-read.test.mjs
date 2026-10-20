@@ -19,9 +19,12 @@ function buildSession() {
 
   for (let index = 1; index <= 5; index += 1) {
     const isLast = index === 5
+    const isToolOnlyAssistant = index === 4
     const message = {
       role: index % 2 === 1 ? 'user' : 'assistant',
-      content: isLast
+      content: isToolOnlyAssistant
+        ? ''
+        : isLast
         ? [
             { type: 'text', text: 'latest body' },
             {
@@ -49,7 +52,7 @@ function buildSession() {
       password: 'SECRET_PASSWORD',
       env: { SECRET_ENV: 'SECRET_ENV_VALUE' },
       headers: { Authorization: 'Bearer SECRET_TOKEN' },
-      tool_calls: isLast
+      tool_calls: isToolOnlyAssistant
         ? [{
             id: 'tool-secret',
             function: { name: 'read_file', arguments: JSON.stringify({ file_path: 'E:/secret/private.txt' }) },
@@ -59,7 +62,9 @@ function buildSession() {
         : []
     }
     messages.push(message)
-    chatShow.push({ ...message })
+    const uiMessage = { ...message }
+    if (isToolOnlyAssistant) delete uiMessage.timestamp
+    chatShow.push(uiMessage)
   }
 
   return {
@@ -142,8 +147,10 @@ async function main() {
     assert.deepEqual(first.messages.map((message) => message.role), ['assistant', 'user'])
     assert.deepEqual(first.messages.map((message) => message.uiMessageId), ['ui-4', 'ui-5'])
 
-    const latest = first.messages.at(-1)
-    assert.deepEqual(latest.payload.toolCalls, [{ id: 'tool-secret', name: 'read_file', status: 'finished', arguments: {}, result: '[已隐藏敏感内容]' }])
+    const toolOnlyAssistant = first.messages.find((message) => message.uiMessageId === 'ui-4')
+    assert.equal(toolOnlyAssistant?.payload.timestamp, '2026-01-01T00:00:04.000Z')
+    assert.equal(toolOnlyAssistant?.payload.completedTimestamp, '2026-01-01T00:00:04.000Z')
+    assert.deepEqual(toolOnlyAssistant?.payload.toolCalls, [{ id: 'tool-secret', name: 'read_file', status: 'finished', arguments: {}, result: '[已隐藏敏感内容]' }])
     const serializedFirst = JSON.stringify(first)
     for (const forbidden of [
       PIXEL_DATA_URL,

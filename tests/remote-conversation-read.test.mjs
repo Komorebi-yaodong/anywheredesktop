@@ -275,6 +275,60 @@ async function main() {
     assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}\?type=image/)
     assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}\?type=video/)
     assert.match(mediaText, /anywhere-media:\/\/[A-Za-z0-9_-]{16,160}\?type=audio/)
+    // Use synthetic extracted Office parts, not real document files. Their
+    // original text stays durable on Desktop but must not inflate Mobile DTOs.
+    const officeBody = 'SYNTHETIC_OFFICE_BODY'.repeat(40000)
+    const officePathText = '`E:\\Synthetic\\论文.docx`\n`E:\\Synthetic\\数据.xlsx`\n我正在写论文'
+    const officeContent = [
+      {type: 'text', text: officePathText},
+      {type: 'text', text: `file name:fixture.docx\nfile content:\n${officeBody}\nfile end`},
+      {type: 'text', text: `file name:fixture.xlsx\nfile content:\n${officeBody}\nfile end`},
+      {type: 'document', name: 'structured.xlsx', content: officeBody, data: officeBody},
+      {type: 'image', url: 'E:/Synthetic/not-an-image.docx'}
+    ]
+    await store.saveConversationSnapshot({dirPath: root, conversationId, expectedRevision: mediaForms.revision,
+      holderInstanceId: 'remote-read-media-fixture', leaseEpoch: mediaLease.leaseEpoch,
+      sessionData: {...buildSession(), fullHistory: [{role: 'user', storageId: 'office-fixture', content: officeContent}],
+        chat_show: [{role: 'user', storageId: 'office-fixture', uiStorageId: 'ui-office-fixture', content: officeContent}]}})
+    const unexpectedMedia = []
+    const officePage = await store.loadRemoteConversationPage({dirPath: root, conversationId, registerMedia: source => {unexpectedMedia.push(source); throw new Error('documents must not register media')}})
+    const officeDto = JSON.stringify(officePage)
+    assert.equal(officeDto.includes('SYNTHETIC_OFFICE_BODY'), false)
+    assert.ok(officeDto.includes('fixture.docx') && officeDto.includes('fixture.xlsx') && officeDto.includes('structured.xlsx'))
+    assert.equal(officePage.messages[0].payload.content[0].text, officePathText)
+    assert.equal(unexpectedMedia.length, 0)
+    assert.ok(Buffer.byteLength(officeDto) < 8192)
+    const {createRemoteCryptoSession} = await import('../main/core/remote/cryptoSession.js')
+    const keyA = Buffer.alloc(32, 1), keyB = Buffer.alloc(32, 2)
+    const sender = createRemoteCryptoSession({sessionId: 'office-synthetic-session', sendKey: Buffer.from(keyA), receiveKey: Buffer.from(keyB), sendDirection: 'desktop-to-client', receiveDirection: 'client-to-desktop'})
+    const receiver = createRemoteCryptoSession({sessionId: 'office-synthetic-session', sendKey: Buffer.from(keyB), receiveKey: Buffer.from(keyA), sendDirection: 'client-to-desktop', receiveDirection: 'desktop-to-client'})
+    const wire = sender.encrypt({kind: 'response', requestId: 'office-synthetic-request', ok: true, result: officePage})
+    assert.deepEqual(receiver.decrypt(wire).result, officePage)
+    assert.equal(receiver.decrypt(sender.encrypt({kind: 'response', ok: true, result: {ping: true}})).result.ping, true)
+    sender.close(); receiver.close()
+    const desktopOriginal = await store.openConversation({dirPath: root, reference: conversationId})
+    assert.ok(JSON.stringify(desktopOriginal.sessionData).includes(officeBody))
+
+
+    const {replaceConversationEditableText} = await import('../render/window/utils/conversationEditableText.js')
+    let edited = replaceConversationEditableText(desktopOriginal.sessionData.fullHistory[0].content, 'Edited user input')
+    edited = replaceConversationEditableText(edited, 'Newest user input')
+    const editedSaved = await store.saveConversationSnapshot({dirPath: root, conversationId, expectedRevision: desktopOriginal.descriptor.revision,
+      holderInstanceId: 'remote-read-media-fixture', leaseEpoch: mediaLease.leaseEpoch,
+      sessionData: {...desktopOriginal.sessionData, fullHistory: [{...desktopOriginal.sessionData.fullHistory[0], content: edited}],
+        chat_show: [{...desktopOriginal.sessionData.chat_show[0], content: edited}]}})
+    assert.equal(editedSaved.ok, true)
+    const reopened = await store.openConversation({dirPath: root, reference: conversationId})
+    assert.equal(reopened.sessionData.fullHistory[0].content[0].text, 'Newest user input')
+    assert.equal(reopened.sessionData.fullHistory[0].content[1].text, officeContent[1].text)
+    assert.equal(reopened.sessionData.fullHistory[0].content[2].text, officeContent[2].text)
+    const nextRequest = await store.getConversationRequestMessages({dirPath: root, conversationId})
+    const requestContent = nextRequest.messages.find(message => message.storageId === 'office-fixture').content
+    assert.equal(requestContent[0].text, 'Newest user input')
+    assert.equal(requestContent[1].text, officeContent[1].text)
+    assert.equal(requestContent[2].text, officeContent[2].text)
+
+
     await store.releaseWriteLease({ dirPath: root, conversationId, holderInstanceId: 'remote-read-media-fixture', leaseEpoch: mediaLease.leaseEpoch })
 
     assert.equal(readActiveLease(created.databasePath), null)

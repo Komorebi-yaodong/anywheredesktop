@@ -3,6 +3,8 @@ import fs from 'node:fs/promises'
 import vm from 'node:vm'
 import { shallowRef, ref, computed, watch } from 'vue'
 
+import {replaceConversationEditableText} from '../render/window/utils/conversationEditableText.js'
+
 const source = await fs.readFile(new URL('../render/window/App.vue', import.meta.url), 'utf8')
 
 const mobileControlDeclaration = source.indexOf('const mobileControlActive = ref(false);')
@@ -485,6 +487,41 @@ await adapter.runRemoteConversationCommand({ type: 'conversation.compact.cancel'
 assert.equal(context.__compactAbort, true)
 adapter.activeRemoteCommand.value = null
 context.compacting.value = false
+
+
+// Run the actual edit implementation on authoritative UI/canonical messages.
+const originalEditStub = context.handleEditMessage;
+context.replaceConversationEditableText = replaceConversationEditableText;
+context.resolveEditableFullHistoryIndex = index => index;
+vm.runInContext(source.slice(source.indexOf('const handleEditMessage ='), source.indexOf('const handleEditStart =')) + '\nglobalThis.realEditMessage = handleEditMessage;', ctx);
+const beforeEditUi = context.chat_show.value;
+const beforeEditHistory = context.fullHistory.value;
+const documentOne = {type: 'text', text: 'file name:one.docx\nfile content:\nORIGINAL_DOCUMENT_ONE\nfile end'};
+const documentTwo = {type: 'text', text: 'file name:two.xlsx\nfile content:\nORIGINAL_DOCUMENT_TWO\nfile end'};
+const mixed = [{type: 'text', text: 'old prose'}, documentOne, documentTwo, {type: 'image_url', image_url: {url: 'fixture-image'}}];
+context.chat_show.value = [{id: 900, role: 'user', content: structuredClone(mixed)}];
+context.fullHistory.value = [{role: 'user', content: structuredClone(mixed)}];
+context.handleEditMessage = context.realEditMessage;
+assert.equal(context.handleEditMessage(0, 'new prose', {}), true);
+for (const message of [context.chat_show.value[0], context.fullHistory.value[0]]) {
+  assert.equal(message.content[0].text, 'new prose');
+  assert.equal(message.content[1].text, documentOne.text);
+  assert.equal(message.content[2].text, documentTwo.text);
+  assert.equal(message.content[3].image_url.url, 'fixture-image');
+}
+assert.equal(context.handleEditMessage(0, 'newest prose', {}), true);
+assert.equal(context.fullHistory.value[0].content[1].text, documentOne.text);
+context.chat_show.value[0].content = documentOne.text;
+context.fullHistory.value[0].content = documentOne.text;
+assert.equal(context.handleEditMessage(0, 'added prose', {}), true);
+assert.equal(context.fullHistory.value[0].content[0].text, documentOne.text);
+assert.equal(context.fullHistory.value[0].content[1].text, 'added prose');
+const standaloneFile = {type: 'file', file: {filename: 'standalone.pdf', file_data: 'ORIGINAL_FILE_DATA'}};
+assert.deepEqual(replaceConversationEditableText(standaloneFile, 'added input'), [standaloneFile, {type: 'text', text: 'added input'}]);
+
+context.handleEditMessage = originalEditStub;
+context.chat_show.value = beforeEditUi;
+context.fullHistory.value = beforeEditHistory;
 
 
 const metadataEventStart = events.length

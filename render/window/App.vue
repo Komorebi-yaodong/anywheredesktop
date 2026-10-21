@@ -14,6 +14,8 @@ import defaultUserAvatarUrl from '../../build/user.png?asset';
 import TextSearchUI from './utils/TextSearchUI.js';
 import { formatTimestamp, sanitizeToolArgs, sanitizeToolFunctionName } from './utils/formatters.js';
 import { resolveSafeConversationMutationTarget } from './utils/conversationMessageTarget.js';
+
+import {replaceConversationEditableText} from './utils/conversationEditableText.js';
 import { createLinkedUserMessagePair } from './utils/linkedUserMessage.js';
 import { completeConversationClose, createConversationMutationQueue, createConversationPersistenceTracker, mergeConversationMutationRequests as mergeAutoSaveRequests } from './utils/conversationMutationQueue.js';
 import { MAX_AUTOMATIC_NETWORK_RETRIES, createNetworkRetryingStream, runWithNetworkRetries } from './utils/conversationNetworkRetry.js';
@@ -5997,6 +5999,11 @@ const handleEditMessage = (index, newContent, remoteCommand = null) => {
 
   const updateContent = (message) => {
     if (!message) return;
+    if (remoteCommand) {
+      message.content = replaceConversationEditableText(message.content, newContent);
+      return;
+    }
+
     if (typeof message.content === 'string' || message.content === null) {
       message.content = newContent;
     } else if (Array.isArray(message.content)) {

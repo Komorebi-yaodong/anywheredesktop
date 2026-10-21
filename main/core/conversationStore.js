@@ -520,6 +520,23 @@ function remoteMediaReference(value, registerMedia) {
   }
 }
 
+// Desktop file parsers store extracted documents as standalone text parts.
+// Only the Remote display projection drops their body; canonical/UI history on
+// Desktop and the model's request context are never rewritten.
+function remoteExtractedFileNotice(value) {
+  if (typeof value !== 'string' || !/^file name:/i.test(value)) return null
+  const header = /^file name:([^\r\n]+)\r?\nfile content:\r?\n/i.exec(value)
+  if (!header || !/\r?\nfile end\s*$/i.test(value)) return null
+  return remoteFileNotice({name: header[1]})
+}
+
+function remoteFileNotice(value = {}, fallbackName = '') {
+  const file = value.file && typeof value.file === 'object' ? value.file : value
+  const name = normalizeText(file.filename || file.file_name || file.name || fallbackName).trim().slice(0, 240)
+  return {type: 'file', name, previewable: false, text: `[文件${name ? `：${name}` : ''}；仅在 Desktop 查看内容]`}
+}
+
+
 function sanitizeRemoteText(value, context = {}) {
   const source = typeof value === 'string' ? value : ''
   const registerMedia = context.registerMedia
@@ -615,6 +632,8 @@ function sanitizeRemoteTasks(value) {
 
 function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
   if (typeof value === 'string') {
+    const extractedFile = remoteExtractedFileNotice(value)
+    if (extractedFile) return extractedFile
     const parsed = parseDataUrl(value)
     if (parsed) {
       return {
@@ -634,6 +653,13 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
     if (attachmentId && Object.keys(value).length === 1) {
       return resolveAttachment(attachmentId, context.nameHint)
     }
+    if (value.type === 'text') {
+      const extractedFile = remoteExtractedFileNotice(value.text)
+      if (extractedFile) return extractedFile
+    }
+
+    if (['file', 'document', 'input_file'].includes(value.type)) return remoteFileNotice(value, context.nameHint)
+
     if (value.type === 'image_url' || value.type === 'image') {
       const rawUrl = value.image_url ?? value.image ?? value.url
       const sourcePath = typeof rawUrl === 'string' ? rawUrl.trim() : ''
@@ -645,6 +671,9 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
         // Mobile cannot open a Desktop path directly, so always prefer the
         // opaque media reference for rendering while keeping the path readable.
         if (media) return { type: 'image', url: media, sourcePath }
+        if (normalizeConversationLocalMediaPath(sourcePath) && !REMOTE_MEDIA_EXTENSION_PATTERN.test(sourcePath)) {
+          return remoteFileNotice(value, sourcePath.split(/[\\/]/).pop())
+        }
         return { type: 'image', sourcePath }
       }
       if (rawUrl && typeof rawUrl === 'object') {

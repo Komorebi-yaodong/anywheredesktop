@@ -65,6 +65,22 @@ const localChatFiles = ref([]);
 const cloudChatFiles = ref([]);
 const isTableLoading = ref(false);
 const selectedFiles = ref([]);
+
+const remoteControlledSessions = ref([]);
+let removeRemoteSessionsListener = null;
+const remoteControlForFile = (file) => activeView.value === 'local'
+    ? remoteControlledSessions.value.find(session => session.conversationId === file?.conversationId) : null;
+const refreshRemoteControls = async () => {
+    try {
+        const result = await window.api.listRemoteControlledSessions?.();
+        remoteControlledSessions.value = Array.isArray(result?.sessions) ? result.sessions : [];
+    } catch { /* advisory control labels never block history loading */ }
+};
+const openRemoteControlledFile = async (file) => {
+    try { await window.api.observeRemoteConversation(file.conversationId); }
+    catch { ElMessage.error('打开远端控制会话失败，请刷新后重试。'); }
+};
+
 const currentPage = ref(1);
 const pageSize = ref(loadChatHistoryPageSize());
 const singleFileSyncing = ref({});
@@ -742,6 +758,9 @@ async function selectLocalChatPath() {
 
 
 onMounted(async () => {
+
+    await refreshRemoteControls();
+    removeRemoteSessionsListener = window.api.onRemoteSessionsChanged?.(refreshRemoteControls);
     try {
         const result = await window.api.getConfig();
         if (result && result.config && result.config.webdav) {
@@ -774,6 +793,8 @@ onDeactivated(() => {
 });
 
 onUnmounted(() => {
+
+    removeRemoteSessionsListener?.();
     window.removeEventListener('focus', handleWindowFocus);
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('mouseup', onGlobalMouseUp);
@@ -2142,6 +2163,13 @@ async function deleteFiles(filesToDelete) {
 
     isDeletingFiles.value = true; // 上锁
     try {
+        await refreshRemoteControls();
+        const controlled = normalizedFiles.find(file => remoteControlForFile(file));
+        if (controlled) {
+            await ElMessageBox.confirm('所选会话仍由远端设备控制。请先打开会话并点击“接管会话”，关闭该窗口后再删除。', '会话正在使用', {type: 'info', confirmButtonText: '打开会话', cancelButtonText: '取消'});
+            await openRemoteControlledFile(controlled);
+            return;
+        }
         await ElMessageBox.confirm(t('common.confirmDeleteMultiple', { count: normalizedFiles.length }), t('common.warningTitle'), { type: 'warning' });
 
         let syncDeletions = false;
@@ -2208,7 +2236,9 @@ async function deleteFiles(filesToDelete) {
 
     } catch (error) {
         if (error !== 'cancel' && error !== 'close') {
-            ElMessage.error(`${t('common.deleteFailedMultiple')}: ${error.message}`);
+            ElMessage.error(String(error?.message || '').includes('conversation_write_lease_lost')
+                ? '会话仍有打开的写入窗口。请先打开并接管远端会话、关闭窗口后再删除。'
+                : `${t('common.deleteFailedMultiple')}: ${error.message}`);
         }
     } finally {
         isTableLoading.value = false;
@@ -2725,9 +2755,10 @@ const toggleSelectAll = () => {
                                         @change="(val) => toggleFileSelection(row.file, val)" @click.stop />
                                 </div>
 
-                                <div class="list-title" :title="normalizeTitleValue(row.file)"
+                                <div class="list-title" :class="{'is-remote-controlled': remoteControlForFile(row.file)}" :title="normalizeTitleValue(row.file)"
                                     @mousedown="onTitleMouseDown(row.file, $event)">
-                                    {{ normalizeTitleValue(row.file) }}
+                                    <span class="conversation-title-text">{{ normalizeTitleValue(row.file) }}</span>
+                                    <button v-if="remoteControlForFile(row.file)" type="button" class="remote-control-tag" :title="`${remoteControlForFile(row.file).deviceName} 正在控制 · 点击打开`" @mousedown.stop @click.stop="openRemoteControlledFile(row.file)">{{ remoteControlForFile(row.file).deviceName }} 控制中</button>
                                 </div>
                                 <div v-if="showCreatedAtColumn" class="meta-created">{{ formatDate(row.file.createdAt || row.file.lastmod) }}</div>
                                 <div class="meta-updated">{{ formatDate(row.file.updatedAt || row.file.lastmod || row.file.createdAt) }}</div>
@@ -2904,6 +2935,12 @@ const toggleSelectAll = () => {
 </template>
 
 <style scoped>
+
+.list-title.is-remote-controlled { display: flex; align-items: center; gap: 7px; color: var(--el-color-primary); }
+.conversation-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.remote-control-tag { flex: 0 1 auto; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--el-color-primary-light-7); border-radius: 9px; padding: 2px 7px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font: inherit; font-size: 11px; cursor: pointer; }
+.remote-control-tag:hover { background: var(--el-color-primary-light-8); }
+
 /* 框选矩形样式 */
 .selection-box {
     position: absolute; /* 基于 table-container 局部坐标，避免受外层玻璃态容器影响 */

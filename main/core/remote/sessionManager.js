@@ -121,6 +121,7 @@ function sanitizeConfigResult(source = {}) {
   return {
     revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
     busy: source.busy === true,
+    deferred: source.deferred === true,
     patched: stringArray(Array.isArray(source.patched) ? source.patched : [], 'patched'),
     config: {
       model: text(config.model, 320), reasoningEffort: text(config.reasoningEffort, 32), voice: text(config.voice, 160),
@@ -267,7 +268,7 @@ function sanitizeEvent(event, payload) {
 export function createRemoteSessionManager({
   getConfig, openConversation, listWindows, openWindow, getWindowByRef,
   readLocalProjects = async () => ({ projects: [] }), dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice,
-  recordAssistantUsage = async () => {}, uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null, onConversationRevision = null
+  recordAssistantUsage = async () => {}, uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null, onConversationRevision = null, onControlChanged = () => {}
 } = {}) {
   for (const [name, value] of Object.entries({
     getConfig, openConversation, listWindows, openWindow, getWindowByRef, readLocalProjects,
@@ -524,6 +525,7 @@ export function createRemoteSessionManager({
 
 
   function requireMobileController(session, deviceId) {
+    if (session?.desktopTakingOver) throw remoteError('remote_desktop_takeover_in_progress')
     if (!session?.mobileControlled) throw remoteError('remote_conversation_takeover_required')
     if (session.mobileDeviceId && session.mobileDeviceId !== deviceId) throw remoteError('remote_conversation_controlled_by_other_device')
   }
@@ -619,7 +621,9 @@ export function createRemoteSessionManager({
       session.idleReleaseTimer = null
       session.mobileOpened = true
       session.mobileControlled = true
+
       session.mobileDeviceId = safeDeviceId
+      onControlChanged()
       return { ok: true, conversationId, windowId: session.windowRef, hidden: session.hidden, mobileControlled: true }
     })
   }
@@ -646,6 +650,7 @@ export function createRemoteSessionManager({
       }
       session.mobileControlled = false
       session.mobileDeviceId = ''
+      onControlChanged()
       return { ok: true, conversationId, windowId: session.windowRef, hidden: false, mobileControlled: false }
     })
   }
@@ -699,15 +704,70 @@ export function createRemoteSessionManager({
 
 
 
+  // Local IPC only; never exposed as a paired-device RPC or a lease override.
+  function controlledSessions({ deviceId = '' } = {}) {
+    const selectedDevice = deviceId ? id(deviceId, 'deviceId') : ''
+    const result = []
+    for (const conversationId of new Set([...sessions.keys(), ...windows().map(item => item.conversationId).filter(Boolean)])) {
+      const session = existingSession(conversationId)
+      const item = session && windowItem(session.windowRef)
+      if (!item || !session.mobileControlled || (selectedDevice && session.mobileDeviceId !== selectedDevice)) continue
+      result.push({conversationId, deviceId: session.mobileDeviceId || '', windowId: session.windowRef,
+        title: text(item.conversationTitle || item.title, 240) || '未命名会话', hidden: item.remoteHidden === true,
+        busy: Boolean(session.activeRequestId || item.busy || item.generating || item.compacting)})
+    }
+    return {ok: true, sessions: result}
+  }
+
+  async function takeoverOnDesktop({ conversationId, confirmed = false } = {}) {
+    const target = id(conversationId, 'conversationId')
+    if (!confirmed) throw remoteError('remote_takeover_confirmation_required')
+    return serialize(target, async () => {
+      const session = existingSession(target)
+      if (!session) throw remoteError('remote_conversation_window_not_found')
+      if (!session.mobileControlled) return showOnDesktop({params: {conversationId: target}})
+      session.desktopTakingOver = true
+      if (session.queueTimer) clearTimeout(session.queueTimer)
+      session.queueTimer = null
+      const pending = session.pendingSends.splice(0)
+      try {
+        for (const queued of pending) {
+          const record = requests.get(requestKey(queued.deviceId, queued.requestId))
+          if (record && !record.terminal) publish(record, 'assistant.cancelled', {code: 'remote_desktop_takeover'})
+          await uploadManager?.releaseReservation?.({deviceId: queued.deviceId, requestId: queued.requestId})?.catch?.(() => {})
+        }
+        session.desktopControlReceipt = {requestId: crypto.randomUUID(), done: false, ok: false}
+        const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {type: 'conversation.desktop.takeover', conversationId: target, requestId: session.desktopControlReceipt.requestId})
+        if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+        const deadline = Date.now() + Math.max(15000, readinessTimeoutMs)
+        while (true) {
+          const item = windowItem(session.windowRef)
+          if (!item) throw remoteError('remote_conversation_window_not_found')
+          if (session.desktopControlReceipt?.done) {
+            if (!session.desktopControlReceipt.ok) throw remoteError('remote_desktop_takeover_failed')
+            if (!session.activeRequestId) break
+          }
+          if (Date.now() >= deadline) throw remoteError('remote_desktop_takeover_timeout')
+          await new Promise(resolve => setTimeout(resolve, 40))
+        }
+        session.mobileControlled = false
+        session.mobileDeviceId = ''
+        session.mobileOpened = false
+        showOnDesktop({params: {conversationId: target}})
+        onControlChanged()
+        return {ok: true, conversationId: target, windowId: session.windowRef, mobileControlled: false}
+      } finally { session.desktopTakingOver = false; session.desktopControlReceipt = null }
+    })
+  }
+
+
   function observeOnDesktop({ conversationId } = {}) {
     const safeConversationId = id(conversationId, 'conversationId')
     const session = existingSession(safeConversationId)
     if (!session?.mobileControlled) return { ok: true, reused: false }
     const item = windowItem(session.windowRef)
-    // A hidden Mobile writer deliberately remains hidden here. Desktop history
-    // opens its own read-only observer, which reloads persisted revisions and
-    // can never overwrite the authoritative writer on later handoff.
-    if (!item || item.remoteHidden === true) return { ok: true, reused: false }
+    if (!item) return { ok: true, reused: false }
+    showOnDesktop({params: {conversationId: safeConversationId}})
     return { ok: true, reused: true, conversationId: safeConversationId, windowId: session.windowRef, mobileControlled: true }
   }
 
@@ -819,6 +879,7 @@ export function createRemoteSessionManager({
 
 
   function ensureMobileControl(session, deviceId) {
+    if (session?.desktopTakingOver) throw remoteError('remote_desktop_takeover_in_progress')
     if (session?.mobileControlled) {
       if (session.mobileDeviceId && session.mobileDeviceId !== deviceId) throw remoteError('remote_conversation_controlled_by_other_device')
       if (!session.mobileDeviceId) session.mobileDeviceId = deviceId
@@ -831,6 +892,7 @@ export function createRemoteSessionManager({
       session.mobileOpened = true
       session.mobileControlled = true
       session.mobileDeviceId = deviceId
+      onControlChanged()
       return
     }
     throw remoteError('remote_conversation_takeover_required')
@@ -876,7 +938,7 @@ export function createRemoteSessionManager({
   }
 
   async function dispatchNextSend(session) {
-    if (!enabled || session?.closing || sessions.get(session.conversationId) !== session || session.activeRequestId || session.dispatchingQueued || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
+    if (!enabled || session?.closing || session?.desktopTakingOver || sessions.get(session.conversationId) !== session || session.activeRequestId || session.dispatchingQueued || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
     const item = windowItem(session.windowRef)
     if (!item) { finishClosed(session); return }
     if (item.busy || item.generating || item.compacting) {
@@ -1127,13 +1189,14 @@ export function createRemoteSessionManager({
         const session = await ensureSession(conversationId, check)
         check()
         const readOnly = operation === 'conversation.config.get'
+        const independent = readOnly || operation === 'conversation.config.patch'
         if (!readOnly) ensureMobileControl(session, safeDeviceId)
         const item = windowItem(session.windowRef)
-        if (!readOnly && (session.activeRequestId || item?.busy || item?.generating || item?.compacting)) throw remoteError('remote_conversation_busy')
+        if (!independent && (session.activeRequestId || item?.busy || item?.generating || item?.compacting)) throw remoteError('remote_conversation_busy')
         if (session.activeRequestId === safeRequestId || configReads.has(`${session.windowRef}:${safeRequestId}`)) throw remoteError('remote_request_id_conflict')
         record.windowRef = session.windowRef
         record.readOnly = readOnly
-        if (readOnly) {
+        if (independent) {
           const readKey = `${session.windowRef}:${safeRequestId}`
           if (configReads.has(readKey)) throw remoteError('remote_request_id_conflict')
           configReads.set(readKey, record)
@@ -1331,9 +1394,15 @@ export function createRemoteSessionManager({
 
   function handleRendererEvent({ windowRef, payload } = {}) {
     const data = object(payload)
-    if (!RENDERER_EVENTS.has(data.event)) return { ok: false, error: 'remote_renderer_event_invalid' }
     const session = sessions.get(data.conversationId)
     if (!session || session.windowRef !== windowRef) return { ok: false, error: 'remote_renderer_event_window_mismatch' }
+    if (data.event === 'conversation.desktop.control.result') {
+      if (!session.desktopTakingOver || session.desktopControlReceipt?.requestId !== data.requestId) return {ok: false, error: 'remote_renderer_event_request_mismatch'}
+      session.desktopControlReceipt.done = true
+      session.desktopControlReceipt.ok = data.payload?.ok === true
+      return {ok: true}
+    }
+    if (!RENDERER_EVENTS.has(data.event)) return { ok: false, error: 'remote_renderer_event_invalid' }
     const readKey = `${windowRef}:${data.requestId}`
     const read = configReads.get(readKey)
     if (read && read.conversationId === data.conversationId && !read.terminal) {
@@ -1477,7 +1546,7 @@ export function createRemoteSessionManager({
     refreshContext: (input) => configCommand({ ...input, operation: 'conversation.context.refresh' }),
     compact,
     cancelCompact,
-    cancel, release, openForMobile, takeover, handoff, closeConversation, openedSessions, observeOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
+    cancel, release, openForMobile, takeover, handoff, closeConversation, openedSessions, observeOnDesktop, controlledSessions, takeoverOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
     resume: () => { enabled = true },
     authorizeDevice: (deviceId) => { revokedDevices.delete(deviceId) },

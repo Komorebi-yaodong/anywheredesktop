@@ -179,11 +179,12 @@ assert.match(appSource, /const failedLease = conversationLease\.value;[\s\S]{0,5
 
 
 assert.match(appSource, /const waitForPendingWindowMutationsBeforeClose = async[\s\S]{0,900}activeApplyMcpPromise/)
-assert.match(appSource, /if \(isClosingWindow\.value \|\| !ensureConversationWriteAccess\(true\)\) return/)
-assert.match(appSource, /await waitForAssistantTurnToSettleBeforeClose\(assistantSettlementPromise\);[\s\S]{0,120}await waitForPendingWindowMutationsBeforeClose\(\)/)
+assert.match(appSource, /if \(desktopTakeoverPending\.value \|\| isClosingWindow\.value \|\| !ensureConversationWriteAccess\(false\)\) return/)
+assert.match(appSource, /remoteCommand \? ensureConversationWriteAccess\(false\) : ensureLocalConversationWriteAccess\(true\)/)
+assert.match(appSource, /await waitForAssistantTurnToSettleBeforeClose\(assistantSettlementPromise\);[\s\S]{0,120}await remoteConfigExecutionPromise;[\s\S]{0,80}await waitForPendingWindowMutationsBeforeClose\(\)/)
 
 assert.match(appSource, /if \(!added\) return;[\s\S]{0,1800}if \(isClosingWindow\.value\) return;[\s\S]{0,160}loading\.value = true/)
 
-assert.match(appSource, /:write-locked="conversationReadOnly \|\| conversationLeasePending \|\| isClosingWindow"/)
+assert.match(appSource, /:write-locked="conversationReadOnly \|\| mobileControlActive \|\| desktopTakeoverPending \|\| conversationLeasePending \|\| isClosingWindow"/)
 
 console.log('Desktop conversation persistence lifecycle regression passed')

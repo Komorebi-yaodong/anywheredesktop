@@ -125,6 +125,8 @@ export function registerIpcHandlers({
   compactApi,
   remoteGateway,
   observeRemoteConversation = () => ({ ok: true, reused: false }),
+  listRemoteControlledSessions = async () => ({ok: true, sessions: []}),
+  takeoverRemoteConversation = async () => ({ok: false}),
   remoteUploadManager,
 
   updaterApi,
@@ -151,6 +153,21 @@ export function registerIpcHandlers({
     }
   })
 
+
+
+  handleInvoke('remote:controlledSessions', async (event, input = {}) => {
+    const sender = listWindows().find(item => item.id === getWindowRefByWebContentsId(event.sender.id))
+    if (!sender || !['main', 'window'].includes(sender.type)) throw new Error('remote_local_window_required')
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'deviceId')) throw new Error('remote_parameter_unknown')
+    return listRemoteControlledSessions(input)
+  })
+  handleInvoke('remote:takeoverOnDesktop', async (event, input = {}) => {
+    const sender = listWindows().find(item => item.id === getWindowRefByWebContentsId(event.sender.id))
+    if (!sender || !['main', 'window'].includes(sender.type)) throw new Error('remote_local_window_required')
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['conversationId', 'confirmed'].includes(key))) throw new Error('remote_parameter_unknown')
+    if (sender.type === 'window' && sender.conversationId !== input.conversationId) throw new Error('remote_conversation_window_mismatch')
+    return takeoverRemoteConversation(input)
+  })
 
 
   handleInvoke('conversation:observeRemote', async (_event, input = {}) => {

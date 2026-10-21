@@ -195,6 +195,16 @@ const remoteGateway = createRemoteGateway({
   }
 })
 
+function notifyRemoteControlChanged(broadcast = true) {
+  for (const item of listWindows()) {
+    const win = getWindowByRef(item.id)
+    if (!win || win.isDestroyed()) continue
+    try { win.webContents.send('remote:sessions-changed') } catch { /* teardown */ }
+  }
+  if (broadcast) remoteGateway.broadcastEvent('conversation.windows.changed', {reason: 'control', updatedAt: new Date().toISOString()})
+}
+
+
 const remoteSessionManager = createRemoteSessionManager({
   getConfig: dataApi.getConfig,
   openConversation: conversationApi.openConversation,
@@ -205,6 +215,8 @@ const remoteSessionManager = createRemoteSessionManager({
   dispatchRemoteCommandToWindow,
   revealRemoteConversationWindow,
   onConversationRevision: ({ windowRef, conversationId, revision }) => notifyConversationObservers(windowRef, conversationId, revision),
+
+  onControlChanged: notifyRemoteControlChanged,
   uploadManager: remoteUploadManager,
   recordAssistantUsage: async (promptKey) => {
     const current = await dataApi.getConfig()
@@ -221,6 +233,8 @@ remoteGateway.setSessionManager(remoteSessionManager)
 
 
 setWindowMetadataNotifier((change = {}) => {
+
+  notifyRemoteControlChanged(false)
   if (change.reason === 'closed' && typeof change.windowRef === 'string' && change.windowRef) {
     remoteGateway.handleWindowClosed(change.windowRef)
   }
@@ -912,6 +926,14 @@ app.whenReady().then(async () => {
     compactApi,
     remoteGateway,
     observeRemoteConversation: (input) => remoteSessionManager.observeOnDesktop(input),
+
+    listRemoteControlledSessions: async (input) => {
+      const {devices} = await remoteGateway.listDevices()
+      const names = new Map(devices.map(device => [device.deviceId, device.displayName]))
+      const result = remoteSessionManager.controlledSessions(input)
+      return {...result, sessions: result.sessions.map(session => ({...session, deviceName: names.get(session.deviceId) || '远端设备'}))}
+    },
+    takeoverRemoteConversation: (input) => remoteSessionManager.takeoverOnDesktop(input),
     remoteUploadManager,
 
     updaterApi,

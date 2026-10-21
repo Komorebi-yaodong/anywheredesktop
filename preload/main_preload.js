@@ -75,6 +75,14 @@ const api = {
     invokeOrThrow('remote:saveAndConfigure', toPlainPayload(settings) || {}),
   createRemotePairing: () => invokeOrThrow('remote:createPairing'),
   listRemoteDevices: () => invokeOrThrow('remote:listDevices'),
+
+  listRemoteControlledSessions: (input = {}) => invokeOrThrow('remote:controlledSessions', toPlainPayload(input) || {}),
+  takeoverRemoteConversation: (conversationId = '', confirmed = false) => invokeOrThrow('remote:takeoverOnDesktop', {conversationId, confirmed}),
+  onRemoteSessionsChanged: (callback) => {
+    const listener = () => callback?.()
+    electronAPI.ipcRenderer.on('remote:sessions-changed', listener)
+    return () => electronAPI.ipcRenderer.removeListener('remote:sessions-changed', listener)
+  },
   renameRemoteDevice: (deviceId = '', displayName = '') =>
     invokeOrThrow('remote:renameDevice', deviceId, displayName),
   revokeRemoteDevice: (deviceId = '') => invokeOrThrow('remote:revokeDevice', deviceId),

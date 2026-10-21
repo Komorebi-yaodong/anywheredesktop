@@ -235,6 +235,8 @@ const api = {
   listWindows: (type = '') => electronAPI.ipcRenderer.invoke('window:list', type),
   updateConversationWindowStatus: (input = {}) =>
     electronAPI.ipcRenderer.invoke('window:conversationStatus', toPlainPayload(input) || {}),
+  takeoverRemoteConversation: (conversationId = '', confirmed = false) => invokeOrThrow('remote:takeoverOnDesktop', {conversationId, confirmed}),
+
   emitRemoteRendererEvent: (input = {}) =>
     electronAPI.ipcRenderer.invoke('remote:rendererEvent', toPlainPayload(input) || {}),
   consumeRemoteUpload: (input = {}) =>

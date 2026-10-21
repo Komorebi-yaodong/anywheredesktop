@@ -27,6 +27,40 @@ const advancedOpen = ref(false)
 const auditOpen = ref(false)
 const devices = ref([])
 const auditEntries = ref([])
+
+const controlledSessions = ref([])
+const selectedDevice = ref(null)
+const sessionsVisible = ref(false)
+const sessionAction = ref('')
+let removeSessionsListener = null
+async function refreshControlledSessions() {
+  const result = await window.api.listRemoteControlledSessions()
+  controlledSessions.value = Array.isArray(result?.sessions) ? result.sessions : []
+}
+const deviceSessions = computed(() => controlledSessions.value.filter(item => item.deviceId === selectedDevice.value?.deviceId))
+const sessionCount = (device) => controlledSessions.value.filter(item => item.deviceId === device.deviceId).length
+async function viewDeviceSessions(device) {
+  selectedDevice.value = device
+  sessionsVisible.value = true
+  await refreshControlledSessions().catch(() => ElMessage.error('读取控制会话失败，请稍后重试。'))
+}
+async function openControlledSession(session) {
+  try { await window.api.observeRemoteConversation(session.conversationId) }
+  catch { ElMessage.error('打开会话失败，窗口可能已关闭。') }
+}
+async function takeOverSession(session) {
+  if (sessionAction.value) return
+  try {
+    await ElMessageBox.confirm('接管将停止当前生成、取消远端待发消息，保存后由 Desktop 控制，Mobile 将只读。', '强制接管会话', {type: 'warning', confirmButtonText: '接管', cancelButtonText: '取消'})
+    sessionAction.value = session.conversationId
+    await window.api.takeoverRemoteConversation(session.conversationId, true)
+    await refreshControlledSessions()
+    ElMessage.success('已由 Desktop 接管，Mobile 现在为只读。')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error('接管未完成，请等待当前会话保存后重试。')
+  } finally { sessionAction.value = '' }
+}
+
 let removeStatusListener = null
 
 const isEnabled = computed(() => settings.value.enabled === true)
@@ -72,6 +106,7 @@ async function refresh() {
       window.api.listRemoteDevices(),
       window.api.getRemoteAuditLog()
     ])
+    await refreshControlledSessions()
     status.value = nextStatus || status.value
     applyConfiguredSettings(nextStatus || status.value, { force: true })
     devices.value = Array.isArray(deviceResult?.devices) ? deviceResult.devices : []
@@ -179,6 +214,10 @@ function deviceSubtitle(device = {}) {
 }
 
 async function openDialog() {
+
+  if (!removeSessionsListener) removeSessionsListener = window.api.onRemoteSessionsChanged?.(() => {
+    if (visible.value) refreshControlledSessions().catch(() => {})
+  })
   visible.value = true
   pairing.value = null
   await refresh()
@@ -196,6 +235,7 @@ async function openDialog() {
 }
 
 onBeforeUnmount(() => {
+  removeSessionsListener?.()
   removeStatusListener?.()
   removeStatusListener = null
 })
@@ -297,6 +337,8 @@ defineExpose({ openDialog })
                 <span :class="['device-status', device.online ? 'is-online' : '']">{{ device.online ? '在线' : `最后连接 ${formatTime(device.lastSeenAt)}` }}</span>
               </div>
               <div class="device-actions">
+                <el-button link type="primary" :aria-label="`查看 ${device.displayName} 控制的会话`" @click="viewDeviceSessions(device)">会话 {{ sessionCount(device) }}</el-button>
+
                 <el-button link @click="renameDevice(device)">重命名</el-button>
                 <el-button link type="danger" :icon="Delete" @click="revokeDevice(device)">撤销</el-button>
               </div>
@@ -323,6 +365,19 @@ defineExpose({ openDialog })
         </section>
       </template>
 
+      <el-dialog v-model="sessionsVisible" title="设备控制的会话" width="min(90vw, 620px)" append-to-body>
+        <p class="controlled-device-name" :title="selectedDevice?.displayName">{{ selectedDevice?.displayName }}</p>
+        <el-empty v-if="!deviceSessions.length" description="该设备当前没有控制的会话" :image-size="64" />
+        <div v-else class="controlled-session-list">
+          <article v-for="session in deviceSessions" :key="session.conversationId" class="controlled-session-item">
+            <div class="controlled-session-meta"><strong :title="session.title">{{ session.title }}</strong><span>{{ session.busy ? '正在生成或执行工具' : '空闲' }} · {{ session.hidden ? '隐藏窗口' : '窗口已打开' }}</span></div>
+            <el-button size="small" round @click="openControlledSession(session)">打开</el-button>
+            <el-button size="small" round plain type="primary" :disabled="Boolean(sessionAction)" :loading="sessionAction === session.conversationId" @click="takeOverSession(session)">强制接管</el-button>
+          </article>
+        </div>
+      </el-dialog>
+
+
       <el-dialog v-model="qrZoomVisible" title="扫描配对二维码" width="min(88vw, 760px)" append-to-body>
         <img v-if="pairing" class="qr-fullsize" :src="pairing.qrDataUrl" alt="放大的手机配对二维码">
         <p class="qr-dialog-note">请点击放大后的二维码进行扫描；验证码请从原配对面板单独读取。</p>
@@ -332,6 +387,14 @@ defineExpose({ openDialog })
 </template>
 
 <style scoped>
+
+.controlled-device-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-bottom: 12px; color: var(--el-text-color-secondary); }
+.controlled-session-list { display: grid; gap: 8px; max-height: 420px; overflow-y: auto; }
+.controlled-session-item { display: flex; gap: 8px; align-items: center; padding: 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 12px; background: var(--el-fill-color-lighter); }
+.controlled-session-meta { display: grid; gap: 5px; flex: 1; min-width: 0; }
+.controlled-session-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--el-text-color-primary); font-size: 13px; }
+.controlled-session-meta span { font-size: 12px; color: var(--el-text-color-secondary); }
+
 .remote-v2-content { display: grid; gap: 14px; padding: 2px 0 4px; }
 .remote-service-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 14px; background: linear-gradient(135deg, var(--el-fill-color-light), var(--el-fill-color-lighter)); }
 .service-state, .service-title-row, .remote-service-actions, .pairing-actions, .device-actions { display: flex; align-items: center; }.service-state { gap: 10px; min-width: 0; }.service-title-row { gap: 9px; flex-wrap: wrap; }.status-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--el-color-info-light-5); box-shadow: 0 0 0 3px var(--el-fill-color); }.status-dot.online { background: var(--el-color-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--el-color-success) 14%, transparent); }.service-summary { color: var(--el-text-color-secondary); font-size: 12px; }.service-summary.is-running { color: var(--el-color-success); }

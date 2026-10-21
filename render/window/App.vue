@@ -2611,6 +2611,17 @@ const sessionCreatedAt = ref(new Date().toISOString());
 const currentConversationStorage = ref(null);
 const conversationReadOnly = ref(false);
 const mobileControlActive = ref(false);
+
+const desktopTakeoverPending = ref(false);
+const requestDesktopTakeover = async () => {
+  try {
+    await ElMessageBox.confirm('接管将停止本轮生成和远端待发消息，保存后由 Desktop 控制，Mobile 将变为只读。', '接管会话', {type: 'warning', confirmButtonText: '接管', cancelButtonText: '取消'});
+    const result = await window.api.takeoverRemoteConversation(currentConversationStorage.value?.conversationId, true);
+    if (result?.ok === false) throw new Error(result.error || 'remote_desktop_takeover_failed');
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') showDismissibleMessage.error('接管未完成，请等待当前窗口保存后重试。');
+  }
+};
 const conversationLeasePending = ref(false);
 const conversationLease = ref(null);
 const conversationInstanceId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
@@ -2665,6 +2676,10 @@ watch([
 
 const activeRemoteCommand = shallowRef(null);
 let remoteCommandExecutionPromise = null;
+let remoteConfigExecutionPromise = null;
+const pendingRemoteConfigPatch = ref(null);
+const mergeRemoteConfigPatch = (left, right) => JSON.parse(JSON.stringify({...(left || {}), ...right,
+  ...((left?.compact || right?.compact) ? {compact: {...left?.compact, ...right?.compact}} : {})}));
 const remoteHiddenWriter = ref(false);
 const remoteConversationDeleted = ref(false);
 
@@ -2795,7 +2810,8 @@ const normalizeRemoteCommand = (input = {}) => {
 };
 
 const REMOTE_REASONING_EFFORTS = ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max'];
-const getRemoteSessionConfigSnapshot = (patched = []) => ({
+const getRemoteSessionConfigSnapshot = (patched = []) => {
+  const snapshot = ({
   revision: currentConversationStorage.value?.revision || 0,
   patched,
   busy: Boolean(loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value),
@@ -2829,6 +2845,14 @@ const getRemoteSessionConfigSnapshot = (patched = []) => ({
     skills: allSkillsList.value.map((item) => ({ id: item.id || item.name, name: item.name }))
   }
 });
+  snapshot.config = mergeRemoteConfigPatch(snapshot.config, pendingRemoteConfigPatch.value || {});
+  if (Object.hasOwn(pendingRemoteConfigPatch.value?.compact || {}, 'contextLength')) {
+    snapshot.config.compact.contextLengthSource = 'manual';
+    snapshot.config.compact.contextLengthManual = true;
+  }
+  snapshot.deferred = Boolean(pendingRemoteConfigPatch.value);
+  return snapshot;
+};
 
 const setSessionSystemPromptOnly = (nextPrompt) => {
   currentSystemPrompt.value = nextPrompt;
@@ -2854,11 +2878,142 @@ const persistRemoteTranscript = async (reason) => {
 };
 
 
+const validateRemoteConfigPatch = (patch) => {
+  if (Object.hasOwn(patch, 'model') && (!patch.model || !modelMap.value[patch.model])) throw new Error('remote_model_unavailable');
+  if (Object.hasOwn(patch, 'reasoningEffort') && !REMOTE_REASONING_EFFORTS.includes(patch.reasoningEffort)) throw new Error('remote_reasoning_effort_invalid');
+  if (patch.voice && !(currentConfig.value.voiceList || []).includes(patch.voice)) throw new Error('remote_voice_unavailable');
+  if (patch.skillIds) {
+    const known = new Set(allSkillsList.value.flatMap(item => [item.id, item.name]).filter(Boolean));
+    if (patch.skillIds.some(item => !known.has(item))) throw new Error('remote_skill_unavailable');
+  }
+  if (patch.mcpServerIds) {
+    const known = new Set(availableMcpServers.value.map(item => item.id));
+    if (patch.mcpServerIds.some(item => !known.has(item))) throw new Error('remote_mcp_unavailable');
+  }
+};
+const captureRemoteRuntimeConfig = () => ({model: model.value, reasoningEffort: tempReasoningEffort.value, voice: selectedVoice.value,
+  skillIds: [...sessionSkillIds.value], mcpServerIds: [...sessionMcpServerIds.value], systemPrompt: currentSystemPrompt.value, compact: {...compactConfig.value}});
+const restoreRemoteRuntimeConfig = async (before) => {
+  if (before.model && modelMap.value[before.model]) handleChangeModel(before.model);
+  tempReasoningEffort.value = before.reasoningEffort;
+  selectedVoice.value = before.voice;
+  applyNormalizedSkillSelection(before.skillIds);
+  sessionMcpServerIds.value = [...before.mcpServerIds];
+  tempSessionMcpServerIds.value = [...before.mcpServerIds];
+  setSessionSystemPromptOnly(before.systemPrompt);
+  compactConfig.value = {...before.compact};
+  await requestApplyMcpTools(false, 'remote-config-rollback').catch(() => {});
+  await window.api?.updateModelCompactConfig?.(before.model, before.compact).catch(() => {});
+};
+const enqueueRemoteConfig = async (execute) => {
+  const job = (remoteConfigExecutionPromise || Promise.resolve()).catch(() => {}).then(execute);
+  remoteConfigExecutionPromise = job;
+  try { return await job; }
+  finally { if (remoteConfigExecutionPromise === job) remoteConfigExecutionPromise = null; }
+};
+const applyRemoteConfigPatch = async (patch) => {
+  validateRemoteConfigPatch(patch);
+  const before = captureRemoteRuntimeConfig();
+  try {
+          if (Object.hasOwn(patch, 'model')) {
+            if (!patch.model || !modelMap.value[patch.model]) throw new Error('remote_model_unavailable');
+            handleChangeModel(patch.model);
+          }
+          if (Object.hasOwn(patch, 'reasoningEffort')) {
+            if (!REMOTE_REASONING_EFFORTS.includes(patch.reasoningEffort)) throw new Error('remote_reasoning_effort_invalid');
+            tempReasoningEffort.value = patch.reasoningEffort;
+          }
+          if (Object.hasOwn(patch, 'voice')) {
+            const voices = currentConfig.value.voiceList || [];
+            if (patch.voice && !voices.includes(patch.voice)) throw new Error('remote_voice_unavailable');
+            selectedVoice.value = patch.voice || '';
+          }
+          if (Object.hasOwn(patch, 'skillIds')) {
+            const known = new Set(allSkillsList.value.flatMap((item) => [item.id, item.name]).filter(Boolean));
+            if (patch.skillIds.some((item) => !known.has(item))) throw new Error('remote_skill_unavailable');
+            applyNormalizedSkillSelection(patch.skillIds);
+          }
+          if (Object.hasOwn(patch, 'mcpServerIds')) {
+            const known = new Set(availableMcpServers.value.map((item) => item.id));
+            if (patch.mcpServerIds.some((item) => !known.has(item))) throw new Error('remote_mcp_unavailable');
+            sessionMcpServerIds.value = [...patch.mcpServerIds];
+            tempSessionMcpServerIds.value = [...patch.mcpServerIds];
+            await requestApplyMcpTools(false, 'remote-config-patch');
+            if (patch.mcpServerIds.some((item) => !sessionMcpServerIds.value.includes(item))) throw new Error('remote_mcp_apply_failed');
+          }
+          if (Object.hasOwn(patch, 'systemPrompt')) setSessionSystemPromptOnly(patch.systemPrompt);
+          if (Object.hasOwn(patch, 'compact')) {
+            const manualContext = Object.hasOwn(patch.compact, 'contextLength')
+              ? { contextLengthManual: true, contextLengthSource: 'manual' } : {};
+            compactConfig.value = normalizeCompactConfigState({ ...compactConfig.value, ...patch.compact, ...manualContext });
+            compactConfigLoadVersion += 1;
+            compactConfigModelValue = model.value;
+            if (window.api?.updateModelCompactConfig) {
+              const cached = await window.api.updateModelCompactConfig(model.value, { ...patch.compact, ...manualContext });
+              if (cached?.ok === false) throw new Error('remote_session_config_apply_failed');
+            }
+          }
+
+  } catch (error) {
+    await restoreRemoteRuntimeConfig(before);
+    throw error;
+  }
+};
+const persistPendingRemoteConfig = async () => {
+  const version = ++sessionMutationVersion;
+  const saved = await executeAutoSaveRequest({reason: 'remote-next-turn-config', force: true, stateOnly: true, version});
+  await autoSaveMutationQueue.whenIdle();
+  if (saved !== true) throw new Error('remote_conversation_save_failed');
+};
+const applyPendingRemoteConfig = () => enqueueRemoteConfig(async () => {
+  const patch = pendingRemoteConfigPatch.value;
+  if (!patch) return;
+  const before = captureRemoteRuntimeConfig();
+  try {
+    await applyRemoteConfigPatch(patch);
+    pendingRemoteConfigPatch.value = null;
+    // System-prompt changes also update the transcript: persist both together.
+    if (!await persistRemoteTranscript('remote-next-turn-applied')) throw new Error('remote_conversation_save_failed');
+  } catch (error) {
+    pendingRemoteConfigPatch.value = patch;
+    await restoreRemoteRuntimeConfig(before);
+    throw error;
+  }
+});
+
 const runRemoteConversationCommand = async (input = {}) => {
   const command = normalizeRemoteCommand(input);
   if (!command) return;
   const activeConversationId = currentConversationStorage.value?.conversationId || '';
   if (command.conversationId !== activeConversationId) return;
+
+  if (command.type === 'conversation.desktop.takeover') {
+    if (desktopTakeoverPending.value || isClosingWindow.value) return;
+    desktopTakeoverPending.value = true;
+    try {
+      if (activeRemoteCommand.value) activeRemoteCommand.value.__remoteCancelled = true;
+      if (compacting.value) handleCancelCompact();
+      if (loading.value) cancelAskAI();
+      await remoteCommandExecutionPromise;
+      await activeAssistantTurnMeta?.settlementPromise;
+      await remoteConfigExecutionPromise;
+      if (!ensureConversationWriteAccess(false)) throw new Error('conversation_write_lease_lost');
+      if (!await persistRemoteTranscript('desktop-takeover')) throw new Error('remote_conversation_save_failed');
+      const accepted = await emitRemoteRendererEventAndWait('conversation.desktop.control.result', command, {ok: true});
+      if (accepted?.ok !== true) throw new Error('remote_desktop_takeover_expired');
+      mobileControlActive.value = false;
+      await window.api.updateConversationWindowStatus?.(buildConversationWindowStatus());
+      scheduleConversationWindowStatusSync();
+    } catch {
+      mobileControlActive.value = true;
+      scheduleConversationWindowStatusSync();
+      await emitRemoteRendererEventAndWait('conversation.desktop.control.result', command, {ok: false});
+      showDismissibleMessage.error('接管未完成，已保留远端控制；请等待保存后重试。');
+    }
+    finally { desktopTakeoverPending.value = false; }
+    return;
+  }
+
 
   if (command.type === 'conversation.mobile.takeover') {
     if (!isWindowBootstrapped.value || loading.value || compacting.value || isPreparingSend.value || activeRemoteCommand.value) return;
@@ -2902,6 +3057,7 @@ const runRemoteConversationCommand = async (input = {}) => {
     if (compacting.value) handleCancelCompact();
     if (loading.value) cancelAskAI();
     await remoteCommandExecutionPromise;
+    await remoteConfigExecutionPromise;
     if (remoteHiddenWriter.value || command.closeWindow) {
       if (await persistRemoteTranscript('remote-shutdown')) await closePage(true);
     }
@@ -2967,6 +3123,7 @@ const runRemoteConversationCommand = async (input = {}) => {
 
 
   if (command.type === 'conversation.config.get') {
+    await remoteConfigExecutionPromise;
     // Snapshot reads must not replace or finalize the in-flight generation.
     if (isClosingWindow.value) {
       await emitRemoteRendererEventAndWait('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
@@ -2977,7 +3134,42 @@ const runRemoteConversationCommand = async (input = {}) => {
   }
 
 
-  if (['conversation.context.refresh', 'conversation.config.patch'].includes(command.type)) {
+  if (command.type === 'conversation.config.patch') {
+    const execute = async () => {
+      if (!ensureConversationWriteAccess(false) || isClosingWindow.value || desktopTakeoverPending.value) {
+        await emitRemoteRendererEventAndWait('conversation.operation.failed', command, {code: 'remote_conversation_busy'});
+        return;
+      }
+      const previous = pendingRemoteConfigPatch.value;
+      const before = captureRemoteRuntimeConfig();
+      let applied = false;
+      let staged = false;
+      try {
+        const patch = mergeRemoteConfigPatch(previous, command.patch || {});
+        validateRemoteConfigPatch(patch);
+        const deferred = Boolean(loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value);
+        if (deferred) {
+          pendingRemoteConfigPatch.value = patch;
+          staged = true;
+          await persistPendingRemoteConfig();
+        } else {
+          await applyRemoteConfigPatch(patch);
+          applied = true;
+          pendingRemoteConfigPatch.value = null;
+          if (!await persistRemoteTranscript('remote-config-patch')) throw new Error('remote_conversation_save_failed');
+        }
+        await emitRemoteRendererEventAndWait('conversation.config.result', command, {...getRemoteSessionConfigSnapshot(Object.keys(command.patch || {})), deferred});
+      } catch (error) {
+        if (staged || applied) pendingRemoteConfigPatch.value = previous;
+        if (applied) await restoreRemoteRuntimeConfig(before);
+        await emitRemoteRendererEventAndWait('conversation.operation.failed', command, {code: error?.message?.startsWith('remote_') ? error.message : 'remote_session_config_apply_failed'});
+      }
+    };
+    await enqueueRemoteConfig(execute);
+    return;
+  }
+
+  if (command.type === 'conversation.context.refresh') {
     if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
       emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
       return;
@@ -2994,51 +3186,6 @@ const runRemoteConversationCommand = async (input = {}) => {
         systemPrompt: currentSystemPrompt.value, compact: { ...compactConfig.value }
       };
       try {
-        if (command.type === 'conversation.config.patch') {
-          const patch = command.patch && typeof command.patch === 'object' ? command.patch : {};
-          const patched = Object.keys(patch);
-          if (Object.hasOwn(patch, 'model')) {
-            if (!patch.model || !modelMap.value[patch.model]) throw new Error('remote_model_unavailable');
-            handleChangeModel(patch.model);
-          }
-          if (Object.hasOwn(patch, 'reasoningEffort')) {
-            if (!REMOTE_REASONING_EFFORTS.includes(patch.reasoningEffort)) throw new Error('remote_reasoning_effort_invalid');
-            tempReasoningEffort.value = patch.reasoningEffort;
-          }
-          if (Object.hasOwn(patch, 'voice')) {
-            const voices = currentConfig.value.voiceList || [];
-            if (patch.voice && !voices.includes(patch.voice)) throw new Error('remote_voice_unavailable');
-            selectedVoice.value = patch.voice || '';
-          }
-          if (Object.hasOwn(patch, 'skillIds')) {
-            const known = new Set(allSkillsList.value.flatMap((item) => [item.id, item.name]).filter(Boolean));
-            if (patch.skillIds.some((item) => !known.has(item))) throw new Error('remote_skill_unavailable');
-            applyNormalizedSkillSelection(patch.skillIds);
-          }
-          if (Object.hasOwn(patch, 'mcpServerIds')) {
-            const known = new Set(availableMcpServers.value.map((item) => item.id));
-            if (patch.mcpServerIds.some((item) => !known.has(item))) throw new Error('remote_mcp_unavailable');
-            sessionMcpServerIds.value = [...patch.mcpServerIds];
-            tempSessionMcpServerIds.value = [...patch.mcpServerIds];
-            await requestApplyMcpTools(false, 'remote-config-patch');
-            if (patch.mcpServerIds.some((item) => !sessionMcpServerIds.value.includes(item))) throw new Error('remote_mcp_apply_failed');
-          }
-          if (Object.hasOwn(patch, 'systemPrompt')) setSessionSystemPromptOnly(patch.systemPrompt);
-          if (Object.hasOwn(patch, 'compact')) {
-            const manualContext = Object.hasOwn(patch.compact, 'contextLength')
-              ? { contextLengthManual: true, contextLengthSource: 'manual' } : {};
-            compactConfig.value = normalizeCompactConfigState({ ...compactConfig.value, ...patch.compact, ...manualContext });
-            compactConfigLoadVersion += 1;
-            compactConfigModelValue = model.value;
-            if (window.api?.updateModelCompactConfig) {
-              const cached = await window.api.updateModelCompactConfig(model.value, { ...patch.compact, ...manualContext });
-              if (cached?.ok === false) throw new Error('remote_session_config_apply_failed');
-            }
-          }
-          const saved = await persistRemoteTranscript('remote-config-patch');
-          if (!saved) throw new Error('remote_conversation_save_failed');
-          terminalPayload = { ...getRemoteSessionConfigSnapshot(patched), busy: false };
-        } else if (command.type === 'conversation.context.refresh') {
           if (!window.api?.resolveModelContext) throw new Error('remote_context_resolve_unavailable');
           const requestedModel = model.value;
           // Invalidate an older automatic model-config load before awaiting I/O.
@@ -3059,21 +3206,9 @@ const runRemoteConversationCommand = async (input = {}) => {
           // Capacity lookup changes the limit, not token usage. Do not delay its
           // confirmed result on an unrelated full transcript/tool token recount.
           terminalPayload = { ...getRemoteSessionConfigSnapshot(['compact']), busy: false };
-        }
       } catch (error) {
-        if (command.type === 'conversation.config.patch') {
-          if (rollback.model && modelMap.value[rollback.model]) handleChangeModel(rollback.model);
-          else model.value = rollback.model;
-          tempReasoningEffort.value = rollback.reasoningEffort;
-          selectedVoice.value = rollback.voice;
-          applyNormalizedSkillSelection(rollback.skillIds);
-          sessionMcpServerIds.value = [...rollback.mcpServerIds];
-          tempSessionMcpServerIds.value = [...rollback.mcpServerIds];
-          setSessionSystemPromptOnly(rollback.systemPrompt);
-          await requestApplyMcpTools(false, 'remote-config-rollback').catch(() => {});
-        }
         compactConfig.value = { ...rollback.compact };
-        if ((command.patch?.compact || contextLookupApplied) && window.api?.updateModelCompactConfig) {
+        if (contextLookupApplied && window.api?.updateModelCompactConfig) {
           await window.api.updateModelCompactConfig(rollback.model, rollback.compact).catch(() => {});
         }
         terminalEvent = 'conversation.operation.failed';
@@ -3822,7 +3957,7 @@ const drainBufferIntoHistory = async () => {
 const flushAppendBuffer = async () => {
   // A buffered turn may begin only after the previous turn has fully released ownership.
   // isMcpLoading is deliberately declared before this function.
-  if (isClosingWindow.value || !ensureConversationWriteAccess(false)) return;
+  if (desktopTakeoverPending.value || isClosingWindow.value || !ensureConversationWriteAccess(false)) return;
   if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta) return;
   isFlushingAppendBuffer = true;
   let startedTurn = false;
@@ -6090,6 +6225,8 @@ const closePage = async (force_save = false) => {
       cancelAskAI();
       await waitForAssistantTurnToSettleBeforeClose(assistantSettlementPromise);
     }
+    await remoteConfigExecutionPromise;
+
     await waitForPendingWindowMutationsBeforeClose();
     if (compacting.value) {
       handleCancelCompact();
@@ -6424,6 +6561,7 @@ onMounted(async () => {
 
     if (data) {
       remoteHiddenWriter.value = data.remoteHidden === true;
+      mobileControlActive.value = data.remoteHidden === true;
       basic_msg.value = { code: data.code, type: data.type, payload: data.payload };
       if (data.conversation?.descriptor && data.conversation?.sessionData) {
         const descriptor = data.conversation.descriptor;
@@ -7548,6 +7686,7 @@ const serializeSessionMcpToolOverrides = () => Object.fromEntries(
 );
 
 const getSessionTransientStatePatch = () => ({
+  pendingRemoteConfigPatch: pendingRemoteConfigPatch.value,
   promptDraft: prompt.value,
   draftFileList: fileList.value,
   pendingAppendBuffer: normalizePendingInputBuffer(pendingAppendBuffer.value)
@@ -7903,6 +8042,7 @@ const getSessionDataAsObject = (options = {}) => {
     : [];
   const historyToSave = history.value;
   return {
+    pendingRemoteConfigPatch: pendingRemoteConfigPatch.value,
     anywhere_history: true, CODE: CODE.value, basic_msg: basic_msg.value, isInit: isInit.value,
     autoCloseOnBlur: autoCloseOnBlur.value, model: requestConfigState.model,
     sessionMetadata: { ...getSessionMetadata(), ...(explicitTitle ? { title: explicitTitle } : {}) },
@@ -9181,6 +9321,7 @@ const handleSaveAction = async () => {
 };
 
 const loadSession = async (jsonData) => {
+  pendingRemoteConfigPatch.value = jsonData.pendingRemoteConfigPatch && typeof jsonData.pendingRemoteConfigPatch === 'object' ? deepCloneSafe(jsonData.pendingRemoteConfigPatch) : null;
   loading.value = true;
   sessionCreatedAt.value = resolveSessionCreatedAt(jsonData) || sessionCreatedAt.value;
   isRestoringSessionSnapshot = true;
@@ -9955,12 +10096,18 @@ const appendCurrentInputToHistory = async () => {
 
 const askAI = async (forceSend = false, remoteCommand = null) => {
   if (activeRemoteCommand.value && activeRemoteCommand.value !== remoteCommand) return;
-  if (isClosingWindow.value || !(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
+  if (desktopTakeoverPending.value || isClosingWindow.value || !(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
   if (loading.value || isPreparingSend.value || compacting.value) return;
   if (isMcpLoading.value) {
     showDismissibleMessage.info('正在加载工具，请稍后再试...');
     return;
   }
+
+  isPreparingSend.value = true;
+  try { await applyPendingRemoteConfig(); }
+  catch { showDismissibleMessage.error('下一轮配置应用失败，已保留设置；请检查模型或工具配置后重试。'); return; }
+  finally { isPreparingSend.value = false; }
+  if (desktopTakeoverPending.value || isClosingWindow.value) return;
 
   // --- 1. 处理用户输入 ---
   if (!forceSend) {
@@ -11694,7 +11841,7 @@ const scrollToMessageByIndex = async (index) => {
         </div>
 
         <ChatInput ref="chatInputRef" v-model:prompt="prompt" v-model:fileList="fileList"
-          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting" :write-locked="conversationReadOnly || conversationLeasePending || isClosingWindow"
+          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting" :write-locked="conversationReadOnly || mobileControlActive || desktopTakeoverPending || conversationLeasePending || isClosingWindow" :remote-controlled="mobileControlActive" :takeover-pending="desktopTakeoverPending" @takeover-session="requestDesktopTakeover"
           :ctrlEnterToSend="currentConfig.CtrlEnterToSend" :layout="inputLayout" :voiceList="currentConfig.voiceList"
           :is-mcp-active="isMcpActive" :all-mcp-servers="availableMcpServers" :active-mcp-ids="sessionMcpServerIds"
           :active-skill-ids="sessionSkillIds" :all-skills="allSkillsList"

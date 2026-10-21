@@ -253,8 +253,9 @@ async function run() {
   })
   assert.deepEqual(
     hiddenWriterWithObserver.manager.observeOnDesktop({ conversationId: CID }),
-    { ok: true, reused: false }
+    { ok: true, reused: true, conversationId: CID, windowId: hiddenWriterRef, mobileControlled: true }
   )
+  assert.equal(hiddenWriterWithObserver.opens.length, 1, 'opening Desktop control reuses the hidden writer')
   const observedSession = hiddenWriterWithObserver.manager.openedSessions({ deviceId: DEVICE, params: {} }).sessions[0]
   assert.equal(observedSession.windowId, hiddenWriterRef)
   assert.equal(observedSession.hasDesktopObserver, true)
@@ -266,6 +267,37 @@ async function run() {
   assert.equal(hiddenWriterWithObserver.manager.getSession(CID)?.windowRef, hiddenWriterRef)
   assert.equal(hiddenWriterWithObserver.manager.getSession(CID)?.mobileControlled, false)
 
+
+
+  const localControl = fixture();
+  await send(localControl.manager, 'request-local-active');
+  await send(localControl.manager, 'request-local-queued');
+  const controlled = localControl.manager.controlledSessions({deviceId: DEVICE});
+  assert.equal(controlled.sessions.length, 1);
+  assert.equal(controlled.sessions[0].deviceId, DEVICE);
+  assert.equal(localControl.manager.controlledSessions({deviceId: 'device-other-fixture'}).sessions.length, 0);
+  await assert.rejects(localControl.manager.takeoverOnDesktop({conversationId: CID}), {code: 'remote_takeover_confirmation_required'});
+  const taking = localControl.manager.takeoverOnDesktop({conversationId: CID, confirmed: true});
+  await new Promise(resolve => setImmediate(resolve));
+  const transfer = localControl.commands.at(-1);
+  assert.equal(transfer.type, 'conversation.desktop.takeover');
+  assert.equal(localControl.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-local-queued'}}).event, 'assistant.cancelled');
+  assert.equal(localControl.manager.handleRendererEvent({windowRef: 'spoof-window', payload: {event: 'conversation.desktop.control.result', requestId: transfer.requestId, conversationId: CID, payload: {ok: true}}}).ok, false);
+  renderer(localControl, 'assistant.cancelled', {}, 'request-local-active');
+  renderer(localControl, 'conversation.desktop.control.result', {ok: true}, transfer.requestId);
+  await taking;
+  assert.equal(localControl.opens.length, 1);
+  assert.equal(localControl.manager.controlledSessions().sessions.length, 0);
+  assert.equal(localControl.manager.openedSessions({deviceId: DEVICE}).sessions[0].controlledByThisDevice, false);
+  await assert.rejects(send(localControl.manager, 'request-after-local-takeover'), {code: 'remote_conversation_takeover_required'});
+
+  const failedControl = fixture();
+  await failedControl.manager.openForMobile({deviceId: DEVICE, params: {conversationId: CID}});
+  const failedTaking = failedControl.manager.takeoverOnDesktop({conversationId: CID, confirmed: true});
+  await new Promise(resolve => setImmediate(resolve));
+  renderer(failedControl, 'conversation.desktop.control.result', {ok: false}, failedControl.commands.at(-1).requestId);
+  await assert.rejects(failedTaking, {code: 'remote_desktop_takeover_failed'});
+  assert.equal(failedControl.manager.controlledSessions().sessions.length, 1);
 
 
   const mutations = fixture({ existing: true })
@@ -398,7 +430,12 @@ async function run() {
   renderer(parallelRead, 'conversation.config.result', { busy: true, config: {}, options: {} }, 'request-busy-read')
   assert.equal(parallelRead.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-busy-read' } }).result.busy, true)
   assert.equal(parallelRead.manager.getSession(CID).activeRequestId, 'request-busy-generation')
-  await assert.rejects(parallelRead.manager.patchConfig({ deviceId: DEVICE, requestId: 'request-busy-patch', params: { conversationId: CID, patch: { model: 'p|new' } } }), { code: 'remote_conversation_busy' })
+  await parallelRead.manager.patchConfig({ deviceId: DEVICE, requestId: 'request-busy-patch', params: { conversationId: CID, patch: { model: 'p|new' } } })
+  assert.equal(parallelRead.manager.getSession(CID).activeRequestId, 'request-busy-generation')
+  renderer(parallelRead, 'conversation.config.result', {busy: true, deferred: true, config: {model: 'p|new'}}, 'request-busy-patch')
+  assert.equal(parallelRead.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-busy-patch'}}).result.deferred, true)
+  assert.equal(parallelRead.manager.getSession(CID).activeRequestId, 'request-busy-generation')
+  assert.equal(parallelRead.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-busy-generation'}}).terminal, false)
   renderer(parallelRead, 'assistant.completed', {}, 'request-busy-generation')
   await parallelRead.manager.refreshContext({ deviceId: DEVICE, requestId: 'request-context-refresh', params: { conversationId: CID } })
   renderer(parallelRead, 'conversation.config.result', { config: { compact: { contextLength: 131072, contextLengthSource: 'api' } }, options: {} }, 'request-context-refresh')

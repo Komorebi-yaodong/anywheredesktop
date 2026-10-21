@@ -56,7 +56,7 @@ const events = [], actions = [], consumedUploads = [], appendedMessages = []
 const context = {
   shallowRef, ref, computed, watch, console, setTimeout, clearTimeout,
   window: { api: {
-    emitRemoteRendererEvent: async (event) => { events.push(structuredClone(event)); actions.push(event.event) },
+    emitRemoteRendererEvent: async (event) => { events.push(structuredClone(event)); actions.push(event.event); return {ok: true} },
     consumeRemoteUpload: async (input) => {
       consumedUploads.push(structuredClone(input))
       return { uploadId: input.uploadId, content: { type: 'image_url', image_url: { url: 'data:image/png;base64,UE5HREFUQQ==' } } }
@@ -75,6 +75,9 @@ const context = {
   conversationInstanceId: 'renderer-instance-fixture',
   isWindowBootstrapped: ref(true), isClosingWindow: ref(false), loading: ref(false), compacting: ref(false),
   isPreparingSend: ref(false), isMcpLoading: ref(false), chat_show: ref([]),
+  desktopTakeoverPending: ref(false), mobileControlActive: ref(false),
+  scheduleConversationWindowStatusSync() {}, buildConversationWindowStatus: () => ({}),
+  showDismissibleMessage: {info() {}, success() {}, error() {}}, deepCloneSafe: value => structuredClone(value),
   sessionMutationVersion: 0, lastPersistedSessionVersion: 0,
   isAutoApproveTools: ref(false),
   ensureConversationWriteAccess: () => true,
@@ -142,7 +145,7 @@ context.executeAutoSaveRequest = async (request) => {
   return true
 }
 const ctx = vm.createContext(context)
-vm.runInContext(block + '\n globalThis.adapter = { runRemoteConversationCommand, emitRemoteAssistantDelta, activeRemoteCommand, remoteHiddenWriter };', ctx)
+vm.runInContext(block + '\n globalThis.adapter = { runRemoteConversationCommand, emitRemoteAssistantDelta, activeRemoteCommand, remoteHiddenWriter, pendingRemoteConfigPatch, applyPendingRemoteConfig, getRemoteSessionConfigSnapshot };', ctx)
 const adapter = context.adapter
 context.askAI = async () => {
   adapter.activeRemoteCommand.value.__remoteStarted = true
@@ -252,7 +255,7 @@ context.handleEditMessage = (index, content) => { context.chat_show.value[index]
 // Run the real deletion function: a stub returning true masked the missing
 // success return even though Desktop had already mutated and persisted history.
 context.ensureLocalConversationWriteAccess = () => true
-context.showDismissibleMessage = { warning() {}, info() {} }
+context.showDismissibleMessage = { warning() {}, info() {}, error() {}, success() {} }
 context.resolveSafeConversationMutationTarget = (_history, ui, index) => context.fullHistory.value.findIndex(item => item.storageId === ui[index]?.storageId)
 context.isToolMediaMessage = () => false
 context.markOutermostCanRestore = () => {}
@@ -385,6 +388,85 @@ assert.equal(events.at(-1).payload.code, 'remote_context_resolve_failed')
 
 assert.equal(cachedContextWrites.length, beforeFailedLookupWrites, 'failed lookup does not rewrite the model cache')
 context.refreshPromptTokenBreakdown = async () => {}
+
+
+// A busy config command persists a next-turn patch without mutating runtime
+// values, tools, transcript, or the current generation's request identity.
+const beforeNextTurn = {model: context.model.value, system: context.currentSystemPrompt.value, reasoning: context.tempReasoningEffort.value};
+const activeGeneration = {type: 'conversation.send', conversationId: command.conversationId, requestId: 'renderer-current-generation'};
+adapter.activeRemoteCommand.value = activeGeneration;
+context.loading.value = true;
+await adapter.runRemoteConversationCommand({type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-next-turn-model', patch: {model: 'provider|model-a', systemPrompt: 'Next system', reasoningEffort: 'low'}});
+assert.equal(adapter.activeRemoteCommand.value, activeGeneration);
+assert.equal(context.loading.value, true);
+assert.equal(context.model.value, beforeNextTurn.model);
+assert.equal(context.currentSystemPrompt.value, beforeNextTurn.system);
+assert.equal(context.tempReasoningEffort.value, beforeNextTurn.reasoning);
+assert.equal(events.at(-1).payload.deferred, true);
+assert.equal(events.at(-1).payload.config.model, 'provider|model-a');
+assert.equal(events.at(-1).requestId, 'renderer-next-turn-model');
+assert.ok(actions.includes('remote-next-turn-config'));
+await adapter.runRemoteConversationCommand({type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-next-turn-merge', patch: {voice: 'Voice A', compact: {contextLength: 65536}}});
+assert.equal(adapter.pendingRemoteConfigPatch.value.systemPrompt, 'Next system');
+assert.equal(adapter.getRemoteSessionConfigSnapshot().config.compact.contextLengthSource, 'manual');
+const savedExecutor = context.executeAutoSaveRequest;
+context.executeAutoSaveRequest = async () => false;
+await adapter.runRemoteConversationCommand({type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-next-turn-fail', patch: {systemPrompt: 'Must not replace'}});
+assert.equal(events.at(-1).event, 'conversation.operation.failed');
+assert.equal(adapter.pendingRemoteConfigPatch.value.systemPrompt, 'Next system');
+context.executeAutoSaveRequest = savedExecutor;
+context.loading.value = false;
+adapter.activeRemoteCommand.value = null;
+await adapter.applyPendingRemoteConfig();
+assert.equal(context.model.value, 'provider|model-a');
+assert.equal(context.currentSystemPrompt.value, 'Next system');
+assert.equal(context.selectedVoice.value, 'Voice A');
+assert.equal(adapter.pendingRemoteConfigPatch.value, null);
+assert.ok(actions.includes('remote-next-turn-applied'));
+context.activeAssistantTurnMeta = null;
+context.mobileControlActive.value = true;
+await adapter.runRemoteConversationCommand({type: 'conversation.desktop.takeover', conversationId: command.conversationId, requestId: 'renderer-desktop-control'});
+assert.equal(context.mobileControlActive.value, false);
+assert.equal(events.at(-1).event, 'conversation.desktop.control.result');
+assert.equal(events.at(-1).payload.ok, true);
+context.mobileControlActive.value = true;
+context.executeAutoSaveRequest = async () => false;
+await adapter.runRemoteConversationCommand({type: 'conversation.desktop.takeover', conversationId: command.conversationId, requestId: 'renderer-desktop-control-fail'});
+assert.equal(context.mobileControlActive.value, true);
+assert.equal(events.at(-1).payload.ok, false);
+context.executeAutoSaveRequest = savedExecutor;
+const savedEmitter = context.window.api.emitRemoteRendererEvent;
+context.window.api.emitRemoteRendererEvent = async event => {events.push(structuredClone(event)); return {ok: false}};
+await adapter.runRemoteConversationCommand({type: 'conversation.desktop.takeover', conversationId: command.conversationId, requestId: 'renderer-control-expired'});
+assert.equal(context.mobileControlActive.value, true, 'expired local takeover receipt cannot unlock Desktop');
+context.window.api.emitRemoteRendererEvent = savedEmitter;
+
+// Serialize next-turn application with a newer patch arriving during tool apply.
+context.loading.value = true;
+await adapter.runRemoteConversationCommand({type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-serial-first', patch: {mcpServerIds: ['mcp-b'], systemPrompt: 'First pending'}});
+assert.equal(events.at(-1).event, 'conversation.config.result', JSON.stringify(events.at(-1)));
+assert.deepEqual(Array.from(adapter.pendingRemoteConfigPatch.value.mcpServerIds), ['mcp-b']);
+context.loading.value = false;
+let resumeApply;
+const savedApplyTools = context.requestApplyMcpTools;
+context.requestApplyMcpTools = async () => new Promise(resolve => {resumeApply = resolve});
+const application = adapter.applyPendingRemoteConfig();
+await new Promise(resolve => setImmediate(resolve));
+context.loading.value = true;
+const newerPatch = adapter.runRemoteConversationCommand({type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-serial-new', patch: {systemPrompt: 'Newer pending'}});
+resumeApply();
+await application;
+await newerPatch;
+assert.equal(context.currentSystemPrompt.value, 'First pending');
+assert.equal(adapter.pendingRemoteConfigPatch.value.systemPrompt, 'Newer pending');
+context.requestApplyMcpTools = savedApplyTools;
+context.loading.value = false;
+await adapter.applyPendingRemoteConfig();
+assert.equal(context.currentSystemPrompt.value, 'Newer pending');
+assert.equal(adapter.pendingRemoteConfigPatch.value, null);
+
+
+context.mobileControlActive.value = false;
 
 
 const compactEventStart = events.length

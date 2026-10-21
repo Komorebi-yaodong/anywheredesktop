@@ -13,6 +13,8 @@ const props = defineProps({
     loading: Boolean,
 
     writeLocked: { type: Boolean, default: false },
+    remoteControlled: {type: Boolean, default: false},
+    takeoverPending: {type: Boolean, default: false},
     ctrlEnterToSend: Boolean,
     voiceList: { type: Array, default: () => [] },
     layout: { type: String, default: 'horizontal' },
@@ -59,7 +61,7 @@ const props = defineProps({
 });
 
 // 增加 toggle-mcp 事件
-const emit = defineEmits(['submit', 'cancel', 'clear-history', 'remove-file', 'upload', 'send-audio', 'open-mcp-dialog', 'pick-file-start', 'toggle-mcp', 'toggle-skill', 'open-skill-dialog', 'cancel-buffer', 'stop-subagent', 'acknowledge-subagent', 'acknowledge-all-subagents', 'rerun-subagent', 'open-subagent-detail', 'close-subagent-detail', 'open-compact-dialog', 'run-compact', 'cancel-compact', 'save-compact-config', 'apply-compact-advanced-global', 'reset-compact-config', 'refresh-compact-context', 'restore-compact']);
+const emit = defineEmits(['takeover-session', 'submit', 'cancel', 'clear-history', 'remove-file', 'upload', 'send-audio', 'open-mcp-dialog', 'pick-file-start', 'toggle-mcp', 'toggle-skill', 'open-skill-dialog', 'cancel-buffer', 'stop-subagent', 'acknowledge-subagent', 'acknowledge-all-subagents', 'rerun-subagent', 'open-subagent-detail', 'close-subagent-detail', 'open-compact-dialog', 'run-compact', 'cancel-compact', 'save-compact-config', 'apply-compact-advanced-global', 'reset-compact-config', 'refresh-compact-context', 'restore-compact']);
 
 // --- Refs and State ---
 const senderRef = ref(null);
@@ -1036,6 +1038,11 @@ defineExpose({ focus, senderRef });
             <el-col :span="0" />
             <el-col :span="24">
                 <div class="chat-input-area-vertical">
+
+                    <div v-if="remoteControlled" class="remote-control-action">
+                        <span>远端设备正在控制此会话</span>
+                        <el-button size="small" round plain type="primary" :loading="takeoverPending" @click="emit('takeover-session')">接管会话</el-button>
+                    </div>
                     <div v-if="showMcpQuickSelect && filteredMcpList.length > 0" class="mcp-quick-select">
                         <!-- 顶部提示栏 -->
                         <div class="mcp-quick-header">
@@ -1429,6 +1436,9 @@ defineExpose({ focus, senderRef });
 </template>
 
 <style scoped>
+
+.remote-control-action { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 2px 3px 8px; color: var(--el-text-color-secondary); font-size: 12px; }
+
 .compact-config-dialog :deep(.el-dialog) {
     border-radius: 16px;
     overflow: hidden;

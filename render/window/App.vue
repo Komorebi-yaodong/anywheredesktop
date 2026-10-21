@@ -965,8 +965,12 @@ const loadCompactConfigForCurrentModel = async ({
       // 只有用户保存过的长度可以跳过刷新并保持最高优先级。
       resolveResult = await window.api.resolveModelContext(requestedModel, {
         forceRefresh: forceRefresh || !hasManualOverride,
-        preferManual
+        preferManual,
+        requireApi: forceRefresh && !preferManual
       });
+      if (forceRefresh && !preferManual && (!resolveResult?.ok || resolveResult.source !== 'api')) {
+        throw new Error('未能从检索服务获取当前模型长度，已保留原值；请检查 Desktop 网络或手动填写。');
+      }
     }
 
     const configResult = await window.api.getModelCompactConfig(requestedModel);
@@ -1002,6 +1006,7 @@ const loadCompactConfigForCurrentModel = async ({
     compactConfigModelValue = requestedModel;
   } catch (error) {
     console.warn('[compact] load model config failed:', error);
+    if (forceRefresh && !preferManual) throw error;
   }
 };
 
@@ -2982,6 +2987,7 @@ const runRemoteConversationCommand = async (input = {}) => {
     remoteCommandExecutionPromise = (async () => {
       let terminalEvent = 'conversation.config.result';
       let terminalPayload = getRemoteSessionConfigSnapshot();
+      let contextLookupApplied = false;
       const rollback = {
         model: model.value, reasoningEffort: tempReasoningEffort.value, voice: selectedVoice.value,
         mcpServerIds: [...sessionMcpServerIds.value], skillIds: [...sessionSkillIds.value],
@@ -3034,33 +3040,42 @@ const runRemoteConversationCommand = async (input = {}) => {
           terminalPayload = { ...getRemoteSessionConfigSnapshot(patched), busy: false };
         } else if (command.type === 'conversation.context.refresh') {
           if (!window.api?.resolveModelContext) throw new Error('remote_context_resolve_unavailable');
-          const resolved = await window.api.resolveModelContext(model.value, { forceRefresh: true, preferManual: false });
+          const requestedModel = model.value;
+          // Invalidate an older automatic model-config load before awaiting I/O.
+          compactConfigLoadVersion += 1;
+          const resolved = await window.api.resolveModelContext(requestedModel, { forceRefresh: true, preferManual: false, requireApi: true });
           const contextLength = Number(resolved?.contextLength);
           if (!resolved?.ok || resolved.source !== 'api' || !Number.isFinite(contextLength) || contextLength < 4096 || contextLength > 10_000_000) {
-            throw new Error('remote_context_resolve_failed');
+            const codes = ['context_model_missing', 'context_service_auth_failed', 'context_model_not_found', 'context_service_unavailable', 'context_response_invalid', 'context_lookup_timeout', 'context_network_unavailable'];
+            throw new Error(codes.includes(resolved?.code) ? `remote_${resolved.code}` : 'remote_context_resolve_failed');
           }
+          contextLookupApplied = true;
+          if (model.value !== requestedModel) throw new Error('remote_model_changed');
           compactConfigLoadVersion += 1;
           compactConfigModelValue = model.value;
           compactConfig.value = normalizeCompactConfigState({ ...compactConfig.value, contextLength: Math.floor(contextLength), contextLengthManual: false, contextLengthSource: 'api' });
           const saved = await persistRemoteTranscript('remote-context-refresh');
           if (!saved) throw new Error('remote_conversation_save_failed');
-          await refreshPromptTokenBreakdown();
+          // Capacity lookup changes the limit, not token usage. Do not delay its
+          // confirmed result on an unrelated full transcript/tool token recount.
           terminalPayload = { ...getRemoteSessionConfigSnapshot(['compact']), busy: false };
         }
       } catch (error) {
-        if (rollback.model && modelMap.value[rollback.model]) handleChangeModel(rollback.model);
-        else model.value = rollback.model;
-        tempReasoningEffort.value = rollback.reasoningEffort;
-        selectedVoice.value = rollback.voice;
-        applyNormalizedSkillSelection(rollback.skillIds);
-        sessionMcpServerIds.value = [...rollback.mcpServerIds];
-        tempSessionMcpServerIds.value = [...rollback.mcpServerIds];
-        compactConfig.value = { ...rollback.compact };
-        if ((command.patch?.compact || command.type === 'conversation.context.refresh') && window.api?.updateModelCompactConfig) {
-          await window.api.updateModelCompactConfig(model.value, rollback.compact).catch(() => {});
+        if (command.type === 'conversation.config.patch') {
+          if (rollback.model && modelMap.value[rollback.model]) handleChangeModel(rollback.model);
+          else model.value = rollback.model;
+          tempReasoningEffort.value = rollback.reasoningEffort;
+          selectedVoice.value = rollback.voice;
+          applyNormalizedSkillSelection(rollback.skillIds);
+          sessionMcpServerIds.value = [...rollback.mcpServerIds];
+          tempSessionMcpServerIds.value = [...rollback.mcpServerIds];
+          setSessionSystemPromptOnly(rollback.systemPrompt);
+          await requestApplyMcpTools(false, 'remote-config-rollback').catch(() => {});
         }
-        setSessionSystemPromptOnly(rollback.systemPrompt);
-        await requestApplyMcpTools(false, 'remote-config-rollback').catch(() => {});
+        compactConfig.value = { ...rollback.compact };
+        if ((command.patch?.compact || contextLookupApplied) && window.api?.updateModelCompactConfig) {
+          await window.api.updateModelCompactConfig(rollback.model, rollback.compact).catch(() => {});
+        }
         terminalEvent = 'conversation.operation.failed';
         terminalPayload = { code: error?.message?.startsWith('remote_') ? error.message : 'remote_session_config_apply_failed' };
       } finally {

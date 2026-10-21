@@ -791,9 +791,10 @@ export async function pruneCompactCacheByEnabledModels(enabledModelInputs = []) 
 
 export async function resolveModelContextLength(modelInput = '', options = {}) {
   const modelKey = normalizeModelKey(modelInput)
-  const forceRefresh = options?.forceRefresh === true
-  // When true (default), preserve manually saved contextLength and do not overwrite with API.
-  const preferManual = options?.preferManual !== false
+  const requireApi = options?.requireApi === true
+  const forceRefresh = requireApi || options?.forceRefresh === true
+  // Explicit lookups must not report a manual/cache/default value as API success.
+  const preferManual = !requireApi && options?.preferManual !== false
   const existing = await getModelCompactConfig(modelInput)
   const existingConfig = existing?.config || defaultModelCacheEntry(modelKey)
   const hasManualOverride = existingConfig.contextLengthManual === true
@@ -834,40 +835,71 @@ export async function resolveModelContextLength(modelInput = '', options = {}) {
   let source = 'default'
   let resolvedId = modelKey
 
-  if (queryModel.trim()) {
+  let lookupCode = 'context_model_missing'
+  // Preserve the configured model name first. Gateways may prepend a vendor
+  // route (vendor/model); only a genuine no-match tries the normalized name.
+  const queries = [...new Set([queryModel.trim(), ...(requireApi ? [modelKey] : [])].filter(Boolean))]
+  for (const query of queries) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 15000)
+    let retryNormalized = false
+    let stopLookup = false
     try {
-      const endpoint = `${MODEL_RESOLVE_URL}?model=${encodeURIComponent(queryModel.trim())}`
+      const endpoint = `${MODEL_RESOLVE_URL}?model=${encodeURIComponent(query)}`
       const { fetchWithProxy } = await import('./net.js')
       const response = await fetchWithProxy(endpoint, {
-        method: 'GET',
-        headers: {
-          Authorization: MODEL_RESOLVE_AUTH,
-          Accept: 'application/json'
-        }
+        method: 'GET', signal: controller.signal, timeoutMs: 15000,
+        headers: { Authorization: MODEL_RESOLVE_AUTH, Accept: 'application/json' }
       })
-      const rawText = await response.text()
-      let payload = {}
-      try {
-        payload = rawText ? JSON.parse(rawText) : {}
-      } catch {
-        payload = {}
-      }
-      if (response.ok && payload?.status === 'success') {
-        const resolved = payload?.resolved || {}
-        if (typeof resolved.id === 'string' && resolved.id.trim()) {
-          resolvedId = normalizeModelKey(resolved.id)
-        } else if (typeof payload?.parsing?.canonical_id === 'string' && payload.parsing.canonical_id.trim()) {
-          resolvedId = normalizeModelKey(payload.parsing.canonical_id)
+      if (!response.ok) {
+        lookupCode = [401, 403].includes(response.status) ? 'context_service_auth_failed'
+          : response.status === 404 ? 'context_model_not_found' : 'context_service_unavailable'
+        retryNormalized = lookupCode === 'context_model_not_found'
+        stopLookup = !retryNormalized
+      } else {
+        let payload
+        try { payload = JSON.parse(await response.text()) }
+        catch (error) {
+          if (controller.signal.aborted || error?.name === 'AbortError') throw error
+          lookupCode = 'context_response_invalid'
+          stopLookup = true
         }
-        const length = Number(resolved.context_length)
-        if (Number.isFinite(length) && length > 0) {
-          contextLength = Math.floor(length)
-          source = 'api'
+        if (!stopLookup && payload?.status !== 'success') {
+          if (['not_found', 'no_match'].includes(payload?.status)) {
+            lookupCode = 'context_model_not_found'
+            retryNormalized = true
+          } else {
+            lookupCode = payload?.status === 'error' ? 'context_service_unavailable' : 'context_response_invalid'
+            stopLookup = true
+          }
+        }
+        if (!stopLookup && !retryNormalized) {
+          const resolved = payload?.resolved || {}
+          const length = Number(resolved.context_length)
+          if (!Number.isFinite(length) || length < (requireApi ? 4096 : 1024) || length > 10_000_000) {
+            lookupCode = 'context_response_invalid'
+            stopLookup = true
+          } else {
+            const candidateId = resolved.id || payload?.parsing?.canonical_id
+            if (typeof candidateId === 'string' && candidateId.trim()) resolvedId = normalizeModelKey(candidateId)
+            contextLength = Math.floor(length)
+            source = 'api'
+          }
         }
       }
     } catch (error) {
-      console.warn('[compact] resolve model context failed:', error)
-    }
+      lookupCode = controller.signal.aborted || error?.name === 'AbortError' || /timeout/i.test(String(error?.message || ''))
+        ? 'context_lookup_timeout' : 'context_network_unavailable'
+      stopLookup = true
+    } finally { clearTimeout(timer) }
+    if (source === 'api' || stopLookup) break
+  }
+
+  // A user-triggered strict lookup never persists default fallback over a
+  // previously valid/manual value, including the resolved canonical cache key.
+  if (requireApi && source !== 'api') {
+    return { ok: false, code: lookupCode, modelKey, contextLength: existingConfig.contextLength,
+      resolvedId: existingConfig.resolvedId || modelKey, source: existingConfig.contextLengthSource || 'default', config: existingConfig }
   }
 
   // Prefer resolvedId as cache key when API returns a better id.

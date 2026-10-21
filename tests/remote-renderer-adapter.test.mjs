@@ -354,8 +354,12 @@ await adapter.runRemoteConversationCommand({ type: 'conversation.config.patch', 
 assert.equal(context.compactConfig.value.contextLength, 65536)
 assert.equal(context.compactConfig.value.contextLengthSource, 'manual')
 assert.equal(cachedContextWrites.at(-1).contextLengthManual, true)
-context.window.api.resolveModelContext = async () => ({ ok: true, contextLength: 131072, source: 'api' })
-context.refreshPromptTokenBreakdown = async () => {}
+context.window.api.resolveModelContext = async (model, options) => {
+  assert.equal(model, 'provider|model-b')
+  assert.equal(options.requireApi, true)
+  return { ok: true, contextLength: 131072, source: 'api' }
+}
+context.refreshPromptTokenBreakdown = async () => { throw new Error('context lookup must not recount the transcript') }
 await adapter.runRemoteConversationCommand({ type: 'conversation.context.refresh', conversationId: command.conversationId, requestId: 'renderer-fetch-context' })
 assert.equal(context.compactConfig.value.contextLength, 131072)
 assert.equal(events.at(-1).payload.config.compact.contextLengthSource, 'api')
@@ -364,6 +368,23 @@ await adapter.runRemoteConversationCommand({ type: 'conversation.context.refresh
 assert.equal(events.at(-1).event, 'conversation.operation.failed')
 assert.equal(events.at(-1).payload.code, 'remote_context_resolve_failed')
 assert.equal(context.compactConfig.value.contextLength, 131072, 'failed lookup preserves the prior context length')
+
+
+const beforeFailedLookupWrites = cachedContextWrites.length
+
+for (const code of ['context_lookup_timeout', 'context_network_unavailable', 'context_model_not_found']) {
+  context.window.api.resolveModelContext = async () => ({ok: false, code})
+  await adapter.runRemoteConversationCommand({type: 'conversation.context.refresh', conversationId: command.conversationId, requestId: `renderer-${code}`})
+  assert.equal(events.at(-1).payload.code, `remote_${code}`)
+  assert.equal(context.compactConfig.value.contextLength, 131072)
+}
+context.window.api.resolveModelContext = async () => ({ok: false, code: 'private/secret/should-not-leak'})
+await adapter.runRemoteConversationCommand({type: 'conversation.context.refresh', conversationId: command.conversationId, requestId: 'renderer-context-safe-code'})
+assert.equal(events.at(-1).payload.code, 'remote_context_resolve_failed')
+
+
+assert.equal(cachedContextWrites.length, beforeFailedLookupWrites, 'failed lookup does not rewrite the model cache')
+context.refreshPromptTokenBreakdown = async () => {}
 
 
 const compactEventStart = events.length

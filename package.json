@@ -18,7 +18,7 @@
     "build": "electron-vite build",
     "test:conversation-lease": "node tests/conversation-lease.test.mjs",
     "test:conversation-time": "node tests/conversation-time.test.mjs",
-    "test:compact-policy": "node tests/compact-policy.test.mjs",
+    "test:compact-policy": "node tests/compact-policy.test.mjs && node tests/context-resolver.test.mjs",
     "test:window-manager-scope": "node tests/window-manager-scope.test.mjs",
     "test:package-contents": "node tests/package-contents.test.mjs",
     "test:compaction-interaction": "node tests/compaction-interaction-restore.test.mjs",

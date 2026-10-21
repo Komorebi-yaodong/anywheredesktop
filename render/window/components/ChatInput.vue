@@ -2595,7 +2595,7 @@ html.dark .el-divider--vertical {
 /* --- Vertical Layout (Chat Input Area) --- */
 .chat-input-area-vertical {
     --composer-ink: #183e52;
-    --composer-placeholder: #254b60;
+    --composer-placeholder: #426477;
     display: flex;
     flex-direction: column;
     /* A bounded tinted scrim keeps text readable over arbitrary glass wallpaper. */
@@ -2611,7 +2611,7 @@ html.dark .el-divider--vertical {
 
 html.dark .chat-input-area-vertical {
     --composer-ink: #f0f9ff;
-    --composer-placeholder: #d9f1ff;
+    --composer-placeholder: #97bacd;
     background: rgba(13, 34, 46, 0.90);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 24px 48px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);

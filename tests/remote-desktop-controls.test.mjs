@@ -105,6 +105,9 @@ const contrast = (a, b) => {
   const values = [luminance(a), luminance(b)].sort((left, right) => right - left)
   return (values[0] + 0.05) / (values[1] + 0.05)
 }
+assert.ok(luminance(rgb(light['--composer-placeholder'])) > luminance(rgb(light['--composer-ink'])) * 1.5, 'light placeholder must visibly recede from typed text')
+assert.ok(luminance(rgb(dark['--composer-placeholder'])) < luminance(rgb(dark['--composer-ink'])) * 0.75, 'dark placeholder must visibly recede from typed text')
+
 for (const theme of [light, dark]) {
   const [r, g, b, alpha] = theme.background.match(/[\d.]+/g).map(Number)
   for (const wallpaper of [0, 255]) {

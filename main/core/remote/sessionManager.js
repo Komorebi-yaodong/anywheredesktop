@@ -613,10 +613,24 @@ export function createRemoteSessionManager({
         throw remoteError('remote_conversation_controlled_by_other_device')
       }
       if (busy) throw remoteError('remote_conversation_busy')
-      const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
-        type: 'conversation.mobile.takeover', conversationId
-      })
-      if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+      const receipt = {requestId: crypto.randomUUID(), done: false, ok: false, code: '', expiresAt: Date.now() + readinessTimeoutMs}
+      session.mobileControlReceipt = receipt
+      try {
+        const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
+          type: 'conversation.mobile.takeover', conversationId, requestId: receipt.requestId
+        })
+        if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
+        const deadline = receipt.expiresAt
+        while (!receipt.done) {
+          check()
+          if (!windowItem(session.windowRef)) throw remoteError('remote_conversation_window_not_found')
+          if (Date.now() >= deadline) throw remoteError('remote_mobile_takeover_timeout')
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+        check()
+        if (sessions.get(conversationId) !== session || !windowItem(session.windowRef)) throw remoteError('remote_conversation_window_not_found')
+        if (!receipt.ok) throw remoteError(receipt.code || 'remote_mobile_takeover_failed')
+      } finally { session.mobileControlReceipt = null }
       if (session.idleReleaseTimer) clearTimeout(session.idleReleaseTimer)
       session.idleReleaseTimer = null
       session.mobileOpened = true
@@ -1021,6 +1035,11 @@ export function createRemoteSessionManager({
         return result
       }
       return dispatchSendRecord(session, record, check)
+    }).catch((error) => {
+      // Failures before Renderer dispatch (e.g. control/lease/window changed)
+      // must not leave a recoverable request permanently command.pending.
+      if (!record.terminal) publish(record, 'assistant.failed', {code: error?.code || 'remote_renderer_dispatch_failed'})
+      throw error
     })
     return record.dispatched
   }
@@ -1396,6 +1415,15 @@ export function createRemoteSessionManager({
     const data = object(payload)
     const session = sessions.get(data.conversationId)
     if (!session || session.windowRef !== windowRef) return { ok: false, error: 'remote_renderer_event_window_mismatch' }
+    if (data.event === 'conversation.mobile.control.result') {
+      const receipt = session.mobileControlReceipt
+      if (!receipt || receipt.requestId !== data.requestId || receipt.done || Date.now() >= receipt.expiresAt) return {ok: false, error: 'remote_renderer_event_request_mismatch'}
+      receipt.done = true
+      receipt.ok = data.payload?.ok === true
+      receipt.code = ['remote_conversation_busy', 'remote_conversation_save_failed', 'remote_conversation_read_only'].includes(data.payload?.code) ? data.payload.code : 'remote_mobile_takeover_failed'
+      return {ok: true}
+    }
+
     if (data.event === 'conversation.desktop.control.result') {
       if (!session.desktopTakingOver || session.desktopControlReceipt?.requestId !== data.requestId) return {ok: false, error: 'remote_renderer_event_request_mismatch'}
       session.desktopControlReceipt.done = true

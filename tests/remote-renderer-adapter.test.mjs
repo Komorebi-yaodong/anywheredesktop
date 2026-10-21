@@ -54,6 +54,34 @@ for (const responseMessage of [
   assert.equal(streamed[0][4], 'stream-storage');
 }
 
+// Execute the real askAI finalizer, including exceptions before busy release.
+const turnFinalizerStart = source.indexOf('    try {\n      cancelPendingStreamingDisplay?.();', source.indexOf('const askAI ='))
+const turnFinalizerEnd = source.indexOf('\n  }\n};\n\nconst cancelAskAI', turnFinalizerStart)
+assert.ok(turnFinalizerStart > 0 && turnFinalizerEnd > turnFinalizerStart)
+for (const failure of ['focus', 'mcp', 'compact', 'none']) {
+  const command = {}, meta = {resolveSettlement: () => { finalized.settled = true }}
+  const finalized = {
+    console: {error() {}}, activeAssistantTurnMeta: meta, turnMeta: meta, turnRemoteCommand: command,
+    loading: {value: true}, signalController: {value: null}, requestAbortController: {},
+    cancelPendingStreamingDisplay: () => {}, isModelIterationConfigLocked: {value: true},
+    pendingApplyMcpRequest: {value: failure === 'mcp'}, isApplyMcpRunning: {value: false},
+    requestApplyMcpTools: async () => {throw new Error('fixture-mcp-finalize')},
+    currentAssistantChatShowIndex: -1, nextTick: async () => {},
+    focusChatInputIfSafe: () => {if (failure === 'focus') throw new Error('fixture-focus-finalize')},
+    currentTaskConfig: {value: null}, scheduleAutoSave: () => {},
+    maybeAutoCompactAfterTurn: async () => {if (failure === 'compact') throw new Error('fixture-compact-finalize')},
+    currentConversationStorage: {value: {revision: 7}}, syncAutoCloseOnBlurListener: () => {},
+    flushAppendBuffer: async () => {}, settled: false
+  }
+  const run = vm.runInNewContext(`(async () => {${source.slice(turnFinalizerStart, turnFinalizerEnd)}})()`, finalized)
+  await run
+  if (failure !== 'none') assert.equal(command.__remoteTerminalPayload.code, 'remote_assistant_finalize_failed')
+  assert.equal(finalized.loading.value, false, 'finalizer failure cannot strand writer busy')
+  assert.equal(finalized.activeAssistantTurnMeta, null)
+  assert.equal(finalized.settled, true)
+}
+
+
 const events = [], actions = [], consumedUploads = [], appendedMessages = []
 const context = {
   shallowRef, ref, computed, watch, console, setTimeout, clearTimeout,
@@ -442,6 +470,31 @@ context.window.api.emitRemoteRendererEvent = async event => {events.push(structu
 await adapter.runRemoteConversationCommand({type: 'conversation.desktop.takeover', conversationId: command.conversationId, requestId: 'renderer-control-expired'});
 assert.equal(context.mobileControlActive.value, true, 'expired local takeover receipt cannot unlock Desktop');
 context.window.api.emitRemoteRendererEvent = savedEmitter;
+
+// Mobile takeover must acknowledge the actual idle lease-owning Renderer.
+context.conversationReadOnly = ref(false);
+context.mobileControlActive.value = false;
+const mobileTakeoverCommand = {type: 'conversation.mobile.takeover', conversationId: command.conversationId, requestId: 'renderer-mobile-control'};
+context.loading.value = true;
+await adapter.runRemoteConversationCommand(mobileTakeoverCommand);
+assert.equal(events.at(-1).payload.code, 'remote_conversation_busy');
+assert.equal(context.mobileControlActive.value, false);
+context.loading.value = false;
+context.executeAutoSaveRequest = async () => false;
+await adapter.runRemoteConversationCommand(mobileTakeoverCommand);
+assert.equal(events.at(-1).payload.code, 'remote_conversation_save_failed');
+assert.equal(context.mobileControlActive.value, false);
+context.executeAutoSaveRequest = savedExecutor;
+context.window.api.emitRemoteRendererEvent = async event => {events.push(structuredClone(event)); return {ok: false}};
+await adapter.runRemoteConversationCommand(mobileTakeoverCommand);
+assert.equal(context.mobileControlActive.value, false, 'expired mobile receipt cannot seize control');
+context.window.api.emitRemoteRendererEvent = savedEmitter;
+await adapter.runRemoteConversationCommand(mobileTakeoverCommand);
+assert.equal(events.at(-1).event, 'conversation.mobile.control.result');
+assert.equal(events.at(-1).payload.ok, true);
+assert.equal(context.mobileControlActive.value, true);
+assert.equal(context.desktopTakeoverPending.value, false);
+
 
 // Serialize next-turn application with a newer patch arriving during tool apply.
 context.loading.value = true;

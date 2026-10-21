@@ -3,7 +3,7 @@ import { createRemoteSessionManager } from '../main/core/remote/sessionManager.j
 
 const CID = 'conversation-session-fixture-0001'
 const DEVICE = 'device-session-fixture-0001'
-function fixture({ existing = false, dispatchFailure = false, allowControlCommands = false, stalled = false, uploadManager = null } = {}) {
+function fixture({ existing = false, dispatchFailure = false, allowControlCommands = false, stalled = false, uploadManager = null, takeoverReceipt = 'ok' } = {}) {
   const items = existing ? [{ id: 'window-existing', type: 'window', conversationId: CID, rendererReady: true, leasePending: false, remoteHidden: false }] : []
   const commands = [], events = [], opens = []
   let blocked = null
@@ -25,6 +25,8 @@ function fixture({ existing = false, dispatchFailure = false, allowControlComman
     },
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       commands.push({ windowRef, ...command })
+
+      if (command.type === 'conversation.mobile.takeover' && takeoverReceipt !== 'timeout' && (!dispatchFailure || allowControlCommands)) manager.handleRendererEvent({windowRef, payload: {conversationId: command.conversationId, requestId: command.requestId, event: 'conversation.mobile.control.result', payload: {ok: takeoverReceipt === 'ok', code: 'remote_conversation_save_failed'}}})
       if (command.type === 'remote.shutdown') items.splice(items.findIndex((item) => item.id === windowRef), 1)
       return { ok: !dispatchFailure || (allowControlCommands && /^conversation\.mobile\.(takeover|handoff)$/.test(command.type)) }
     },
@@ -184,6 +186,15 @@ async function run() {
   renderer(removable, 'assistant.completed', {}, 'request-queue-active')
 
 
+  for (const takeoverReceipt of ['timeout', 'failed']) {
+    const rejected = fixture({existing: true, takeoverReceipt})
+    await assert.rejects(rejected.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}}), {code: takeoverReceipt === 'timeout' ? 'remote_mobile_takeover_timeout' : 'remote_conversation_save_failed'})
+    assert.equal(rejected.manager.openedSessions({deviceId: DEVICE, params: {}}).sessions[0].mobileControlled, false)
+    const command = rejected.commands.at(-1)
+    assert.equal(renderer(rejected, 'conversation.mobile.control.result', {ok: true}, command.requestId).ok, false, 'late receipt cannot take control')
+  }
+
+
   const takeoverFixture = fixture({ existing: true })
   // A conversation already open on Desktop is listable immediately, so Mobile
   // can take it over without opening it first.
@@ -201,6 +212,13 @@ async function run() {
     false,
     'a rejected visible-writer write must not grant Mobile control'
   )
+  const rejectedBeforeDispatch = takeoverFixture.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-visible-without-takeover'}})
+  assert.equal(rejectedBeforeDispatch.terminal, true, 'pre-dispatch rejection must not remain pending')
+  assert.equal(rejectedBeforeDispatch.result.code, 'remote_conversation_takeover_required')
+  takeoverFixture.items[0].busy = true
+  await assert.rejects(takeoverFixture.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}}), {code: 'remote_conversation_busy'})
+  takeoverFixture.items[0].busy = false
+
   const openedForMobile = await takeoverFixture.manager.openForMobile({ deviceId: DEVICE, params: { conversationId: CID } })
   assert.equal(openedForMobile.mobileControlled, false)
   const takeoverList = takeoverFixture.manager.openedSessions({ deviceId: DEVICE, params: {} })
@@ -230,6 +248,14 @@ async function run() {
   assert.equal(closable.commands.at(-1).closeWindow, true)
   assert.equal(closable.items.length, 0)
 
+
+
+  // Same conversation can be reacquired after writer shutdown/recreation.
+  await closable.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}})
+  assert.equal(closable.manager.openedSessions({deviceId: DEVICE, params: {}}).sessions[0].controlledByThisDevice, true)
+  await send(closable.manager, 'request-reopened-writer')
+  renderer(closable, 'assistant.completed', {}, 'request-reopened-writer')
+  await closable.manager.closeConversation({deviceId: DEVICE, params: {conversationId: CID}})
 
 
   const hiddenTakeover = fixture()
@@ -352,6 +378,33 @@ async function run() {
   mutations.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
     conversationId: CID, requestId: 'request-reask-fixture', event: 'assistant.failed', payload: { code: 'remote_test_failure' }
   } })
+
+
+  // User sequence: send -> edit -> reask -> rename -> multi-tool turns -> handoff -> reopen.
+  const lifecycle = fixture()
+  await send(lifecycle.manager, 'request-lifecycle-first')
+  renderer(lifecycle, 'assistant.completed', {revision: 1}, 'request-lifecycle-first')
+  await lifecycle.manager.editMessage({deviceId: DEVICE, requestId: 'request-lifecycle-edit', params: {conversationId: CID, uiMessageId: 'ui-lifecycle-user', content: 'corrected prose'}})
+  renderer(lifecycle, 'conversation.operation.completed', {revision: 2}, 'request-lifecycle-edit')
+  await lifecycle.manager.reaskMessage({deviceId: DEVICE, requestId: 'request-lifecycle-reask', params: {conversationId: CID, uiMessageId: 'ui-lifecycle-last'}})
+  renderer(lifecycle, 'assistant.completed', {revision: 3}, 'request-lifecycle-reask')
+  await lifecycle.manager.renameConversation({deviceId: DEVICE, requestId: 'request-lifecycle-rename', params: {conversationId: CID, title: 'Renamed synthetic conversation'}})
+  renderer(lifecycle, 'conversation.operation.completed', {revision: 4}, 'request-lifecycle-rename')
+  for (let index = 0; index < 3; index++) {
+    const requestId = `request-lifecycle-tools-${index}`
+    await send(lifecycle.manager, requestId)
+    renderer(lifecycle, 'assistant.started', {}, requestId)
+    for (let segment = 0; segment < 3; segment++) renderer(lifecycle, 'assistant.delta', {segmentId: `segment-${segment}`, toolCalls: [{id: `tool-${segment}`, name: 'read_file', status: 'finished'}]}, requestId)
+    await assert.rejects(lifecycle.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}}), {code: 'remote_conversation_busy'})
+    renderer(lifecycle, 'assistant.completed', {revision: 5 + index}, requestId)
+    assert.equal(lifecycle.manager.listSendQueue({deviceId: DEVICE, params: {conversationId: CID}}).activeRequestId, '')
+  }
+  await lifecycle.manager.handoff({deviceId: DEVICE, params: {conversationId: CID}})
+  await lifecycle.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}})
+  await lifecycle.manager.closeConversation({deviceId: DEVICE, params: {conversationId: CID}})
+  await lifecycle.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}})
+  assert.equal(lifecycle.manager.openedSessions({deviceId: DEVICE}).sessions[0].controlledByThisDevice, true)
+  await lifecycle.manager.closeConversation({deviceId: DEVICE, params: {conversationId: CID}})
 
 
   const metadata = fixture({ existing: true })

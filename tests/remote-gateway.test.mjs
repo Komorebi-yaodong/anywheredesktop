@@ -362,6 +362,15 @@ async function main() {
     broadcastToDevice: (deviceId, event, payload) => gateway.sendEventToDevice(deviceId, event, payload),
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       writerCommands.push(command)
+
+      if (command.type === 'conversation.mobile.takeover') {
+        const receipt = sessionManager.handleRendererEvent({windowRef, payload: {
+          conversationId: command.conversationId, requestId: command.requestId,
+          event: 'conversation.mobile.control.result', payload: {ok: true}
+        }})
+        assert.equal(receipt.ok, true, 'encrypted takeover waits for the actual writer receipt')
+      }
+
       if (command.type === 'conversation.compact') {
         sessionManager.handleRendererEvent({ windowRef, payload: {
           conversationId: command.conversationId, requestId: command.requestId,

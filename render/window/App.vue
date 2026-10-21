@@ -3018,14 +3018,25 @@ const runRemoteConversationCommand = async (input = {}) => {
 
 
   if (command.type === 'conversation.mobile.takeover') {
-    if (!isWindowBootstrapped.value || loading.value || compacting.value || isPreparingSend.value || activeRemoteCommand.value) return;
-    if (conversationLease.value?.leaseEpoch && !conversationReadOnly.value) {
-      const saved = await persistRemoteTranscript('mobile-takeover').catch(() => false);
-      if (!saved) return;
+    const fail = (code) => emitRemoteRendererEventAndWait('conversation.mobile.control.result', command, {ok: false, code});
+    if (!isWindowBootstrapped.value || desktopTakeoverPending.value || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
+      await fail('remote_conversation_busy'); return;
     }
-    mobileControlActive.value = true;
-    scheduleConversationWindowStatusSync();
-    showDismissibleMessage.info('该会话正在由 Mobile 控制，本窗口将实时观察更新');
+    if (!ensureConversationWriteAccess(false) || conversationReadOnly.value || !conversationLease.value?.leaseEpoch) {
+      await fail('remote_conversation_read_only'); return;
+    }
+    // Lock local input while persisting, then require Main to accept this exact
+    // handover receipt. Expired/closed-window receipts cannot grant control.
+    desktopTakeoverPending.value = true;
+    try {
+      const saved = await persistRemoteTranscript('mobile-takeover').catch(() => false);
+      if (!saved) { await fail('remote_conversation_save_failed'); return; }
+      const accepted = await emitRemoteRendererEventAndWait('conversation.mobile.control.result', command, {ok: true});
+      if (accepted?.ok !== true) return;
+      mobileControlActive.value = true;
+      scheduleConversationWindowStatusSync();
+      showDismissibleMessage.info('该会话正在由 Mobile 控制，本窗口将实时观察更新');
+    } finally { desktopTakeoverPending.value = false; }
     return;
   }
   if (command.type === 'conversation.mobile.handoff') {
@@ -11182,13 +11193,25 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
             revision: currentConversationStorage.value?.revision || 0
           };
         }
-        activeAssistantTurnMeta = null;
-        loading.value = false;
-        syncAutoCloseOnBlurListener();
-        if (!turnRemoteCommand) await flushAppendBuffer();
       }
+    } catch (error) {
+      if (turnRemoteCommand) {
+        turnRemoteCommand.__remoteTerminalEvent = 'assistant.failed';
+        turnRemoteCommand.__remoteTerminalPayload = {code: 'remote_assistant_finalize_failed'};
+      }
+      console.error('[conversation] assistant finalization failed:', error);
     } finally {
-      turnMeta.resolveSettlement?.();
+      // Focus/autosave/auto-compaction finalizers can fail after HTTP/tool work
+      // has settled. They must never strand the writer in loading forever.
+      try {
+        if (signalController.value === requestAbortController) signalController.value = null;
+        if (activeAssistantTurnMeta === turnMeta) {
+          activeAssistantTurnMeta = null;
+          loading.value = false;
+          syncAutoCloseOnBlurListener();
+          if (!turnRemoteCommand) await flushAppendBuffer();
+        }
+      } finally { turnMeta.resolveSettlement?.(); }
     }
   }
 };

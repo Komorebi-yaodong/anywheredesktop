@@ -269,6 +269,22 @@ async function run() {
 
 
 
+  // Showing the Mobile writer and closing that very window ends its control;
+  // no Desktop takeover is needed before a normal close releases the lease.
+  const revealedThenClosed = fixture();
+  await revealedThenClosed.manager.openForMobile({deviceId: DEVICE, params: {conversationId: CID}});
+  const sameWriter = revealedThenClosed.items[0].id;
+  const shown = revealedThenClosed.manager.observeOnDesktop({conversationId: CID});
+  assert.equal(shown.windowId, sameWriter);
+  assert.equal(revealedThenClosed.items[0].remoteHidden, false);
+  assert.equal(revealedThenClosed.manager.controlledSessions().sessions.length, 1);
+  revealedThenClosed.items.splice(0);
+  revealedThenClosed.manager.handleWindowClosed(sameWriter);
+  assert.equal(revealedThenClosed.manager.controlledSessions().sessions.length, 0);
+  assert.equal(revealedThenClosed.manager.openedSessions({deviceId: DEVICE}).sessions.length, 0);
+  assert.equal(revealedThenClosed.commands.some(item => item.type === 'conversation.desktop.takeover'), false);
+
+
   const localControl = fixture();
   await send(localControl.manager, 'request-local-active');
   await send(localControl.manager, 'request-local-queued');

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import vm from 'node:vm'
 import {ref, computed} from 'vue'
+import {parse, compileStyle} from '@vue/compiler-sfc'
 
 const root = new URL('../', import.meta.url)
 const read = file => fs.readFile(new URL(file, root), 'utf8')
@@ -51,6 +52,55 @@ assert.ok(calls.some(call => call[0] === 'open' && call[1] === 'conversation-two
 const input = await read('render/window/components/ChatInput.vue')
 assert.match(input, /v-if="remoteControlled" class="remote-control-action"/)
 assert.match(input, /@click="emit\('takeover-session'\)"/)
+// Compile the real scoped stylesheet: a global selector must never strip the
+// composer target, and toolbar icon sizing must not affect the text action.
+const {descriptor} = parse(input)
+const compiled = compileStyle({source: descriptor.styles[0].content, filename: 'ChatInput.vue', id: 'data-v-control-fixture', scoped: true})
+assert.deepEqual(compiled.errors, [])
+const rules = compiled.rawResult.root.nodes.filter(node => node.type === 'rule')
+const styleFor = selector => {
+  const rule = rules.find(node => node.selector === selector)
+  assert.ok(rule, `compiled style missing: ${selector}`)
+  return Object.fromEntries(rule.nodes.filter(node => node.type === 'decl').map(node => [node.prop, node.value]))
+}
+const scope = '[data-v-control-fixture]'
+const light = styleFor(`.chat-input-area-vertical${scope}`)
+const dark = styleFor(`html.dark .chat-input-area-vertical${scope}`)
+assert.equal(rules.some(node => node.selector === 'html.dark'), false, 'dark composer styles must not become page-wide')
+const button = styleFor(`.remote-control-action .remote-takeover-button${scope}`)
+assert.equal(button.width, 'auto')
+assert.equal(button['min-width'], '108px')
+assert.equal(button.height, '30px')
+assert.equal(rules.some(node => /^\.chat-input-area-vertical \.el-button/.test(node.selector)), false)
+assert.ok(rules.some(node => node.selector.includes('.input-actions-bar .el-button')))
+assert.match(compiled.code, /\.el-textarea__inner::placeholder/)
+assert.match(input, /此会话由远端控制，接管后可在此输入/)
+assert.match(input, /正在接管/)
+assert.match(chats, /所选会话仍由远端设备控制，需要打开被控制会话单独关闭。/)
+assert.doesNotMatch(chats, /请先打开会话并点击“接管会话”|请先打开并接管远端会话/)
+
+// Check actual CSS colors over worst-case black/white wallpaper. These numbers
+// validate local scrim contrast only, not a substitute for real glass rendering.
+const rgb = hex => hex.slice(1).match(/.{2}/g).map(part => parseInt(part, 16))
+const luminance = color => color.map(value => {
+  const s = value / 255
+  return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+}).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0)
+const contrast = (a, b) => {
+  const values = [luminance(a), luminance(b)].sort((left, right) => right - left)
+  return (values[0] + 0.05) / (values[1] + 0.05)
+}
+for (const theme of [light, dark]) {
+  const [r, g, b, alpha] = theme.background.match(/[\d.]+/g).map(Number)
+  for (const wallpaper of [0, 255]) {
+    const background = [r, g, b].map(value => value * alpha + wallpaper * (1 - alpha))
+    for (const token of ['--composer-ink', '--composer-placeholder']) {
+      assert.ok(contrast(rgb(theme[token]), background) >= 4.5, `${token} must remain readable on glass`)
+    }
+  }
+}
+assert.ok(contrast(rgb(button.color), rgb(button.background)) >= 4.5)
+
 const window = await read('render/window/App.vue')
 assert.match(window, /:remote-controlled="mobileControlActive"/)
 assert.match(window, /@takeover-session="requestDesktopTakeover"/)

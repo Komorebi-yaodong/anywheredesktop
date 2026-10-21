@@ -1039,9 +1039,9 @@ defineExpose({ focus, senderRef });
             <el-col :span="24">
                 <div class="chat-input-area-vertical">
 
-                    <div v-if="remoteControlled" class="remote-control-action">
-                        <span>远端设备正在控制此会话</span>
-                        <el-button size="small" round plain type="primary" :loading="takeoverPending" @click="emit('takeover-session')">接管会话</el-button>
+                    <div v-if="remoteControlled" class="remote-control-action" role="status" aria-label="远端控制状态">
+                        <span class="remote-control-label"><span class="remote-control-dot" aria-hidden="true"></span>远端控制中</span>
+                        <el-button class="remote-takeover-button" size="small" round :icon="RefreshRight" :loading="takeoverPending" :disabled="takeoverPending" aria-label="接管会话" @click="emit('takeover-session')">{{ takeoverPending ? '正在接管' : '接管会话' }}</el-button>
                     </div>
                     <div v-if="showMcpQuickSelect && filteredMcpList.length > 0" class="mcp-quick-select">
                         <!-- 顶部提示栏 -->
@@ -1108,7 +1108,7 @@ defineExpose({ focus, senderRef });
 
                     <div class="input-wrapper">
                         <el-input ref="senderRef" class="chat-textarea-vertical" v-model="prompt" type="textarea"
-                            :placeholder="isRecording ? '录音中... 结束后将连同文本一起发送' : (loading ? '输入、粘贴或拖拽内容后，发送将加入缓冲区' : '输入、粘贴、拖拽以发送内容，“ @”选择MCP，“ /”选择skill')"
+                            :placeholder="remoteControlled ? '此会话由远端控制，接管后可在此输入' : (isRecording ? '录音中... 结束后将连同文本一起发送' : (loading ? '输入、粘贴或拖拽内容后，发送将加入缓冲区' : '输入、粘贴、拖拽以发送内容，“ @”选择MCP，“ /”选择skill'))"
                             :autosize="{ minRows: 1, maxRows: 15 }" resize="none" @keydown="handleKeyDown"
                             :disabled="draftInputLocked" />
                     </div>
@@ -1437,7 +1437,60 @@ defineExpose({ focus, senderRef });
 
 <style scoped>
 
-.remote-control-action { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 2px 3px 8px; color: var(--el-text-color-secondary); font-size: 12px; }
+.remote-control-action {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-bottom: 10px;
+}
+.remote-control-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--composer-ink);
+    font-size: 12px;
+    font-weight: 600;
+}
+.remote-control-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+.remote-control-action .remote-takeover-button {
+    width: auto;
+    min-width: 108px;
+    height: 30px;
+    margin: 0;
+    padding: 0 12px;
+    border: 1px solid #174b66;
+    border-radius: 10px;
+    background: #174b66;
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    box-shadow: 0 2px 5px rgba(14, 48, 67, 0.14);
+}
+.remote-control-action .remote-takeover-button:hover,
+.remote-control-action .remote-takeover-button:focus-visible {
+    border-color: #10384f;
+    background: #10384f;
+    color: #ffffff;
+}
+.remote-control-action .remote-takeover-button:focus-visible {
+    outline: 2px solid var(--composer-ink);
+    outline-offset: 3px;
+}
+.remote-control-action .remote-takeover-button.is-disabled,
+.remote-control-action .remote-takeover-button.is-loading {
+    background: #174b66;
+    border-color: #174b66;
+    color: #ffffff;
+    opacity: 1;
+}
+.remote-takeover-button.is-loading::before { background: transparent; }
 
 .compact-config-dialog :deep(.el-dialog) {
     border-radius: 16px;
@@ -2541,9 +2594,12 @@ html.dark .el-divider--vertical {
 
 /* --- Vertical Layout (Chat Input Area) --- */
 .chat-input-area-vertical {
+    --composer-ink: #183e52;
+    --composer-placeholder: #254b60;
     display: flex;
     flex-direction: column;
-    background: rgba(255, 255, 255, 0.18);
+    /* A bounded tinted scrim keeps text readable over arbitrary glass wallpaper. */
+    background: rgba(246, 251, 253, 0.88);
     border-radius: 24px;
     padding: 12px 14px;
     border: 1px solid rgba(255, 255, 255, 0.34);
@@ -2554,7 +2610,9 @@ html.dark .el-divider--vertical {
 }
 
 html.dark .chat-input-area-vertical {
-    background: rgba(18, 20, 24, 0.34);
+    --composer-ink: #f0f9ff;
+    --composer-placeholder: #d9f1ff;
+    background: rgba(13, 34, 46, 0.90);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 24px 48px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
@@ -2569,10 +2627,22 @@ html.dark .chat-input-area-vertical {
     box-shadow: none !important;
     border: none !important;
     padding: 0;
-    color: var(--el-text-color-primary);
+    color: var(--composer-ink);
+    -webkit-text-fill-color: var(--composer-ink);
     font-size: 14px;
     line-height: 1.6;
     resize: none;
+}
+.chat-textarea-vertical :deep(.el-textarea__inner::placeholder),
+.chat-textarea-vertical.is-disabled :deep(.el-textarea__inner::placeholder) {
+    color: var(--composer-placeholder);
+    -webkit-text-fill-color: var(--composer-placeholder);
+    opacity: 1;
+}
+.chat-textarea-vertical.is-disabled :deep(.el-textarea__inner) {
+    color: var(--composer-ink);
+    -webkit-text-fill-color: var(--composer-ink);
+    opacity: 1;
 }
 
 .input-actions-bar {
@@ -2604,7 +2674,7 @@ html.dark .chat-input-area-vertical {
     margin-right: 0;
 }
 
-.chat-input-area-vertical .el-button {
+.chat-input-area-vertical .input-actions-bar .el-button {
     width: 32px;
     height: 32px;
     background: transparent;
@@ -2613,11 +2683,11 @@ html.dark .chat-input-area-vertical {
     transition: all 0.2s ease;
 }
 
-.chat-input-area-vertical .el-button:hover {
+.chat-input-area-vertical .input-actions-bar .el-button:hover {
     background-color: rgba(255, 255, 255, 0.26);
 }
 
-html.dark .chat-input-area-vertical .el-button:hover {
+html.dark .chat-input-area-vertical .input-actions-bar .el-button:hover {
     background-color: rgba(255, 255, 255, 0.1);
 }
 

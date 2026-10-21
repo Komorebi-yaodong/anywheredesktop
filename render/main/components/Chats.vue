@@ -2166,7 +2166,7 @@ async function deleteFiles(filesToDelete) {
         await refreshRemoteControls();
         const controlled = normalizedFiles.find(file => remoteControlForFile(file));
         if (controlled) {
-            await ElMessageBox.confirm('所选会话仍由远端设备控制。请先打开会话并点击“接管会话”，关闭该窗口后再删除。', '会话正在使用', {type: 'info', confirmButtonText: '打开会话', cancelButtonText: '取消'});
+            await ElMessageBox.confirm('所选会话仍由远端设备控制，需要打开被控制会话单独关闭。', '会话正在使用', {type: 'info', confirmButtonText: '打开会话', cancelButtonText: '取消'});
             await openRemoteControlledFile(controlled);
             return;
         }
@@ -2237,7 +2237,7 @@ async function deleteFiles(filesToDelete) {
     } catch (error) {
         if (error !== 'cancel' && error !== 'close') {
             ElMessage.error(String(error?.message || '').includes('conversation_write_lease_lost')
-                ? '会话仍有打开的写入窗口。请先打开并接管远端会话、关闭窗口后再删除。'
+                ? '会话仍有打开的写入窗口，需要打开对应会话并单独关闭后再删除。'
                 : `${t('common.deleteFailedMultiple')}: ${error.message}`);
         }
     } finally {

@@ -153,8 +153,8 @@ const context = {
     }
   }),
   availableMcpServers: computed(() => [
-    { id: 'mcp-a', name: 'MCP A', tags: ['Research'], env: { SECRET: 'MUST_NOT_LEAK' } },
-    { id: 'mcp-b', name: 'MCP B', labels: ['文件'] }
+    { id: 'mcp-a', name: 'MCP A', type: 'builtin', tags: ['Research'], env: { SECRET: 'MUST_NOT_LEAK' } },
+    { id: 'mcp-b', name: 'MCP B', type: 'stdio', labels: ['文件'] }
   ]),
   allSkillsList: ref([{ id: 'skill-a', name: 'Skill A' }, { id: 'skill-b', name: 'Skill B' }]),
   fullHistory: ref([{ role: 'system', content: 'Old system' }]),
@@ -360,8 +360,8 @@ await adapter.runRemoteConversationCommand({ type: 'conversation.config.get', co
 assert.equal(events.at(-1).event, 'conversation.config.result')
 assert.equal(events.at(-1).payload.config.model, 'provider|model-a')
 assert.deepEqual(events.at(-1).payload.options.mcpServers, [
-  { id: 'mcp-a', name: 'MCP A', tags: ['Research'], preset: true },
-  { id: 'mcp-b', name: 'MCP B', tags: ['文件'], preset: false }
+  { id: 'mcp-a', name: 'MCP A', transport: 'builtin', tags: ['Research'], preset: true },
+  { id: 'mcp-b', name: 'MCP B', transport: 'stdio', tags: ['文件'], preset: false }
 ])
 assert.equal(JSON.stringify(events.at(-1).payload.options.mcpServers).includes('MUST_NOT_LEAK'), false)
 assert.equal(actions.filter((item) => item === 'remote-turn-finalized' || item === 'remote-config-patch').length, saveCountBeforeConfigGet)

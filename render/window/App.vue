@@ -2843,6 +2843,7 @@ const getRemoteSessionConfigSnapshot = (patched = []) => {
     mcpServers: availableMcpServers.value.map((item) => ({
       id: item.id,
       name: item.name || item.id,
+      transport: ['builtin', 'stdio', 'sse', 'http', 'streamable-http'].includes(item.transport || item.type) ? item.transport || item.type : 'local',
       tags: Array.isArray(item.tags) || Array.isArray(item.labels) ? [...new Set((Array.isArray(item.tags) ? item.tags : item.labels).filter((tag) => typeof tag === 'string').map((tag) => tag.trim().slice(0, 80)).filter(Boolean))].slice(0, 32) : [],
       preset: Array.isArray(currentConfig.value?.prompts?.[CODE.value]?.defaultMcpServers) && currentConfig.value.prompts[CODE.value].defaultMcpServers.includes(item.id)
     })),

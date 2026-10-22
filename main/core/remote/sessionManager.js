@@ -156,6 +156,7 @@ function sanitizeConfigResult(source = {}) {
         id: text(item?.id, 160),
         name: text(item?.name, 240),
         tags: safeMcpTags(item),
+        ...(typeof item?.transport === 'string' ? {transport: ['builtin', 'stdio', 'sse', 'http', 'streamable-http'].includes(item.transport) ? item.transport : 'local'} : {}),
         preset: item?.preset === true
       })),
       skills: (Array.isArray(options.skills) ? options.skills : []).slice(0, 512).map((item) => ({ id: text(item?.id, 160), name: text(item?.name, 240) }))

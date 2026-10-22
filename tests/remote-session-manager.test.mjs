@@ -520,7 +520,7 @@ async function run() {
         models: [{ value: 'provider|model', label: 'Model', api_key: 'NO' }],
         reasoningEfforts: ['default', 'high'],
         voices: [],
-        mcpServers: [{ id: 'mcp-1', name: 'MCP', tags: ['Research', '文件'], preset: true, env: { SECRET: 'NO' }, cwd: 'NO' }],
+        mcpServers: [{ id: 'mcp-1', name: 'MCP', transport: 'builtin', tags: ['Research', '文件'], preset: true, env: { SECRET: 'NO' }, cwd: 'NO' }],
         skills: [{ id: 'skill-1', name: 'Skill One', path: 'NO' }]
       }
     }
@@ -529,7 +529,7 @@ async function run() {
   assert.equal(configState.result.config.systemPrompt, 'Session only')
 
   assert.deepEqual(configState.result.contextUsage, {status: 'ready', estimated: true, systemTokens: 100, conversationTokens: 200, toolTokens: 50, updatedAt: 1234})
-  assert.deepEqual(configState.result.options.mcpServers, [{ id: 'mcp-1', name: 'MCP', tags: ['Research', '文件'], preset: true }])
+  assert.deepEqual(configState.result.options.mcpServers, [{ id: 'mcp-1', name: 'MCP', transport: 'builtin', tags: ['Research', '文件'], preset: true }])
   assert.equal(JSON.stringify(configState).includes('NO'), false)
   await configFixture.manager.getConfig({ deviceId: DEVICE, requestId: 'request-config-get', params: { conversationId: CID } })
   assert.equal(configFixture.commands.at(-1).type, 'conversation.config.get')

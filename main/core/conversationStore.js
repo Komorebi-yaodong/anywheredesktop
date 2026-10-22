@@ -2259,6 +2259,23 @@ export async function renameConversation({
   return { ok: true, conversationId, title: nextTitle, dbFile: descriptor.dbFile, revision, updatedAt }
 }
 
+/** Read-only identity probe: missing/corrupt indexes must not discard a surviving database. */
+export async function conversationExists({ dirPath, conversationId } = {}) {
+  const files = await fs.readdir(dirPath)
+  const descriptor = findConversation(await readLocalProjects(dirPath), conversationId)
+  const names = [...new Set([descriptor?.dbFile, createDatabaseFilename(conversationId), ...files.filter(name => name.toLowerCase().endsWith(DB_EXTENSION))].filter(Boolean))]
+  for (const name of names) {
+    const databasePath = resolveDatabasePath(dirPath, name)
+    try { await fs.stat(databasePath) }
+    catch (error) { if (error?.code === 'ENOENT') continue; throw error }
+    const db = openDatabase(databasePath, {readOnly: true})
+    try { if (getConversationRow(db)?.conversation_id === conversationId) return true }
+    finally {db.close()}
+  }
+  return false
+}
+
+
 export async function deleteConversation({ dirPath, conversationId, holderInstanceId = '', leaseEpoch = null, deleteLegacyJson = false } = {}) {
   const projects = await readLocalProjects(dirPath)
   const descriptor = findConversation(projects, conversationId)

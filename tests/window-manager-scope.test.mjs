@@ -17,4 +17,11 @@ assert.match(source.slice(normalizerStart, metadataStart), /^function normalizeC
 assert.match(source, /conversationId:\s*normalizeConversationMetadataId\(/)
 assert.match(source, /const conversationId = normalizeConversationMetadataId\(source\.conversationId\)/)
 
+assert.match(source, /const conversationDirectoryStore = new Map\(\)/)
+const metadataBuilder = source.slice(metadataStart, source.indexOf('function resolveWindowConfig', metadataStart))
+const metadataUpdate = source.slice(source.indexOf('export function updateConversationWindowMetadata'), source.indexOf('export function getWindowRefByWebContentsId'))
+assert.doesNotMatch(metadataBuilder, /dirPath:/, 'private conversation locations cannot enter listWindows or remote metadata')
+assert.doesNotMatch(metadataUpdate.slice(metadataUpdate.indexOf('const next =')), /dirPath:/, 'window-status updates cannot leak storage paths into public metadata')
+assert.match(metadataUpdate, /conversationDirectoryStore\.set/)
+
 console.log('Desktop window manager scope regression passed')

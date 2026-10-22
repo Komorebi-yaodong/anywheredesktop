@@ -638,11 +638,17 @@ assert.equal(events.at(-1).payload.deleted, true)
 assert.ok(actions.includes(`delete-conversation:${command.conversationId}`))
 assert.ok(actions.includes('lease-heartbeat-stop'))
 assert.equal(context.conversationLease.value, null)
+
+assert.equal(context.mobileControlActive.value, false, 'a removed conversation cannot remain Mobile-controlled')
 assert.equal(actions.at(-1), 'buffer-flush')
 assert.equal(actions.filter((item) => item === 'window-close').length, windowCloseCountBeforeDelete + 1)
 
 assert.match(source, /if \(!turnRemoteCommand\) await flushAppendBuffer\(\)/)
 assert.match(source, /approvalStatus: autoApproveThisTurn\(\)/)
+const savesAfterDeletion = actions.filter(item => item === 'desktop-takeover' || item === 'remote-shutdown').length
+await adapter.runRemoteConversationCommand({type: 'remote.shutdown', conversationId: command.conversationId, conversationDeleted: true, closeWindow: true})
+assert.equal(actions.filter(item => item === 'desktop-takeover' || item === 'remote-shutdown').length, savesAfterDeletion, 'deleted shutdown must never try to persist or revive its database')
+
 assert.doesNotMatch(block, /isAutoApproveTools\.value = true/)
 const windowSource = await fs.readFile(new URL('../main/windowManager.js', import.meta.url), 'utf8')
 assert.match(windowSource, /setBackgroundThrottling\(false\)/)

@@ -280,7 +280,7 @@ function sanitizeEvent(event, payload) {
 export function createRemoteSessionManager({
   getConfig, openConversation, listWindows, openWindow, getWindowByRef,
   readLocalProjects = async () => ({ projects: [] }), dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice,
-  recordAssistantUsage = async () => {}, uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null, onConversationRevision = null, onControlChanged = () => {}
+  recordAssistantUsage = async () => {}, conversationExists = null, getConversationDirectory = null, uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null, onConversationRevision = null, onControlChanged = () => {}
 } = {}) {
   for (const [name, value] of Object.entries({
     getConfig, openConversation, listWindows, openWindow, getWindowByRef, readLocalProjects,
@@ -334,6 +334,68 @@ export function createRemoteSessionManager({
     return next
   }
 
+  function retireDeletedConversation(conversationId) {
+    const first = !deletedConversations.has(conversationId)
+    deletedConversations.add(conversationId)
+    const session = sessions.get(conversationId)
+    if (session) {
+      session.mobileControlled = false; session.mobileOpened = false; session.mobileDeviceId = ''
+      session.controlEpoch = crypto.randomUUID()
+      session.pendingChoices?.clear?.()
+      if (session.queueTimer) clearTimeout(session.queueTimer)
+      if (session.idleReleaseTimer) clearTimeout(session.idleReleaseTimer)
+      session.queueTimer = null; session.idleReleaseTimer = null
+      for (const queued of session.pendingSends.splice(0)) {
+        const record = requests.get(requestKey(queued.deviceId, queued.requestId))
+        if (record && !record.terminal) publish(record, 'assistant.cancelled', {code: 'remote_conversation_not_found'})
+      }
+    }
+    if (first) onControlChanged()
+  }
+
+  async function confirmDeletedConversation(conversationId) {
+    if (deletedConversations.has(conversationId)) return true
+    if (typeof conversationExists !== 'function') return false
+    const item = windows().find(entry => entry.type === 'window' && entry.conversationId === conversationId)
+    const config = typeof getConversationDirectory === 'function' ? null : await getConfig()
+    const directory = text(typeof getConversationDirectory === 'function' ? getConversationDirectory(item?.id, conversationId) : config?.config?.webdav?.localChatPath, 32768).trim()
+    if (!directory) return false
+    if (await conversationExists({dirPath: directory, conversationId}) !== false) return false
+    if (item && !windows().some(entry => entry.id === item.id && entry.conversationId === conversationId)) return false
+    retireDeletedConversation(conversationId)
+    return true
+  }
+
+  async function closeDeletedConversation(conversationId, wait = true) {
+    const targets = windows().filter(item => item.type === 'window' && item.conversationId === conversationId)
+    for (const item of targets) {
+      const result = await dispatchRemoteCommandToWindow(item.id, {type: 'remote.shutdown', conversationId, conversationDeleted: true, closeWindow: true})
+      if (!result?.ok) throw remoteError('remote_renderer_dispatch_failed')
+    }
+    if (!wait) return
+    const deadline = Date.now() + Math.max(15000, readinessTimeoutMs)
+    while (targets.some(item => windowItem(item.id))) {
+      if (Date.now() >= deadline) throw remoteError('remote_conversation_close_timeout')
+      await new Promise(resolve => setTimeout(resolve, 40))
+    }
+    const session = sessions.get(conversationId)
+    if (session) handleWindowClosed(session.windowRef)
+  }
+
+  let reconcilingDeleted = null
+  function reconcileDeletedSessions() {
+    if (reconcilingDeleted) return reconcilingDeleted
+    reconcilingDeleted = (async () => {
+      for (const conversationId of new Set([...sessions.keys(), ...windows().filter(item => item.type === 'window').map(item => item.conversationId).filter(Boolean)])) {
+        try {
+          if (await confirmDeletedConversation(conversationId)) await closeDeletedConversation(conversationId, false)
+        } catch { /* Unknown filesystem/config failures must never retire a live writer. */ }
+      }
+    })().finally(() => {reconcilingDeleted = null})
+    return reconcilingDeleted
+  }
+
+
   function remember(conversationId, item) {
     const current = sessions.get(conversationId)
     const session = current || { conversationId, activeRequestId: '', activeDeviceId: '', pendingSends: [], pendingChoices: new Map(), mobileOpened: false, mobileControlled: false, mobileDeviceId: '', controlEpoch: crypto.randomUUID() }
@@ -346,6 +408,8 @@ export function createRemoteSessionManager({
   }
 
   function existingSession(conversationId) {
+
+    if (deletedConversations.has(conversationId)) return null
     const current = sessions.get(conversationId)
     if (current) {
       const item = windowItem(current.windowRef)
@@ -380,6 +444,8 @@ export function createRemoteSessionManager({
     check()
     if (closingConversations.has(conversationId)) throw remoteError('remote_conversation_closing')
     if (deletedConversations.has(conversationId)) throw remoteError('remote_conversation_not_found')
+
+    if (await confirmDeletedConversation(conversationId)) {await closeDeletedConversation(conversationId, false); throw remoteError('remote_conversation_not_found')}
     let session = existingSession(conversationId)
     if (!session) {
       let creation = creations.get(conversationId)
@@ -513,7 +579,7 @@ export function createRemoteSessionManager({
   }
 
   function scheduleIdleRelease(session) {
-    if (!session || session.idleReleaseTimer || !session.hidden || session.mobileControlled) return
+    if (!session || deletedConversations.has(session.conversationId) || session.idleReleaseTimer || !session.hidden || session.mobileControlled) return
     session.idleReleaseTimer = setTimeout(() => {
       session.idleReleaseTimer = null
       if (!enabled || sessions.get(session.conversationId) !== session) return
@@ -554,7 +620,7 @@ export function createRemoteSessionManager({
     const conversationId = id(params.conversationId, 'conversationId')
     assertActive(generation, safeDeviceId)
     const session = sessions.get(conversationId)
-    const candidates = windows().filter(item => item.conversationId === conversationId)
+    const candidates = deletedConversations.has(conversationId) ? [] : windows().filter(item => item.conversationId === conversationId)
     const writer = candidates.find(item => !item.readOnly && !item.leasePending)
     const record = session?.activeDeviceId === safeDeviceId && session?.activeRequestId
       ? requests.get(requestKey(safeDeviceId, session.activeRequestId)) : null
@@ -601,7 +667,7 @@ export function createRemoteSessionManager({
     // it over without opening it first. A read-only observer or a pending lease
     // is never offered: the writable writer stays the only control target.
     for (const item of windows()) {
-      if (item.type !== 'window' || !item.conversationId || seen.has(item.conversationId)) continue
+      if (item.type !== 'window' || !item.conversationId || deletedConversations.has(item.conversationId) || seen.has(item.conversationId)) continue
       const candidates = windows().filter((candidate) =>
         candidate.type === 'window' && candidate.conversationId === item.conversationId
       )
@@ -635,6 +701,7 @@ export function createRemoteSessionManager({
     const guardedCommand = commandGuard.getStore()
     const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     return serialize(conversationId, async () => {
+      if (await confirmDeletedConversation(conversationId)) {await closeDeletedConversation(conversationId, false); throw remoteError('remote_conversation_not_found')}
       let session = existingSession(conversationId)
       const existed = Boolean(session)
       if (!session) {
@@ -802,6 +869,10 @@ export function createRemoteSessionManager({
     const target = id(conversationId, 'conversationId')
     if (!confirmed) throw remoteError('remote_takeover_confirmation_required')
     return serialize(target, async () => {
+      if (await confirmDeletedConversation(target)) {
+        await closeDeletedConversation(target)
+        return {ok: true, conversationId: target, mobileControlled: false, deleted: true, closed: true}
+      }
       const session = existingSession(target)
       if (!session) throw remoteError('remote_conversation_window_not_found')
       if (!session.mobileControlled) return showOnDesktop({params: {conversationId: target}})
@@ -1021,7 +1092,7 @@ export function createRemoteSessionManager({
   }
 
   async function dispatchNextSend(session) {
-    if (!enabled || session?.closing || session?.desktopTakingOver || sessions.get(session.conversationId) !== session || session.activeRequestId || session.dispatchingQueued || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
+    if (!enabled || deletedConversations.has(session?.conversationId) || session?.closing || session?.desktopTakingOver || sessions.get(session.conversationId) !== session || session.activeRequestId || session.dispatchingQueued || !Array.isArray(session.pendingSends) || session.pendingSends.length === 0) return
     const item = windowItem(session.windowRef)
     if (!item) { finishClosed(session); return }
     if (item.busy || item.generating || item.compacting) {
@@ -1539,7 +1610,7 @@ export function createRemoteSessionManager({
     }
     if (record.terminal) {
       if (session.activeOperation === 'conversation.delete' && data.event === 'conversation.operation.completed' && sanitizedPayload.deleted) {
-        deletedConversations.add(session.conversationId)
+        retireDeletedConversation(session.conversationId)
       }
       session.activeRequestId = ''
       session.activeDeviceId = ''
@@ -1607,6 +1678,8 @@ export function createRemoteSessionManager({
       session.pendingSends = []
     }
     closing = (async () => {
+
+      await reconcileDeletedSessions()
       await Promise.allSettled([...creations.values()])
       await Promise.allSettled([...sessions.values()].map(async (session) => {
         const item = windowItem(session.windowRef)
@@ -1614,9 +1687,9 @@ export function createRemoteSessionManager({
         session.hidden = item.remoteHidden === true
         if (session.hidden) {
           // Bootstrap may still be acquiring a lease; cleanup must reach its registered adapter.
-          await ready(session.windowRef).catch(() => {})
+          if (!deletedConversations.has(session.conversationId)) await ready(session.windowRef).catch(() => {})
           await dispatchRemoteCommandToWindow(session.windowRef, {
-            type: 'remote.shutdown', conversationId: session.conversationId, closeHidden: true
+            type: 'remote.shutdown', conversationId: session.conversationId, closeHidden: true, conversationDeleted: deletedConversations.has(session.conversationId)
           })
         } else if (session.activeRequestId) {
           await dispatchRemoteCommandToWindow(session.windowRef, {
@@ -1663,7 +1736,7 @@ export function createRemoteSessionManager({
     refreshContext: (input) => configCommand({ ...input, operation: 'conversation.context.refresh' }),
     compact,
     cancelCompact,
-    cancel, release, openForMobile, takeover, handoff, closeConversation, openedSessions, observeOnDesktop, controlledSessions, takeoverOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
+    cancel, release, openForMobile, takeover, handoff, closeConversation, openedSessions, reconcileDeletedSessions, observeOnDesktop, controlledSessions, takeoverOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
     resume: () => { enabled = true },
     authorizeDevice: (deviceId) => { revokedDevices.delete(deviceId) },

@@ -171,6 +171,9 @@ const singletonStore = new Map()
 const multiStore = new Map()
 const multiTypeIndex = new Map()
 const windowMetadataStore = new Map()
+
+// Main-only storage location; never included in listWindows/remote DTOs.
+const conversationDirectoryStore = new Map()
 const webContentsToWindowRef = new Map()
 let windowMetadataNotifier = null
 
@@ -1194,7 +1197,10 @@ const dynamicBaseConfig =
   const win = createBrowserWindow(targetType, config, titleSuffix, id, initMessage)
 
   multiStore.set(id, win)
+
   if (targetType === 'window') {
+    conversationDirectoryStore.set(id, {conversationId: normalizeConversationMetadataId(openPayload?.conversation?.descriptor?.conversationId),
+      dirPath: openPayload?.conversation?.sessionData?.conversationStorage?.dirPath || fullConfig?.webdav?.localChatPath || ''})
     windowMetadataStore.set(
       id,
       buildWindowMetadata(id, openPayload, fullConfig, dialogWindowConfig?.promptCode || resolvePromptCode(openPayload), dialogWindowConfig?.promptConfig)
@@ -1211,6 +1217,8 @@ const dynamicBaseConfig =
     unbindWindowRefByWebContentsId(webContentsId)
     multiStore.delete(id)
     windowMetadataStore.delete(id)
+
+    conversationDirectoryStore.delete(id)
     if (targetType === 'window') notifyWindowMetadataChanged('closed', id)
 
     const indexSet = multiTypeIndex.get(targetType)
@@ -1665,6 +1673,12 @@ export function notifyConversationObservers(sourceWindowRef = '', conversationId
 }
 
 
+export function getConversationWindowDirectory(windowRef, conversationId) {
+  const location = conversationDirectoryStore.get(windowRef)
+  return location?.conversationId === conversationId ? location.dirPath : ''
+}
+
+
 export function updateConversationWindowMetadata(windowRef = '', input = {}) {
   const normalizedRef = typeof windowRef === 'string' ? windowRef.trim() : ''
   const current = windowMetadataStore.get(normalizedRef)
@@ -1675,6 +1689,8 @@ export function updateConversationWindowMetadata(windowRef = '', input = {}) {
 
   const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
   const conversationId = normalizeConversationMetadataId(source.conversationId)
+
+  if (typeof source.dirPath === 'string' && source.dirPath.trim()) conversationDirectoryStore.set(normalizedRef, {conversationId, dirPath: source.dirPath.trim()})
   const title = typeof source.title === 'string' ? source.title.trim().slice(0, 240) : ''
   const next = {
     ...current,

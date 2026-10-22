@@ -2635,6 +2635,8 @@ let conversationStatusSyncTimer = null;
 let lastConversationStatusFingerprint = '';
 
 const buildConversationWindowStatus = () => ({
+
+  dirPath: currentConversationStorage.value?.dirPath || '',
   conversationId: typeof currentConversationStorage.value?.conversationId === 'string'
     ? currentConversationStorage.value.conversationId
     : '',
@@ -2809,7 +2811,8 @@ const normalizeRemoteCommand = (input = {}) => {
     targetRequestId: typeof input.targetRequestId === 'string' ? input.targetRequestId.trim() : '',
     acquireLease: input.acquireLease === true,
     reload: input.reload === true,
-    closeWindow: input.closeWindow === true
+    closeWindow: input.closeWindow === true,
+    conversationDeleted: input.conversationDeleted === true
   };
 };
 
@@ -2883,6 +2886,8 @@ const setSessionSystemPromptOnly = (nextPrompt) => {
 
 
 const persistRemoteTranscript = async (reason) => {
+
+  if (remoteConversationDeleted.value) return true;
   clearScheduledAutoSave();
   const version = ++sessionMutationVersion;
   const request = { reason, force: true, stateOnly: false, version };
@@ -3079,13 +3084,23 @@ const runRemoteConversationCommand = async (input = {}) => {
     return;
   }
   if (command.type === 'remote.shutdown') {
+
+    if (command.conversationDeleted) {
+      remoteConversationDeleted.value = true;
+      mobileControlActive.value = false;
+      clearScheduledAutoSave();
+      stopConversationLeaseHeartbeat();
+      conversationLease.value = null;
+      scheduleConversationWindowStatusSync();
+    }
     if (activeRemoteCommand.value) activeRemoteCommand.value.__remoteCancelled = true;
     if (compacting.value) handleCancelCompact();
     if (loading.value) cancelAskAI();
     await remoteCommandExecutionPromise;
     await remoteConfigExecutionPromise;
     if (remoteHiddenWriter.value || command.closeWindow) {
-      if (await persistRemoteTranscript('remote-shutdown')) await closePage(true);
+      if (remoteConversationDeleted.value) await closePage(false);
+      else if (await persistRemoteTranscript('remote-shutdown')) await closePage(true);
     }
     return;
   }
@@ -3314,6 +3329,9 @@ const runRemoteConversationCommand = async (input = {}) => {
           });
           if (!deleted?.removed) throw new Error('remote_conversation_not_found');
           remoteConversationDeleted.value = true;
+
+          mobileControlActive.value = false;
+          scheduleConversationWindowStatusSync();
 
           stopConversationLeaseHeartbeat();
           conversationLease.value = null;
@@ -6280,12 +6298,13 @@ const closePage = async (force_save = false) => {
     const dirPath = currentConversationStorage.value?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
     const persistenceState = conversationPersistenceTracker.getState();
     const hasUnpersistedSession = persistenceState.hasUnpersistedMutations || persistenceState.hasUnpersistedFullSnapshot;
+    const deleted = remoteConversationDeleted.value === true;
     const canWriteCurrentConversation = !currentConversationStorage.value?.conversationId || ensureConversationWriteAccess(false);
-    if (hasUnpersistedSession && !canWriteCurrentConversation) {
+    if (!deleted && hasUnpersistedSession && !canWriteCurrentConversation) {
       throw lastAutoSaveError || new Error('conversation_unpersisted_changes_without_write_access');
     }
     const shouldPersistOnClose = Boolean(
-      dirPath &&
+      !deleted && dirPath &&
       (defaultConversationName.value || shouldForceSave) &&
       canWriteCurrentConversation &&
       (hasUnpersistedSession || shouldForceSave)
@@ -7166,6 +7185,8 @@ const isNamedLocalConversationAvailable = () => Boolean(
 );
 
 const shouldPersistCurrentSessionAutomatically = () => {
+
+  if (remoteConversationDeleted.value) return false;
   return basic_msg.value?.type === 'summon' || isCurrentPromptAutoSaveEnabled() || isNamedLocalConversationAvailable();
 };
 
@@ -7901,6 +7922,8 @@ const clearScheduledAutoSave = () => {
 
 const autoSaveMutationQueue = createConversationMutationQueue(async (request = {}) => {
   if (conversationMetadataMutationPromise) await conversationMetadataMutationPromise;
+
+  if (remoteConversationDeleted.value) return true;
   if ((!request || !request.force) && !shouldPersistCurrentSessionAutomatically()) return false;
 
   const saveOptions = {
@@ -7913,6 +7936,8 @@ const autoSaveMutationQueue = createConversationMutationQueue(async (request = {
 });
 
 const executeAutoSaveRequest = async (request = {}) => {
+
+  if (remoteConversationDeleted.value) return true;
   const normalizedRequest = { ...request, version: Math.max(0, Number(request.version) || sessionMutationVersion) };
   conversationPersistenceTracker.markRequired(normalizedRequest);
   const completionPromise = autoSaveMutationQueue.enqueue(normalizedRequest);

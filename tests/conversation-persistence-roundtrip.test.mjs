@@ -216,6 +216,8 @@ async function verifyOrphanDatabaseIndexRecovery(root) {
   unrelated.close()
 
   assert.equal(await fs.access(path.join(orphanRoot, 'projects.yaml')).then(() => true, () => false), false)
+  assert.equal(await store.conversationExists({dirPath: orphanRoot, conversationId: created.descriptor.conversationId}), true, 'renamed orphan without index is still a live conversation')
+
   const listed = await store.listLocalConversations(orphanRoot)
   assert.equal(listed.length, 1)
   assert.equal(listed[0].conversationId, created.descriptor.conversationId)
@@ -357,6 +359,13 @@ async function main() {
     await verifyUiLinkRepair(root)
 
     await verifyOrphanDatabaseIndexRecovery(root)
+
+
+    const absentRoot = await fs.mkdtemp(path.join(root, 'absent-'))
+    const beforeProbe = await fs.readdir(absentRoot)
+    assert.equal(await store.conversationExists({dirPath: absentRoot, conversationId}), false)
+    assert.deepEqual(await fs.readdir(absentRoot), beforeProbe, 'probe cannot recreate a removed database')
+    await assert.rejects(store.conversationExists({dirPath: path.join(absentRoot, 'missing-directory'), conversationId}), {code: 'ENOENT'}, 'an unavailable directory is not proof that a conversation was deleted')
 
 
     const warning = await writeLocalProjectsBestEffort(root, { version: 2, conversations: {}, projects: [] }, async () => {

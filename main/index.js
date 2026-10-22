@@ -41,6 +41,8 @@ import {
   setMainWindowCloseBehavior,
   setWindowMetadataNotifier,
   updateConversationWindowMetadata,
+
+  getConversationWindowDirectory,
   markAppQuitting,
   isSingletonWindowVisible
 } from './windowManager.js'
@@ -208,6 +210,10 @@ function notifyRemoteControlChanged(broadcast = true) {
 const remoteSessionManager = createRemoteSessionManager({
   getConfig: dataApi.getConfig,
   openConversation: conversationApi.openConversation,
+
+  conversationExists: conversationApi.conversationExists,
+
+  getConversationDirectory: getConversationWindowDirectory,
   listWindows,
   openWindow,
   getWindowByRef,
@@ -930,6 +936,8 @@ app.whenReady().then(async () => {
     listRemoteControlledSessions: async (input) => {
       const {devices} = await remoteGateway.listDevices()
       const names = new Map(devices.map(device => [device.deviceId, device.displayName]))
+      await remoteSessionManager.reconcileDeletedSessions()
+
       const result = remoteSessionManager.controlledSessions(input)
       return {...result, sessions: result.sessions.map(session => ({...session, deviceName: names.get(session.deviceId) || '远端设备'}))}
     },

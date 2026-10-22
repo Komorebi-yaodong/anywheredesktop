@@ -1292,6 +1292,7 @@ export function createRemoteGateway({
 
         case 'conversation.opened.list':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')
+          await activeSessionManager.reconcileDeletedSessions?.()
           result = activeSessionManager.openedSessions({ deviceId: context.device.deviceId, params })
           break
         case 'conversation.takeover':

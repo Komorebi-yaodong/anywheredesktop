@@ -53,13 +53,15 @@ export function normalizeLocalMediaPath(value = '') {
 }
 
 
-function normalizeDataImage(value = '') {
+function normalizeDataMedia(value = '') {
   const source = typeof value === 'string' ? value.trim() : ''
-  const match = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(source)
+  const match = /^data:((?:image\/(?:png|jpe?g|webp|gif))|(?:audio\/(?:mpeg|mp3|wav|x-wav|mp4|m4a|aac|ogg|webm))|(?:video\/(?:mp4|webm|quicktime|x-m4v)));base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(source)
   if (!match) return null
   const bytes = Buffer.from(match[2].replace(/\s+/g, ''), 'base64')
   if (bytes.length < 1 || bytes.length > MAX_MEDIA_BYTES) return null
-  return { mimeType: match[1].toLowerCase(), bytes }
+  const rawType = match[1].toLowerCase()
+  const mimeType = ({'image/jpg': 'image/jpeg', 'audio/mp3': 'audio/mpeg', 'audio/x-wav': 'audio/wav', 'audio/m4a': 'audio/mp4'})[rawType] || rawType
+  return {mimeType, bytes}
 }
 
 /**
@@ -98,7 +100,7 @@ export function createRemoteConversationMediaService() {
   function register({ deviceId, conversationId, source } = {}) {
     const safeDeviceId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
     const safeConversationId = normalizeIdentifier(conversationId, 'conversationId', { minLength: 16, maxLength: 160 })
-    const inline = normalizeDataImage(source)
+    const inline = normalizeDataMedia(source)
     const filePath = inline ? '' : normalizeLocalMediaPath(source)
     const mimeType = inline?.mimeType || mediaTypeFor(filePath)
     if (!mimeType || (!inline && !filePath)) return null

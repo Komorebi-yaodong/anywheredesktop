@@ -125,8 +125,11 @@ export function createBusinessProtocol({readService, getManager, operations = nu
           const runtime = getManager().runtimeSnapshot({deviceId: context.device.deviceId, params: {conversationId: body.conversationId}})
           // Closed history has no writer yet. Creating a new hidden writer for
           // the same device is allowed; an existing/foreign writer is not.
-          if (expectedEpoch === 'window-none' && session?.hidden && !session.mobileControlled) {freshWriter = session.windowRef; expectedEpoch = runtime.control.epoch}
-          if (freshWriter && session?.windowRef === freshWriter && runtime.control.owner === 'this_device') {expectedEpoch = runtime.control.epoch; freshWriter = null}
+          if (expectedEpoch === 'window-none' && session?.hidden && !session.mobileControlled) freshWriter = session.windowRef
+          if (freshWriter && session?.windowRef === freshWriter && session.hidden && (!session.mobileControlled || runtime.control.owner === 'this_device')) {
+            expectedEpoch = runtime.control.epoch
+            if (runtime.control.owner === 'this_device') freshWriter = null
+          }
           if (typeof expectedEpoch !== 'string' || expectedEpoch !== runtime.control.epoch) throw remoteError('remote_control_epoch_conflict')
         }
       }

@@ -39,6 +39,20 @@ Existing service parameter allowlists, permission/revision checks, quotas and fi
 
 ## Conversation view, content and runtime
 
+
+### Bounded history delivery and media correction
+
+History reads now apply a 160 KiB page budget (both legacy and structured representations) before the encrypted 256 KiB frame ceiling. They return a continuous latest suffix with a correct older-page cursor; no text is truncated to make a page fit. Mobile can also reduce page size on explicit oversized **read** responses only, and fetches earlier pages when scrolling to the top (the manual button remains available).
+
+A single oversized safe payload is replaced with optional `fullPayload:{id,totalChars,sha256}`. The new Mobile fetches `conversation.history.chunk.get({conversationId,id,offset})`, reassembles UTF-16 code-unit chunks of at most 16384, verifies offsets/length/SHA-256 of the complete UTF-8 JSON, and only then publishes the original message. References are device/conversation scoped, cached for five minutes with a 64 MiB total cache limit. Expired references or capacity limits are explicit failures, not partial-message success. The new endpoint is advertised separately; older Mobile versions do not reconstruct deferred single-message payloads and must update for that case. No transport cap or security filtering is relaxed.
+
+Persisted compaction boundaries hide covered older messages by default, while keeping the summary message; `page.visibleFromUiOrder` prevents cached covered rows from reappearing on refresh. Ordinary assistant/user roles are never used to guess a compaction boundary. `view_image` and `view_pdf` can append user messages for model compatibility: retain their original role and explanatory text, just like directly submitted user content. Do not hide them or rewrite them into tool messages.
+
+Stored data URI and nested attachment references now resolve to authorized opaque image/audio/video media resources. Bytes are read through existing bounded media chunks, not embedded in history pages; original attachment hash/MIME metadata is retained. Audio playback is supported and video uses the same reserved resource path. PDF remains a file notice with no inline PDF rendering. Existing media size/cache quotas still apply.
+
+Hidden Writer deletion commands tolerate only their own new hidden/uncontrolled Writer's readiness transition; they still reject foreign ownership changes. Failed commands clean up only their own newly created idle hidden Writer, never visible, busy or another device's window.
+
+
 `conversation.view.get({conversationId,pageSize,beforeUiOrder?})` returns schemaVersion/serverEpoch/sequence/cursor/page/runtime. Snapshot cursor is captured before awaited reads. Transcript and runtime are not a cross-store transaction; catch-up repairs changes during reads. Older history remains paginated; no frame limit is increased.
 
 Negotiated 1.0 returns the published sanitized message payload. Negotiated 1.1 returns payload `blocks`, converted only AFTER the existing safe persisted-message projection:

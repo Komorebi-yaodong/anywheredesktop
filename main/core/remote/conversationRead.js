@@ -1,4 +1,6 @@
 import crypto from 'node:crypto'
+
+import {createHistoryPager} from './historyPager.js'
 import { normalizeIdentifier, remoteError } from './protocol.js'
 
 const FORBIDDEN_PATH_KEYS = new Set([
@@ -118,6 +120,9 @@ export function createRemoteConversationReadService({
   if (typeof readLocalProjects !== 'function') throw new Error('remote_read_projects_required')
   if (typeof loadRemoteConversationPage !== 'function') throw new Error('remote_read_page_required')
   if (typeof listWindows !== 'function') throw new Error('remote_read_windows_required')
+
+  const historyPager = createHistoryPager()
+
 
   async function getLocalDirectory() {
     const result = await getConfig()
@@ -253,7 +258,7 @@ export function createRemoteConversationReadService({
       ])
     )
     const agentIdentities = safeAgentIdentities(configResult?.config)
-    return loadRemoteConversationPage({
+    const result = await loadRemoteConversationPage({
       dirPath: directory,
       conversationId,
       beforeUiOrder: params.beforeUiOrder,
@@ -264,9 +269,11 @@ export function createRemoteConversationReadService({
         ? (source) => registerMedia({ deviceId: safeDeviceId, conversationId, source })
         : null
     })
+    return historyPager.page(result, safeDeviceId, conversationId)
   }
 
   return {
+    historyChunk: historyPager.chunk,
     listConversations,
     listMessages,
     getWindows

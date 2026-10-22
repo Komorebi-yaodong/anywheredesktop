@@ -331,6 +331,8 @@ export function createRemoteGateway({
     capabilities.push('remote.contract.negotiate')
     if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'transfer.request')
     if (conversationReadService) {
+
+      if (typeof conversationReadService.historyChunk === 'function') capabilities.push('conversation.history.chunk.get')
       capabilities.push('conversation.list', 'conversation.messages.list', 'conversation.windows.list')
       if (typeof getConversationMedia === 'function') capabilities.push('conversation.media.get')
     }
@@ -1398,6 +1400,11 @@ export function createRemoteGateway({
         case 'remote.contract.negotiate':
           result = businessProtocol.negotiate(context, params)
           break
+        case 'conversation.history.chunk.get':
+          if (typeof conversationReadService?.historyChunk !== 'function') throw remoteError('remote_method_unavailable')
+          result = conversationReadService.historyChunk({deviceId: context.device.deviceId, params})
+          break
+
         case 'conversation.view.get':
           result = await businessProtocol.view(context, params)
           break

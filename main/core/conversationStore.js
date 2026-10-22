@@ -460,7 +460,7 @@ function createRemoteAttachmentResolver(db) {
 function createRemoteImageReferenceResolver(db, registerMedia) {
   const statement = db.prepare('SELECT data_url FROM attachments WHERE attachment_id = ?')
   return (value) => {
-    const attachmentId = normalizeText(value?.[ATTACHMENT_REF_KEY]).trim()
+    const attachmentId = normalizeText(value?.[ATTACHMENT_REF_KEY] || value?.url?.[ATTACHMENT_REF_KEY] || value?.data?.[ATTACHMENT_REF_KEY]).trim()
     if (!attachmentId || typeof registerMedia !== 'function') return ''
     const dataUrl = statement.get(attachmentId)?.data_url
     return remoteMediaReference(dataUrl, registerMedia)
@@ -509,7 +509,7 @@ function localMediaReference(value, registerMedia) {
 function remoteMediaReference(value, registerMedia) {
   const source = typeof value === 'string' ? value.trim().replace(/^['"]|['"]$/g, '') : ''
   const localPath = normalizeConversationLocalMediaPath(source)
-  const isInlineImage = /^data:image\/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(source)
+  const isInlineImage = /^data:(?:image\/(?:png|jpe?g|webp|gif)|audio\/(?:mpeg|mp3|wav|x-wav|mp4|m4a|aac|ogg|webm)|video\/(?:mp4|webm|quicktime|x-m4v));base64,[A-Za-z0-9+/=\r\n]+$/i.test(source)
   if (!source || (!REMOTE_MEDIA_EXTENSION_PATTERN.test(localPath || source) && !isInlineImage) || typeof registerMedia !== 'function') return ''
   if (!isInlineImage && !localPath) return ''
   try {
@@ -636,6 +636,9 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
     if (extractedFile) return extractedFile
     const parsed = parseDataUrl(value)
     if (parsed) {
+
+      const media = remoteMediaReference(value, context.registerMedia)
+      if (media && /^(image|audio|video)\//.test(parsed.mimeType)) return {type: parsed.mimeType.split('/')[0], url: media, mimeType: parsed.mimeType}
       return {
         type: 'inline-attachment',
         mimeType: parsed.mimeType,
@@ -651,7 +654,9 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
   if (value && typeof value === 'object') {
     const attachmentId = normalizeText(value[ATTACHMENT_REF_KEY]).trim()
     if (attachmentId && Object.keys(value).length === 1) {
-      return resolveAttachment(attachmentId, context.nameHint)
+      const metadata = resolveAttachment(attachmentId, context.nameHint)
+      const uri = /^(image|audio|video)\//.test(metadata.mimeType || '') ? context.resolveAttachmentImage?.(value) : ''
+      return uri ? {...metadata, type: metadata.mimeType.split('/')[0], url: uri} : metadata
     }
     if (value.type === 'text') {
       const extractedFile = remoteExtractedFileNotice(value.text)
@@ -660,21 +665,24 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
 
     if (['file', 'document', 'input_file'].includes(value.type)) return remoteFileNotice(value, context.nameHint)
 
-    if (value.type === 'image_url' || value.type === 'image') {
-      const rawUrl = value.image_url ?? value.image ?? value.url
+    if (['image_url', 'image', 'audio', 'audio_url', 'video', 'video_url'].includes(value.type)) {
+      const kind = value.type.startsWith('audio') ? 'audio' : value.type.startsWith('video') ? 'video' : 'image'
+      const nested = value.image_url ?? value.image ?? value.audio_url ?? value.video_url ?? value.url
+      const rawUrl = nested && typeof nested === 'object' && typeof nested.url === 'string' ? nested.url : nested
       const sourcePath = typeof rawUrl === 'string' ? rawUrl.trim() : ''
       if (sourcePath) {
         if (/^anywhere-media:\/\/[A-Za-z0-9_-]{16,160}(?:\?type=(?:image|video|audio))?$/.test(sourcePath)) {
-          return { type: 'image', url: sourcePath }
+          return { type: kind, url: sourcePath }
         }
         const media = remoteMediaReference(sourcePath, context.registerMedia)
         // Mobile cannot open a Desktop path directly, so always prefer the
         // opaque media reference for rendering while keeping the path readable.
-        if (media) return { type: 'image', url: media, sourcePath }
+        if (media) return {type: kind, url: media, ...(/^data:/i.test(sourcePath) ? {} : {sourcePath})}
         if (normalizeConversationLocalMediaPath(sourcePath) && !REMOTE_MEDIA_EXTENSION_PATTERN.test(sourcePath)) {
           return remoteFileNotice(value, sourcePath.split(/[\\/]/).pop())
         }
-        return { type: 'image', sourcePath }
+        if (/^https:\/\//i.test(sourcePath)) return {type: kind, url: sourcePath}
+        return /^data:/i.test(sourcePath) ? {type: kind, unavailable: true} : {type: kind, sourcePath}
       }
       if (rawUrl && typeof rawUrl === 'object') {
         // Attachment-backed history images. Desktop resolves the stored bytes
@@ -683,16 +691,20 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
         const previewUrl = typeof context.resolveAttachmentImage === 'function'
           ? context.resolveAttachmentImage(rawUrl)
           : ''
-        const resolved = sanitizeRemotePayload(rawUrl, resolveAttachment, context)
+        const resolved = sanitizeRemotePayload(rawUrl[ATTACHMENT_REF_KEY] ? rawUrl : rawUrl.url, resolveAttachment, context)
         if (resolved && typeof resolved === 'object' && resolved.attachmentId) {
           return previewUrl
-            ? { type: 'image', url: previewUrl, attachmentId: resolved.attachmentId, mimeType: resolved.mimeType || '', name: resolved.name || '' }
-            : { type: 'image', attachmentId: resolved.attachmentId, mimeType: resolved.mimeType || '', name: resolved.name || '' }
+            ? {...resolved, type: kind, url: previewUrl}
+            : {...resolved, type: kind}
         }
       }
     }
     if (value.type === 'input_audio' && value.input_audio && typeof value.input_audio === 'object') {
-      const encoded = normalizeText(value.input_audio.data).replace(/\s+/g, '')
+      const input = value.input_audio.data
+      const format = normalizeText(value.input_audio.format, 'wav').toLowerCase()
+      const encoded = typeof input === 'string' ? input.replace(/\s+/g, '') : ''
+      const uri = typeof input === 'object' ? context.resolveAttachmentImage?.(input) : remoteMediaReference(`data:audio/${format};base64,${encoded}`, context.registerMedia)
+      if (uri) return {type: 'audio', url: uri, format}
       return {
         type: 'audio',
         format: normalizeText(value.input_audio.format, 'wav'),
@@ -725,7 +737,7 @@ function sanitizeRemoteToolDetail(value, context = {}) {
     if (REMOTE_SENSITIVE_TEXT_PATTERN.test(source)) return '[已隐藏敏感内容]'
     const cleaned = sanitizeRemoteText(source, context)
     if (/\[local-file-hidden\]|\[local-media-unavailable\]/.test(cleaned)) return '[已隐藏本地路径]'
-    return cleaned.slice(0, 16 * 1024)
+    return cleaned
   }
 }
 
@@ -1682,6 +1694,12 @@ export async function loadRemoteConversationPage({
       && Number.isFinite(Number(beforeUiOrder))
       ? Number(beforeUiOrder)
       : null
+    // Use persisted compaction boundaries, never infer them from role alone.
+    const lastCompactUi = Number(db.prepare("SELECT MAX(ui_order) AS value FROM ui_messages WHERE role_code = 'compaction'").get()?.value) || 0
+    const compactOrdinal = getActiveMessageStart(db)
+    const linkedCompactUi = compactOrdinal > 0 ? Number(db.prepare(`SELECT MIN(ui.ui_order) AS value FROM ui_messages ui JOIN messages m ON m.message_uuid = ui.message_uuid WHERE m.ordinal >= ?`).get(compactOrdinal)?.value) || 0 : 0
+    const visibleStart = Math.max(lastCompactUi, linkedCompactUi)
+
     const pageRows = safeBefore == null
       ? db.prepare(`
           SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json, created_at, updated_at FROM (
@@ -1689,20 +1707,20 @@ export async function loadRemoteConversationPage({
               message.created_at, message.updated_at
             FROM ui_messages AS ui
             LEFT JOIN messages AS message ON message.message_uuid = ui.message_uuid
-            WHERE ui.role_code NOT IN ('system', 'tool')
+            WHERE ui.role_code NOT IN ('system', 'tool') AND ui.ui_order >= ?
             ORDER BY ui.ui_order DESC LIMIT ?
           ) ORDER BY ui_order
-        `).all(limit)
+        `).all(visibleStart, limit)
       : db.prepare(`
           SELECT ui_order, ui_uuid, message_uuid, role_code, payload_json, created_at, updated_at FROM (
             SELECT ui.ui_order, ui.ui_uuid, ui.message_uuid, ui.role_code, ui.payload_json,
               message.created_at, message.updated_at
             FROM ui_messages AS ui
             LEFT JOIN messages AS message ON message.message_uuid = ui.message_uuid
-            WHERE ui.role_code NOT IN ('system', 'tool') AND ui.ui_order < ?
+            WHERE ui.role_code NOT IN ('system', 'tool') AND ui.ui_order >= ? AND ui.ui_order < ?
             ORDER BY ui.ui_order DESC LIMIT ?
           ) ORDER BY ui_order
-        `).all(safeBefore, limit)
+        `).all(visibleStart, safeBefore, limit)
     // System prompt is session configuration, not a chat bubble. It remains
     // available only through conversation.config.get/patch for Mobile.
     const rows = pageRows
@@ -1740,8 +1758,8 @@ export async function loadRemoteConversationPage({
     const hasMore = oldestOrder > 0 && Boolean(
       db.prepare(`
         SELECT 1 AS value FROM ui_messages
-        WHERE role_code NOT IN ('system', 'tool') AND ui_order < ? LIMIT 1
-      `).get(oldestOrder)?.value
+        WHERE role_code NOT IN ('system', 'tool') AND ui_order >= ? AND ui_order < ? LIMIT 1
+      `).get(visibleStart, oldestOrder)?.value
     )
     const project = projects.projects.find((item) => item.conversationIds.includes(normalizedConversationId)) || null
 
@@ -1761,6 +1779,8 @@ export async function loadRemoteConversationPage({
       tasks,
       page: {
         pageSize: limit,
+
+        visibleFromUiOrder: visibleStart,
         nextBeforeUiOrder: hasMore ? oldestOrder : null,
         hasMore
       }

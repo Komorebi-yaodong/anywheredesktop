@@ -1212,11 +1212,13 @@ export function createRemoteSessionManager({
     }
     requests.set(key, record)
     record.dispatched = serialize(conversationId, async () => {
+      const hadSession = Boolean(existingSession(conversationId))
+      record.createdHiddenWriter = !hadSession
       try {
-        const hadSession = Boolean(existingSession(conversationId))
         const session = await ensureSession(conversationId, check)
         check()
         ensureMobileControl(session, safeDeviceId)
+        check()
         const item = windowItem(session.windowRef)
         if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
         session.activeRequestId = safeRequestId
@@ -1243,6 +1245,7 @@ export function createRemoteSessionManager({
           session.activeOperation = ''
         }
         publish(record, 'conversation.operation.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
+        if (record.createdHiddenWriter && session?.hidden && (!session.mobileDeviceId || session.mobileDeviceId === safeDeviceId)) await releaseHiddenSession(session).catch(() => {})
         throw error
       }
     })
@@ -1543,6 +1546,8 @@ export function createRemoteSessionManager({
       session.pendingChoices?.clear?.()
       void dispatchNextSend(session)
       scheduleIdleRelease(session)
+
+      if (record.createdHiddenWriter && data.event === 'conversation.operation.failed' && session.hidden && (!session.mobileDeviceId || session.mobileDeviceId === record.deviceId)) releaseHiddenSession(session).catch(() => {})
     }
     return { ok: true }
   }

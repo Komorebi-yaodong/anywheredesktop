@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:anywhere:remote-contract:1.1:extensions",
+  "$defs": {
+    "durableOperation": {
+      "type": "object",
+      "required": ["operationId", "conversationId", "state", "terminal", "code", "receipt", "progress", "acceptedAt", "expiresAt"],
+      "properties": {
+        "operationId": {"type": "string"}, "conversationId": {"type": ["string", "null"]},
+        "state": {"enum": ["accepted", "queued", "running", "succeeded", "failed", "cancelled", "interrupted"]},
+        "terminal": {"type": "boolean"}, "code": {"type": ["string", "null"]},
+        "acceptedAt": {"type": "integer", "minimum": 0}, "expiresAt": {"type": "integer", "minimum": 0}
+      }
+    },
+    "resource": {"type": "object", "required": ["schemaVersion", "resource", "value"], "properties": {"schemaVersion": {"const": "1.0"}, "resource": {"type": "string"}}},
+    "messageBlock": {"type": "object", "required": ["kind"], "properties": {"kind": {"type": "string"}, "text": {"type": "string"}, "uri": {"type": "string"}, "name": {"type": "string"}}}
+  }
+}

@@ -45,6 +45,40 @@ function renderer(f, event, payload = {}, requestId = 'request-fixture-0001', wi
 }
 
 async function run() {
+
+  {
+    const hidden = fixture()
+    let expected = 'window-none'
+    let fresh = null
+    const check = () => {
+      const session = hidden.manager.getSession(CID)
+      const runtime = hidden.manager.runtimeSnapshot({deviceId: DEVICE, params: {conversationId: CID}})
+      if (expected === 'window-none' && session?.hidden && !session.mobileControlled) {fresh = session.windowRef; expected = runtime.control.epoch}
+      if (fresh && session?.windowRef === fresh && runtime.control.owner === 'this_device') {expected = runtime.control.epoch; fresh = null}
+      assert.equal(runtime.control.epoch, expected)
+    }
+    await hidden.manager.withCommandGuard(check, () => send(hidden.manager, 'request-new-hidden-guard'))
+    renderer(hidden, 'assistant.completed', {}, 'request-new-hidden-guard')
+    await hidden.manager.closeAll()
+  }
+
+  {
+    const guarded = fixture({existing: true})
+    await guarded.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}})
+    const epoch = guarded.manager.runtimeSnapshot({deviceId: DEVICE, params: {conversationId: CID}}).control.epoch
+    const check = () => assert.equal(guarded.manager.runtimeSnapshot({deviceId: DEVICE, params: {conversationId: CID}}).control.epoch, epoch)
+    await guarded.manager.withCommandGuard(check, () => send(guarded.manager, 'request-guarded-first'))
+    await guarded.manager.withCommandGuard(check, () => send(guarded.manager, 'request-guarded-queued'))
+    assert.equal(guarded.manager.runtimeSnapshot({deviceId: DEVICE, params: {conversationId: CID}}).control.epoch, epoch, 'same owner does not rotate epoch')
+    renderer(guarded, 'assistant.completed', {}, 'request-guarded-first')
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(guarded.commands.at(-1).requestId, 'request-guarded-queued')
+    renderer(guarded, 'assistant.completed', {}, 'request-guarded-queued')
+    await guarded.manager.handoff({deviceId: DEVICE, params: {conversationId: CID}})
+    await assert.rejects(guarded.manager.withCommandGuard(check, () => send(guarded.manager, 'request-guarded-stale')))
+    await guarded.manager.closeAll()
+  }
+
   {
     const items = [], opens = [];
     let config = {config: {webdav: {localChatPath: 'PRIVATE_FIXTURE_PATH'}, prompts: {

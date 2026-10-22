@@ -1,6 +1,6 @@
 'use strict';
 const schema = require('./schema.json');
-const VERSION = Object.freeze({major: 1, minor: 0});
+const VERSION = Object.freeze({major: 1, minor: 1});
 const CAPABILITIES = Object.freeze(['conversation.view.v1', 'conversation.runtime.v1', 'conversation.invalidation.v1', 'operation.read.v1']);
 const object = value => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 function invalid() {return Object.assign(new Error('remote_contract_invalid'), {code: 'remote_contract_invalid'});}
@@ -57,3 +57,5 @@ function validateOperation(value) {
   return value;
 }
 module.exports = {VERSION, CAPABILITIES, validateNegotiation, validateRuntime, validateView, validateChanges, validateOperation};
+
+Object.assign(module.exports, require('./extensions.cjs'));

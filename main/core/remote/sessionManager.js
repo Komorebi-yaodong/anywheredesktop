@@ -1,4 +1,6 @@
 import crypto from 'node:crypto'
+
+import {AsyncLocalStorage} from 'node:async_hooks'
 import { normalizeIdentifier, remoteError } from './protocol.js'
 import { getQuickAssistantWeight } from '../quickAssistantUsage.js'
 import { sanitizeRemoteToolCalls } from '../conversationStore.js'
@@ -286,6 +288,10 @@ export function createRemoteSessionManager({
     if (typeof value !== 'function') throw new Error(`remote_session_${name}_required`)
   }
   const sessions = new Map()
+
+  const commandGuard = new AsyncLocalStorage()
+
+  const controlProjections = new Map()
   const creations = new Map()
   const queues = new Map()
   const requests = new Map()
@@ -320,7 +326,8 @@ export function createRemoteSessionManager({
 
   function serialize(conversationId, operation) {
     const previous = queues.get(conversationId) || Promise.resolve()
-    const next = previous.catch(() => {}).then(operation)
+    const guard = commandGuard.getStore()
+    const next = previous.catch(() => {}).then(() => {guard?.(); return operation()})
     queues.set(conversationId, next)
     next.finally(() => { if (queues.get(conversationId) === next) queues.delete(conversationId) }).catch(() => {})
     return next
@@ -328,7 +335,7 @@ export function createRemoteSessionManager({
 
   function remember(conversationId, item) {
     const current = sessions.get(conversationId)
-    const session = current || { conversationId, activeRequestId: '', activeDeviceId: '', pendingSends: [], pendingChoices: new Map(), mobileOpened: false, mobileControlled: false, mobileDeviceId: '' }
+    const session = current || { conversationId, activeRequestId: '', activeDeviceId: '', pendingSends: [], pendingChoices: new Map(), mobileOpened: false, mobileControlled: false, mobileDeviceId: '', controlEpoch: crypto.randomUUID() }
     if (!(session.pendingChoices instanceof Map)) session.pendingChoices = new Map()
     session.windowRef = item.id
     session.hidden = item.remoteHidden === true
@@ -555,6 +562,15 @@ export function createRemoteSessionManager({
       : writer ? 'desktop' : candidates.length ? 'unknown' : 'none'
     const pendingChoices = owner === 'this_device' && session?.pendingChoices instanceof Map
       ? [...session.pendingChoices].map(([toolCallId, questions]) => ({toolCallId, questions: sanitizeChoiceQuestions(questions)})) : []
+    const signature = `${session?.controlEpoch || ''}:${writer?.id || ''}:${owner}:${session?.desktopTakingOver === true}`
+    const projectionKey = `${safeDeviceId}:${conversationId}`
+    let projection = controlProjections.get(projectionKey)
+    if (!projection || projection.signature !== signature) {
+      projection = {signature, epoch: !writer && !session ? 'window-none' : crypto.randomUUID()}
+      if (controlProjections.size >= 2048) controlProjections.delete(controlProjections.keys().next().value)
+      controlProjections.set(projectionKey, projection)
+    }
+
     const active = Boolean(session?.activeRequestId)
     const state = !writer && active ? 'recovering' : session?.closing || session?.desktopTakingOver || session?.mobileControlReceipt ? 'finalizing'
       : pendingChoices.length ? 'waiting_input'
@@ -567,7 +583,7 @@ export function createRemoteSessionManager({
       conversationId,
       execution: {state, operationId: record && !record.terminal ? record.requestId : null,
         phase: writer?.compacting ? 'compacting' : null},
-      control: {owner, canWrite: owner === 'this_device' && Boolean(writer) && !session?.desktopTakingOver && !session?.closing},
+      control: {owner, epoch: projection.epoch, canWrite: owner === 'this_device' && Boolean(writer) && !session?.desktopTakingOver && !session?.closing},
       queue: {pendingCount: (session?.pendingSends || []).filter(item => item.deviceId === safeDeviceId).length},
       pendingChoices
     }
@@ -615,7 +631,8 @@ export function createRemoteSessionManager({
     const safeDeviceId = id(deviceId, 'deviceId')
     const conversationId = id(params.conversationId, 'conversationId')
     const epoch = generation
-    const check = () => assertActive(epoch, safeDeviceId)
+    const guardedCommand = commandGuard.getStore()
+    const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     return serialize(conversationId, async () => {
       let session = existingSession(conversationId)
       const existed = Boolean(session)
@@ -647,7 +664,8 @@ export function createRemoteSessionManager({
     const safeDeviceId = id(deviceId, 'deviceId')
     const conversationId = id(params.conversationId, 'conversationId')
     const epoch = generation
-    const check = () => assertActive(epoch, safeDeviceId)
+    const guardedCommand = commandGuard.getStore()
+    const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     return serialize(conversationId, async () => {
       const session = await ensureSession(conversationId, check)
       check()
@@ -681,6 +699,7 @@ export function createRemoteSessionManager({
       session.mobileControlled = true
 
       session.mobileDeviceId = safeDeviceId
+      session.controlEpoch = crypto.randomUUID()
       onControlChanged()
       return { ok: true, conversationId, windowId: session.windowRef, hidden: session.hidden, mobileControlled: true }
     })
@@ -708,6 +727,7 @@ export function createRemoteSessionManager({
       }
       session.mobileControlled = false
       session.mobileDeviceId = ''
+      session.controlEpoch = crypto.randomUUID()
       onControlChanged()
       return { ok: true, conversationId, windowId: session.windowRef, hidden: false, mobileControlled: false }
     })
@@ -810,6 +830,7 @@ export function createRemoteSessionManager({
         }
         session.mobileControlled = false
         session.mobileDeviceId = ''
+      session.controlEpoch = crypto.randomUUID()
         session.mobileOpened = false
         showOnDesktop({params: {conversationId: target}})
         onControlChanged()
@@ -869,7 +890,8 @@ export function createRemoteSessionManager({
     const promptCode = typeof params.promptCode === 'string' ? params.promptCode : ''
     if (!promptCode || promptCode.length > 160) throw remoteError('remote_assistant_invalid')
     const epoch = generation
-    const check = () => assertActive(epoch, safeDeviceId)
+    const guardedCommand = commandGuard.getStore()
+    const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     check()
     const key = requestKey(safeDeviceId, safeRequestId)
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation: 'conversation.create', promptCode })).digest('hex')
@@ -909,6 +931,7 @@ export function createRemoteSessionManager({
         session.mobileOpened = true
         session.mobileControlled = true
         session.mobileDeviceId = safeDeviceId
+      session.controlEpoch = crypto.randomUUID()
         record.conversationId = conversationId
         const result = { ok: true, conversationId, windowId: windowRef, hidden: session.hidden, created: true,
           promptCode, title: text(item.conversationTitle, 240) || `${promptCode} - 新会话` }
@@ -940,7 +963,7 @@ export function createRemoteSessionManager({
     if (session?.desktopTakingOver) throw remoteError('remote_desktop_takeover_in_progress')
     if (session?.mobileControlled) {
       if (session.mobileDeviceId && session.mobileDeviceId !== deviceId) throw remoteError('remote_conversation_controlled_by_other_device')
-      if (!session.mobileDeviceId) session.mobileDeviceId = deviceId
+      if (!session.mobileDeviceId) {session.mobileDeviceId = deviceId; session.controlEpoch = crypto.randomUUID()}
       return
     }
     // A hidden writer only exists for Mobile. The first paired device that
@@ -950,6 +973,7 @@ export function createRemoteSessionManager({
       session.mobileOpened = true
       session.mobileControlled = true
       session.mobileDeviceId = deviceId
+      session.controlEpoch = crypto.randomUUID()
       onControlChanged()
       return
     }
@@ -1041,7 +1065,8 @@ export function createRemoteSessionManager({
     if ((!body.trim() && uploadIds.length === 0) || body.length > 128 * 1024) throw remoteError('remote_message_invalid')
     if (uploadIds.length && !uploadManager?.authorizeForRequest) throw remoteError('remote_upload_unavailable')
     const epoch = generation
-    const check = () => assertActive(epoch, safeDeviceId)
+    const guardedCommand = commandGuard.getStore()
+    const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     check()
     const key = requestKey(safeDeviceId, safeRequestId)
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ conversationId, text: body, uploadIds })).digest('hex')
@@ -1103,7 +1128,8 @@ export function createRemoteSessionManager({
       throw remoteError('remote_message_invalid')
     }
     const epoch = generation
-    const check = () => assertActive(epoch, safeDeviceId)
+    const guardedCommand = commandGuard.getStore()
+    const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     check()
     const key = requestKey(safeDeviceId, safeRequestId)
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation, conversationId, uiMessageId, content })).digest('hex')
@@ -1168,7 +1194,8 @@ export function createRemoteSessionManager({
     const projectId = operation === 'conversation.project.set' ? params.projectId : ''
     if (operation === 'conversation.project.set' && (typeof projectId !== 'string' || projectId.length > 160 || /[\\/]/.test(projectId) || [...projectId].some(character => character.charCodeAt(0) < 32))) throw remoteError('remote_project_id_invalid')
     const epoch = generation
-    const check = () => assertActive(epoch, safeDeviceId)
+    const guardedCommand = commandGuard.getStore()
+    const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     check()
     const key = requestKey(safeDeviceId, safeRequestId)
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation, conversationId, title, projectId, confirmed: params.confirmed === true })).digest('hex')
@@ -1233,7 +1260,8 @@ export function createRemoteSessionManager({
     const safeRequestId = id(requestId, 'requestId')
     const patch = operation === 'conversation.config.patch' ? normalizeConfigPatch(params.patch) : null
     const epoch = generation
-    const check = () => assertActive(epoch, safeDeviceId)
+    const guardedCommand = commandGuard.getStore()
+    const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     check()
     const key = requestKey(safeDeviceId, safeRequestId)
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation, conversationId, patch })).digest('hex')
@@ -1300,7 +1328,8 @@ export function createRemoteSessionManager({
     const safeDeviceId = id(deviceId, 'deviceId')
     const safeRequestId = id(requestId, 'requestId')
     const epoch = generation
-    const check = () => assertActive(epoch, safeDeviceId)
+    const guardedCommand = commandGuard.getStore()
+    const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     check()
     const key = requestKey(safeDeviceId, safeRequestId)
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation: 'conversation.compact', conversationId })).digest('hex')
@@ -1609,6 +1638,8 @@ export function createRemoteSessionManager({
   return {
     send,
     runtimeSnapshot,
+
+    withCommandGuard: (guard, action) => commandGuard.run(guard, action),
 
     supportsContextUsage: true,
     listSendQueue, removeQueuedSend, submitChoice,

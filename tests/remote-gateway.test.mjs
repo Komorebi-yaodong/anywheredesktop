@@ -809,13 +809,39 @@ async function main() {
     assert.equal(windowEvent.event, 'conversation.windows.changed')
     assert.equal(windowEvent.payload.windows[0].busy, true)
 
+    const v11 = await sendEncryptedRequest({socket, session, requestId: 'request-contract-v11', method: 'remote.contract.negotiate', params: {versions: [{major: 1, minor: 1}]}})
+    assert.equal(v11.result.selected.minor, 1)
+    assert.ok(v11.result.capabilities.includes('command.durable.v1'))
+    const resourceV11 = await sendEncryptedRequest({socket, session, requestId: 'request-resource-v11', method: 'resource.get', params: {resource: 'conversation.messages.list', params: {conversationId: 'conversation-gateway-fixture-0001'}}})
+    assert.equal(resourceV11.ok, true)
+    assert.equal(resourceV11.result.value.messages[0].payload.blocks[0].text, 'hello')
+    assert.equal(Object.hasOwn(resourceV11.result.value.messages[0].payload, 'content'), false)
+    const durableIssuedAt = Date.now()
+    const durableInput = {commandId: `command-${durableIssuedAt}-project-v11-fixture`, issuedAt: durableIssuedAt, method: 'management.mutate', params: {section: 'assistants', id: 'DurableAssistant', operation: 'create', patch: {name: 'Durable Synthetic Project'}}}
+    const durable = await sendEncryptedRequest({socket, session, requestId: 'request-durable-v11', method: 'command.submit', params: durableInput})
+    assert.equal(durable.ok, true)
+    assert.equal(durable.result.state, 'succeeded')
+    const repeatDurable = await sendEncryptedRequest({socket, session, requestId: 'request-durable-repeat-v11', method: 'command.submit', params: durableInput})
+    assert.deepEqual(repeatDurable.result, durable.result)
+    const durableConflict = await sendEncryptedRequest({socket, session, requestId: 'request-durable-conflict-v11', method: 'command.submit', params: {...durableInput, params: {name: 'Changed'}}})
+    assert.equal(durableConflict.error.code, 'remote_command_id_conflict')
+    const durableStatus = await sendEncryptedRequest({socket, session, requestId: 'request-durable-status-v11', method: 'operation.status.get', params: {operationId: durableInput.commandId}})
+    assert.equal(durableStatus.result.state, 'succeeded')
+    const storedOperations = await storage.get('remote:operations:v1', null)
+    assert.ok(storedOperations.value.encrypted)
+    assert.equal(JSON.stringify(storedOperations).includes('Durable Synthetic Project'), false)
+    await sendEncryptedRequest({socket, session, requestId: 'request-back-v10', method: 'remote.contract.negotiate', params: {versions: [{major: 1, minor: 0}]}})
+
+
     assert.deepEqual(conversationCalls.map((item) => item.method), [
       'conversation.messages.list', // negotiated unified view above
+
       'conversation.list',
       ...Array(4).fill('conversation.list'),
       'conversation.messages.list',
       'conversation.windows.list',
-      'conversation.list'
+      'conversation.list',
+      'conversation.messages.list' // structured resource v1.1
     ])
 
     assert.ok(welcome.payload.capabilities.includes('conversation.request.get'))

@@ -1,10 +1,13 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "files": {
-    "index.cjs": "f34975b33f1129aa3f308e7d31d2cf429aa2861284975e049ac4d922054b709c",
-    "index.d.ts": "084c213b08b5d196cc537cbc5d00ee9d3db5dd5463fc687b164f248dd09238f7",
+    "index.cjs": "de1abad3fdc436559d4b003c6130b10cfa56b2a0795b348c8c7e834942436232",
+    "index.d.ts": "25aac41d3192724e3521d30ce5dee0cd2c8424738d146a3d9b6f76a307aa9707",
     "schema.json": "5f899ac18b6b7c77055e0271b648d966e2e8b3d70a6b7372adf7fe96e3f87ad5",
-    "package.json": "f05cff83fae0b68e25de45fa71b279117ed2b47586a8df31d255a74e5a9ce2e2",
+    "package.json": "f2ac8b6b2ccfc5fa1ce6eb8279e83ea155ab3c20b256ca53b90861652eabef50",
+    "routes.json": "3d614189cd3472b4919414ce4e30e3d902bf31ef362fd453304e2b8f588b7d17",
+    "extensions.cjs": "0ce4d5039f283df842ec782dd4ee3b49d994091443c988b0a2dbd693d62dd7ba",
+    "extensions.schema.json": "adb01952e8fbf815315bb686b2d0011ff6cc3a0ed8dcccf74153ee6facb40b9a",
     "fixtures/v1.0-view.json": "fc036d441e0ae6bd7a2265fa2ee1035760db1a8e92e7716d0087f08111d69115"
   }
 }

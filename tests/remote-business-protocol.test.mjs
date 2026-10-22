@@ -17,7 +17,7 @@ const service = createBusinessProtocol({
 })
 await assert.rejects(service.view(A, {conversationId: CID}), {code: 'remote_contract_negotiation_required'})
 assert.throws(() => service.negotiate(A, {versions: [{major: 99, minor: 0}]}), {code: 'remote_contract_version_unsupported'})
-assert.equal(service.negotiate(A, {versions: [{major: 1, minor: 9}]}).selected.minor, 0)
+assert.equal(service.negotiate(A, {versions: [{major: 1, minor: 9}]}).selected.minor, 1)
 service.negotiate(B, {versions: [{major: 1, minor: 0}]})
 const first = await service.view(A, {conversationId: CID})
 assert.equal(first.runtime.control.canWrite, false)
@@ -47,4 +47,4 @@ const legacy = await fs.readFile(new URL('./compat/legacy-v2-consumer.mjs', impo
 const legacyHash = (await fs.readFile(new URL('./compat/legacy-v2-consumer.sha256', import.meta.url), 'utf8')).trim()
 assert.equal(createHash('sha256').update(legacy).digest('hex'), legacyHash, 'frozen legacy consumer must not drift')
 
-console.log(JSON.stringify({ok: true, suite: 'remote-business-protocol', contractVersion: '1.0'}))
+console.log(JSON.stringify({ok: true, suite: 'remote-business-protocol', contractVersion: '1.1'}))

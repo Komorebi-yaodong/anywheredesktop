@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "files": {
+    "index.cjs": "f34975b33f1129aa3f308e7d31d2cf429aa2861284975e049ac4d922054b709c",
+    "index.d.ts": "084c213b08b5d196cc537cbc5d00ee9d3db5dd5463fc687b164f248dd09238f7",
+    "schema.json": "5f899ac18b6b7c77055e0271b648d966e2e8b3d70a6b7372adf7fe96e3f87ad5",
+    "package.json": "f05cff83fae0b68e25de45fa71b279117ed2b47586a8df31d255a74e5a9ce2e2",
+    "fixtures/v1.0-view.json": "fc036d441e0ae6bd7a2265fa2ee1035760db1a8e92e7716d0087f08111d69115"
+  }
+}

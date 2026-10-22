@@ -1,0 +1,415 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:anywhere:remote-contract:1.0",
+  "title": "Anywhere Remote business contract 1.0",
+  "$defs": {
+    "negotiation": {
+      "type": "object",
+      "required": [
+        "selected",
+        "capabilities",
+        "serverEpoch",
+        "limits"
+      ],
+      "properties": {
+        "selected": {
+          "type": "object",
+          "required": [
+            "major",
+            "minor"
+          ],
+          "properties": {
+            "major": {
+              "const": 1
+            },
+            "minor": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "serverEpoch": {
+          "type": "string"
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "eventRetention",
+            "operationRetentionMs"
+          ],
+          "properties": {
+            "eventRetention": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "operationRetentionMs": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "conversationId",
+        "execution",
+        "control",
+        "queue",
+        "pendingChoices"
+      ],
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,160}$"
+        },
+        "execution": {
+          "type": "object",
+          "required": [
+            "state",
+            "operationId",
+            "phase"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "idle",
+                "preparing",
+                "running",
+                "waiting_input",
+                "cancelling",
+                "finalizing",
+                "recovering"
+              ]
+            },
+            "operationId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[A-Za-z0-9_-]{8,160}$"
+            },
+            "phase": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "control": {
+          "type": "object",
+          "required": [
+            "owner",
+            "canWrite"
+          ],
+          "properties": {
+            "owner": {
+              "enum": [
+                "desktop",
+                "this_device",
+                "other_device",
+                "none",
+                "unknown"
+              ]
+            },
+            "canWrite": {
+              "type": "boolean"
+            }
+          }
+        },
+        "queue": {
+          "type": "object",
+          "required": [
+            "pendingCount"
+          ],
+          "properties": {
+            "pendingCount": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "pendingChoices": {
+          "type": "array"
+        }
+      }
+    },
+    "view": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "serverEpoch",
+        "sequence",
+        "cursor",
+        "page",
+        "runtime"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "serverEpoch": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "page": {
+          "type": "object",
+          "required": [
+            "conversation",
+            "messages",
+            "page"
+          ],
+          "properties": {
+            "conversation": {
+              "type": "object",
+              "required": [
+                "conversationId",
+                "revision"
+              ],
+              "properties": {
+                "conversationId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{8,160}$"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "messages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/message"
+              }
+            },
+            "page": {
+              "type": "object",
+              "required": [
+                "pageSize",
+                "nextBeforeUiOrder",
+                "hasMore"
+              ],
+              "properties": {
+                "pageSize": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "nextBeforeUiOrder": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "hasMore": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        }
+      }
+    },
+    "changes": {
+      "type": "object",
+      "required": [
+        "serverEpoch",
+        "sequence",
+        "cursor",
+        "resyncRequired",
+        "hasMore",
+        "events"
+      ],
+      "properties": {
+        "serverEpoch": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "resyncRequired": {
+          "type": "boolean"
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "sequence",
+              "conversationId",
+              "resources"
+            ],
+            "properties": {
+              "sequence": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "conversationId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[A-Za-z0-9_-]{8,160}$"
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "conversationId",
+        "state",
+        "terminal",
+        "progress"
+      ],
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,160}$"
+        },
+        "conversationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,160}$"
+        },
+        "state": {
+          "enum": [
+            "accepted",
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "progress": {
+          "$ref": "#/$defs/progress"
+        }
+      }
+    },
+    "message": {
+      "type": "object",
+      "required": [
+        "messageId",
+        "uiMessageId",
+        "role",
+        "order",
+        "payload"
+      ],
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "uiMessageId": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "content",
+            "reasoningContent",
+            "toolCalls"
+          ],
+          "properties": {
+            "content": {},
+            "reasoningContent": {
+              "type": "string"
+            },
+            "toolCalls": {
+              "type": "array"
+            }
+          }
+        }
+      }
+    },
+    "progress": {
+      "type": "object",
+      "required": [
+        "requestId",
+        "conversationId",
+        "event",
+        "eventSequence",
+        "terminal",
+        "text",
+        "reasoning",
+        "toolCalls",
+        "truncated"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,160}$"
+        },
+        "conversationId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,160}$"
+        },
+        "event": {
+          "type": "string"
+        },
+        "eventSequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "reasoning": {
+          "type": "string"
+        },
+        "toolCalls": {
+          "type": "array"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

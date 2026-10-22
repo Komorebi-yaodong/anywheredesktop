@@ -1,6 +1,8 @@
 import crypto from 'node:crypto'
 
 import {createBusinessProtocol} from './businessProtocol.js'
+
+import {createOperationJournal} from './operationJournal.js'
 import https from 'node:https'
 import { isIP } from 'node:net'
 import os from 'node:os'
@@ -270,7 +272,12 @@ export function createRemoteGateway({
   const activeSocketsByDeviceId = new Map()
   let activeSessionManager = sessionManager
 
-  const businessProtocol = createBusinessProtocol({readService: conversationReadService, getManager: () => activeSessionManager})
+  const operationJournal = createOperationJournal({
+    load: async () => {const value = await storageGet('remote:operations:v1', null); return value ? JSON.parse(decryptLocalSecret(value.encrypted)) : null},
+    save: async value => {const result = await dbStorageSetItem('remote:operations:v1', {encrypted: encryptLocalSecret(JSON.stringify(value))}); if (result?.ok === false) throw remoteError('remote_operation_storage_failed')}
+  })
+  const businessProtocol = createBusinessProtocol({readService: conversationReadService, getManager: () => activeSessionManager,
+    operations: operationJournal, dispatch: dispatchLegacy})
 
   const seenSessionHelloNonces = new Map()
   let unauthenticatedSocketCount = 0
@@ -322,7 +329,7 @@ export function createRemoteGateway({
     const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get']
 
     capabilities.push('remote.contract.negotiate')
-    if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get')
+    if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'transfer.request')
     if (conversationReadService) {
       capabilities.push('conversation.list', 'conversation.messages.list', 'conversation.windows.list')
       if (typeof getConversationMedia === 'function') capabilities.push('conversation.media.get')
@@ -723,6 +730,13 @@ export function createRemoteGateway({
 
   function sendEncryptedEventToDevice(deviceId = '', event, payload = {}) {
 
+    if (typeof payload.requestId === 'string' && typeof payload.conversationId === 'string') {
+      try {
+        const progress = activeSessionManager?.getRequest({deviceId, params: {requestId: payload.requestId}})
+        if (progress?.terminal) operationJournal.update(deviceId, payload.requestId, progress).catch(() => {})
+      } catch { /* non-operation notifications */ }
+    }
+
     businessProtocol.notify(event, payload, deviceId)
     const normalizedDeviceId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
     const eventName = typeof event === 'string' ? event.trim().slice(0, 120) : ''
@@ -1051,27 +1065,9 @@ export function createRemoteGateway({
     return parseJsonBuffer(Buffer.concat(chunks), { maxBytes: REMOTE_MAX_REQUEST_BYTES })
   }
 
-  async function handleEncryptedRpc({ socket, context, request }) {
-    const requestId = normalizeIdentifier(request.requestId, 'requestId', { minLength: 8, maxLength: 160 })
-    const method = typeof request.method === 'string' ? request.method.trim() : ''
-    const params = request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {}
-
-    try {
-      let result
-      switch (method) {
-
-        case 'remote.contract.negotiate':
-          result = businessProtocol.negotiate(context, params)
-          break
-        case 'conversation.view.get':
-          result = await businessProtocol.view(context, params)
-          break
-        case 'conversation.changes.get':
-          result = businessProtocol.changes(context, params)
-          break
-        case 'operation.get':
-          result = businessProtocol.operation(context, params)
-          break
+  async function dispatchLegacy(context, requestId, method, params) {
+    let result
+    switch (method) {
         case 'remote.ping':
           result = { at: nowIso() }
           break
@@ -1372,6 +1368,47 @@ export function createRemoteGateway({
           break
         default:
           throw remoteError('remote_method_unavailable')
+    }
+    return result
+  }
+
+  async function handleEncryptedRpc({ socket, context, request }) {
+    const requestId = normalizeIdentifier(request.requestId, 'requestId', { minLength: 8, maxLength: 160 })
+    const method = typeof request.method === 'string' ? request.method.trim() : ''
+    const params = request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {}
+
+    try {
+      let result
+      switch (method) {
+
+        case 'transfer.request':
+          result = await businessProtocol.transfer(context, requestId, params)
+          break
+
+        case 'resource.get':
+          result = await businessProtocol.resource(context, requestId, params)
+          break
+        case 'command.submit':
+          result = await businessProtocol.command(context, params)
+          break
+        case 'operation.status.get':
+          result = await businessProtocol.operationStatus(context, params)
+          break
+
+        case 'remote.contract.negotiate':
+          result = businessProtocol.negotiate(context, params)
+          break
+        case 'conversation.view.get':
+          result = await businessProtocol.view(context, params)
+          break
+        case 'conversation.changes.get':
+          result = businessProtocol.changes(context, params)
+          break
+        case 'operation.get':
+          result = businessProtocol.operation(context, params)
+          break
+        default:
+          result = await dispatchLegacy(context, requestId, method, params)
       }
 
       if (!sendRpcResult(socket, context, requestId, result)) {
@@ -1437,6 +1474,8 @@ export function createRemoteGateway({
       if (context.handshakeTimer) clearTimeout(context.handshakeTimer)
 
       context.authenticated = true
+
+      context.capabilities = getCapabilities()
       context.device = device
       context.session = accepted.session
       unauthenticatedSocketCount = Math.max(0, unauthenticatedSocketCount - 1)

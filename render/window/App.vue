@@ -2796,6 +2796,8 @@ const normalizeRemoteCommand = (input = {}) => {
     content: typeof input.content === 'string' ? input.content : '',
     uiMessageId: typeof input.uiMessageId === 'string' ? input.uiMessageId.trim() : '',
     title: typeof input.title === 'string' ? input.title.trim() : '',
+
+    projectId: typeof input.projectId === 'string' ? input.projectId : null,
     confirmed: input.confirmed === true,
     patch: input.patch && typeof input.patch === 'object' && !Array.isArray(input.patch) ? input.patch : null,
     uploadIds: Array.isArray(input.uploadIds)
@@ -2853,6 +2855,16 @@ const getRemoteSessionConfigSnapshot = (patched = []) => {
     snapshot.config.compact.contextLengthManual = true;
   }
   snapshot.deferred = Boolean(pendingRemoteConfigPatch.value);
+
+  const breakdown = promptTokenBreakdown.value;
+  snapshot.contextUsage = breakdown ? {
+    status: breakdown.error || loading.value || compacting.value ? 'stale' : breakdown.loading ? 'calculating' : breakdown.updatedAt ? 'ready' : 'unavailable',
+    estimated: true,
+    systemTokens: Math.max(0, Math.floor(Number(breakdown.systemTokens) || 0)),
+    conversationTokens: Math.max(0, Math.floor(Number(breakdown.conversationTokens) || 0)),
+    toolTokens: Math.max(0, Math.floor(Number(breakdown.toolTokens) || 0)),
+    updatedAt: Math.max(0, Number(breakdown.updatedAt) || 0)
+  } : null;
   return snapshot;
 };
 
@@ -3141,6 +3153,7 @@ const runRemoteConversationCommand = async (input = {}) => {
     if (isClosingWindow.value) {
       await emitRemoteRendererEventAndWait('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
     } else {
+      if (!loading.value && !compacting.value && !isPreparingSend.value && !isMcpLoading.value && typeof refreshPromptTokenBreakdown === 'function') await refreshPromptTokenBreakdown();
       await emitRemoteRendererEventAndWait('conversation.config.result', command, getRemoteSessionConfigSnapshot());
     }
     return;
@@ -3236,7 +3249,7 @@ const runRemoteConversationCommand = async (input = {}) => {
   }
 
 
-  if (['conversation.rename', 'conversation.delete'].includes(command.type)) {
+  if (['conversation.rename', 'conversation.delete', 'conversation.project.set'].includes(command.type)) {
     if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
       emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
       return;
@@ -3262,11 +3275,17 @@ const runRemoteConversationCommand = async (input = {}) => {
         if (!storage?.conversationId || storage.conversationId !== command.conversationId || !dirPath) {
           throw new Error('remote_conversation_not_found');
         }
-        if (command.type === 'conversation.rename') {
+        if (command.type === 'conversation.rename' || command.type === 'conversation.project.set') {
+          if (command.type === 'conversation.project.set') {
+            if (command.projectId === null) throw new Error('remote_project_id_invalid');
+            const projects = await window.api.readLocalProjects(dirPath);
+            if (command.projectId && !projects?.projects?.some(project => project.id === command.projectId)) throw new Error('remote_project_not_found');
+          }
           const renamed = await window.api.renameConversation({
             dirPath,
             conversationId: storage.conversationId,
-            title: command.title,
+            title: command.type === 'conversation.rename' ? command.title : defaultConversationName.value || storage.title,
+            ...(command.type === 'conversation.project.set' ? {projectId: command.projectId} : {}),
             expectedRevision: storage.revision,
             holderInstanceId: conversationInstanceId,
             leaseEpoch: conversationLease.value?.leaseEpoch

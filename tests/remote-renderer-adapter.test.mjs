@@ -91,8 +91,12 @@ const context = {
       consumedUploads.push(structuredClone(input))
       return { uploadId: input.uploadId, content: { type: 'image_url', image_url: { url: 'data:image/png;base64,UE5HREFUQQ==' } } }
     },
+    readLocalProjects: async () => ({projects: [{id: 'project-fixture', name: 'Fixture Project'}]}),
+
     renameConversation: async (input) => {
       actions.push(`rename-conversation:${input.title}`)
+
+      context.lastRenameInput = structuredClone(input)
       return { ok: true, title: input.title, revision: Number(input.expectedRevision) + 1 }
     },
     deleteConversation: async (input) => {
@@ -101,6 +105,8 @@ const context = {
     }
   } },
   currentConversationStorage: ref({ conversationId: 'conversation-renderer-fixture', revision: 0, dirPath: 'fixture-dir' }),
+
+  promptTokenBreakdown: ref({systemTokens: 0, conversationTokens: 0, toolTokens: 0, updatedAt: 0, loading: false, error: ''}),
   conversationLease: ref({ leaseEpoch: 4 }),
   conversationInstanceId: 'renderer-instance-fixture',
   isWindowBootstrapped: ref(true), isClosingWindow: ref(false), loading: ref(false), compacting: ref(false),
@@ -494,6 +500,22 @@ assert.equal(events.at(-1).event, 'conversation.mobile.control.result');
 assert.equal(events.at(-1).payload.ok, true);
 assert.equal(context.mobileControlActive.value, true);
 assert.equal(context.desktopTakeoverPending.value, false);
+
+
+context.promptTokenBreakdown = ref({systemTokens: 100, conversationTokens: 300, toolTokens: 50, updatedAt: 1234, loading: false, error: ''});
+context.refreshPromptTokenBreakdown = async () => {actions.push('refresh-context-usage')};
+const safeUsage = adapter.getRemoteSessionConfigSnapshot().contextUsage;
+assert.equal(safeUsage.systemTokens, 100);
+assert.equal(safeUsage.estimated, true);
+await adapter.runRemoteConversationCommand({type: 'conversation.project.set', conversationId: command.conversationId, requestId: 'renderer-project-set', projectId: 'project-fixture'});
+assert.equal(events.at(-1).event, 'conversation.operation.completed');
+assert.equal(context.lastRenameInput.projectId, 'project-fixture');
+assert.equal(context.lastRenameInput.leaseEpoch, 4);
+await adapter.runRemoteConversationCommand({type: 'conversation.project.set', conversationId: command.conversationId, requestId: 'renderer-project-clear', projectId: ''});
+assert.equal(events.at(-1).event, 'conversation.operation.completed');
+assert.equal(context.lastRenameInput.projectId, '');
+await adapter.runRemoteConversationCommand({type: 'conversation.project.set', conversationId: command.conversationId, requestId: 'renderer-project-missing', projectId: 'missing-project'});
+assert.equal(events.at(-1).payload.code, 'remote_project_not_found');
 
 
 // Serialize next-turn application with a newer patch arriving during tool apply.

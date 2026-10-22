@@ -407,6 +407,16 @@ async function run() {
   await lifecycle.manager.closeConversation({deviceId: DEVICE, params: {conversationId: CID}})
 
 
+  const projectMove = fixture({existing: true})
+  await projectMove.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}})
+  await projectMove.manager.setConversationProject({deviceId: DEVICE, requestId: 'request-project-move', params: {conversationId: CID, projectId: 'project-fixture'}})
+  assert.equal(projectMove.commands.at(-1).projectId, 'project-fixture')
+  renderer(projectMove, 'conversation.operation.completed', {operation: 'conversation.project.set', revision: 14}, 'request-project-move')
+  assert.equal(projectMove.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-project-move'}}).terminal, true)
+  await assert.rejects(projectMove.manager.setConversationProject({deviceId: DEVICE, requestId: 'request-project-conflict', params: {conversationId: CID, projectId: '../forbidden'}}), {code: 'remote_project_id_invalid'})
+  await projectMove.manager.closeConversation({deviceId: DEVICE, params: {conversationId: CID}})
+
+
   const metadata = fixture({ existing: true })
 
   await metadata.manager.takeover({ deviceId: DEVICE, params: { conversationId: CID } })
@@ -469,6 +479,8 @@ async function run() {
   configFixture.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
     conversationId: CID, requestId: 'request-config-patch', event: 'conversation.config.result', payload: {
       revision: 10, patched: ['model', 'systemPrompt'],
+
+      contextUsage: {status: 'ready', systemTokens: 100, conversationTokens: 200, toolTokens: 50, updatedAt: 1234, rawPrompt: 'NO', secret: 'NO'},
       config: { model: 'provider|model', reasoningEffort: 'high', voice: '', mcpServerIds: ['mcp-1'], skillIds: ['Skill One'], systemPrompt: 'Session only', compact: { triggerRatio: 0.8, keepRecentRounds: 4, secret: 'NO' } },
       options: {
         models: [{ value: 'provider|model', label: 'Model', api_key: 'NO' }],
@@ -481,6 +493,8 @@ async function run() {
   } })
   const configState = configFixture.manager.getRequest({ deviceId: DEVICE, params: { requestId: 'request-config-patch' } })
   assert.equal(configState.result.config.systemPrompt, 'Session only')
+
+  assert.deepEqual(configState.result.contextUsage, {status: 'ready', estimated: true, systemTokens: 100, conversationTokens: 200, toolTokens: 50, updatedAt: 1234})
   assert.deepEqual(configState.result.options.mcpServers, [{ id: 'mcp-1', name: 'MCP', tags: ['Research', '文件'], preset: true }])
   assert.equal(JSON.stringify(configState).includes('NO'), false)
   await configFixture.manager.getConfig({ deviceId: DEVICE, requestId: 'request-config-get', params: { conversationId: CID } })

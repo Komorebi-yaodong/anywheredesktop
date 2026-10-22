@@ -122,6 +122,15 @@ function sanitizeConfigResult(source = {}) {
     revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
     busy: source.busy === true,
     deferred: source.deferred === true,
+
+    contextUsage: source.contextUsage && typeof source.contextUsage === 'object' ? {
+      status: ['ready', 'calculating', 'stale', 'unavailable'].includes(source.contextUsage.status) ? source.contextUsage.status : 'unavailable',
+      estimated: true,
+      systemTokens: Math.min(1000000000, Math.max(0, Math.floor(Number(source.contextUsage.systemTokens) || 0))),
+      conversationTokens: Math.min(1000000000, Math.max(0, Math.floor(Number(source.contextUsage.conversationTokens) || 0))),
+      toolTokens: Math.min(1000000000, Math.max(0, Math.floor(Number(source.contextUsage.toolTokens) || 0))),
+      updatedAt: Math.max(0, Number(source.contextUsage.updatedAt) || 0)
+    } : null,
     patched: stringArray(Array.isArray(source.patched) ? source.patched : [], 'patched'),
     config: {
       model: text(config.model, 320), reasoningEffort: text(config.reasoningEffort, 32), voice: text(config.voice, 160),
@@ -529,6 +538,41 @@ export function createRemoteSessionManager({
     if (!session?.mobileControlled) throw remoteError('remote_conversation_takeover_required')
     if (session.mobileDeviceId && session.mobileDeviceId !== deviceId) throw remoteError('remote_conversation_controlled_by_other_device')
   }
+
+  // Stable business projection: never expose Renderer refs, paths or device IDs.
+  function runtimeSnapshot({deviceId, params = {}} = {}) {
+    parameters(params, ['conversationId'])
+    const safeDeviceId = id(deviceId, 'deviceId')
+    const conversationId = id(params.conversationId, 'conversationId')
+    assertActive(generation, safeDeviceId)
+    const session = sessions.get(conversationId)
+    const candidates = windows().filter(item => item.conversationId === conversationId)
+    const writer = candidates.find(item => !item.readOnly && !item.leasePending)
+    const record = session?.activeDeviceId === safeDeviceId && session?.activeRequestId
+      ? requests.get(requestKey(safeDeviceId, session.activeRequestId)) : null
+    const owner = writer && session?.mobileControlled && session.windowRef === writer.id
+      ? !session.mobileDeviceId || session.mobileDeviceId === safeDeviceId ? 'this_device' : 'other_device'
+      : writer ? 'desktop' : candidates.length ? 'unknown' : 'none'
+    const pendingChoices = owner === 'this_device' && session?.pendingChoices instanceof Map
+      ? [...session.pendingChoices].map(([toolCallId, questions]) => ({toolCallId, questions: sanitizeChoiceQuestions(questions)})) : []
+    const active = Boolean(session?.activeRequestId)
+    const state = !writer && active ? 'recovering' : session?.closing || session?.desktopTakingOver || session?.mobileControlReceipt ? 'finalizing'
+      : pendingChoices.length ? 'waiting_input'
+        : writer?.compacting ? 'running'
+          : writer?.generating ? 'running'
+            : active && record?.event === 'conversation.command.pending' ? 'preparing'
+              : active || writer?.busy ? 'running'
+                : candidates.length && !writer ? 'recovering' : 'idle'
+    return {
+      conversationId,
+      execution: {state, operationId: record && !record.terminal ? record.requestId : null,
+        phase: writer?.compacting ? 'compacting' : null},
+      control: {owner, canWrite: owner === 'this_device' && Boolean(writer) && !session?.desktopTakingOver && !session?.closing},
+      queue: {pendingCount: (session?.pendingSends || []).filter(item => item.deviceId === safeDeviceId).length},
+      pendingChoices
+    }
+  }
+
 
   function openedSessions({ deviceId, params = {} } = {}) {
     parameters(params, [])
@@ -1111,7 +1155,7 @@ export function createRemoteSessionManager({
   async function conversationMetadataCommand({ deviceId, requestId, params = {}, operation } = {}) {
     const allowed = operation === 'conversation.rename'
       ? ['conversationId', 'title']
-      : ['conversationId', 'confirmed']
+      : operation === 'conversation.project.set' ? ['conversationId', 'projectId'] : ['conversationId', 'confirmed']
     parameters(params, allowed)
     const conversationId = id(params.conversationId, 'conversationId')
     if (/\.(json|db)$/i.test(conversationId)) throw remoteError('remote_conversation_id_invalid')
@@ -1120,11 +1164,14 @@ export function createRemoteSessionManager({
     const title = operation === 'conversation.rename' ? text(params.title, 241).trim() : ''
     if (operation === 'conversation.rename' && (!title || title.length > 240)) throw remoteError('remote_conversation_title_invalid')
     if (operation === 'conversation.delete' && params.confirmed !== true) throw remoteError('remote_confirmation_required')
+
+    const projectId = operation === 'conversation.project.set' ? params.projectId : ''
+    if (operation === 'conversation.project.set' && (typeof projectId !== 'string' || projectId.length > 160 || /[\\/]/.test(projectId) || [...projectId].some(character => character.charCodeAt(0) < 32))) throw remoteError('remote_project_id_invalid')
     const epoch = generation
     const check = () => assertActive(epoch, safeDeviceId)
     check()
     const key = requestKey(safeDeviceId, safeRequestId)
-    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation, conversationId, title, confirmed: params.confirmed === true })).digest('hex')
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ operation, conversationId, title, projectId, confirmed: params.confirmed === true })).digest('hex')
     const previous = requests.get(key)
     if (previous) {
       if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
@@ -1154,7 +1201,7 @@ export function createRemoteSessionManager({
           requestId: safeRequestId,
           deviceId: safeDeviceId,
           conversationId,
-          ...(operation === 'conversation.rename' ? { title } : { confirmed: true })
+          ...(operation === 'conversation.rename' ? { title } : operation === 'conversation.project.set' ? {projectId} : { confirmed: true })
         })
         if (!dispatched?.ok) throw remoteError('remote_renderer_dispatch_failed')
         const result = { ok: true, operation, conversationId, windowId: session.windowRef, hidden: session.hidden, created: !hadSession }
@@ -1561,6 +1608,9 @@ export function createRemoteSessionManager({
 
   return {
     send,
+    runtimeSnapshot,
+
+    supportsContextUsage: true,
     listSendQueue, removeQueuedSend, submitChoice,
     listAssistants, createConversation,
 
@@ -1568,6 +1618,8 @@ export function createRemoteSessionManager({
     deleteMessage: (input) => mutate({ ...input, operation: 'conversation.message.delete' }),
     reaskMessage: (input) => mutate({ ...input, operation: 'conversation.message.reask' }),
     renameConversation: (input) => conversationMetadataCommand({ ...input, operation: 'conversation.rename' }),
+
+    setConversationProject: (input) => conversationMetadataCommand({...input, operation: 'conversation.project.set'}),
     deleteConversation: (input) => conversationMetadataCommand({ ...input, operation: 'conversation.delete' }),
     getConfig: (input) => configCommand({ ...input, operation: 'conversation.config.get' }),
     patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),

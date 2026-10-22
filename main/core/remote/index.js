@@ -1,4 +1,6 @@
 import crypto from 'node:crypto'
+
+import {createBusinessProtocol} from './businessProtocol.js'
 import https from 'node:https'
 import { isIP } from 'node:net'
 import os from 'node:os'
@@ -268,6 +270,8 @@ export function createRemoteGateway({
   const activeSocketsByDeviceId = new Map()
   let activeSessionManager = sessionManager
 
+  const businessProtocol = createBusinessProtocol({readService: conversationReadService, getManager: () => activeSessionManager})
+
   const seenSessionHelloNonces = new Map()
   let unauthenticatedSocketCount = 0
 
@@ -316,6 +320,9 @@ export function createRemoteGateway({
 
   function getCapabilities() {
     const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get']
+
+    capabilities.push('remote.contract.negotiate')
+    if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get')
     if (conversationReadService) {
       capabilities.push('conversation.list', 'conversation.messages.list', 'conversation.windows.list')
       if (typeof getConversationMedia === 'function') capabilities.push('conversation.media.get')
@@ -331,6 +338,9 @@ export function createRemoteGateway({
         'conversation.config.get', 'conversation.config.patch', 'conversation.context.refresh', 'conversation.compact', 'conversation.compact.cancel'
       )
     }
+    if (typeof activeSessionManager?.setConversationProject === 'function') capabilities.push('conversation.project.set')
+    if (activeSessionManager?.supportsContextUsage === true) capabilities.push('conversation.context.usage.v1')
+
     if (uploadManager) capabilities.push('attachment.begin', 'attachment.chunk', 'attachment.complete', 'attachment.abort')
     if (businessConfigService) capabilities.push('business.config.get', 'business.config.replace')
     if (mobileWorkspaceService) capabilities.push(
@@ -658,6 +668,8 @@ export function createRemoteGateway({
   }
 
   function broadcastEncryptedEvent(event, payload = {}) {
+
+    businessProtocol.notify(event, payload)
     const eventName = typeof event === 'string' ? event.trim().slice(0, 120) : ''
     if (!eventName) return { ok: false, sent: 0 }
     let sent = 0
@@ -710,6 +722,8 @@ export function createRemoteGateway({
 
 
   function sendEncryptedEventToDevice(deviceId = '', event, payload = {}) {
+
+    businessProtocol.notify(event, payload, deviceId)
     const normalizedDeviceId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
     const eventName = typeof event === 'string' ? event.trim().slice(0, 120) : ''
     if (!eventName) return { ok: false, sent: 0 }
@@ -1045,6 +1059,19 @@ export function createRemoteGateway({
     try {
       let result
       switch (method) {
+
+        case 'remote.contract.negotiate':
+          result = businessProtocol.negotiate(context, params)
+          break
+        case 'conversation.view.get':
+          result = await businessProtocol.view(context, params)
+          break
+        case 'conversation.changes.get':
+          result = businessProtocol.changes(context, params)
+          break
+        case 'operation.get':
+          result = businessProtocol.operation(context, params)
+          break
         case 'remote.ping':
           result = { at: nowIso() }
           break
@@ -1304,6 +1331,11 @@ export function createRemoteGateway({
         case 'conversation.config.patch':
           if (!activeSessionManager) throw remoteError('remote_method_unavailable')
           result = await activeSessionManager.patchConfig({ deviceId: context.device.deviceId, requestId, params })
+          break
+
+        case 'conversation.project.set':
+          if (typeof activeSessionManager?.setConversationProject !== 'function') throw remoteError('remote_method_unavailable')
+          result = await activeSessionManager.setConversationProject({deviceId: context.device.deviceId, requestId, params})
           break
 
         case 'conversation.rename':

@@ -1,0 +1,9 @@
+{
+  "name": "@anywhere/remote-contract",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "description": "Vendored, version-pinned wire contract; no cross-checkout runtime dependency",
+  "files": ["index.cjs", "index.d.ts", "schema.json", "fixtures"]
+}

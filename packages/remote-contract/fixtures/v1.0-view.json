@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "serverEpoch": "fixture-epoch-0001",
+  "cursor": "fixture-epoch-0001:7",
+  "sequence": 7,
+  "page": {
+    "ok": true,
+    "conversation": {"conversationId": "conversation-contract-fixture", "title": "Frozen conversation", "revision": 3, "createdAt": "", "updatedAt": "", "project": null},
+    "messages": [{"messageId": "canonical-fixture-0001", "uiMessageId": "ui-fixture-0001", "role": "assistant", "order": 1, "payload": {"content": "Frozen safe prose", "reasoningContent": "", "summary": "", "summaryPrefix": "", "timestamp": "", "completedTimestamp": "", "aiName": "Fixture", "voiceName": "", "status": "", "toolCalls": []}}],
+    "tasks": [],
+    "page": {"pageSize": 50, "nextBeforeUiOrder": null, "hasMore": false}
+  },
+  "runtime": {
+    "conversationId": "conversation-contract-fixture",
+    "execution": {"state": "idle", "operationId": null, "phase": null},
+    "control": {"owner": "desktop", "canWrite": false},
+    "queue": {"pendingCount": 0},
+    "pendingChoices": []
+  }
+}

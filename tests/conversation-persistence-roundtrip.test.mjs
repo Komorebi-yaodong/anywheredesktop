@@ -335,6 +335,23 @@ async function main() {
       assert.deepEqual(opened.sessionData.sessionMcpToolOverrides, statePatch.sessionMcpToolOverrides)
     }
 
+    // Project changes use the same lease-owning metadata path as Mobile.
+    let projectData = await readLocalProjects(root)
+    projectData.projects.push({id: 'remote-project-fixture', name: 'Remote Project', files: [], conversationIds: []})
+    await writeLocalProjects(root, projectData)
+    const moved = await store.renameConversation({dirPath: root, conversationId, title: 'project-title-kept', projectId: 'remote-project-fixture', expectedRevision: revision, holderInstanceId, leaseEpoch: lease.leaseEpoch})
+    revision = moved.revision
+    assert.ok((await readLocalProjects(root)).projects.find(item => item.id === 'remote-project-fixture').conversationIds.includes(conversationId))
+    const projectReopened = await store.openConversation({dirPath: root, reference: conversationId, activeOnly: true, pageSize: 200})
+    assert.equal(projectReopened.descriptor.title, 'project-title-kept')
+    const renamedAgain = await store.renameConversation({dirPath: root, conversationId, title: 'later-title', expectedRevision: revision, holderInstanceId, leaseEpoch: lease.leaseEpoch})
+    revision = renamedAgain.revision
+    assert.ok((await readLocalProjects(root)).projects.find(item => item.id === 'remote-project-fixture').conversationIds.includes(conversationId), 'later metadata save preserves assignment')
+    const ungrouped = await store.renameConversation({dirPath: root, conversationId, title: 'later-title', projectId: '', expectedRevision: revision, holderInstanceId, leaseEpoch: lease.leaseEpoch})
+    revision = ungrouped.revision
+    assert.equal((await readLocalProjects(root)).projects.some(item => item.conversationIds.includes(conversationId)), false)
+
+
     await verifyRecoveredUiProjection(root)
 
     await verifyUiLinkRepair(root)

@@ -294,9 +294,9 @@ async function main() {
       conversationCalls.push({ method: 'conversation.messages.list', params: structuredClone(params) })
       return {
         ok: true,
-        conversation: { conversationId: params.conversationId, title: 'Gateway Fixture', revision: 3 },
-        messages: [{ messageId: 'message-1', role: 'user', order: 1, payload: { content: 'hello' } }],
-        page: { hasMore: false, nextBeforeUiOrder: null }
+        conversation: { conversationId: params.params?.conversationId || params.conversationId, title: 'Gateway Fixture', revision: 3 },
+        messages: [{ messageId: 'message-1', uiMessageId: 'ui-message-1', role: 'user', order: 1, payload: { content: 'hello', reasoningContent: '', toolCalls: [] } }],
+        page: { pageSize: 50, hasMore: false, nextBeforeUiOrder: null }
       }
     },
     getWindows() {
@@ -628,6 +628,20 @@ async function main() {
     assert.ok(welcome.payload.capabilities.includes('conversation.messages.list'))
     assert.ok(welcome.payload.capabilities.includes('conversation.windows.list'))
 
+    // Old RPCs remain usable without negotiation. New business endpoints require it.
+    const prematureView = await sendEncryptedRequest({socket, session, requestId: 'request-contract-before-negotiate', method: 'conversation.view.get', params: {conversationId: 'conversation-gateway-fixture-0001'}})
+    assert.equal(prematureView.error.code, 'remote_contract_negotiation_required')
+    const negotiated = await sendEncryptedRequest({socket, session, requestId: 'request-contract-negotiate', method: 'remote.contract.negotiate', params: {versions: [{major: 1, minor: 0}]}})
+    assert.equal(negotiated.result.selected.major, 1)
+    assert.ok(negotiated.result.capabilities.includes('conversation.runtime.v1'))
+    const unifiedView = await sendEncryptedRequest({socket, session, requestId: 'request-contract-view', method: 'conversation.view.get', params: {conversationId: 'conversation-gateway-fixture-0001', pageSize: 50}})
+    assert.equal(unifiedView.ok, true)
+    assert.equal(unifiedView.result.runtime.conversationId, 'conversation-gateway-fixture-0001')
+    const changes = await sendEncryptedRequest({socket, session, requestId: 'request-contract-changes', method: 'conversation.changes.get', params: {conversationId: 'conversation-gateway-fixture-0001', cursor: unifiedView.result.cursor}})
+    assert.equal(changes.result.resyncRequired, false)
+    assert.equal(JSON.stringify(unifiedView).includes('PRIVATE'), false)
+
+
     assert.ok(welcome.payload.capabilities.includes('attachment.begin'))
     assert.ok(welcome.payload.capabilities.includes('attachment.chunk'))
     assert.ok(welcome.payload.capabilities.includes('attachment.complete'))
@@ -796,6 +810,7 @@ async function main() {
     assert.equal(windowEvent.payload.windows[0].busy, true)
 
     assert.deepEqual(conversationCalls.map((item) => item.method), [
+      'conversation.messages.list', // negotiated unified view above
       'conversation.list',
       ...Array(4).fill('conversation.list'),
       'conversation.messages.list',

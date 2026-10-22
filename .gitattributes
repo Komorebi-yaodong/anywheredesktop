@@ -1,0 +1,3 @@
+# Published protocol artifacts and frozen compatibility baselines must hash identically.
+packages/remote-contract/** text eol=lf
+tests/compat/** text eol=lf

@@ -647,6 +647,47 @@ async function main() {
     assert.ok(welcome.payload.capabilities.includes('attachment.complete'))
     assert.ok(welcome.payload.capabilities.includes('attachment.abort'))
 
+
+    // Full-size image chunks may be in flight together, but one receiver owns
+    // decryption order. Verify the actual encrypted envelope and upload manager.
+    const photoBytes = Buffer.alloc(3 * 128 * 1024, 0x5a)
+    const photoSha = crypto.createHash('sha256').update(photoBytes).digest('base64url')
+    const photoBegin = await sendEncryptedRequest({socket, session, requestId: 'request-photo-pipeline-begin', method: 'attachment.begin',
+      params: {name: 'synthetic-photo.jpg', type: 'image/jpeg', size: photoBytes.length, sha256: photoSha}})
+    assert.equal(photoBegin.ok, true)
+    const photoUploadId = photoBegin.result.upload.uploadId
+    const photoReceipts = new Map()
+    await new Promise((resolve, reject) => {
+      const deadline = setTimeout(() => {cleanup(); reject(new Error('photo_pipeline_timeout'))}, 10000)
+      const cleanup = () => {clearTimeout(deadline); socket.off('message', receive)}
+      const receive = raw => {
+        try {
+          const frame = JSON.parse(raw.toString())
+          if (frame.type !== 'remote.encrypted') return
+          const message = session.decrypt(frame)
+          if (message.kind !== 'response' || !String(message.requestId).startsWith('request-photo-pipeline-chunk-')) return
+          assert.equal(message.ok, true)
+          const index = Number(message.requestId.slice('request-photo-pipeline-chunk-'.length))
+          assert.equal(message.result.upload.receivedBytes, (index + 1) * 128 * 1024)
+          assert.equal(message.result.upload.nextChunkIndex, index + 1)
+          photoReceipts.set(index, message.result.upload)
+          if (photoReceipts.size === 3) {cleanup(); resolve()}
+        } catch (error) {cleanup(); reject(error)}
+      }
+      socket.on('message', receive)
+      for (let index = 0; index < 3; index++) {
+        const frame = session.encrypt({kind: 'request', requestId: `request-photo-pipeline-chunk-${index}`, method: 'attachment.chunk',
+          params: {uploadId: photoUploadId, index, data: photoBytes.subarray(index * 128 * 1024, (index + 1) * 128 * 1024).toString('base64url')}})
+        assert.ok(Buffer.byteLength(JSON.stringify(frame)) < 256 * 1024)
+        socket.send(JSON.stringify(frame))
+      }
+    })
+    const photoComplete = await sendEncryptedRequest({socket, session, requestId: 'request-photo-pipeline-complete', method: 'attachment.complete', params: {uploadId: photoUploadId}})
+    assert.equal(photoComplete.result.upload.sha256, photoSha)
+    assert.equal(photoComplete.result.upload.state, 'completed')
+    await sendEncryptedRequest({socket, session, requestId: 'request-photo-pipeline-abort', method: 'attachment.abort', params: {uploadId: photoUploadId}})
+
+
     assert.ok(welcome.payload.capabilities.includes('management.catalog'))
     const structuredCatalog=await sendEncryptedRequest({socket,session,requestId:'request-management-catalog',method:'management.catalog',params:{section:'providers'}})
     assert.equal(structuredCatalog.ok,true)

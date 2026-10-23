@@ -81,6 +81,19 @@ try {
   })
   assert.equal(Buffer.from(inlineChunk.data, 'base64url').toString(), inlineBytes.toString())
   assert.equal(service.register({ deviceId, conversationId, source: inlineSource }).mediaId, inline.mediaId)
+  // Register computes the immutable inline hash once; repeated byte ranges
+  // must not hash the entire image on every 96 KiB request.
+  const hashFunction = crypto.createHash
+  let repeatedHashes = 0
+  crypto.createHash = (...args) => { repeatedHashes += 1; return hashFunction(...args) }
+  try {
+    for (let index = 0; index < 5; index++) {
+      const part = await service.get({ deviceId, params: {conversationId, mediaId: inline.mediaId, offset: 0, length: 8} })
+      assert.equal(part.sha256, inlineChunk.sha256)
+    }
+    assert.equal(repeatedHashes, 0)
+  } finally { crypto.createHash = hashFunction }
+
   console.log(JSON.stringify({ ok: true, suite: 'conversation-media' }))
 } finally {
   await fs.rm(root, { recursive: true, force: true })

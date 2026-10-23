@@ -129,6 +129,7 @@ export function createRemoteConversationMediaService() {
       ...(inline ? { buffer: inline.bytes } : {}),
       mimeType,
       privateKey,
+      ...(inline ? {contentHash: sourceKey.slice(5)} : existing?.contentHash ? {contentHash: existing.contentHash, contentHashMarker: existing.contentHashMarker} : {}),
       expiresAtMs: Date.now() + REF_TTL_MS
     })
     idsByPrivateKey.set(privateKey, mediaId)
@@ -136,7 +137,8 @@ export function createRemoteConversationMediaService() {
   }
 
   async function contentHash(entry, stats = null) {
-    if (Buffer.isBuffer(entry.buffer)) return crypto.createHash(MEDIA_VERSION_ALGORITHM).update(entry.buffer).digest('hex')
+    // Inline buffers are immutable and already content-hashed when registered.
+    if (Buffer.isBuffer(entry.buffer)) return entry.contentHash
     const marker = `${stats?.size || 0}:${stats?.mtimeMs || 0}:${stats?.ctimeMs || 0}`
     if (entry.contentHash && entry.contentHashMarker === marker) return entry.contentHash
     const bytes = await fs.readFile(entry.filePath)

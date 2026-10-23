@@ -158,7 +158,7 @@ async function main() {
     const toolOnlyAssistant = first.messages.find((message) => message.uiMessageId === 'ui-4')
     assert.equal(toolOnlyAssistant?.payload.timestamp, '2026-01-01T00:00:04.000Z')
     assert.equal(toolOnlyAssistant?.payload.completedTimestamp, '2026-01-01T00:00:06.000Z')
-    assert.deepEqual(toolOnlyAssistant?.payload.toolCalls, [{ id: 'tool-secret', name: 'read_file', status: 'finished', arguments: {}, result: '[已隐藏敏感内容]' }])
+    assert.deepEqual(toolOnlyAssistant?.payload.toolCalls, [{ id: 'tool-secret', name: 'read_file', status: 'finished', arguments: {}, result: 'SECRET_TOOL_RESULT' }])
     const serializedFirst = JSON.stringify(first)
     for (const forbidden of [
       PIXEL_DATA_URL,
@@ -171,13 +171,15 @@ async function main() {
       'SECRET_PASSWORD',
       'SECRET_ENV_VALUE',
       'SECRET_TOKEN',
-      'SECRET_TOOL_RESULT',
       'dbFile',
       'dirPath',
       'legacyJson'
     ]) {
       assert.equal(serializedFirst.includes(forbidden), false, `remote DTO leaked: ${forbidden}`)
     }
+    assert.ok(serializedFirst.includes('SECRET_TOOL_RESULT'), 'completed rendered tool output stays visible to the paired Mobile')
+    assert.equal(serializedFirst.includes('[已隐藏敏感内容]'), false)
+
     assert.ok(serializedFirst.includes('pixel.png'))
     assert.ok(serializedFirst.includes('attachmentId'))
     assert.ok(serializedFirst.includes('sha256'))

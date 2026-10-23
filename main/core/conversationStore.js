@@ -723,9 +723,6 @@ function sanitizeRemotePayload(value, resolveAttachment, context = {}) {
   return value
 }
 
-const REMOTE_SENSITIVE_TEXT_PATTERN = /(?:api[_ -]?key|secret|password|authorization|bearer\s+[A-Za-z0-9._-]+|token|credential|cookie|private[_ -]?key)/i
-
-
 function sanitizeRemoteToolDetail(value, context = {}) {
   if (typeof value !== 'string') return sanitizeRemotePayload(value, () => ({ type: 'attachment', unavailable: true }), context)
   const source = value.trim()
@@ -734,7 +731,6 @@ function sanitizeRemoteToolDetail(value, context = {}) {
     const parsed = JSON.parse(source)
     return sanitizeRemotePayload(parsed, () => ({ type: 'attachment', unavailable: true }), context)
   } catch {
-    if (REMOTE_SENSITIVE_TEXT_PATTERN.test(source)) return '[已隐藏敏感内容]'
     const cleaned = sanitizeRemoteText(source, context)
     if (/\[local-file-hidden\]|\[local-media-unavailable\]/.test(cleaned)) return '[已隐藏本地路径]'
     return cleaned
@@ -755,8 +751,11 @@ export function sanitizeRemoteToolCalls(toolCalls = [], context = {}) {
         name: normalizeText(source.name || source.function?.name).trim(),
         status: normalizeText(source.approvalStatus || source.status).trim(),
         arguments: sanitizeRemoteToolDetail(rawArgs, context),
+        // Historical result is already rendered in the Desktop conversation.
+        // The paired Mobile presents that exact result; only live input uses the
+        // narrower execution-time projection above.
         ...(Object.hasOwn(source, 'result') || Object.hasOwn(source, 'content')
-          ? { result: sanitizeRemoteToolDetail(rawResult, context) }
+          ? { result: rawResult }
           : {}),
         ...(Array.isArray(choiceQuestions)
           ? { choice: { questions: choiceQuestions.map((question) => ({

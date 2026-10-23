@@ -7,7 +7,7 @@ export const REMOTE_UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024
 export const REMOTE_UPLOAD_MAX_DEVICE_BYTES = 64 * 1024 * 1024
 export const REMOTE_UPLOAD_MAX_CONCURRENT = 8
 export const REMOTE_UPLOAD_MAX_RETAINED = 32
-export const REMOTE_UPLOAD_MAX_CHUNK_BYTES = 128 * 1024
+export const REMOTE_UPLOAD_MAX_CHUNK_BYTES = 512 * 1024
 export const REMOTE_UPLOAD_TTL_MS = 10 * 60 * 1000
 
 const MIME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/

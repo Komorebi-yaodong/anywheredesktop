@@ -7,7 +7,10 @@ export const REMOTE_HEALTH_PATH = '/health'
 export const REMOTE_DEFAULT_PORT = 17860
 export const REMOTE_PAIRING_TTL_MS = 2 * 60 * 1000
 export const REMOTE_MAX_DEVICES = 20
-export const REMOTE_MAX_FRAME_BYTES = 256 * 1024
+// 512 KiB attachment bytes expand twice through Base64URL + encrypted JSON.
+export const REMOTE_MAX_FRAME_BYTES = 1024 * 1024
+// Responses/events remain compatible with existing Mobile receivers.
+export const REMOTE_MAX_RESPONSE_FRAME_BYTES = 256 * 1024
 export const REMOTE_MAX_REQUEST_BYTES = 128 * 1024
 
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/

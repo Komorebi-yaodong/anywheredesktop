@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createRemoteUploadManager } from '../main/core/remote/uploadManager.js'
+import { createRemoteUploadManager, REMOTE_UPLOAD_MAX_FILE_BYTES } from '../main/core/remote/uploadManager.js'
 
 const DEVICE = 'device-upload-fixture-0001'
 const OTHER_DEVICE = 'device-upload-fixture-0002'
@@ -37,7 +37,7 @@ async function main() {
     const payload = Buffer.from('encrypted upload fixture')
     const started = await begin(manager, payload)
     assert.equal(started.upload.state, 'uploading')
-    assert.equal(started.upload.maxChunkBytes, 128 * 1024)
+    assert.equal(started.upload.maxChunkBytes, 512 * 1024)
 
     const duplicateBegin = await manager.begin({
       deviceId: DEVICE,
@@ -148,6 +148,21 @@ async function main() {
       code: 'remote_upload_integrity_failed'
     })
     assert.equal(manager.getUpload(corrupt.upload.uploadId), null, 'integrity failure must delete the temporary file')
+
+    // The exact 512 KiB boundary is accepted; one extra byte never advances state.
+    assert.equal(REMOTE_UPLOAD_MAX_FILE_BYTES, 25 * 1024 * 1024)
+    const boundaryData = Buffer.alloc(512 * 1024, 0x6b)
+    const boundary = await begin(manager, boundaryData)
+    await assert.rejects(manager.chunk({deviceId: DEVICE, params: {
+      uploadId: boundary.upload.uploadId, index: 0, data: encoded(Buffer.alloc(boundaryData.length + 1))
+    }}), {code: 'remote_invalid_base64url'})
+    assert.equal(manager.getUpload(boundary.upload.uploadId).receivedBytes, 0)
+    const boundaryAck = await manager.chunk({deviceId: DEVICE, params: {
+      uploadId: boundary.upload.uploadId, index: 0, data: encoded(boundaryData)
+    }})
+    assert.equal(boundaryAck.upload.receivedBytes, boundaryData.length)
+    assert.equal((await manager.complete({deviceId: DEVICE, params: {uploadId: boundary.upload.uploadId}})).upload.sha256, digest(boundaryData))
+    await manager.abort({deviceId: DEVICE, params: {uploadId: boundary.upload.uploadId}})
 
     const expiringData = Buffer.from('expires')
     const expiring = await begin(manager, expiringData)

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import {
   REMOTE_MAX_FRAME_BYTES,
+  REMOTE_MAX_RESPONSE_FRAME_BYTES,
   REMOTE_PROTOCOL_VERSION,
   buildFrameAad,
   canonicalBuffer,
@@ -544,6 +545,7 @@ export function completeSessionHello({ state, accept, expectedDeviceId, expected
 
 export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, sendDirection, receiveDirection }) {
   const safeSessionId = normalizeIdentifier(sessionId, 'sessionId', { minLength: 16, maxLength: 128 })
+  const maxSendFrameBytes = sendDirection === 'desktop-to-client' ? REMOTE_MAX_RESPONSE_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES
   if (!Buffer.isBuffer(sendKey) || sendKey.length !== SESSION_KEY_BYTES || !Buffer.isBuffer(receiveKey) || receiveKey.length !== SESSION_KEY_BYTES) {
     throw remoteError('remote_session_key_invalid')
   }
@@ -581,7 +583,7 @@ export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, send
       }
       let aad
       try {
-        if (plaintext.length > REMOTE_MAX_FRAME_BYTES) throw remoteError('remote_payload_size_invalid')
+        if (plaintext.length > maxSendFrameBytes) throw remoteError('remote_payload_size_invalid')
         aad = buildFrameAad({ sessionId: safeSessionId, sequence, direction: sendDirection })
         const encrypted = encryptAead({ key: sendKey, plaintext, aad })
         const frame = {
@@ -593,7 +595,7 @@ export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, send
         }
         // The transport limit applies to the envelope, not its plaintext.
         // Base64url expansion must be checked before committing the sequence.
-        if (Buffer.byteLength(JSON.stringify(frame)) > REMOTE_MAX_FRAME_BYTES) {
+        if (Buffer.byteLength(JSON.stringify(frame)) > maxSendFrameBytes) {
           throw remoteError('remote_payload_size_invalid')
         }
         nextSendSequence += 1

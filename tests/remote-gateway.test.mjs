@@ -9,6 +9,7 @@ import { WebSocket } from 'ws'
 import { createRemoteGateway } from '../main/core/remote/index.js'
 import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
 import { createRemoteUploadManager } from '../main/core/remote/uploadManager.js'
+import { REMOTE_MAX_FRAME_BYTES } from '../main/core/remote/protocol.js'
 import { createRemoteBusinessConfigService } from '../main/core/remote/businessConfig.js'
 import { createRemoteManagementService } from '../main/core/remote/management.js'
 import {
@@ -650,12 +651,20 @@ async function main() {
 
     // Full-size image chunks may be in flight together, but one receiver owns
     // decryption order. Verify the actual encrypted envelope and upload manager.
-    const photoBytes = Buffer.alloc(3 * 128 * 1024, 0x5a)
+    const photoBytes = Buffer.alloc(3 * 512 * 1024, 0x5a)
     const photoSha = crypto.createHash('sha256').update(photoBytes).digest('base64url')
     const photoBegin = await sendEncryptedRequest({socket, session, requestId: 'request-photo-pipeline-begin', method: 'attachment.begin',
       params: {name: 'synthetic-photo.jpg', type: 'image/jpeg', size: photoBytes.length, sha256: photoSha}})
     assert.equal(photoBegin.ok, true)
+    assert.equal(photoBegin.result.upload.maxChunkBytes, 512 * 1024)
+
     const photoUploadId = photoBegin.result.upload.uploadId
+    const oversizedChunk = await sendEncryptedRequest({socket, session, requestId: 'request-photo-oversized-chunk', method: 'attachment.chunk',
+      params: {uploadId: photoUploadId, index: 0, data: Buffer.alloc(512 * 1024 + 1).toString('base64url')}})
+    assert.equal(oversizedChunk.ok, false)
+    assert.equal(oversizedChunk.error.code, 'remote_invalid_base64url')
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-photo-after-refusal-ping', method: 'remote.ping'})).ok, true)
+
     const photoReceipts = new Map()
     await new Promise((resolve, reject) => {
       const deadline = setTimeout(() => {cleanup(); reject(new Error('photo_pipeline_timeout'))}, 10000)
@@ -668,7 +677,7 @@ async function main() {
           if (message.kind !== 'response' || !String(message.requestId).startsWith('request-photo-pipeline-chunk-')) return
           assert.equal(message.ok, true)
           const index = Number(message.requestId.slice('request-photo-pipeline-chunk-'.length))
-          assert.equal(message.result.upload.receivedBytes, (index + 1) * 128 * 1024)
+          assert.equal(message.result.upload.receivedBytes, (index + 1) * 512 * 1024)
           assert.equal(message.result.upload.nextChunkIndex, index + 1)
           photoReceipts.set(index, message.result.upload)
           if (photoReceipts.size === 3) {cleanup(); resolve()}
@@ -677,8 +686,10 @@ async function main() {
       socket.on('message', receive)
       for (let index = 0; index < 3; index++) {
         const frame = session.encrypt({kind: 'request', requestId: `request-photo-pipeline-chunk-${index}`, method: 'attachment.chunk',
-          params: {uploadId: photoUploadId, index, data: photoBytes.subarray(index * 128 * 1024, (index + 1) * 128 * 1024).toString('base64url')}})
-        assert.ok(Buffer.byteLength(JSON.stringify(frame)) < 256 * 1024)
+          params: {uploadId: photoUploadId, index, data: photoBytes.subarray(index * 512 * 1024, (index + 1) * 512 * 1024).toString('base64url')}})
+        const frameBytes = Buffer.byteLength(JSON.stringify(frame))
+        assert.ok(frameBytes > 512 * 1024, 'encoded frame must exceed the old transport limit')
+        assert.ok(frameBytes < REMOTE_MAX_FRAME_BYTES, '512 KiB chunks must fit the bounded encrypted frame')
         socket.send(JSON.stringify(frame))
       }
     })
@@ -958,7 +969,7 @@ async function main() {
     assert.equal(invalidComplete.error.code, 'remote_upload_integrity_failed')
     assert.equal(uploadManager.getUpload(invalidUploadId), null)
 
-    const attachmentPayload = Buffer.alloc(128 * 1024, 0x5a)
+    const attachmentPayload = Buffer.alloc(512 * 1024, 0x5a)
     const attachmentBegin = await sendEncryptedRequest({
       ...reconnected,
       requestId: 'request-attachment-begin',

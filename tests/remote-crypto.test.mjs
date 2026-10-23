@@ -13,6 +13,7 @@ import {
 } from '../main/core/remote/cryptoSession.js'
 import {
   REMOTE_PROTOCOL_VERSION,
+  REMOTE_MAX_FRAME_BYTES,
   normalizeRemoteSettings,
   remoteError
 } from '../main/core/remote/protocol.js'
@@ -166,9 +167,9 @@ function run() {
     deviceId,
     desktopId: fixture.context.desktopId
   })
-  expectCode(() => sequenceConnection.deviceSession.encrypt({ content: 'x'.repeat(300 * 1024) }), 'remote_payload_size_invalid')
+  expectCode(() => sequenceConnection.deviceSession.encrypt({ content: 'x'.repeat(REMOTE_MAX_FRAME_BYTES + 1) }), 'remote_payload_size_invalid')
   // Base64url ciphertext + envelope can overflow even when plaintext fits.
-  expectCode(() => sequenceConnection.deviceSession.encrypt({ content: 'x'.repeat(200 * 1024) }), 'remote_payload_size_invalid')
+  expectCode(() => sequenceConnection.deviceSession.encrypt({ content: 'x'.repeat(REMOTE_MAX_FRAME_BYTES * 3 / 4) }), 'remote_payload_size_invalid')
   expectCode(() => sequenceConnection.deviceSession.encrypt({ content: NaN }), 'remote_canonical_value_invalid')
   const circularPayload = { kind: 'request' }
   circularPayload.self = circularPayload
@@ -177,6 +178,13 @@ function run() {
   const postFailureFrame = sequenceConnection.deviceSession.encrypt({ kind: 'request', method: 'remote.ping', requestId: 'request-sequence-safe-0001' })
   assert.equal(postFailureFrame.sequence, 1)
   assert.equal(sequenceConnection.accepted.session.decrypt(postFailureFrame).method, 'remote.ping')
+
+  // Upload ingress grows, but ordinary responses retain the legacy 256 KiB bound.
+  expectCode(() => sequenceConnection.accepted.session.encrypt({content: 'x'.repeat(300 * 1024)}), 'remote_payload_size_invalid')
+  expectCode(() => sequenceConnection.accepted.session.encrypt({content: 'x'.repeat(200 * 1024)}), 'remote_payload_size_invalid')
+  const boundedReply = sequenceConnection.accepted.session.encrypt({kind: 'response', ok: true})
+  assert.equal(boundedReply.sequence, 1)
+  assert.equal(sequenceConnection.deviceSession.decrypt(boundedReply).ok, true)
 
   // A fresh WSS connection uses new ephemeral key material even for the same paired device.
   const nextConnection = createConnectedSessions({
@@ -214,6 +222,8 @@ function run() {
     method: 'remote.status.get',
     requestId: 'request-order-0001'
   })
+
+  assert.equal(REMOTE_MAX_FRAME_BYTES, 1024 * 1024)
 
   assert.equal(publicKeyFromPrivate(fixture.desktop.privateKey), fixture.desktop.publicKey)
   assert.deepEqual(normalizeRemoteSettings({ remote: { enabled: true, host: '', port: 17860 } }), {

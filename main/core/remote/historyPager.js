@@ -25,7 +25,11 @@ export function createHistoryPager() {
   }
   function page(value, deviceId, conversationId) {
     const selected = []
-    const size = messages => Math.max(bytes({...value, messages}), bytes(structuredPage({...value, messages})))
+    // Oversized page metadata is handled by the negotiated result transfer.
+    // It must not force every tiny message into a fullPayload reference.
+    const metadataBytes = Math.max(bytes({...value, messages: []}), bytes(structuredPage({...value, messages: []})))
+    const messageBase = metadataBytes > PAGE_BYTES ? {...value, tasks: []} : value
+    const size = messages => Math.max(bytes({...messageBase, messages}), bytes(structuredPage({...messageBase, messages})))
     for (let index = value.messages.length - 1; index >= 0; index--) {
       let message = value.messages[index]
       if (size([message]) > PAGE_BYTES) message = deferred(message, deviceId, conversationId)

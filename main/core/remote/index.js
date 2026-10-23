@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import {createBusinessProtocol} from './businessProtocol.js'
 
 import {createOperationJournal} from './operationJournal.js'
+import {createResultTransfers, RESULT_TRANSFER_CAPABILITY} from './resultTransfer.js'
 import https from 'node:https'
 import { isIP } from 'node:net'
 import os from 'node:os'
@@ -279,6 +280,9 @@ export function createRemoteGateway({
   const businessProtocol = createBusinessProtocol({readService: conversationReadService, getManager: () => activeSessionManager,
     operations: operationJournal, dispatch: dispatchLegacy})
 
+  const resultTransfers = createResultTransfers()
+
+
   const seenSessionHelloNonces = new Map()
   let unauthenticatedSocketCount = 0
 
@@ -326,7 +330,7 @@ export function createRemoteGateway({
 
 
   function getCapabilities() {
-    const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get']
+    const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get', RESULT_TRANSFER_CAPABILITY]
 
     capabilities.push('remote.contract.negotiate')
     if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'transfer.request')
@@ -645,6 +649,8 @@ export function createRemoteGateway({
     const context = socketContexts.get(socket)
     if (!context) return
     context.closed = true
+
+    resultTransfers.clearOwner(context)
     if (context.handshakeTimer) clearTimeout(context.handshakeTimer)
     if (context.authenticated) {
       const sockets = activeSocketsByDeviceId.get(context.device?.deviceId)
@@ -699,12 +705,29 @@ export function createRemoteGateway({
 
   function sendEncrypted(socket, context, payload) {
     if (!isOpen(socket) || !context?.session) return false
+    let frame
     try {
-      const frame = context.session.encrypt(payload)
-      return sendPlain(socket, frame)
-    } catch {
-      return false
+      frame = context.session.encrypt(payload)
+    } catch (error) {
+      if (!['remote_payload_size_invalid', 'remote_canonical_value_invalid'].includes(error?.code)) return false
+      if (payload.kind !== 'event') return false
+      // Local DTO size/encoding failures never invalidate a healthy AEAD stream.
+      // New peers fetch the immutable original; old peers use existing invalidations.
+      let transfer
+      try {
+        if (context.resultTransfers && error.code === 'remote_payload_size_invalid') transfer = resultTransfers.put(context, payload)
+        const refresh = {conversationId: typeof payload.payload?.conversationId === 'string' ? payload.payload.conversationId : '',
+          requestId: typeof payload.payload?.requestId === 'string' ? payload.payload.requestId : ''}
+        frame = context.session.encrypt(transfer
+          ? {kind: 'event', event: 'remote.transfer.ready', payload: {transfer}}
+          : {kind: 'event', event: 'conversation.windows.changed', payload: refresh})
+      } catch {
+        // Capacity limits are recoverable by the existing read/invalidation path.
+        if (transfer) resultTransfers.release(context, {id: transfer.id})
+        try {frame = context.session.encrypt({kind: 'event', event: 'conversation.windows.changed', payload: {}})} catch {return false}
+      }
     }
+    return sendPlain(socket, frame)
   }
 
   function sendRpcResult(socket, context, requestId, result) {
@@ -715,6 +738,12 @@ export function createRemoteGateway({
     } catch (error) {
       // DTO encoding/size failures happen before the send sequence is committed.
       // Reject this RPC only. Transport/crypto session failures still fail closed.
+      if (error?.code === 'remote_payload_size_invalid' && context.resultTransfers) {
+        const transfer = resultTransfers.put(context, result)
+        try {frame = context.session.encrypt({kind: 'response', requestId, ok: true, transfer})}
+        catch (failure) {resultTransfers.release(context, {id: transfer.id}); throw failure}
+        return sendPlain(socket, frame)
+      }
       const code = error?.code === 'remote_payload_size_invalid'
         ? 'remote_response_too_large'
         : error?.code === 'remote_canonical_value_invalid'
@@ -1384,6 +1413,21 @@ export function createRemoteGateway({
       let result
       switch (method) {
 
+        case 'remote.transfer.negotiate':
+          if (!Array.isArray(params.capabilities) || params.capabilities.length !== 1 || params.capabilities[0] !== RESULT_TRANSFER_CAPABILITY || Object.keys(params).length !== 1) throw remoteError('remote_parameter_invalid')
+          context.resultTransfers = true
+          result = {capabilities: [RESULT_TRANSFER_CAPABILITY]}
+          break
+        case 'remote.transfer.chunk':
+          if (!context.resultTransfers) throw remoteError('remote_method_unavailable')
+          result = resultTransfers.chunk(context, params)
+          break
+        case 'remote.transfer.release':
+          if (!context.resultTransfers) throw remoteError('remote_method_unavailable')
+          result = resultTransfers.release(context, params)
+          break
+
+
         case 'transfer.request':
           result = await businessProtocol.transfer(context, requestId, params)
           break
@@ -1681,6 +1725,8 @@ export function createRemoteGateway({
     webSocketServer = null
     server = null
     unauthenticatedSocketCount = 0
+
+    resultTransfers.clear()
 
     if (closingWss) {
       try {

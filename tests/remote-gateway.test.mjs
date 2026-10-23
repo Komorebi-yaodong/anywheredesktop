@@ -162,6 +162,30 @@ async function sendEncryptedRequest({ socket, session, requestId, method, params
   return result
 }
 
+// RESULT_TRANSFER_READER_START
+async function readTransferredResult(connection, ref) {
+  const parts = []
+  for (let offset = 0; offset < ref.totalBytes;) {
+    const message = await sendEncryptedRequest({...connection, requestId: `read-transfer-${crypto.randomUUID()}`, method: 'remote.transfer.chunk', params: {id: ref.id, offset}})
+    assert.equal(message.ok, true)
+    const reply = message.result
+    assert.equal(reply.id, ref.id)
+    assert.equal(reply.offset, offset)
+    assert.equal(reply.totalBytes, ref.totalBytes)
+    assert.equal(reply.sha256, ref.sha256)
+    const bytes = Buffer.from(reply.data, 'base64url')
+    assert.equal(bytes.length, Math.min(ref.chunkBytes, ref.totalBytes - offset))
+    parts.push(bytes); offset += bytes.length
+  }
+  const bytes = Buffer.concat(parts)
+  assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), ref.sha256)
+  const released = await sendEncryptedRequest({...connection, requestId: `release-transfer-${crypto.randomUUID()}`, method: 'remote.transfer.release', params: {id: ref.id}})
+  assert.equal(released.ok, true)
+  return JSON.parse(bytes)
+}
+// RESULT_TRANSFER_READER_END
+
+
 async function readServerCertificate(endpoint) {
   return new Promise((resolve, reject) => {
     // The fixture's public self-signed cert is inspected here. No global TLS override.
@@ -265,6 +289,8 @@ async function main() {
 
   let responseFailureFixture = ''
 
+  let largePageTasks = []
+
   const conversationReadService = {
     async listConversations(params = {}) {
       conversationCalls.push({ method: 'conversation.list', params: structuredClone(params) })
@@ -297,6 +323,7 @@ async function main() {
         ok: true,
         conversation: { conversationId: params.params?.conversationId || params.conversationId, title: 'Gateway Fixture', revision: 3 },
         messages: [{ messageId: 'message-1', uiMessageId: 'ui-message-1', role: 'user', order: 1, payload: { content: 'hello', reasoningContent: '', toolCalls: [] } }],
+        tasks: largePageTasks,
         page: { pageSize: 50, hasMore: false, nextBeforeUiOrder: null }
       }
     },
@@ -813,6 +840,46 @@ async function main() {
     }
 
 
+    // Old peers never see transfer references, and a large event must not close them.
+    const tasks = Array.from({length: 10}, () => ({content: '中'.repeat(1200), status: 'pending', steps: Array.from({length: 6}, () => ({content: '中'.repeat(1200), status: 'pending'}))}))
+    const oldEvent = waitForMessage(socket, frame => frame.type === 'remote.encrypted').then(frame => session.decrypt(frame))
+    gateway.sendEventToDevice(deviceId, 'conversation.tasks.updated', {conversationId: 'conversation-gateway-fixture-0001', tasks})
+    assert.equal((await oldEvent).event, 'conversation.windows.changed')
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-old-large-event-ping', method: 'remote.ping'})).ok, true)
+
+    const opted = await sendEncryptedRequest({socket, session, requestId: 'request-result-transfer-opt-in', method: 'remote.transfer.negotiate', params: {capabilities: ['remote.transfer.v1']}})
+    assert.deepEqual(opted.result.capabilities, ['remote.transfer.v1'])
+    responseFailureFixture = 'wire_size'
+    const largeResponse = await sendEncryptedRequest({socket, session, requestId: 'request-large-result', method: 'conversation.list'})
+    assert.equal(largeResponse.ok, true)
+    assert.equal(largeResponse.result, undefined)
+    assert.ok(largeResponse.transfer)
+    // The captured snapshot cannot change when the authoritative source changes.
+    responseFailureFixture = ''
+    assert.deepEqual(await readTransferredResult({socket, session}, largeResponse.transfer), {ok: true, synthetic: 'x'.repeat(200 * 1024)})
+    const missing = await sendEncryptedRequest({socket, session, requestId: 'request-released-transfer', method: 'remote.transfer.chunk', params: {id: largeResponse.transfer.id, offset: 0}})
+    assert.equal(missing.error.code, 'remote_transfer_expired')
+    largePageTasks = tasks
+    const largeView = await sendEncryptedRequest({socket, session, requestId: 'request-large-whole-view', method: 'conversation.view.get', params: {conversationId: 'conversation-gateway-fixture-0001', pageSize: 1}})
+    assert.equal(largeView.ok, true)
+    assert.ok(largeView.transfer)
+    largePageTasks = []
+    const restoredView = await readTransferredResult({socket, session}, largeView.transfer)
+    assert.deepEqual(restoredView.page.tasks, tasks)
+    assert.equal(restoredView.page.messages[0].uiMessageId, 'ui-message-1')
+    assert.equal(restoredView.page.messages[0].payload.content, 'hello')
+    assert.equal(restoredView.runtime.conversationId, 'conversation-gateway-fixture-0001')
+
+    const newEvent = waitForMessage(socket, frame => frame.type === 'remote.encrypted').then(frame => session.decrypt(frame))
+    gateway.sendEventToDevice(deviceId, 'conversation.tasks.updated', {conversationId: 'conversation-gateway-fixture-0001', tasks})
+    const ready = await newEvent
+    assert.equal(ready.event, 'remote.transfer.ready')
+    const fullEvent = await readTransferredResult({socket, session}, ready.payload.transfer)
+    assert.equal(fullEvent.event, 'conversation.tasks.updated')
+    assert.deepEqual(fullEvent.payload.tasks, tasks)
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-new-large-event-ping', method: 'remote.ping'})).ok, true)
+
+
     const messagesResponse = await sendEncryptedRequest({
       socket,
       session,
@@ -889,7 +956,8 @@ async function main() {
       'conversation.messages.list', // negotiated unified view above
 
       'conversation.list',
-      ...Array(4).fill('conversation.list'),
+      ...Array(5).fill('conversation.list'), // four error fixtures + negotiated large result
+      'conversation.messages.list', // negotiated large whole-view metadata
       'conversation.messages.list',
       'conversation.windows.list',
       'conversation.list',

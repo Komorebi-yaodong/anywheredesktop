@@ -73,6 +73,16 @@ try {
    assert.ok(data.byteLength > 0)
    assert.match(data.mimeType, /^(image|audio|video)\//)
  }
+ const tasks = Array.from({length: 10}, () => ({content: '中'.repeat(1200), status: 'pending', steps: Array.from({length: 6}, () => ({content: '中'.repeat(1200), status: 'pending'}))}))
+ const short = [{role: 'assistant', content: '短正文保持完整', storageId: 'short-canonical-fixture', uiStorageId: 'short-ui-fixture'}]
+ const withTasks = await createConversation({dirPath: root, title: 'Large metadata synthetic', sessionData: {fullHistory: short, chat_show: short, taskList: tasks}})
+ const raw = await loadRemoteConversationPage({dirPath: root, conversationId: withTasks.descriptor.conversationId, pageSize: 1})
+ const full = createHistoryPager().page(raw, deviceId, withTasks.descriptor.conversationId)
+ assert.deepEqual(full.tasks, tasks)
+ assert.equal(full.messages[0].payload.content, '短正文保持完整')
+ assert.equal(full.messages[0].payload.fullPayload, undefined)
+ assert.ok(Buffer.byteLength(JSON.stringify(full)) > 192 * 1024, 'generic negotiated transfer handles the full metadata result')
+
  assert.equal((await loadRemoteConversationPage({dirPath: root, conversationId: cid, beforeUiOrder: page.messages[0].order})).messages.length, 0)
 } finally {await fs.rm(root, {recursive: true, force: true})}
 console.log(JSON.stringify({ok: true, suite: 'remote-history-paging', coverage: 'all rows, chunks, roles, compaction, image/audio/video/PDF'}))

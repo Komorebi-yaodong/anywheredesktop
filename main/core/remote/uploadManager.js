@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import {TRANSFER_MAX_CHUNK_BYTES} from './transferLimits.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { decodeBase64Url, normalizeIdentifier, remoteError } from './protocol.js'
@@ -71,7 +72,8 @@ function publicRecord(record, maxChunkBytes) {
     state: record.state,
     receivedBytes: record.receivedBytes,
     nextChunkIndex: record.nextChunkIndex,
-    maxChunkBytes,
+    maxChunkBytes: record.maxChunkBytes || maxChunkBytes,
+    ...(record.maxChunkBytes > REMOTE_UPLOAD_MAX_CHUNK_BYTES ? {adaptive: true} : {}),
     expiresAt: new Date(record.expiresAtMs).toISOString()
   }
 }
@@ -192,7 +194,7 @@ export function createRemoteUploadManager({
     record.expiresAtMs = now() + ttlMs
   }
 
-  async function begin({ deviceId, requestId, params = {} } = {}) {
+  async function begin({ deviceId, requestId, params = {}, adaptive = false } = {}) {
     await ensureInitialized()
     await cleanupExpired()
     const source = parameters(params, ['name', 'type', 'size', 'sha256'])
@@ -237,6 +239,7 @@ export function createRemoteUploadManager({
       size,
       expectedSha256,
       computedSha256: '',
+      maxChunkBytes: adaptive && maxChunkBytes === REMOTE_UPLOAD_MAX_CHUNK_BYTES ? TRANSFER_MAX_CHUNK_BYTES : maxChunkBytes,
       state: 'uploading',
       receivedBytes: 0,
       nextChunkIndex: 0,
@@ -252,7 +255,7 @@ export function createRemoteUploadManager({
     return { ok: true, upload: publicRecord(record, maxChunkBytes) }
   }
 
-  async function chunk({ deviceId, params = {} } = {}) {
+  async function chunk({ deviceId, params = {}, adaptive = false } = {}) {
     await ensureInitialized()
     await cleanupExpired()
     const source = parameters(params, ['uploadId', 'index', 'data'])
@@ -260,7 +263,7 @@ export function createRemoteUploadManager({
     if (record.state !== 'uploading') throw remoteError('remote_upload_state_invalid')
     const index = Number(source.index)
     if (!Number.isSafeInteger(index) || index < 0) throw remoteError('remote_upload_chunk_order_invalid')
-    const data = decodeBase64Url(source.data, 'data', { minBytes: 1, maxBytes: maxChunkBytes })
+    const data = decodeBase64Url(source.data, 'data', { minBytes: 1, maxBytes: Math.min(record.maxChunkBytes || maxChunkBytes, adaptive ? TRANSFER_MAX_CHUNK_BYTES : maxChunkBytes) })
     if (index === record.nextChunkIndex - 1 && record.lastChunk?.index === index) {
       const chunkSha256 = crypto.createHash('sha256').update(data).digest('base64url')
       if (record.lastChunk.size !== data.length || record.lastChunk.sha256 !== chunkSha256) {

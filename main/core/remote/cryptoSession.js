@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import {TRANSFER_MAX_FRAME_BYTES} from './transferLimits.js'
 import {
   REMOTE_MAX_FRAME_BYTES,
   REMOTE_MAX_RESPONSE_FRAME_BYTES,
@@ -302,9 +303,9 @@ function encryptAead({ key, plaintext, aad }) {
   }
 }
 
-function decryptAead({ key, nonce, ciphertext, tag, aad }) {
+function decryptAead({ key, nonce, ciphertext, tag, aad, maxBytes = REMOTE_MAX_FRAME_BYTES }) {
   const safeNonce = decodeBase64Url(nonce, 'frame.nonce', { minBytes: NONCE_BYTES, maxBytes: NONCE_BYTES })
-  const safeCiphertext = decodeBase64Url(ciphertext, 'frame.ciphertext', { minBytes: 1, maxBytes: REMOTE_MAX_FRAME_BYTES })
+  const safeCiphertext = decodeBase64Url(ciphertext, 'frame.ciphertext', { minBytes: 1, maxBytes })
   const safeTag = decodeBase64Url(tag, 'frame.tag', { minBytes: TAG_BYTES, maxBytes: TAG_BYTES })
   try {
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, safeNonce)
@@ -545,7 +546,8 @@ export function completeSessionHello({ state, accept, expectedDeviceId, expected
 
 export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, sendDirection, receiveDirection }) {
   const safeSessionId = normalizeIdentifier(sessionId, 'sessionId', { minLength: 16, maxLength: 128 })
-  const maxSendFrameBytes = sendDirection === 'desktop-to-client' ? REMOTE_MAX_RESPONSE_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES
+  const defaultSendFrameBytes = sendDirection === 'desktop-to-client' ? REMOTE_MAX_RESPONSE_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES
+  let adaptive = false
   if (!Buffer.isBuffer(sendKey) || sendKey.length !== SESSION_KEY_BYTES || !Buffer.isBuffer(receiveKey) || receiveKey.length !== SESSION_KEY_BYTES) {
     throw remoteError('remote_session_key_invalid')
   }
@@ -571,8 +573,10 @@ export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, send
       sendKey.fill(0)
       receiveKey.fill(0)
     },
-    encrypt(payload) {
+    enableAdaptiveTransfers() {assertOpen(); adaptive = true},
+    encrypt(payload, {largeTransfer = false} = {}) {
       assertOpen()
+      const maxSendFrameBytes = adaptive && (largeTransfer || sendDirection === 'client-to-desktop') ? TRANSFER_MAX_FRAME_BYTES : defaultSendFrameBytes
       const sequence = nextSendSequence
       let plaintext
       try {
@@ -617,7 +621,8 @@ export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, send
         throw remoteError(sequence < nextReceiveSequence ? 'remote_frame_replayed' : 'remote_frame_out_of_order')
       }
       const aad = buildFrameAad({ sessionId: safeSessionId, sequence, direction: receiveDirection })
-      const plaintext = decryptAead({ key: receiveKey, nonce: frame.nonce, ciphertext: frame.ciphertext, tag: frame.tag, aad })
+      if (Buffer.byteLength(JSON.stringify(frame)) > (adaptive ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES)) throw remoteError('remote_payload_size_invalid')
+      const plaintext = decryptAead({ key: receiveKey, nonce: frame.nonce, ciphertext: frame.ciphertext, tag: frame.tag, aad, maxBytes: adaptive ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES })
       let payload
       try {
         payload = JSON.parse(plaintext.toString('utf8'))

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import {TRANSFER_MIN_CHUNK_BYTES, TRANSFER_MAX_CHUNK_BYTES} from './transferLimits.js'
 import {canonicalBuffer, normalizeIdentifier, remoteError} from './protocol.js'
 
 export const RESULT_TRANSFER_CAPABILITY = 'remote.transfer.v1'
@@ -33,7 +34,8 @@ export function createResultTransfers({now = Date.now, maxTotalBytes = MAX_TOTAL
     const sha256 = crypto.createHash('sha256').update(bytes).digest('hex')
     entries.set(id, {owner, bytes, sha256, expires: now() + TTL_MS})
     totalBytes += bytes.length
-    return {id, totalBytes: bytes.length, sha256, chunkBytes: RESULT_TRANSFER_CHUNK_BYTES}
+    return {id, totalBytes: bytes.length, sha256, chunkBytes: owner.adaptiveTransfers ? TRANSFER_MIN_CHUNK_BYTES : RESULT_TRANSFER_CHUNK_BYTES,
+      ...(owner.adaptiveTransfers ? {maxChunkBytes: TRANSFER_MAX_CHUNK_BYTES, adaptive: true} : {})}
   }
   function owned(owner, params, keys) {
     prune()
@@ -44,10 +46,12 @@ export function createResultTransfers({now = Date.now, maxTotalBytes = MAX_TOTAL
     return {id, entry}
   }
   function chunk(owner, params) {
-    const {id, entry} = owned(owner, params, ['id', 'offset'])
+    const {id, entry} = owned(owner, params, owner.adaptiveTransfers ? ['id', 'offset', 'length'] : ['id', 'offset'])
     const offset = params.offset
     if (!Number.isSafeInteger(offset) || offset < 0 || offset >= entry.bytes.length) throw remoteError('remote_transfer_range_invalid')
-    const bytes = entry.bytes.subarray(offset, offset + RESULT_TRANSFER_CHUNK_BYTES)
+    const length = owner.adaptiveTransfers ? params.length : RESULT_TRANSFER_CHUNK_BYTES
+    if (!Number.isSafeInteger(length) || length < 1 || length > (owner.adaptiveTransfers ? TRANSFER_MAX_CHUNK_BYTES : RESULT_TRANSFER_CHUNK_BYTES)) throw remoteError('remote_transfer_range_invalid')
+    const bytes = entry.bytes.subarray(offset, offset + length)
     return {id, offset, totalBytes: entry.bytes.length, sha256: entry.sha256, byteLength: bytes.length, data: bytes.toString('base64url')}
   }
   function release(owner, params) {const {id} = owned(owner, params, ['id']); remove(id); return {ok: true}}

@@ -4,6 +4,7 @@ import {createBusinessProtocol} from './businessProtocol.js'
 
 import {createOperationJournal} from './operationJournal.js'
 import {createResultTransfers, RESULT_TRANSFER_CAPABILITY} from './resultTransfer.js'
+import {ADAPTIVE_TRANSFER_CAPABILITY, TRANSFER_MAX_FRAME_BYTES} from './transferLimits.js'
 import https from 'node:https'
 import { isIP } from 'node:net'
 import os from 'node:os'
@@ -203,9 +204,9 @@ function normalizePairingConfirmation(input = {}) {
   }
 }
 
-function parsePlainSocketMessage(raw) {
+function parsePlainSocketMessage(raw, maxBytes = REMOTE_MAX_FRAME_BYTES) {
   const data = Buffer.isBuffer(raw) ? raw : Buffer.from(raw)
-  return parseJsonBuffer(data, { maxBytes: REMOTE_MAX_FRAME_BYTES, code: 'remote_socket_message_invalid' })
+  return parseJsonBuffer(data, { maxBytes, code: 'remote_socket_message_invalid' })
 }
 
 function createJsonResponse(response, statusCode, payload) {
@@ -330,7 +331,7 @@ export function createRemoteGateway({
 
 
   function getCapabilities() {
-    const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get', RESULT_TRANSFER_CAPABILITY]
+    const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get', RESULT_TRANSFER_CAPABILITY, ADAPTIVE_TRANSFER_CAPABILITY]
 
     capabilities.push('remote.contract.negotiate')
     if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'transfer.request')
@@ -674,7 +675,8 @@ export function createRemoteGateway({
     if (!isOpen(socket)) return false
     try {
       const text = JSON.stringify(payload)
-      if (Buffer.byteLength(text) > REMOTE_MAX_FRAME_BYTES) return false
+      const context = socketContexts.get(socket)
+      if (Buffer.byteLength(text) > (context?.adaptiveTransfers ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES)) return false
       socket.send(text)
       return true
     } catch {
@@ -730,11 +732,11 @@ export function createRemoteGateway({
     return sendPlain(socket, frame)
   }
 
-  function sendRpcResult(socket, context, requestId, result) {
+  function sendRpcResult(socket, context, requestId, result, largeTransfer = false) {
     if (!isOpen(socket) || !context?.session) return false
     let frame
     try {
-      frame = context.session.encrypt({ kind: 'response', requestId, ok: true, result })
+      frame = context.session.encrypt({ kind: 'response', requestId, ok: true, result }, {largeTransfer: context.adaptiveTransfers && largeTransfer})
     } catch (error) {
       // DTO encoding/size failures happen before the send sequence is committed.
       // Reject this RPC only. Transport/crypto session failures still fail closed.
@@ -1235,11 +1237,11 @@ export function createRemoteGateway({
 
         case 'attachment.begin':
           if (!uploadManager) throw remoteError('remote_method_unavailable')
-          result = await uploadManager.begin({ deviceId: context.device.deviceId, requestId, params })
+          result = await uploadManager.begin({ deviceId: context.device.deviceId, requestId, params, adaptive: context.adaptiveTransfers })
           break
         case 'attachment.chunk':
           if (!uploadManager) throw remoteError('remote_method_unavailable')
-          result = await uploadManager.chunk({ deviceId: context.device.deviceId, params })
+          result = await uploadManager.chunk({ deviceId: context.device.deviceId, params, adaptive: context.adaptiveTransfers })
           break
         case 'attachment.complete':
           if (!uploadManager) throw remoteError('remote_method_unavailable')
@@ -1270,7 +1272,7 @@ export function createRemoteGateway({
           break
         case 'conversation.media.get':
           if (typeof getConversationMedia !== 'function') throw remoteError('remote_method_unavailable')
-          result = await getConversationMedia({ deviceId: context.device.deviceId, params })
+          result = await getConversationMedia({ deviceId: context.device.deviceId, params, adaptive: context.adaptiveTransfers })
           break
 
         case 'conversation.windows.list':
@@ -1414,9 +1416,10 @@ export function createRemoteGateway({
       switch (method) {
 
         case 'remote.transfer.negotiate':
-          if (!Array.isArray(params.capabilities) || params.capabilities.length !== 1 || params.capabilities[0] !== RESULT_TRANSFER_CAPABILITY || Object.keys(params).length !== 1) throw remoteError('remote_parameter_invalid')
+          if (!Array.isArray(params.capabilities) || params.capabilities.length < 1 || params.capabilities.length > 2 || !params.capabilities.includes(RESULT_TRANSFER_CAPABILITY) || new Set(params.capabilities).size !== params.capabilities.length || params.capabilities.some(value => ![RESULT_TRANSFER_CAPABILITY, ADAPTIVE_TRANSFER_CAPABILITY].includes(value)) || Object.keys(params).length !== 1) throw remoteError('remote_parameter_invalid')
           context.resultTransfers = true
-          result = {capabilities: [RESULT_TRANSFER_CAPABILITY]}
+          if (params.capabilities.includes(ADAPTIVE_TRANSFER_CAPABILITY)) {context.adaptiveTransfers = true; context.session.enableAdaptiveTransfers()}
+          result = {capabilities: [RESULT_TRANSFER_CAPABILITY, ...(context.adaptiveTransfers ? [ADAPTIVE_TRANSFER_CAPABILITY] : [])] }
           break
         case 'remote.transfer.chunk':
           if (!context.resultTransfers) throw remoteError('remote_method_unavailable')
@@ -1463,7 +1466,7 @@ export function createRemoteGateway({
           result = await dispatchLegacy(context, requestId, method, params)
       }
 
-      if (!sendRpcResult(socket, context, requestId, result)) {
+      if (!sendRpcResult(socket, context, requestId, result, method === 'remote.transfer.chunk' || method === 'conversation.media.get' || method === 'resource.get' && params.resource === 'conversation.media.get')) {
         safeSocketClose(socket, 1011, 'response_send_failed')
         return
       }
@@ -1568,7 +1571,7 @@ export function createRemoteGateway({
     const context = socketContexts.get(socket)
     if (!context) return
     try {
-      const message = parsePlainSocketMessage(raw)
+      const message = parsePlainSocketMessage(raw, context.adaptiveTransfers ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES)
       if (!context.authenticated) {
         await authenticateSocket(socket, context, message)
         return
@@ -1648,7 +1651,7 @@ export function createRemoteGateway({
     const nextServer = https.createServer({ key: tls.key, cert: tls.cert }, handleHttp)
     const nextWebSocketServer = new WebSocketServer({
       noServer: true,
-      maxPayload: REMOTE_MAX_FRAME_BYTES,
+      maxPayload: TRANSFER_MAX_FRAME_BYTES,
       perMessageDeflate: false
     })
     attachWebSocketHandlers(nextWebSocketServer)

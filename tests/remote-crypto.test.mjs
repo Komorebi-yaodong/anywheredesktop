@@ -186,6 +186,17 @@ function run() {
   assert.equal(boundedReply.sequence, 1)
   assert.equal(sequenceConnection.deviceSession.decrypt(boundedReply).ok, true)
 
+  sequenceConnection.deviceSession.enableAdaptiveTransfers()
+  sequenceConnection.accepted.session.enableAdaptiveTransfers()
+  // A negotiated big transfer cannot weaken the ordinary response/event cap.
+  expectCode(() => sequenceConnection.accepted.session.encrypt({content: 'x'.repeat(300 * 1024)}), 'remote_payload_size_invalid')
+  expectCode(() => sequenceConnection.deviceSession.encrypt({content: 'x'.repeat(16 * 1024 * 1024 + 1)}), 'remote_payload_size_invalid')
+  expectCode(() => sequenceConnection.deviceSession.encrypt({content: 'x'.repeat(12 * 1024 * 1024)}), 'remote_payload_size_invalid')
+  const adaptiveSafe = sequenceConnection.deviceSession.encrypt({kind: 'request', method: 'remote.ping', requestId: 'request-adaptive-size-safe'})
+  assert.equal(adaptiveSafe.sequence, 2)
+  assert.equal(sequenceConnection.accepted.session.decrypt(adaptiveSafe).method, 'remote.ping')
+
+
   // A fresh WSS connection uses new ephemeral key material even for the same paired device.
   const nextConnection = createConnectedSessions({
     rootSecret: fixture.deviceResponse.rootSecret,

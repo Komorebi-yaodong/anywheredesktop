@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import {TRANSFER_MAX_CHUNK_BYTES} from './transferLimits.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeIdentifier, remoteError } from './protocol.js'
@@ -149,7 +150,7 @@ export function createRemoteConversationMediaService() {
   }
 
 
-  async function get({ deviceId, params = {} } = {}) {
+  async function get({ deviceId, params = {}, adaptive = false } = {}) {
     if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some((key) => !['conversationId', 'mediaId', 'offset', 'length'].includes(key))) {
       throw remoteError('remote_parameter_unknown')
     }
@@ -158,7 +159,7 @@ export function createRemoteConversationMediaService() {
     const mediaId = normalizeIdentifier(params.mediaId, 'mediaId', { minLength: 16, maxLength: 160 })
     const offset = Math.floor(Number(params.offset))
     const length = Math.floor(Number(params.length))
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > MAX_CHUNK_BYTES || (length === 0 && offset !== 0)) throw remoteError('remote_media_range_invalid')
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > (adaptive ? TRANSFER_MAX_CHUNK_BYTES : MAX_CHUNK_BYTES) || (length === 0 && offset !== 0)) throw remoteError('remote_media_range_invalid')
     prune()
     const entry = refs.get(mediaId)
     if (!entry || entry.deviceId !== safeDeviceId || entry.conversationId !== conversationId) throw remoteError('remote_media_not_found')
@@ -172,6 +173,7 @@ export function createRemoteConversationMediaService() {
         return {
           ok: true,
           mediaId,
+          ...(adaptive ? {adaptive: true, maxChunkBytes: TRANSFER_MAX_CHUNK_BYTES} : {}),
           mimeType: entry.mimeType,
           totalBytes: entry.buffer.length,
           sha256: version,
@@ -194,6 +196,7 @@ export function createRemoteConversationMediaService() {
       return {
         ok: true,
         mediaId,
+        ...(adaptive ? {adaptive: true, maxChunkBytes: TRANSFER_MAX_CHUNK_BYTES} : {}),
         mimeType: entry.mimeType,
         totalBytes: stats.size,
         sha256: version,

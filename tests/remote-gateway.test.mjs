@@ -10,6 +10,7 @@ import { createRemoteGateway } from '../main/core/remote/index.js'
 import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
 import { createRemoteUploadManager } from '../main/core/remote/uploadManager.js'
 import { REMOTE_MAX_FRAME_BYTES } from '../main/core/remote/protocol.js'
+import {createRemoteConversationMediaService} from '../main/core/remote/conversationMedia.js'
 import { createRemoteBusinessConfigService } from '../main/core/remote/businessConfig.js'
 import { createRemoteManagementService } from '../main/core/remote/management.js'
 import {
@@ -166,7 +167,7 @@ async function sendEncryptedRequest({ socket, session, requestId, method, params
 async function readTransferredResult(connection, ref) {
   const parts = []
   for (let offset = 0; offset < ref.totalBytes;) {
-    const message = await sendEncryptedRequest({...connection, requestId: `read-transfer-${crypto.randomUUID()}`, method: 'remote.transfer.chunk', params: {id: ref.id, offset}})
+    const message = await sendEncryptedRequest({...connection, requestId: `read-transfer-${crypto.randomUUID()}`, method: 'remote.transfer.chunk', params: {id: ref.id, offset, ...(ref.adaptive ? {length: Math.min(8 * 1024 * 1024, ref.totalBytes - offset)} : {})}})
     assert.equal(message.ok, true)
     const reply = message.result
     assert.equal(reply.id, ref.id)
@@ -174,7 +175,7 @@ async function readTransferredResult(connection, ref) {
     assert.equal(reply.totalBytes, ref.totalBytes)
     assert.equal(reply.sha256, ref.sha256)
     const bytes = Buffer.from(reply.data, 'base64url')
-    assert.equal(bytes.length, Math.min(ref.chunkBytes, ref.totalBytes - offset))
+    assert.equal(bytes.length, Math.min(ref.adaptive ? 8 * 1024 * 1024 : ref.chunkBytes, ref.totalBytes - offset))
     parts.push(bytes); offset += bytes.length
   }
   const bytes = Buffer.concat(parts)
@@ -256,6 +257,8 @@ async function main() {
   const storage = createStorage()
   const port = await findFreePort()
   const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-remote-gateway-test-'))
+  const mediaService = createRemoteConversationMediaService()
+
   const uploadManager = createRemoteUploadManager({ tempRoot: path.join(sandbox, 'uploads') })
 
   let businessConfig = {
@@ -295,6 +298,7 @@ async function main() {
     async listConversations(params = {}) {
       conversationCalls.push({ method: 'conversation.list', params: structuredClone(params) })
 
+      if (responseFailureFixture === 'adaptive_size') return {ok: true, synthetic: 'z'.repeat(9 * 1024 * 1024)}
       if (responseFailureFixture === 'wire_size') return { ok: true, synthetic: 'x'.repeat(200 * 1024) }
       if (responseFailureFixture === 'plaintext_size') return { ok: true, synthetic: 'x'.repeat(300 * 1024) }
       if (responseFailureFixture === 'invalid_value') return { ok: true, synthetic: NaN }
@@ -355,6 +359,8 @@ async function main() {
     dbStorageGetItem: storage.get,
     dbStorageSetItem: storage.set,
     conversationReadService,
+
+    getConversationMedia: input => mediaService.get(input),
     uploadManager,
     businessConfigService,
     remoteManagementService,
@@ -880,6 +886,39 @@ async function main() {
     assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-new-large-event-ping', method: 'remote.ping'})).ok, true)
 
 
+    const adaptiveOpt = await sendEncryptedRequest({socket, session, requestId: 'request-adaptive-opt', method: 'remote.transfer.negotiate', params: {capabilities: ['remote.transfer.v1', 'remote.transfer.adaptive.v1']}})
+    assert.ok(adaptiveOpt.result.capabilities.includes('remote.transfer.adaptive.v1'))
+    session.enableAdaptiveTransfers()
+    const eightMiB = 8 * 1024 * 1024
+    const maximumData = Buffer.alloc(eightMiB, 0x6c)
+    const maximumSha = crypto.createHash('sha256').update(maximumData).digest('base64url')
+    const maximumBegin = await sendEncryptedRequest({socket, session, requestId: 'request-max-upload-begin', method: 'attachment.begin', params: {name: 'synthetic-8MiB.bin', type: 'application/octet-stream', size: eightMiB, sha256: maximumSha}})
+    assert.equal(maximumBegin.result.upload.maxChunkBytes, eightMiB)
+    assert.equal(maximumBegin.result.upload.adaptive, true)
+    const maximumId = maximumBegin.result.upload.uploadId
+    const rejectedMax = await sendEncryptedRequest({socket, session, requestId: 'request-max-plus-one', method: 'attachment.chunk', params: {uploadId: maximumId, index: 0, data: Buffer.alloc(eightMiB + 1).toString('base64url')}})
+    assert.equal(rejectedMax.error.code, 'remote_invalid_base64url')
+    const maximumAck = await sendEncryptedRequest({socket, session, requestId: 'request-max-upload-chunk', method: 'attachment.chunk', params: {uploadId: maximumId, index: 0, data: maximumData.toString('base64url')}})
+    assert.equal(maximumAck.result.upload.receivedBytes, eightMiB)
+    const maximumComplete = await sendEncryptedRequest({socket, session, requestId: 'request-max-upload-complete', method: 'attachment.complete', params: {uploadId: maximumId}})
+    assert.equal(maximumComplete.result.upload.sha256, maximumSha)
+    await sendEncryptedRequest({socket, session, requestId: 'request-max-upload-abort', method: 'attachment.abort', params: {uploadId: maximumId}})
+    const mediaRef = mediaService.register({deviceId, conversationId: 'conversation-gateway-fixture-0001', source: 'data:audio/wav;base64,' + maximumData.toString('base64')})
+    const mediaMax = await sendEncryptedRequest({socket, session, requestId: 'request-max-media', method: 'conversation.media.get', params: {conversationId: 'conversation-gateway-fixture-0001', mediaId: mediaRef.mediaId, offset: 0, length: eightMiB}})
+    assert.equal(mediaMax.ok, true)
+    assert.equal(mediaMax.result.byteLength, eightMiB)
+    assert.equal(mediaMax.result.data, maximumData.toString('base64url'))
+    const mediaTooLarge = await sendEncryptedRequest({socket, session, requestId: 'request-max-media-plus-one', method: 'conversation.media.get', params: {conversationId: 'conversation-gateway-fixture-0001', mediaId: mediaRef.mediaId, offset: 0, length: eightMiB + 1}})
+    assert.equal(mediaTooLarge.error.code, 'remote_media_range_invalid')
+    responseFailureFixture = 'adaptive_size'
+    const largeAdaptive = await sendEncryptedRequest({socket, session, requestId: 'request-adaptive-result', method: 'conversation.list'})
+    responseFailureFixture = ''
+    assert.equal(largeAdaptive.transfer.chunkBytes, 512 * 1024)
+    assert.equal(largeAdaptive.transfer.maxChunkBytes, eightMiB)
+    assert.deepEqual(await readTransferredResult({socket, session}, largeAdaptive.transfer), {ok: true, synthetic: 'z'.repeat(9 * 1024 * 1024)})
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-after-max-ping', method: 'remote.ping'})).ok, true)
+
+
     const messagesResponse = await sendEncryptedRequest({
       socket,
       session,
@@ -958,6 +997,7 @@ async function main() {
       'conversation.list',
       ...Array(5).fill('conversation.list'), // four error fixtures + negotiated large result
       'conversation.messages.list', // negotiated large whole-view metadata
+      'conversation.list', // adaptive 9 MiB result
       'conversation.messages.list',
       'conversation.windows.list',
       'conversation.list',

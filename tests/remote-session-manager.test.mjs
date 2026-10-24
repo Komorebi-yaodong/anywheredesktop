@@ -173,6 +173,75 @@ async function run() {
   assert.equal(f.commands.filter((command) => command.type === 'remote.shutdown').length, 0, 'revealed window belongs to Desktop')
   await assert.rejects(send(f.manager, 'request-stopped'), { code: 'remote_gateway_stopped' })
 
+  // Supplemental Mobile input is consumed between tool batches, not after final content.
+  const buffered = fixture()
+  await send(buffered.manager, 'request-buffer-parent')
+  renderer(buffered, 'assistant.started', {}, 'request-buffer-parent')
+  await send(buffered.manager, 'request-buffer-first', DEVICE, 'before tool 2')
+  await send(buffered.manager, 'request-buffer-removed', DEVICE, 'withdraw this')
+  buffered.manager.removeQueuedSend({deviceId: DEVICE, params: {conversationId: CID, requestId: 'request-buffer-removed'}})
+  assert.equal((await renderer(buffered, 'conversation.queue.drain', {}, 'request-spoof')).ok, false)
+  assert.equal((await renderer(buffered, 'conversation.queue.drain', {}, 'request-buffer-parent', 'window-spoof')).ok, false)
+  const batch = await renderer(buffered, 'conversation.queue.drain', {}, 'request-buffer-parent')
+  assert.deepEqual(batch.items, [{requestId: 'request-buffer-first', text: 'before tool 2', uploadIds: []}])
+  assert.equal(buffered.manager.getSession(CID).activeRequestId, 'request-buffer-parent')
+  assert.equal(buffered.commands.filter(item => item.type === 'conversation.send').length, 1, 'no second askAI dispatch')
+  assert.throws(() => buffered.manager.removeQueuedSend({deviceId: DEVICE, params: {conversationId: CID, requestId: 'request-buffer-first'}}), {code: 'remote_send_queue_item_not_found'})
+  assert.equal((await renderer(buffered, 'conversation.queue.drain', {}, 'request-buffer-parent')).items.length, 0, 'claimed inputs are not replayed')
+  assert.equal(renderer(buffered, 'conversation.queue.appended', {revision: 7}, 'request-buffer-first').ok, true)
+  assert.equal(buffered.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-buffer-first'}}).terminal, true)
+  assert.equal(buffered.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-buffer-parent'}}).terminal, false)
+  assert.equal(renderer(buffered, 'conversation.queue.appended', {}, 'request-buffer-first').ok, false)
+  renderer(buffered, 'assistant.delta', {textDelta: 'tool 2 starts'}, 'request-buffer-parent')
+  await send(buffered.manager, 'request-buffer-second', DEVICE, 'before tool 3')
+  assert.equal((await renderer(buffered, 'conversation.queue.drain', {}, 'request-buffer-parent')).items[0].requestId, 'request-buffer-second')
+  renderer(buffered, 'conversation.queue.appended', {revision: 8}, 'request-buffer-second')
+  await send(buffered.manager, 'request-buffer-unconfirmed')
+  await renderer(buffered, 'conversation.queue.drain', {}, 'request-buffer-parent')
+  renderer(buffered, 'assistant.failed', {}, 'request-buffer-parent')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(buffered.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-buffer-unconfirmed'}}).result.code, 'remote_buffered_message_unconfirmed')
+  assert.equal(buffered.commands.filter(item => item.type === 'conversation.send').length, 1, 'unconfirmed input must never be replayed as a new turn')
+  assert.equal(buffered.manager.listSendQueue({deviceId: DEVICE, params: {conversationId: CID}}).items.length, 0)
+
+  // A drain must not join the per-conversation command queue: takeover/close
+  // can already hold it while waiting for this turn to settle.
+  const drainingTakeover = fixture()
+  await send(drainingTakeover.manager, 'request-drain-takeover-parent')
+  await send(drainingTakeover.manager, 'request-drain-takeover-child')
+  const takeoverFinished = drainingTakeover.manager.takeoverOnDesktop({conversationId: CID, confirmed: true})
+  await new Promise(resolve => setImmediate(resolve))
+  const drainDuringTakeover = await Promise.race([
+    renderer(drainingTakeover, 'conversation.queue.drain', {}, 'request-drain-takeover-parent'),
+    new Promise(resolve => setTimeout(() => resolve({ok: 'blocked'}), 100)),
+  ])
+  assert.equal(drainDuringTakeover.ok, false, 'reject immediately rather than deadlocking on takeover serialization')
+  const takeoverCommand = drainingTakeover.commands.find(item => item.type === 'conversation.desktop.takeover')
+  renderer(drainingTakeover, 'conversation.desktop.control.result', {ok: true}, takeoverCommand.requestId)
+  renderer(drainingTakeover, 'assistant.cancelled', {}, 'request-drain-takeover-parent')
+  await takeoverFinished
+
+
+  const bufferUploadCalls = []
+  const withBufferedUpload = fixture({uploadManager: {
+    reserveForRequest: async input => bufferUploadCalls.push(['reserve', input]),
+    authorizeForRequest: async input => bufferUploadCalls.push(['authorize', input]),
+    cleanupRequest: async input => bufferUploadCalls.push(['cleanup', input]),
+    releaseReservation: async () => {},
+  }})
+  await send(withBufferedUpload.manager, 'request-buffer-upload-parent')
+  await withBufferedUpload.manager.send({deviceId: DEVICE, requestId: 'request-buffer-upload-child', params: {conversationId: CID, text: '', uploadIds: ['upload-buffer-fixture-0001']}})
+  assert.deepEqual(bufferUploadCalls.map(item => item[0]), ['reserve'])
+  const uploadBatch = await renderer(withBufferedUpload, 'conversation.queue.drain', {}, 'request-buffer-upload-parent')
+  assert.deepEqual(uploadBatch.items[0].uploadIds, ['upload-buffer-fixture-0001'])
+  assert.equal(bufferUploadCalls[1][0], 'authorize')
+  assert.equal(bufferUploadCalls[1][1].requestId, 'request-buffer-upload-child')
+  assert.equal(bufferUploadCalls[1][1].windowRef, withBufferedUpload.items[0].id)
+  renderer(withBufferedUpload, 'conversation.queue.append.failed', {}, 'request-buffer-upload-child')
+  assert.equal(bufferUploadCalls.at(-1)[0], 'cleanup')
+  renderer(withBufferedUpload, 'assistant.cancelled', {}, 'request-buffer-upload-parent')
+
+
   const delayedIdle = fixture()
   await send(delayedIdle.manager, 'request-idle-active')
   await send(delayedIdle.manager, 'request-idle-queued')

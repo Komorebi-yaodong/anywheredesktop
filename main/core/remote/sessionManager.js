@@ -1468,6 +1468,35 @@ export function createRemoteSessionManager({
   }
 
 
+  // Renderer pulls at the same tool-result boundary as its local append buffer.
+  // Claims stay in pendingSends until durable acknowledgement; they are never replayed.
+  async function drainSendQueue(session, data) {
+    const parentRequestId = data.requestId
+    const deviceId = session.activeDeviceId
+    if (!enabled || !parentRequestId || session.activeRequestId !== parentRequestId ||
+        !['conversation.send', 'conversation.message.reask'].includes(session.activeOperation) ||
+        session.closing || session.desktopTakingOver) return {ok: false}
+    const items = []
+    for (const queued of [...session.pendingSends]) {
+      const record = requests.get(requestKey(queued.deviceId, queued.requestId))
+      if (!record || record.terminal || record.appendParentRequestId || queued.deviceId !== deviceId) continue
+      record.appendParentRequestId = parentRequestId
+      try {
+        queued.check()
+        ensureMobileControl(session, deviceId)
+        if (record.uploadIds.length) await uploadManager.authorizeForRequest({deviceId, requestId: record.requestId, windowRef: session.windowRef, uploadIds: record.uploadIds})
+        queued.check()
+        if (session.activeRequestId !== parentRequestId || record.terminal || session.closing || session.desktopTakingOver) throw remoteError('remote_request_cancelled')
+        items.push({requestId: record.requestId, text: record.body, uploadIds: record.uploadIds})
+      } catch (error) {
+        session.pendingSends = session.pendingSends.filter(item => item !== queued)
+        if (!record.terminal) publish(record, 'assistant.failed', {code: error?.code || 'remote_attachment_unavailable'})
+      }
+    }
+    return {ok: true, items}
+  }
+
+
   function listSendQueue({ deviceId, params = {} } = {}) {
     parameters(params, ['conversationId'])
     const conversationId = id(params.conversationId, 'conversationId')
@@ -1491,9 +1520,10 @@ export function createRemoteSessionManager({
     if (!session || !Array.isArray(session.pendingSends)) throw remoteError('remote_send_queue_item_not_found')
     const index = session.pendingSends.findIndex((item) => item.deviceId === deviceId && item.requestId === queuedRequestId)
     if (index < 0) throw remoteError('remote_send_queue_item_not_found')
+    const record = requests.get(requestKey(deviceId, queuedRequestId))
+    if (record?.appendParentRequestId) throw remoteError('remote_send_queue_item_not_found')
     session.pendingSends.splice(index, 1)
     uploadManager?.releaseReservation?.({deviceId, requestId: queuedRequestId})?.catch?.(() => {})
-    const record = requests.get(requestKey(deviceId, queuedRequestId))
     if (record && !record.terminal) publish(record, 'assistant.cancelled', { code: 'remote_send_queue_removed' })
     return { ok: true, conversationId, requestId: queuedRequestId, removed: true }
   }
@@ -1566,6 +1596,21 @@ export function createRemoteSessionManager({
     const data = object(payload)
     const session = sessions.get(data.conversationId)
     if (!session || session.windowRef !== windowRef) return { ok: false, error: 'remote_renderer_event_window_mismatch' }
+    if (data.event === 'conversation.queue.drain') {
+      // Never wait behind takeover/close: those commands await this AI turn's settlement.
+      return drainSendQueue(session, data)
+    }
+    if (data.event === 'conversation.queue.appended' || data.event === 'conversation.queue.append.failed') {
+      const record = requests.get(requestKey(session.activeDeviceId, data.requestId))
+      if (!record || record.terminal || !record.appendParentRequestId || record.appendParentRequestId !== session.activeRequestId) return {ok: false, error: 'remote_renderer_event_request_mismatch'}
+      session.pendingSends = session.pendingSends.filter(item => item.requestId !== record.requestId || item.deviceId !== record.deviceId)
+      const revision = Math.max(0, Number(data.payload?.revision) || 0)
+      // Completing this input receipt must not complete or replace its parent AI turn.
+      publish(record, data.event === 'conversation.queue.appended' ? 'assistant.completed' : 'assistant.failed',
+        data.event === 'conversation.queue.appended' ? {revision} : {code: 'remote_buffered_message_failed'})
+      if (revision > 0) { try { onConversationRevision({windowRef, conversationId: session.conversationId, revision}) } catch { /* observer only */ } }
+      return {ok: true}
+    }
     if (data.event === 'conversation.mobile.control.result') {
       const receipt = session.mobileControlReceipt
       if (!receipt || receipt.requestId !== data.requestId || receipt.done || Date.now() >= receipt.expiresAt) return {ok: false, error: 'remote_renderer_event_request_mismatch'}
@@ -1611,6 +1656,12 @@ export function createRemoteSessionManager({
     if (record.terminal) {
       if (session.activeOperation === 'conversation.delete' && data.event === 'conversation.operation.completed' && sanitizedPayload.deleted) {
         retireDeletedConversation(session.conversationId)
+      }
+      for (const queued of [...session.pendingSends]) {
+        const appended = requests.get(requestKey(queued.deviceId, queued.requestId))
+        if (appended?.appendParentRequestId !== record.requestId) continue
+        session.pendingSends = session.pendingSends.filter(item => item !== queued)
+        if (!appended.terminal) publish(appended, 'assistant.failed', {code: 'remote_buffered_message_unconfirmed'})
       }
       session.activeRequestId = ''
       session.activeDeviceId = ''

@@ -2784,6 +2784,42 @@ const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = ''
   }
 };
 
+// Called only after the complete tool-result batch has been appended to history.
+const drainRemoteAppendBuffer = async (command) => {
+  if (!command || activeRemoteCommand.value !== command || command.__remoteCancelled ||
+      isClosingWindow.value || desktopTakeoverPending.value || !ensureConversationWriteAccess(false)) return;
+  const response = await emitRemoteRendererEventAndWait('conversation.queue.drain', command);
+  if (!response?.ok) throw new Error('remote_buffered_message_unavailable');
+  for (const item of response.items || []) {
+    let appended = false;
+    try {
+      const content = [];
+      if (item.text?.trim()) content.push({type: 'text', text: item.text});
+      for (const uploadId of item.uploadIds || []) {
+        if (command.__remoteCancelled || isClosingWindow.value || desktopTakeoverPending.value || !ensureConversationWriteAccess(false)) throw new Error('remote_request_cancelled');
+        const attachment = await window.api.consumeRemoteUpload({requestId: item.requestId, uploadId});
+        if (!attachment?.content) throw new Error('remote_attachment_parse_failed');
+        content.push(attachment.content);
+      }
+      if (activeRemoteCommand.value !== command || command.__remoteCancelled || isClosingWindow.value || desktopTakeoverPending.value || !ensureConversationWriteAccess(false)) throw new Error('remote_request_cancelled');
+      if (!content.length) throw new Error('remote_message_invalid');
+      appendLinkedUserMessage({
+        historyContent: content.length === 1 && content[0].type === 'text' ? content[0].text : content,
+        uiContent: content, timestamp: new Date().toLocaleString('sv-SE')
+      });
+      appended = true;
+      if (!await persistRemoteTranscript('remote-buffered-user-message')) throw new Error('remote_conversation_save_failed');
+      const acknowledged = await emitRemoteRendererEventAndWait('conversation.queue.appended', item, {revision: currentConversationStorage.value?.revision || 0});
+      if (!acknowledged?.ok) throw new Error('remote_buffered_message_unconfirmed');
+    } catch (error) {
+      await emitRemoteRendererEventAndWait('conversation.queue.append.failed', item).catch(() => {});
+      // A persisted/partially saved input cannot safely be replayed or ignored.
+      if (appended || command.__remoteCancelled || isClosingWindow.value || desktopTakeoverPending.value || !ensureConversationWriteAccess(false)) throw error;
+    }
+  }
+};
+
+
 const normalizeRemoteCommand = (input = {}) => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const type = typeof input.type === 'string' ? input.type.trim() : '';
@@ -11053,6 +11089,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
         // 工具调用完成后，把缓冲区消息插入历史，使下一轮请求即可纳入
         throwIfTurnAborted();
         await drainBufferIntoHistory();
+        await drainRemoteAppendBuffer(turnRemoteCommand);
         throwIfTurnAborted();
 
         // 关键：tool 结果写回后、进入下一轮 AI 请求前做上下文检测。

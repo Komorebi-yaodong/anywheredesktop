@@ -191,6 +191,90 @@ context.askAI = async () => {
 }
 const command = { type: 'conversation.send', conversationId: 'conversation-renderer-fixture', requestId: 'renderer-request-1', text: 'Hello', autoApproveTools: true }
 
+// Execute the real tool-boundary block with Main's queue and Renderer persistence.
+// This uses synthetic messages only; no Electron window, network/model or user history.
+const {createRemoteSessionManager} = await import('../main/core/remote/sessionManager.js')
+const bufferedDevice = 'device-renderer-buffer-fixture'
+const bufferedParent = 'request-renderer-buffer-parent'
+const bufferedCommands = [], bufferedEvents = []
+const bufferedWindow = {id: 'window-renderer-buffer', type: 'window', conversationId: command.conversationId, rendererReady: true, remoteHidden: true}
+const bufferManager = createRemoteSessionManager({
+  getConfig: async () => ({}), openConversation: async () => ({}), listWindows: () => [bufferedWindow],
+  openWindow: async () => ({ok: true}), getWindowByRef: () => ({isDestroyed: () => false}),
+  dispatchRemoteCommandToWindow: async (_windowRef, input) => {bufferedCommands.push(input); return {ok: true}},
+  revealRemoteConversationWindow: () => ({ok: true}), broadcastToDevice: (_device, event, payload) => bufferedEvents.push({event, payload}),
+  uploadManager: {reserveForRequest: async () => {}, authorizeForRequest: async () => {}, releaseReservation: async () => {}, cleanupRequest: async () => {}},
+})
+await bufferManager.send({deviceId: bufferedDevice, requestId: bufferedParent, params: {conversationId: command.conversationId, text: 'initial'}})
+const originalEmitter = context.window.api.emitRemoteRendererEvent
+context.window.api.emitRemoteRendererEvent = input => {
+  actions.push(input.event)
+  return Promise.resolve(bufferManager.handleRendererEvent({windowRef: bufferedWindow.id, payload: input}))
+}
+const boundaryStart = source.indexOf('        appendFullHistory(...safeToolMessages, ...toolMediaMessages);')
+const boundaryEnd = source.indexOf('      } else {', boundaryStart)
+assert.ok(boundaryStart > 0 && boundaryEnd > boundaryStart)
+const boundaryCommand = {...command, requestId: bufferedParent}
+adapter.activeRemoteCommand.value = boundaryCommand
+context.turnRemoteCommand = boundaryCommand
+context.toolMediaMessages = []
+context.scheduleAutoSave = () => {}
+context.isModelIterationConfigLocked = ref(true)
+context.throwIfTurnAborted = () => {
+  if (boundaryCommand.__remoteCancelled) throw new Error('fixture-aborted')
+}
+context.drainBufferIntoHistory = async () => actions.push('local-buffer-boundary')
+let nextModelInput = []
+context.maybeAutoCompactBeforeNextRequest = async () => {nextModelInput = structuredClone(appendedMessages)}
+for (const round of [1, 2]) {
+  await bufferManager.send({deviceId: bufferedDevice, requestId: `request-renderer-buffer-child-${round}`, params: {
+    conversationId: command.conversationId, text: `supplement-${round}`, ...(round === 2 ? {uploadIds: ['upload-renderer-buffer-0001']} : {}),
+  }})
+  context.safeToolMessages = [{role: 'tool', tool_call_id: `call-${round}`, content: `result-${round}`}]
+  await vm.runInContext(`(async () => {${source.slice(boundaryStart, boundaryEnd)}})()`, ctx)
+  assert.equal(nextModelInput.at(-2).role, 'tool')
+  assert.equal(nextModelInput.at(-2).tool_call_id, `call-${round}`)
+  assert.equal(nextModelInput.at(-1).role, 'user')
+  if (round === 1) assert.equal(nextModelInput.at(-1).content, 'supplement-1')
+  else {
+    assert.equal(nextModelInput.at(-1).content[0].text, 'supplement-2')
+    assert.equal(nextModelInput.at(-1).content[1].type, 'image_url')
+    assert.equal(consumedUploads.at(-1).requestId, 'request-renderer-buffer-child-2')
+  }
+  assert.equal(bufferManager.getRequest({deviceId: bufferedDevice, params: {requestId: bufferedParent}}).terminal, false)
+  assert.equal(bufferManager.getRequest({deviceId: bufferedDevice, params: {requestId: `request-renderer-buffer-child-${round}`}}).terminal, true)
+  assert.equal(actions.at(-1), 'conversation.queue.appended', 'save acknowledged before next model iteration')
+}
+assert.equal(bufferedCommands.length, 1, 'tool boundaries never dispatch another AI turn')
+assert.equal(bufferedEvents.filter(item => item.event === 'assistant.completed').length, 2)
+// Saving failure must stop before the next model iteration and retire the input,
+// never dispatch it later as a duplicate user message.
+await bufferManager.send({deviceId: bufferedDevice, requestId: 'request-renderer-buffer-save-fail', params: {conversationId: command.conversationId, text: 'save failure'}})
+const originalSave = context.executeAutoSaveRequest
+context.executeAutoSaveRequest = async () => false
+await assert.rejects(vm.runInContext('drainRemoteAppendBuffer(turnRemoteCommand)', ctx), /remote_conversation_save_failed/)
+assert.equal(bufferManager.getRequest({deviceId: bufferedDevice, params: {requestId: 'request-renderer-buffer-save-fail'}}).event, 'assistant.failed')
+assert.equal(bufferManager.listSendQueue({deviceId: bufferedDevice, params: {conversationId: command.conversationId}}).items.length, 0)
+context.executeAutoSaveRequest = originalSave
+
+// Preparation interrupted by cancellation must not append the input or replay it.
+await bufferManager.send({deviceId: bufferedDevice, requestId: 'request-renderer-buffer-cancel', params: {conversationId: command.conversationId, text: 'cancelled supplement', uploadIds: ['upload-renderer-buffer-cancel']}})
+const originalConsume = context.window.api.consumeRemoteUpload
+context.window.api.consumeRemoteUpload = async () => {boundaryCommand.__remoteCancelled = true; return {content: {type: 'text', text: 'attachment'}}}
+const beforeCancelledAppend = appendedMessages.length
+await assert.rejects(vm.runInContext('drainRemoteAppendBuffer(turnRemoteCommand)', ctx), /remote_request_cancelled/)
+assert.equal(appendedMessages.length, beforeCancelledAppend)
+assert.equal(bufferManager.getRequest({deviceId: bufferedDevice, params: {requestId: 'request-renderer-buffer-cancel'}}).event, 'assistant.failed')
+context.window.api.consumeRemoteUpload = originalConsume
+context.window.api.emitRemoteRendererEvent = originalEmitter
+adapter.activeRemoteCommand.value = null
+// Restore the original fixture before its independent lifecycle checks.
+appendedMessages.length = 0
+consumedUploads.length = 0
+actions.length = 0
+context.currentConversationStorage.value.revision = 0
+
+
 const liveTools = [{ id: 'tool-live-renderer-0001', name: 'safe_tool', approvalStatus: 'executing', args: '{"query":"fixture"}', result: 'SECRET result' }]
 adapter.activeRemoteCommand.value = { ...command, requestId: 'renderer-tool-snapshot', __remoteStarted: true }
 adapter.emitRemoteAssistantDelta(adapter.activeRemoteCommand.value, '', '', '', 'tool-only-bubble', liveTools)

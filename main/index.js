@@ -65,6 +65,9 @@ import * as updaterApi from './core/updater.js'
 import * as compactApi from './core/compact.js'
 import { createRemoteGateway } from './core/remote/index.js'
 import { createRemoteConversationReadService } from './core/remote/conversationRead.js'
+
+import createCatalogWorker from './core/remote/catalogWorker.js?nodeWorker'
+import {createCatalogReader} from './core/remote/catalogReader.js'
 import { createRemoteSessionManager } from './core/remote/sessionManager.js'
 import { createRemoteUploadManager } from './core/remote/uploadManager.js'
 import { createRemoteBusinessConfigService } from './core/remote/businessConfig.js'
@@ -162,7 +165,7 @@ const remoteConversationMediaService = createRemoteConversationMediaService()
 
 const remoteConversationReadService = createRemoteConversationReadService({
   getConfig: dataApi.getConfig,
-  listLocalConversations: conversationApi.listLocalConversations,
+  listLocalConversations: createCatalogReader(createCatalogWorker),
   readLocalProjects: projectsApi.readLocalProjects,
   loadRemoteConversationPage: conversationApi.loadRemoteConversationPage,
   registerMedia: remoteConversationMediaService.register,

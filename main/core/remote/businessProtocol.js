@@ -39,6 +39,13 @@ export function createBusinessProtocol({readService, getManager, operations = nu
     if (!negotiated.has(context)) throw remoteError('remote_contract_negotiation_required')
     if (!available()) throw remoteError('remote_method_unavailable')
   }
+  function control(context, params) {
+    authorize(context)
+    allowed(params, ['conversationId'])
+    return contract.validateRuntime(getManager().runtimeSnapshot({deviceId: context.device.deviceId,
+      params: {conversationId: safeId(params.conversationId)}}))
+  }
+
   async function view(context, params) {
     authorize(context)
     allowed(params, ['conversationId', 'beforeUiOrder', 'pageSize'])
@@ -167,5 +174,5 @@ export function createBusinessProtocol({readService, getManager, operations = nu
   }
 
 
-  return {negotiate, view, changes, operation, notify, available, resource, command, operationStatus, operationStatuses, transfer}
+  return {negotiate, control, view, changes, operation, notify, available, resource, command, operationStatus, operationStatuses, transfer}
 }

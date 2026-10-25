@@ -95,15 +95,15 @@ function resolveDatabasePath(dirPath, dbFile) {
   return path.join(dir, basename)
 }
 
-function openDatabase(databasePath, { readOnly = false } = {}) {
+function openDatabase(databasePath, { readOnly = false, timeout = DEFAULT_BUSY_TIMEOUT_MS } = {}) {
   const db = new DatabaseSync(databasePath, {
     readOnly,
-    timeout: DEFAULT_BUSY_TIMEOUT_MS,
+    timeout,
     enableForeignKeyConstraints: true
   })
   db.exec(`
     PRAGMA foreign_keys = ON;
-    PRAGMA busy_timeout = ${DEFAULT_BUSY_TIMEOUT_MS};
+    PRAGMA busy_timeout = ${timeout};
   `)
   if (!readOnly) {
     db.exec(`
@@ -132,7 +132,7 @@ function descriptorFromConversationRow(row, dbFile, existing = {}) {
   }
 }
 
-async function synchronizeLocalProjectsWithDatabases(dirPath) {
+async function synchronizeLocalProjectsWithDatabases(dirPath, {readOnly = false} = {}) {
   const normalizedDir = path.resolve(normalizeText(dirPath).trim())
   let projects = await readLocalProjects(normalizedDir)
   const entries = await fs.readdir(normalizedDir, { withFileTypes: true }).catch((error) => {
@@ -144,7 +144,7 @@ async function synchronizeLocalProjectsWithDatabases(dirPath) {
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(DB_EXTENSION)) continue
     let db
     try {
-      db = openDatabase(path.join(normalizedDir, entry.name), { readOnly: true })
+      db = openDatabase(path.join(normalizedDir, entry.name), {readOnly: true, ...(readOnly ? {timeout: 0} : {})})
       const row = getConversationRow(db)
       const existing = projects.conversations?.[normalizeText(row?.conversation_id).trim()] || {}
       const descriptor = descriptorFromConversationRow(row, entry.name, existing)
@@ -186,7 +186,7 @@ async function synchronizeLocalProjectsWithDatabases(dirPath) {
   for (const [conversationId, descriptor] of selectedDescriptors.entries()) {
     nextProjects = registerConversation(nextProjects, descriptor)
   }
-  if (JSON.stringify(nextProjects) !== JSON.stringify(projects)) {
+  if (!readOnly && JSON.stringify(nextProjects) !== JSON.stringify(projects)) {
     await writeLocalProjects(normalizedDir, nextProjects)
   }
   return nextProjects
@@ -1556,9 +1556,9 @@ export async function openConversation({ dirPath, reference, activeOnly = true, 
   }
 }
 
-export async function listLocalConversations(dirPath) {
+export async function listLocalConversations(dirPath, {readOnly = false} = {}) {
   const normalizedDir = path.resolve(normalizeText(dirPath).trim())
-  const projects = await synchronizeLocalProjectsWithDatabases(normalizedDir)
+  const projects = await synchronizeLocalProjectsWithDatabases(normalizedDir, {readOnly})
   const files = await fs.readdir(normalizedDir, { withFileTypes: true }).catch((error) => {
     if (error?.code === 'ENOENT') return []
     throw error
@@ -1685,7 +1685,7 @@ export async function loadRemoteConversationPage({
   const projects = await readLocalProjects(normalizedDir)
   const descriptor = findConversation(projects, normalizedConversationId)
   if (!descriptor) throw new Error('conversation_not_found')
-  const db = openDatabase(resolveDatabasePath(normalizedDir, descriptor.dbFile), { readOnly: true })
+  const db = openDatabase(resolveDatabasePath(normalizedDir, descriptor.dbFile), {readOnly: true, timeout: 0})
   try {
     const row = getConversationRow(db)
     const limit = Math.min(100, Math.max(1, Math.floor(Number(pageSize) || 50)))

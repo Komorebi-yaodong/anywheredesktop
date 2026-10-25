@@ -5,7 +5,7 @@ import { shallowRef, ref, computed, watch } from 'vue'
 
 import {replaceConversationEditableText} from '../render/window/utils/conversationEditableText.js'
 
-const source = await fs.readFile(new URL('../render/window/App.vue', import.meta.url), 'utf8')
+const source = (await fs.readFile(new URL('../render/window/App.vue', import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
 
 const mobileControlDeclaration = source.indexOf('const mobileControlActive = ref(false);')
 const mobileControlWatch = source.indexOf('  mobileControlActive,', source.indexOf('watch(['))

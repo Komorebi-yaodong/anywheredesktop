@@ -6,6 +6,9 @@ import path from 'node:path'
 import {createOperationStorage} from './operationStorage.js'
 
 import {createOperationJournal} from './operationJournal.js'
+
+import {createRpcScheduler} from './rpcScheduler.js'
+import {createAuditQueue} from './auditQueue.js'
 import {createResultTransfers, RESULT_TRANSFER_CAPABILITY} from './resultTransfer.js'
 import {ADAPTIVE_TRANSFER_CAPABILITY, TRANSFER_MAX_FRAME_BYTES} from './transferLimits.js'
 import https from 'node:https'
@@ -340,7 +343,7 @@ export function createRemoteGateway({
     const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get', RESULT_TRANSFER_CAPABILITY, ADAPTIVE_TRANSFER_CAPABILITY]
 
     capabilities.push('remote.contract.negotiate')
-    if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'operation.status.batch', 'transfer.request')
+    if (businessProtocol.available()) capabilities.push('conversation.control.get', 'conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'operation.status.batch', 'transfer.request')
     if (conversationReadService) {
 
       if (typeof conversationReadService.historyChunk === 'function') capabilities.push('conversation.history.chunk.get')
@@ -543,28 +546,22 @@ export function createRemoteGateway({
     }).slice(0, MAX_AUDIT_ENTRIES)
   }
 
-  async function appendAudit(type, details = {}) {
-    try {
-      const existing = await storageGet(AUDIT_STORAGE_KEY, { version: REMOTE_PROTOCOL_VERSION, entries: [] })
-      const entries = recentAuditEntries(existing?.entries)
-      const entry = {
-        at: nowIso(),
-        type: String(type || 'remote.unknown').slice(0, 80),
-        deviceId: typeof details?.deviceId === 'string' ? details.deviceId.slice(0, 160) : '',
-        deviceName: typeof details?.deviceName === 'string' ? normalizeDisplayName(details.deviceName).slice(0, 80) : '',
-        deviceModel: typeof details?.deviceModel === 'string' ? normalizeDisplayName(details.deviceModel, '').slice(0, 80) : '',
-        appVersion: typeof details?.appVersion === 'string' ? normalizeDisplayName(details.appVersion, '').slice(0, 80) : '',
-        result: typeof details?.result === 'string' ? details.result.slice(0, 80) : '',
-        meta: details?.meta && typeof details.meta === 'object' ? clone(details.meta) : {}
-      }
-      entries.unshift(entry)
-      await storageSet(AUDIT_STORAGE_KEY, {
-        version: REMOTE_PROTOCOL_VERSION,
-        entries: recentAuditEntries(entries)
-      })
-    } catch {
-      // audit storage is best effort and must not interrupt a trusted action
-    }
+  const auditQueue = createAuditQueue({
+    load: async () => (await storageGet(AUDIT_STORAGE_KEY, {entries: []}))?.entries || [],
+    save: entries => storageSet(AUDIT_STORAGE_KEY, {version: REMOTE_PROTOCOL_VERSION, entries}),
+    filter: recentAuditEntries, maxEntries: MAX_AUDIT_ENTRIES
+  })
+
+  function appendAudit(type, details = {}) {
+    auditQueue.append({
+      at: nowIso(), type: String(type || 'remote.unknown').slice(0, 80),
+      deviceId: typeof details.deviceId === 'string' ? details.deviceId.slice(0, 160) : '',
+      deviceName: typeof details.deviceName === 'string' ? normalizeDisplayName(details.deviceName).slice(0, 80) : '',
+      deviceModel: typeof details.deviceModel === 'string' ? normalizeDisplayName(details.deviceModel, '').slice(0, 80) : '',
+      appVersion: typeof details.appVersion === 'string' ? normalizeDisplayName(details.appVersion, '').slice(0, 80) : '',
+      result: typeof details.result === 'string' ? details.result.slice(0, 80) : '',
+      meta: details.meta && typeof details.meta === 'object' ? clone(details.meta) : {}
+    })
   }
 
   function publicDevice(device) {
@@ -1462,6 +1459,10 @@ export function createRemoteGateway({
           result = conversationReadService.historyChunk({deviceId: context.device.deviceId, params})
           break
 
+        case 'conversation.control.get':
+          result = businessProtocol.control(context, params)
+          break
+
         case 'conversation.view.get':
           result = await businessProtocol.view(context, params)
           break
@@ -1588,13 +1589,20 @@ export function createRemoteGateway({
 
       const request = context.session.decrypt(message)
       if (request.kind !== 'request') throw remoteError('remote_request_invalid')
-      await handleEncryptedRpc({ socket, context, request })
+      // Validate admission while still in the ordered frame lane. Negotiation
+      // executes synchronously before its first await; business completion does not.
+      normalizeIdentifier(request.requestId, 'requestId', {minLength: 8, maxLength: 160})
+      void Promise.resolve(context.rpcScheduler.schedule(request, () => {
+        if (context.closed) return
+        return handleEncryptedRpc({socket, context, request})
+      })).catch(() => {if (!context.closed) safeSocketClose(socket, 1011, 'rpc_dispatch_failed')})
     } catch (error) {
       const code = typeof error?.code === 'string' ? error.code : 'remote_socket_error'
       log('warn', 'socket message rejected', { code, deviceId: context.device?.deviceId || '' })
       if (context.authenticated) {
         sendEncrypted(socket, context, { kind: 'event', event: 'remote.error', payload: { code } })
       }
+      context.closed = true
       safeSocketClose(socket, 4003, code)
     }
   }
@@ -1618,6 +1626,8 @@ export function createRemoteGateway({
         device: null,
         session: null,
         messageQueue: Promise.resolve(),
+
+        rpcScheduler: createRpcScheduler(),
         remoteAddress: typeof request?.socket?.remoteAddress === 'string' ? request.socket.remoteAddress : ''
       }
       unauthenticatedSocketCount += 1
@@ -1631,8 +1641,8 @@ export function createRemoteGateway({
           safeSocketClose(socket, 1003, 'binary_frames_not_supported')
           return
         }
-        // ws emits message callbacks without awaiting async handlers. Serialize per socket so
-        // AEAD sequence checks observe the exact arrival order and fail closed on a bad frame.
+        // Only authentication/decryption/admission share this lane. Business
+        // completion must not delay the next AEAD sequence check or heartbeat.
         context.messageQueue = context.messageQueue
           .then(async () => {
             if (!context.closed) await handleSocketMessage(socket, raw)
@@ -1867,6 +1877,8 @@ export function createRemoteGateway({
   }
 
   async function getAuditLog() {
+
+    await auditQueue.flush()
     const stored = await storageGet(AUDIT_STORAGE_KEY, { version: REMOTE_PROTOCOL_VERSION, entries: [] })
     const devices = await readDevices()
     const profiles = new Map(devices.devices.map((device) => [device.deviceId, {

@@ -19,6 +19,12 @@ await assert.rejects(service.view(A, {conversationId: CID}), {code: 'remote_cont
 assert.throws(() => service.negotiate(A, {versions: [{major: 99, minor: 0}]}), {code: 'remote_contract_version_unsupported'})
 assert.equal(service.negotiate(A, {versions: [{major: 1, minor: 9}]}).selected.minor, 1)
 service.negotiate(B, {versions: [{major: 1, minor: 0}]})
+duringRead = () => {throw new Error('control must not read history')}
+assert.deepEqual(service.control(A, {conversationId: CID}), frozen.runtime)
+assert.throws(() => service.control(A, {conversationId: CID, path: 'forbidden'}), {code: 'remote_parameter_unknown'})
+assert.throws(() => service.control({device: B.device}, {conversationId: CID}), {code: 'remote_contract_negotiation_required'})
+duringRead = () => {}
+
 const first = await service.view(A, {conversationId: CID})
 assert.equal(first.runtime.control.canWrite, false)
 assert.equal(service.changes(A, {conversationId: CID, cursor: first.cursor}).events.length, 0)

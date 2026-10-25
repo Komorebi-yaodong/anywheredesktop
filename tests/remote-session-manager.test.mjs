@@ -753,6 +753,27 @@ async function run() {
   const readonly = fixture({ existing: true })
   readonly.items[0].readOnly = true
   await assert.rejects(send(readonly.manager), { code: 'remote_conversation_read_only' })
+  // Read-only snapshot deadlines do not consume AI/write slots or revive on late replies.
+  const readWindow = {id: 'window-config-deadline', type: 'window', conversationId: CID, rendererReady: true, remoteHidden: true}
+  const deadlineEvents = []
+  const deadlineManager = createRemoteSessionManager({
+    getConfig: async () => ({}), openConversation: async () => ({}), listWindows: () => [readWindow],
+    openWindow: async () => ({ok: false}), getWindowByRef: () => ({isDestroyed: () => false}),
+    dispatchRemoteCommandToWindow: async () => ({ok: true}), revealRemoteConversationWindow: () => ({ok: true}),
+    broadcastToDevice: (_device, event, payload) => deadlineEvents.push({event, payload}), configReadTimeoutMs: 100,
+  })
+  for (let i = 0; i < 300; i++) await deadlineManager.getConfig({deviceId: DEVICE, requestId: `request-deadline-${i}`, params: {conversationId: CID}})
+  await send(deadlineManager, 'request-during-config-reads')
+  await new Promise(resolve => setTimeout(resolve, 130))
+  await assert.rejects(deadlineManager.waitConfigRead({deviceId: DEVICE, requestId: 'request-deadline-299'}), {code: 'remote_resource_read_timeout'})
+  assert.equal(deadlineManager.getRequest({deviceId: DEVICE, params: {requestId: 'request-during-config-reads'}}).terminal, false, 'read deadline never cancels an AI turn')
+  assert.equal(deadlineManager.handleRendererEvent({windowRef: readWindow.id, payload: {conversationId: CID, requestId: 'request-deadline-299', event: 'conversation.config.result', payload: {config: {}}}}).ok, false)
+  assert.equal(deadlineEvents.filter(item => item.payload.requestId === 'request-deadline-299' && item.event.endsWith('.failed')).length, 1)
+  await deadlineManager.getConfig({deviceId: DEVICE, requestId: 'request-read-close', params: {conversationId: CID}})
+  deadlineManager.handleWindowClosed(readWindow.id)
+  await assert.rejects(deadlineManager.waitConfigRead({deviceId: DEVICE, requestId: 'request-read-close'}), {code: 'remote_renderer_closed'})
+
+
   console.log(JSON.stringify({ ok: true, suite: 'remote-session-manager' }))
 }
 await run()

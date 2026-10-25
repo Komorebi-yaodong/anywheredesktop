@@ -2,6 +2,9 @@ import crypto from 'node:crypto'
 
 import {createBusinessProtocol} from './businessProtocol.js'
 
+import path from 'node:path'
+import {createOperationStorage} from './operationStorage.js'
+
 import {createOperationJournal} from './operationJournal.js'
 import {createResultTransfers, RESULT_TRANSFER_CAPABILITY} from './resultTransfer.js'
 import {ADAPTIVE_TRANSFER_CAPABILITY, TRANSFER_MAX_FRAME_BYTES} from './transferLimits.js'
@@ -274,10 +277,13 @@ export function createRemoteGateway({
   const activeSocketsByDeviceId = new Map()
   let activeSessionManager = sessionManager
 
-  const operationJournal = createOperationJournal({
-    load: async () => {const value = await storageGet('remote:operations:v1', null); return value ? JSON.parse(decryptLocalSecret(value.encrypted)) : null},
-    save: async value => {const result = await dbStorageSetItem('remote:operations:v1', {encrypted: encryptLocalSecret(JSON.stringify(value))}); if (result?.ok === false) throw remoteError('remote_operation_storage_failed')}
+  const operationStorage = createOperationStorage({
+    directory: path.join(app.getPath('userData'), 'remote-operations'),
+    encrypt: encryptLocalSecret, decrypt: decryptLocalSecret,
+    loadLegacy: async () => {const value = await storageGet('remote:operations:v1', null); return value ? JSON.parse(decryptLocalSecret(value.encrypted)) : null},
+    markMigrated: async () => {const result = await dbStorageSetItem('remote:operations:v1', {encrypted: encryptLocalSecret(JSON.stringify({version: 2}))}); if (result?.ok === false) throw remoteError('remote_operation_storage_failed')}
   })
+  const operationJournal = createOperationJournal(operationStorage)
   const businessProtocol = createBusinessProtocol({readService: conversationReadService, getManager: () => activeSessionManager,
     operations: operationJournal, dispatch: dispatchLegacy})
 
@@ -334,7 +340,7 @@ export function createRemoteGateway({
     const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get', RESULT_TRANSFER_CAPABILITY, ADAPTIVE_TRANSFER_CAPABILITY]
 
     capabilities.push('remote.contract.negotiate')
-    if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'transfer.request')
+    if (businessProtocol.available()) capabilities.push('conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'operation.status.batch', 'transfer.request')
     if (conversationReadService) {
 
       if (typeof conversationReadService.historyChunk === 'function') capabilities.push('conversation.history.chunk.get')
@@ -1440,6 +1446,9 @@ export function createRemoteGateway({
           break
         case 'command.submit':
           result = await businessProtocol.command(context, params)
+          break
+        case 'operation.status.batch':
+          result = await businessProtocol.operationStatuses(context, params)
           break
         case 'operation.status.get':
           result = await businessProtocol.operationStatus(context, params)

@@ -201,12 +201,14 @@ async function readServerCertificate(endpoint) {
 
 
 async function verifyPersistedTlsLifecycle() {
+
+  const tlsSandbox = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-remote-tls-test-'))
   const storage = createStorage()
   const safeStorage = createMemorySecureStorage()
   const port = await findFreePort()
   let lanAddress = '127.0.0.2'
   const makeGateway = () => createRemoteGateway({
-    app: { getPath: () => process.cwd(), getName: () => 'TLS Fixture' },
+    app: { getPath: () => tlsSandbox, getName: () => 'TLS Fixture' },
     safeStorage, dbStorageGetItem: storage.get, dbStorageSetItem: storage.set,
     getLanAddresses: () => [lanAddress],
     logger: { log() {}, warn() {}, error() {} }
@@ -247,6 +249,7 @@ async function verifyPersistedTlsLifecycle() {
     assert.equal(pairing.certificateFingerprint, pinnedFingerprint)
   } finally {
     await gateway.stop()
+    await fs.rm(tlsSandbox, {recursive: true, force: true})
   }
 }
 
@@ -283,7 +286,7 @@ async function main() {
   })
 
   const app = {
-    getPath: () => process.cwd(),
+    getPath: () => sandbox,
     getName: () => 'Anywhere Remote Test'
   }
   let observedPairing = null
@@ -985,6 +988,13 @@ async function main() {
     assert.equal(durableConflict.error.code, 'remote_command_id_conflict')
     const durableStatus = await sendEncryptedRequest({socket, session, requestId: 'request-durable-status-v11', method: 'operation.status.get', params: {operationId: durableInput.commandId}})
     assert.equal(durableStatus.result.state, 'succeeded')
+    assert.ok(welcome.payload.capabilities.includes('operation.status.batch'))
+    const batchedStatus = await sendEncryptedRequest({socket, session, requestId: 'request-batch-status-v11', method: 'operation.status.batch', params: {operationIds: [durableInput.commandId, 'command-batch-missing-fixture']}})
+    assert.equal(batchedStatus.ok, true)
+    assert.equal(batchedStatus.result.items[0].state, 'succeeded')
+    assert.equal(Object.hasOwn(batchedStatus.result.items[0], 'receipt'), false)
+    assert.equal(batchedStatus.result.items[1].error, 'remote_operation_not_found')
+
     const storedOperations = await storage.get('remote:operations:v1', null)
     assert.ok(storedOperations.value.encrypted)
     assert.equal(JSON.stringify(storedOperations).includes('Durable Synthetic Project'), false)

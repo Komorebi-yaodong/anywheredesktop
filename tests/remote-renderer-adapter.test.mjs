@@ -733,6 +733,16 @@ const savesAfterDeletion = actions.filter(item => item === 'desktop-takeover' ||
 await adapter.runRemoteConversationCommand({type: 'remote.shutdown', conversationId: command.conversationId, conversationDeleted: true, closeWindow: true})
 assert.equal(actions.filter(item => item === 'desktop-takeover' || item === 'remote-shutdown').length, savesAfterDeletion, 'deleted shutdown must never try to persist or revive its database')
 
+// Snapshot reads must finish even while token recount/config mutation never settles.
+context.isClosingWindow.value = false
+context.remoteConfigExecutionPromise = new Promise(() => {})
+context.refreshPromptTokenBreakdown = async () => {throw new Error('must not recount for snapshot')}
+await adapter.runRemoteConversationCommand({type: 'conversation.config.get', conversationId: command.conversationId, requestId: 'renderer-fast-config-read'})
+assert.equal(events.at(-1).event, 'conversation.config.result')
+const snapshotSource = source.slice(source.indexOf("  if (command.type === 'conversation.config.get') {"), source.indexOf("  if (command.type === 'conversation.config.patch') {"))
+assert.doesNotMatch(snapshotSource, /await remoteConfigExecutionPromise|refreshPromptTokenBreakdown\(/)
+
+
 assert.doesNotMatch(block, /isAutoApproveTools\.value = true/)
 const windowSource = await fs.readFile(new URL('../main/windowManager.js', import.meta.url), 'utf8')
 assert.match(windowSource, /setBackgroundThrottling\(false\)/)

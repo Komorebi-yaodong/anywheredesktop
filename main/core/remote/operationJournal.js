@@ -6,7 +6,7 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000
 const FUTURE_MS = 60 * 1000
 
 /** Encrypted by the supplied storage adapter; never persists raw command params. */
-export function createOperationJournal({load, save, now = Date.now}) {
+export function createOperationJournal({load, save, saveChanges, now = Date.now}) {
   const records = new Map()
   let initialized
   let queue = Promise.resolve()
@@ -21,7 +21,16 @@ export function createOperationJournal({load, save, now = Date.now}) {
   const compact = record => ({...record, receipt: record.method === 'conversation.config.get' || record.method === 'conversation.config.patch' || record.method === 'conversation.context.refresh' ? null : bounded(record.receipt),
     progress: record.progress ? {...record.progress, text: '', reasoning: '', toolCalls: [], truncated: true, result: ['conversation.config.get', 'conversation.config.patch', 'conversation.context.refresh'].includes(record.method) ? {refreshRequired: true} : bounded(record.progress.result)} : null})
   let storageFailed = false
-  const persist = async () => {try {await save({version: 1, records: [...records.values()].map(compact)}); storageFailed = false} catch {storageFailed = true; throw remoteError('remote_operation_storage_failed')}}
+  const dirty = new Set(), removed = new Set()
+  const persist = async (record) => {
+    if (record) dirty.add(key(record.deviceId, record.commandId))
+    try {
+      if (saveChanges) {
+        if (dirty.size || removed.size) await saveChanges({puts: [...dirty].flatMap(id => records.has(id) ? [compact(records.get(id))] : []), removes: [...removed]})
+      } else await save({version: 1, records: [...records.values()].map(compact)})
+      dirty.clear(); removed.clear(); storageFailed = false
+    } catch {storageFailed = true; throw remoteError('remote_operation_storage_failed')}
+  }
   async function initialize() {
     if (!initialized) initialized = (async () => {
       const data = await load()
@@ -29,13 +38,14 @@ export function createOperationJournal({load, save, now = Date.now}) {
       const list = data?.records || []
       for (const record of list) {
         if (!record || typeof record.deviceId !== 'string' || typeof record.commandId !== 'string' || !Number.isFinite(record.acceptedAt)) throw remoteError('remote_operation_storage_invalid')
-        if (now() - record.acceptedAt > RETENTION_MS) continue
+        if (now() - record.acceptedAt > RETENTION_MS) {removed.add(key(record.deviceId, record.commandId)); continue}
         if (!record.terminal) {
           record.terminal = true
           record.state = 'interrupted'
           record.code = 'remote_operation_interrupted'
           record.progress = null
           record.receipt = null
+          dirty.add(key(record.deviceId, record.commandId))
         }
         records.set(key(record.deviceId, record.commandId), record)
       }
@@ -61,13 +71,13 @@ export function createOperationJournal({load, save, now = Date.now}) {
         return previous
       }
       if (!Number.isFinite(issuedAt) || issuedAt < now() - MAX_AGE_MS || issuedAt > now() + FUTURE_MS) throw remoteError('remote_command_expired')
-      for (const [id, item] of records) if (now() - item.acceptedAt > RETENTION_MS) records.delete(id)
+      for (const [id, item] of records) if (now() - item.acceptedAt > RETENTION_MS) {records.delete(id); removed.add(id)}
       // Retained dedupe history is not a usage quota; keep valid records without
       // refusing new commands or evicting IDs that still prevent duplicate execution.
       const next = {deviceId, commandId, fingerprint, method, conversationId: typeof params.conversationId === 'string' ? params.conversationId : null,
         acceptedAt: now(), state: 'accepted', terminal: false, receipt: null, progress: null, code: null}
       records.set(recordKey, next)
-      try {await persist()} catch (error) {records.delete(recordKey); throw error}
+      try {await persist(next)} catch (error) {records.delete(recordKey); dirty.delete(recordKey); throw error}
       created = true
       return next
     })
@@ -84,13 +94,13 @@ export function createOperationJournal({load, save, now = Date.now}) {
           record.receipt = receipt
           if (typeof receipt?.conversationId === 'string') record.conversationId = receipt.conversationId
           if (!record.terminal) {record.state = asynchronous ? 'running' : 'succeeded'; record.terminal = !asynchronous}
-          await persist()
+          await persist(record)
         })
       } catch (error) {
         if (error?.code === 'remote_operation_storage_failed') throw error
         await serial(async () => {
           if (!record.terminal) {record.state = 'failed'; record.terminal = true; record.code = /^remote_[a-z0-9_]+$/.test(error?.code) ? error.code : 'remote_command_failed'}
-          await persist()
+          await persist(record)
         })
       }
     })()
@@ -104,6 +114,7 @@ export function createOperationJournal({load, save, now = Date.now}) {
     await serial(async () => {
       const record = records.get(key(deviceId, commandId))
       if (!record || record.terminal) return
+      const before = `${record.state}:${record.conversationId}`
       record.conversationId = progress.conversationId || record.conversationId
       record.progress = {...progress, text: String(progress.text || '').slice(-4096), reasoning: String(progress.reasoning || '').slice(-4096),
         truncated: progress.truncated === true || String(progress.text || '').length > 4096 || String(progress.reasoning || '').length > 4096}
@@ -111,7 +122,9 @@ export function createOperationJournal({load, save, now = Date.now}) {
       record.state = record.terminal ? progress.event.endsWith('.failed') ? 'failed' : progress.event.endsWith('.cancelled') ? 'cancelled' : 'succeeded'
         : progress.event === 'conversation.queue.pending' ? 'queued' : 'running'
       record.code = progress.terminal && progress.result?.code || null
-      await persist()
+      // Token/sequence polling lives in memory; only lifecycle transitions are durable.
+      if (record.terminal || before !== `${record.state}:${record.conversationId}`) await persist(record)
+      else if (storageFailed) await persist()
     })
   }
   async function interrupt(deviceId, commandId) {
@@ -120,7 +133,7 @@ export function createOperationJournal({load, save, now = Date.now}) {
       const record = records.get(key(deviceId, commandId))
       if (!record || record.terminal || live.has(key(deviceId, commandId))) return
       record.state = 'interrupted'; record.terminal = true; record.code = 'remote_operation_interrupted'; record.progress = null
-      await persist()
+      await persist(record)
     })
   }
 

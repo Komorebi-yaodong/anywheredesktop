@@ -280,7 +280,7 @@ function sanitizeEvent(event, payload) {
 export function createRemoteSessionManager({
   getConfig, openConversation, listWindows, openWindow, getWindowByRef,
   readLocalProjects = async () => ({ projects: [] }), dispatchRemoteCommandToWindow, revealRemoteConversationWindow, broadcastToDevice,
-  recordAssistantUsage = async () => {}, conversationExists = null, getConversationDirectory = null, uploadManager = null, readinessTimeoutMs = 12000, onWindowClosed = null, onConversationRevision = null, onControlChanged = () => {}
+  recordAssistantUsage = async () => {}, conversationExists = null, getConversationDirectory = null, uploadManager = null, readinessTimeoutMs = 12000, configReadTimeoutMs = 110000, onWindowClosed = null, onConversationRevision = null, onControlChanged = () => {}
 } = {}) {
   for (const [name, value] of Object.entries({
     getConfig, openConversation, listWindows, openWindow, getWindowByRef, readLocalProjects,
@@ -308,13 +308,17 @@ export function createRemoteSessionManager({
   const windowItem = (windowRef) => windows().find((item) => item.id === windowRef)
   const requestKey = (deviceId, requestId) => `${deviceId}:${requestId}`
 
-  function pruneRequests() {
+  function pruneRequests(readOnly = false) {
     const now = Date.now()
     for (const [key, request] of requests) {
       if (request.terminal && now - request.updatedAtMs > REQUEST_TTL_MS) requests.delete(key)
     }
-    while (requests.size >= MAX_REQUESTS) {
-      const entry = [...requests].find(([, request]) => request.terminal)
+    const finishedReads = [...requests].filter(([, request]) => request.readOnly && request.terminal)
+    for (const [key] of finishedReads.slice(0, Math.max(0, finishedReads.length - MAX_REQUESTS))) requests.delete(key)
+    if (readOnly) return
+    // Read-only snapshots have their own deadline, never consume AI/write slots.
+    while ([...requests.values()].filter(request => !request.readOnly).length >= MAX_REQUESTS) {
+      const entry = [...requests].find(([, request]) => !request.readOnly && request.terminal)
       if (!entry) throw remoteError('remote_request_limit_reached')
       requests.delete(entry[0])
     }
@@ -478,6 +482,7 @@ export function createRemoteSessionManager({
   }
 
   function publish(record, event, payload = {}) {
+    if (record.terminal) return
     record.event = event
     record.updatedAtMs = Date.now()
     record.eventSequence += 1
@@ -504,6 +509,11 @@ export function createRemoteSessionManager({
     if (TERMINAL_EVENTS.has(event)) {
       record.terminal = true
       record.terminalPayload = payload
+      if (record.readOnly) {
+        clearTimeout(record.readTimer)
+        configReads.delete(`${record.windowRef}:${record.requestId}`)
+        record.resolveRead?.()
+      }
       uploadManager?.releaseReservation?.({deviceId:record.deviceId,requestId:record.requestId})?.catch?.(() => {})
       uploadManager?.cleanupRequest?.({
         deviceId: record.deviceId, requestId: record.requestId, windowRef: record.windowRef
@@ -1345,18 +1355,26 @@ export function createRemoteSessionManager({
       if (previous.fingerprint !== fingerprint) throw remoteError('remote_request_id_conflict')
       return { ...(await previous.dispatched), duplicate: true }
     }
-    pruneRequests()
+    pruneRequests(operation === 'conversation.config.get')
     const record = {
       deviceId: safeDeviceId, requestId: safeRequestId, conversationId, fingerprint,
       event: 'conversation.command.pending', eventSequence: 0, terminal: false,
       text: '', reasoning: '', truncated: false, updatedAtMs: Date.now(), windowRef: ''
     }
+    record.readOnly = operation === 'conversation.config.get'
+    if (record.readOnly) {
+      record.readCompletion = new Promise(resolve => {record.resolveRead = resolve})
+      record.readTimer = setTimeout(() => publish(record, 'conversation.operation.failed', {code: 'remote_resource_read_timeout'}), configReadTimeoutMs)
+      record.readTimer.unref?.()
+    }
     requests.set(key, record)
-    record.dispatched = serialize(conversationId, async () => {
+    const execution = serialize(conversationId, async () => {
       try {
+        if (record.terminal) throw remoteError('remote_resource_read_timeout')
         const hadSession = Boolean(existingSession(conversationId))
         const session = await ensureSession(conversationId, check)
         check()
+        if (record.terminal) throw remoteError('remote_resource_read_timeout')
         const readOnly = operation === 'conversation.config.get'
         const independent = readOnly || operation === 'conversation.config.patch'
         if (!readOnly) ensureMobileControl(session, safeDeviceId)
@@ -1393,7 +1411,19 @@ export function createRemoteSessionManager({
         throw error
       }
     })
+    record.dispatched = record.readOnly ? Promise.race([execution, record.readCompletion.then(() => {
+      if (record.event.endsWith('.failed')) throw remoteError(record.terminalPayload?.code || 'remote_resource_read_failed')
+      return record.result || {ok: true}
+    })]) : execution
     return record.dispatched
+  }
+
+  async function waitConfigRead({deviceId, requestId}) {
+    const record = requests.get(requestKey(deviceId, requestId))
+    if (!record?.readOnly) throw remoteError('remote_request_not_found')
+    await record.readCompletion
+    if (record.event.endsWith('.failed')) throw remoteError(record.terminalPayload?.code || 'remote_resource_read_failed')
+    return record.terminalPayload
   }
 
 
@@ -1676,6 +1706,7 @@ export function createRemoteSessionManager({
   }
 
   function handleWindowClosed(windowRef) {
+    for (const read of requests.values()) if (read.readOnly && read.windowRef === windowRef && !read.terminal) publish(read, 'conversation.operation.failed', {code: 'remote_renderer_closed'})
     for (const [conversationId, session] of sessions) {
       if (session.windowRef !== windowRef) continue
       finishClosed(session)
@@ -1717,6 +1748,7 @@ export function createRemoteSessionManager({
     enabled = false
     generation += 1
     if (closing) return closing
+    for (const read of requests.values()) if (read.readOnly && !read.terminal) publish(read, 'conversation.operation.failed', {code: 'remote_gateway_stopped'})
     for (const read of configReads.values()) publish(read, 'conversation.operation.failed', { code: 'remote_gateway_stopped' })
     configReads.clear()
     for (const session of sessions.values()) {
@@ -1782,6 +1814,7 @@ export function createRemoteSessionManager({
 
     setConversationProject: (input) => conversationMetadataCommand({...input, operation: 'conversation.project.set'}),
     deleteConversation: (input) => conversationMetadataCommand({ ...input, operation: 'conversation.delete' }),
+    waitConfigRead,
     getConfig: (input) => configCommand({ ...input, operation: 'conversation.config.get' }),
     patchConfig: (input) => configCommand({ ...input, operation: 'conversation.config.patch' }),
     refreshContext: (input) => configCommand({ ...input, operation: 'conversation.context.refresh' }),

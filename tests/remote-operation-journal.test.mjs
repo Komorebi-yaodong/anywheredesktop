@@ -40,6 +40,28 @@ await assert.rejects(uncertain.execute(uncertainInput, async () => {uncertainCal
 failNextSave = false
 await uncertain.execute(uncertainInput, async () => {uncertainCalls++; return {ok: true}})
 assert.equal(uncertainCalls, 1)
+// Incremental adapters preserve the same prewrite/postwrite failure barriers.
+let deltaWrites = 0, deltaCalls = 0, failDeltaAt = 1
+const deltaDisk = new Map()
+const incremental = createOperationJournal({load: async () => null, now: () => clock,
+ saveChanges: async ({puts, removes}) => {
+  deltaWrites++
+  if (deltaWrites === failDeltaAt) throw new Error('synthetic delta write failure')
+  for (const id of removes) deltaDisk.delete(id)
+  for (const record of puts) deltaDisk.set(`${record.deviceId}:${record.commandId}`, clone(record))
+ }})
+const deltaInput = {...input, commandId: 'command-incremental-failure-fixture'}
+await assert.rejects(incremental.execute(deltaInput, async () => {deltaCalls++; return {ok: true}}), {code: 'remote_operation_storage_failed'})
+assert.equal(deltaCalls, 0)
+failDeltaAt = 3
+await assert.rejects(incremental.execute(deltaInput, async () => {deltaCalls++; return {ok: true}}), {code: 'remote_operation_storage_failed'})
+assert.equal(deltaCalls, 1)
+failDeltaAt = -1
+await incremental.execute(deltaInput, async () => {deltaCalls++; return {ok: true}})
+assert.equal(deltaCalls, 1, 'failed postwrite retries storage only, never dispatch')
+assert.equal(deltaDisk.get(`${input.deviceId}:${deltaInput.commandId}`).terminal, true)
+
+
 // Historical records are dedupe state, not a cumulative usage quota.
 const seedRecord = clone(disk.records.find(record => record.commandId === input.commandId))
 let capacityDisk = {version: 1, records: Array.from({length: 512}, (_, index) => ({...clone(seedRecord), commandId: `capacity-${index}`}))}

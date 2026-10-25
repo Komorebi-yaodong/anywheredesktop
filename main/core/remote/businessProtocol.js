@@ -84,17 +84,9 @@ export function createBusinessProtocol({readService, getManager, operations = nu
     supports(context, params.resource)
     let value = await dispatch(context, requestId, params.resource, params.params || {})
     if (params.resource === 'conversation.config.get') {
-      const deadline = Date.now() + 55000
-      while (Date.now() < deadline) {
-        const progress = getManager().getRequest({deviceId: context.device.deviceId, params: {requestId}})
-        if (progress.terminal) {
-          if (progress.event.endsWith('.failed')) throw remoteError(progress.result?.code || 'remote_resource_read_failed')
-          value = progress.result
-          break
-        }
-        await new Promise(resolve => setTimeout(resolve, 50))
-      }
-      if (!value?.config) throw remoteError('remote_resource_read_timeout')
+      // The manager owns the deadline from receipt, including dispatch queuing.
+      value = await getManager().waitConfigRead({deviceId: context.device.deviceId, requestId})
+      if (!value?.config) throw remoteError('remote_resource_read_failed')
     }
     return {schemaVersion: '1.0', resource: params.resource, value: params.resource === 'conversation.messages.list' ? structuredPage(value) : value}
   }
@@ -158,5 +150,22 @@ export function createBusinessProtocol({readService, getManager, operations = nu
     return record
   }
 
-  return {negotiate, view, changes, operation, notify, available, resource, command, operationStatus, transfer}
+  async function operationStatuses(context, params) {
+    authorize(context)
+    allowed(params, ['operationIds'])
+    if (!Array.isArray(params.operationIds) || params.operationIds.length < 1 || params.operationIds.length > 64 || new Set(params.operationIds).size !== params.operationIds.length) throw remoteError('remote_parameter_invalid')
+    const ids = params.operationIds.map(value => normalizeIdentifier(value, 'operationId', {minLength: 8, maxLength: 160}))
+    const items = await Promise.all(ids.map(async operationId => {
+      try {
+        const record = await operationStatus(context, {operationId})
+        return {operationId, conversationId: record.conversationId, state: record.state, terminal: record.terminal, code: record.code}
+      } catch (error) {
+        return {operationId, error: /^remote_[a-z0-9_]+$/.test(error.code) ? error.code : 'remote_operation_read_failed'}
+      }
+    }))
+    return {items}
+  }
+
+
+  return {negotiate, view, changes, operation, notify, available, resource, command, operationStatus, operationStatuses, transfer}
 }

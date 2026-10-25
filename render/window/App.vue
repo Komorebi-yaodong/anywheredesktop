@@ -3200,13 +3200,12 @@ const runRemoteConversationCommand = async (input = {}) => {
 
 
   if (command.type === 'conversation.config.get') {
-    await remoteConfigExecutionPromise;
-    // Snapshot reads must not replace or finalize the in-flight generation.
-    if (isClosingWindow.value) {
-      await emitRemoteRendererEventAndWait('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
-    } else {
-      if (!loading.value && !compacting.value && !isPreparingSend.value && !isMcpLoading.value && typeof refreshPromptTokenBreakdown === 'function') await refreshPromptTokenBreakdown();
+    try {
+      // Snapshot reads never wait for token recount or an unrelated config write.
+      if (isClosingWindow.value) throw new Error('remote_conversation_busy');
       await emitRemoteRendererEventAndWait('conversation.config.result', command, getRemoteSessionConfigSnapshot());
+    } catch {
+      await emitRemoteRendererEventAndWait('conversation.operation.failed', command, {code: 'remote_resource_read_failed'}).catch(() => {});
     }
     return;
   }

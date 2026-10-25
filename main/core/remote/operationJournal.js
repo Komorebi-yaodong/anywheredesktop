@@ -1,7 +1,6 @@
 import crypto from 'node:crypto'
 import {remoteError, stableStringify} from './protocol.js'
 
-const MAX_RECORDS = 512
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_AGE_MS = 24 * 60 * 60 * 1000
 const FUTURE_MS = 60 * 1000
@@ -63,8 +62,8 @@ export function createOperationJournal({load, save, now = Date.now}) {
       }
       if (!Number.isFinite(issuedAt) || issuedAt < now() - MAX_AGE_MS || issuedAt > now() + FUTURE_MS) throw remoteError('remote_command_expired')
       for (const [id, item] of records) if (now() - item.acceptedAt > RETENTION_MS) records.delete(id)
-      // Never evict a still-valid idempotency record to accept more work.
-      if (records.size >= MAX_RECORDS) throw remoteError('remote_operation_limit_reached')
+      // Retained dedupe history is not a usage quota; keep valid records without
+      // refusing new commands or evicting IDs that still prevent duplicate execution.
       const next = {deviceId, commandId, fingerprint, method, conversationId: typeof params.conversationId === 'string' ? params.conversationId : null,
         acceptedAt: now(), state: 'accepted', terminal: false, receipt: null, progress: null, code: null}
       records.set(recordKey, next)
@@ -133,5 +132,5 @@ export function createOperationJournal({load, save, now = Date.now}) {
     if (!record || now() - record.acceptedAt > RETENTION_MS) throw remoteError('remote_operation_not_found')
     return safeRecord(record)
   }
-  return {execute, update, interrupt, get, initialize, limits: {maxRecords: MAX_RECORDS, retentionMs: RETENTION_MS, maxCommandAgeMs: MAX_AGE_MS}}
+  return {execute, update, interrupt, get, initialize, limits: {retentionMs: RETENTION_MS, maxCommandAgeMs: MAX_AGE_MS}}
 }

@@ -40,10 +40,43 @@ await assert.rejects(uncertain.execute(uncertainInput, async () => {uncertainCal
 failNextSave = false
 await uncertain.execute(uncertainInput, async () => {uncertainCalls++; return {ok: true}})
 assert.equal(uncertainCalls, 1)
-const fullDisk = {version: 1, records: Array.from({length: 512}, (_, index) => ({deviceId: input.deviceId, commandId: `capacity-${index}`, acceptedAt: clock, fingerprint: 'fixture', state: 'succeeded', terminal: true}))}
-const full = createOperationJournal({load: async () => clone(fullDisk), save: async () => {}, now: () => clock})
-await assert.rejects(full.execute({...input, commandId: 'capacity-overflow-fixture'}, dispatch), {code: 'remote_operation_limit_reached'})
-assert.equal(fullDisk.records.length, 512, 'valid dedupe records are not evicted')
+// Historical records are dedupe state, not a cumulative usage quota.
+const seedRecord = clone(disk.records.find(record => record.commandId === input.commandId))
+let capacityDisk = {version: 1, records: Array.from({length: 512}, (_, index) => ({...clone(seedRecord), commandId: `capacity-${index}`}))}
+const capacityOptions = {load: async () => clone(capacityDisk), save: async value => {capacityDisk = clone(value)}, now: () => clock}
+const full = createOperationJournal(capacityOptions)
+let capacityCalls = 0
+const capacityDispatch = async () => {capacityCalls++; return {ok: true}}
+const nextInput = {...input, commandId: 'capacity-beyond-512'}
+assert.equal((await full.execute(nextInput, capacityDispatch)).state, 'succeeded')
+assert.equal(capacityDisk.records.length, 513)
+await Promise.all(Array.from({length: 16}, (_, index) => full.execute({...input, commandId: `capacity-concurrent-${index}`}, capacityDispatch)))
+assert.equal(capacityDisk.records.length, 529, 'concurrent new commands remain accepted after the old cap')
+assert.equal(capacityCalls, 17)
+assert.ok(capacityDisk.records.some(record => record.commandId === 'capacity-0'), 'old valid dedupe IDs are not evicted to accept new work')
+await full.execute({...input, commandId: 'capacity-0'}, capacityDispatch)
+const capacityRestored = createOperationJournal(capacityOptions)
+await capacityRestored.execute(nextInput, capacityDispatch)
+await capacityRestored.execute({...input, commandId: 'capacity-0'}, capacityDispatch)
+assert.equal(capacityCalls, 17, 'both old and new IDs still dedupe after restart above the old cap')
+await assert.rejects(capacityRestored.execute({...nextInput, params: {...input.params, title: 'changed'}}, capacityDispatch), {code: 'remote_command_id_conflict'})
+await capacityRestored.execute({...input, commandId: 'capacity-after-restart'}, capacityDispatch)
+assert.equal(capacityDisk.records.length, 530)
+assert.equal(capacityCalls, 18)
+// A substantially larger retained journal must not introduce a replacement quota.
+capacityDisk.records.push(...Array.from({length: 4096}, (_, index) => ({...clone(seedRecord), commandId: `capacity-large-${index}`})))
+const largeRestored = createOperationJournal(capacityOptions)
+await largeRestored.execute({...input, commandId: 'capacity-large-new'}, capacityDispatch)
+assert.equal(capacityDisk.records.length, 4627)
+assert.equal(capacityCalls, 19)
+await largeRestored.execute({...input, commandId: 'capacity-large-0'}, capacityDispatch)
+assert.equal(capacityCalls, 19)
+assert.equal(Object.hasOwn(largeRestored.limits, 'maxRecords'), false)
+clock += 8 * 86400000
+await largeRestored.execute({...input, issuedAt: clock, commandId: 'capacity-after-retention'}, capacityDispatch)
+await assert.rejects(largeRestored.execute(nextInput, capacityDispatch), {code: 'remote_command_expired'})
+assert.equal(capacityDisk.records.length, 1, 'retention still cleans old history without a count-based quota')
+assert.equal(capacityCalls, 20)
 
 
 clock += 8 * 86400000

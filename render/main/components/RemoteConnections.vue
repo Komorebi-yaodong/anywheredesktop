@@ -327,8 +327,7 @@ defineExpose({ openDialog })
             </div>
             <el-button :icon="Refresh" circle aria-label="刷新设备" @click="refresh" />
           </div>
-          <el-empty v-if="devices.length === 0" description="暂无已配对设备" :image-size="60" />
-          <div v-else class="remote-device-list">
+          <div v-if="devices.length" class="remote-device-list">
             <article v-for="device in devices" :key="device.deviceId" class="remote-device-item">
               <div class="device-icon-wrap"><el-icon class="device-icon"><Connection /></el-icon></div>
               <div class="device-meta">

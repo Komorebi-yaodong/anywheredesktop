@@ -14,6 +14,7 @@ import {ADAPTIVE_TRANSFER_CAPABILITY, TRANSFER_MAX_FRAME_BYTES} from './transfer
 import https from 'node:https'
 import { isIP } from 'node:net'
 import os from 'node:os'
+import { getLanIpv4Addresses } from './lanAddresses.js'
 import QRCode from 'qrcode'
 import selfsigned from 'selfsigned'
 import { WebSocketServer } from 'ws'
@@ -95,17 +96,6 @@ function normalizeLanIpv4Addresses(value = []) {
     .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
 }
 
-
-function getLanIpv4Addresses() {
-  const addresses = []
-  for (const items of Object.values(os.networkInterfaces())) {
-    for (const item of items || []) {
-      if (!item || (item.family !== 'IPv4' && item.family !== 4) || item.internal || !item.address) continue
-      addresses.push(item.address)
-    }
-  }
-  return normalizeLanIpv4Addresses(addresses)
-}
 
 function normalizeFingerprint(value = '') {
   const normalized = String(value || '').replace(/[^a-fA-F0-9]/g, '').toUpperCase()

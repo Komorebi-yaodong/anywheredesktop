@@ -7,6 +7,11 @@ import {parse, compileStyle} from '@vue/compiler-sfc'
 const root = new URL('../', import.meta.url)
 const read = file => fs.readFile(new URL(file, root), 'utf8')
 const source = await read('render/main/components/RemoteConnections.vue')
+const devicesSection = source.slice(source.indexOf('<h3>已配对设备</h3>'), source.indexOf('<section class="advanced-section audit-section">'))
+assert.doesNotMatch(devicesSection, /<el-empty/, 'no devices must use the compact heading hint, not a large empty illustration')
+assert.match(devicesSection, /暂无已配对设备/)
+assert.match(devicesSection, /v-if="devices.length" class="remote-device-list"/)
+
 const script = source.slice(source.indexOf('const visible ='), source.indexOf('defineExpose('))
 const calls = []
 let sessions = [

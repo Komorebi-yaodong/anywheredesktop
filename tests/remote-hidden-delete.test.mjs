@@ -110,7 +110,13 @@ for (const mode of ['takeover', 'listing', 'shutdown', 'live', 'unknown']) {
   getWindowByRef: () => ({isDestroyed: () => false}), openWindow: async () => ({ok: false}),
   dispatchRemoteCommandToWindow: async (windowRef, command) => {
    commands.push(command)
-   if (command.type === 'remote.shutdown') {assert.equal(command.conversationDeleted, true); items.splice(0); manager.handleWindowClosed(windowRef)}
+   if (command.type === 'remote.shutdown') {
+    if (command.conversationDeleted) { items.splice(0); manager.handleWindowClosed(windowRef) }
+    else {
+     assert.ok(mode === 'live' || mode === 'unknown')
+     manager.handleRendererEvent({windowRef, payload: {conversationId: cid, requestId: command.requestId, event: 'conversation.shutdown.result', payload: {ok: mode === 'live'}}})
+    }
+   }
    return {ok: true}
   }, revealRemoteConversationWindow: () => ({ok: true}), broadcastToDevice() {}
  })
@@ -130,7 +136,9 @@ for (const mode of ['takeover', 'listing', 'shutdown', 'live', 'unknown']) {
   assert.equal(manager.controlledSessions().sessions.length, 0)
   assert.ok(commands.every(command => command.type !== 'conversation.desktop.takeover'))
  }
- await manager.closeAll()
+ if (mode === 'unknown') await assert.rejects(manager.closeAll(), {code: 'remote_conversation_save_failed'})
+ else await manager.closeAll()
+ if (mode === 'live' || mode === 'unknown') assert.equal(items.length, 1, 'gateway stop cannot destroy a visible writer')
 }
 
 console.log(JSON.stringify({ok: true, suite: 'remote-hidden-delete'}))

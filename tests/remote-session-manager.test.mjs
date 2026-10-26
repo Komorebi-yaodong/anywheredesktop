@@ -27,7 +27,11 @@ function fixture({ existing = false, dispatchFailure = false, allowControlComman
       commands.push({ windowRef, ...command })
 
       if (command.type === 'conversation.mobile.takeover' && takeoverReceipt !== 'timeout' && (!dispatchFailure || allowControlCommands)) manager.handleRendererEvent({windowRef, payload: {conversationId: command.conversationId, requestId: command.requestId, event: 'conversation.mobile.control.result', payload: {ok: takeoverReceipt === 'ok', code: 'remote_conversation_save_failed'}}})
-      if (command.type === 'remote.shutdown') items.splice(items.findIndex((item) => item.id === windowRef), 1)
+      if (command.type === 'remote.shutdown') {
+        const item = items.find(item => item.id === windowRef)
+        if (item?.remoteHidden || command.closeWindow) items.splice(items.indexOf(item), 1)
+        else manager.handleRendererEvent({windowRef, payload: {conversationId: command.conversationId, requestId: command.requestId, event: 'conversation.shutdown.result', payload: {ok: true}}})
+      }
       return { ok: !dispatchFailure || (allowControlCommands && /^conversation\.mobile\.(takeover|handoff)$/.test(command.type)) }
     },
     revealRemoteConversationWindow: (ref) => { items.find((item) => item.id === ref).remoteHidden = false; return { ok: true } },
@@ -170,7 +174,9 @@ async function run() {
   renderer(f, 'assistant.completed', {}, 'request-fixture-0003')
   f.manager.showOnDesktop({ params: { conversationId: CID } })
   await f.manager.closeAll()
-  assert.equal(f.commands.filter((command) => command.type === 'remote.shutdown').length, 0, 'revealed window belongs to Desktop')
+  assert.equal(f.items.length, 1, 'revealed Desktop window must remain open after remote control is returned')
+  assert.equal(f.commands.at(-1).closeHidden, false)
+  assert.equal(f.manager.getSession(CID).mobileControlled, false)
   await assert.rejects(send(f.manager, 'request-stopped'), { code: 'remote_gateway_stopped' })
 
   // Supplemental Mobile input is consumed between tool batches, not after final content.
@@ -661,7 +667,8 @@ async function run() {
   await compactShutdown.manager.compact({ deviceId: DEVICE, requestId: 'request-compact-shutdown', params: { conversationId: CID } })
   const compactClosing = compactShutdown.manager.closeAll()
   await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(compactShutdown.commands.at(-1).type, 'conversation.compact.cancel')
+  assert.equal(compactShutdown.commands.at(-1).type, 'remote.shutdown')
+  assert.equal(compactShutdown.commands.at(-1).closeHidden, false)
   compactShutdown.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
     conversationId: CID, requestId: 'request-compact-shutdown', event: 'conversation.compact.cancelled', payload: { revision: 12 }
   } })

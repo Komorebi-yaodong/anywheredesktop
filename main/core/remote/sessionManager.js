@@ -1626,6 +1626,16 @@ export function createRemoteSessionManager({
     const data = object(payload)
     const session = sessions.get(data.conversationId)
     if (!session || session.windowRef !== windowRef) return { ok: false, error: 'remote_renderer_event_window_mismatch' }
+    if (data.event === 'conversation.shutdown.result') {
+      const receipt = session.shutdownReceipt
+      if (!receipt || receipt.requestId !== data.requestId || receipt.done || Date.now() >= receipt.expiresAt) {
+        return {ok: false, error: 'remote_renderer_event_request_mismatch'}
+      }
+      receipt.done = true
+      receipt.ok = data.payload?.ok === true
+      receipt.code = receipt.ok ? '' : 'remote_conversation_save_failed'
+      return {ok: true}
+    }
     if (data.event === 'conversation.queue.drain') {
       // Never wait behind takeover/close: those commands await this AI turn's settlement.
       return drainSendQueue(session, data)
@@ -1764,33 +1774,52 @@ export function createRemoteSessionManager({
 
       await reconcileDeletedSessions()
       await Promise.allSettled([...creations.values()])
-      await Promise.allSettled([...sessions.values()].map(async (session) => {
+      const targets = []
+      const dispatchResults = await Promise.allSettled([...sessions.values()].map(async (session) => {
         const item = windowItem(session.windowRef)
         if (!item) { handleWindowClosed(session.windowRef); return }
         session.hidden = item.remoteHidden === true
-        if (session.hidden) {
-          // Bootstrap may still be acquiring a lease; cleanup must reach its registered adapter.
-          if (!deletedConversations.has(session.conversationId)) await ready(session.windowRef).catch(() => {})
-          await dispatchRemoteCommandToWindow(session.windowRef, {
-            type: 'remote.shutdown', conversationId: session.conversationId, closeHidden: true, conversationDeleted: deletedConversations.has(session.conversationId)
-          })
-        } else if (session.activeRequestId) {
-          await dispatchRemoteCommandToWindow(session.windowRef, {
-            type: session.activeOperation === 'conversation.compact' ? 'conversation.compact.cancel' : 'conversation.cancel',
-            requestId: session.activeRequestId,
-            targetRequestId: session.activeRequestId,
-            conversationId: session.conversationId
-          })
-        }
+        if (!session.hidden && !session.activeRequestId && !session.mobileControlled) return
+        // The receipt is scoped to this writer and this stop attempt; dispatch alone is not success.
+        const receipt = {requestId: crypto.randomUUID(), done: false, ok: false, expiresAt: Date.now() + Math.max(15000, readinessTimeoutMs)}
+        session.shutdownReceipt = receipt
+        targets.push(session)
+        if (session.hidden && !deletedConversations.has(session.conversationId)) await ready(session.windowRef).catch(() => {})
+        const result = await dispatchRemoteCommandToWindow(session.windowRef, {
+          type: 'remote.shutdown', requestId: receipt.requestId, conversationId: session.conversationId,
+          closeHidden: session.hidden, conversationDeleted: deletedConversations.has(session.conversationId)
+        })
+        if (!result?.ok) throw remoteError('remote_renderer_dispatch_failed')
       }))
-      // IPC dispatch is not a save/close acknowledgement. Wait for actual writer shutdown.
-      const deadline = Date.now() + Math.max(15000, readinessTimeoutMs)
-      while ([...sessions.values()].some((session) => {
-        const item = windowItem(session.windowRef)
-        return item && (item.remoteHidden === true || Boolean(session.activeRequestId))
-      })) {
-        if (Date.now() >= deadline) throw remoteError('remote_writer_shutdown_timeout')
-        await new Promise((resolve) => setTimeout(resolve, 40))
+      try {
+        const failedDispatch = dispatchResults.find(result => result.status === 'rejected')
+        if (failedDispatch) throw failedDispatch.reason
+        while (true) {
+          let pending = false
+          for (const session of targets) {
+            const item = windowItem(session.windowRef)
+            if (!item) continue
+            const receipt = session.shutdownReceipt
+            if (receipt?.done && !receipt.ok) throw remoteError(receipt.code)
+            if (item.remoteHidden === true || session.activeRequestId || !receipt?.done) {
+              if (Date.now() >= receipt.expiresAt) throw remoteError('remote_writer_shutdown_timeout')
+              pending = true
+            }
+          }
+          if (!pending) break
+          await new Promise((resolve) => setTimeout(resolve, 40))
+        }
+        for (const session of targets) {
+          if (windowItem(session.windowRef)) {
+            session.mobileControlled = false
+            session.mobileOpened = false
+            session.mobileDeviceId = ''
+            session.controlEpoch = crypto.randomUUID()
+          }
+        }
+        onControlChanged()
+      } finally {
+        for (const session of targets) session.shutdownReceipt = null
       }
       // Keep live visible entries for reuse; never destroy a writer before saving.
     })().finally(() => { closing = null })

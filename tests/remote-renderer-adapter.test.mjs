@@ -181,7 +181,7 @@ context.executeAutoSaveRequest = async (request) => {
   return true
 }
 const ctx = vm.createContext(context)
-vm.runInContext(block + '\n globalThis.adapter = { runRemoteConversationCommand, emitRemoteAssistantDelta, activeRemoteCommand, remoteHiddenWriter, pendingRemoteConfigPatch, applyPendingRemoteConfig, getRemoteSessionConfigSnapshot };', ctx)
+vm.runInContext(block + '\n globalThis.adapter = { runRemoteConversationCommand, emitRemoteAssistantDelta, activeRemoteCommand, remoteHiddenWriter, pendingRemoteConfigPatch, applyPendingRemoteConfig, getRemoteSessionConfigSnapshot, remoteConversationDeleted };', ctx)
 const adapter = context.adapter
 context.askAI = async () => {
   adapter.activeRemoteCommand.value.__remoteStarted = true
@@ -223,7 +223,8 @@ context.isModelIterationConfigLocked = ref(true)
 context.throwIfTurnAborted = () => {
   if (boundaryCommand.__remoteCancelled) throw new Error('fixture-aborted')
 }
-context.drainBufferIntoHistory = async () => actions.push('local-buffer-boundary')
+context.turnMeta = {controller: new AbortController()}
+context.drainBufferIntoHistory = async ({toolBoundaryTurn}) => { assert.equal(toolBoundaryTurn, context.turnMeta); actions.push('local-buffer-boundary') }
 let nextModelInput = []
 context.maybeAutoCompactBeforeNextRequest = async () => {nextModelInput = structuredClone(appendedMessages)}
 for (const round of [1, 2]) {
@@ -732,6 +733,30 @@ assert.match(source, /approvalStatus: autoApproveThisTurn\(\)/)
 const savesAfterDeletion = actions.filter(item => item === 'desktop-takeover' || item === 'remote-shutdown').length
 await adapter.runRemoteConversationCommand({type: 'remote.shutdown', conversationId: command.conversationId, conversationDeleted: true, closeWindow: true})
 assert.equal(actions.filter(item => item === 'desktop-takeover' || item === 'remote-shutdown').length, savesAfterDeletion, 'deleted shutdown must never try to persist or revive its database')
+
+// Execute real shutdown branch: closeHidden survives normalization, no double-save,
+// visible control returns only after save, and failed close reports failure without destruction.
+adapter.remoteConversationDeleted.value = false
+adapter.remoteHiddenWriter.value = true
+context.waitForPendingWindowMutationsBeforeClose = async () => {}
+context.waitForCompactionToSettleBeforeClose = async () => {}
+context.isClosingWindow.value = false
+context.mobileControlActive.value = true
+context.closePage = async () => { actions.push('shutdown-close'); return true }
+const savesBeforeShutdown = actions.filter(item => item === 'remote-shutdown').length
+await adapter.runRemoteConversationCommand({type: 'remote.shutdown', conversationId: command.conversationId, requestId: 'shutdown-hidden', closeHidden: true})
+assert.equal(actions.filter(item => item === 'remote-shutdown').length, savesBeforeShutdown, 'closePage alone owns final save')
+assert.equal(events.at(-1).payload.ok, true)
+context.closePage = async () => false
+await adapter.runRemoteConversationCommand({type: 'remote.shutdown', conversationId: command.conversationId, requestId: 'shutdown-save-failed', closeHidden: true})
+assert.equal(events.at(-1).event, 'conversation.shutdown.result')
+assert.equal(events.at(-1).payload.ok, false)
+assert.equal(context.desktopTakeoverPending.value, false)
+adapter.remoteHiddenWriter.value = false
+await adapter.runRemoteConversationCommand({type: 'remote.shutdown', conversationId: command.conversationId, requestId: 'shutdown-visible', closeHidden: true})
+assert.equal(context.mobileControlActive.value, false)
+assert.equal(events.at(-1).payload.ok, true)
+
 
 // Snapshot reads must finish even while token recount/config mutation never settles.
 context.isClosingWindow.value = false

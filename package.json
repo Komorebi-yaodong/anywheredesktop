@@ -16,7 +16,7 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "test:conversation-lease": "node tests/conversation-lease.test.mjs",
+    "test:conversation-lease": "node tests/conversation-lease.test.mjs && node tests/conversation-heartbeat-recovery.test.mjs",
     "test:conversation-time": "node tests/conversation-time.test.mjs",
     "test:compact-policy": "node tests/compact-policy.test.mjs && node tests/context-resolver.test.mjs",
     "test:window-manager-scope": "node tests/window-manager-scope.test.mjs",
@@ -32,7 +32,7 @@
     "test:remote-config": "node tests/remote-config-local.test.mjs",
     "test:remote-conversation-read": "node tests/remote-conversation-read.test.mjs && node tests/remote-history-paging.test.mjs",
     "test:remote-conversation-service": "node tests/remote-conversation-service.test.mjs",
-    "test:remote-session": "node tests/remote-session-manager.test.mjs && node tests/remote-renderer-adapter.test.mjs && node tests/remote-desktop-controls.test.mjs && node tests/remote-hidden-delete.test.mjs",
+    "test:remote-session": "node tests/remote-shutdown-receipt.test.mjs && node tests/remote-session-manager.test.mjs && node tests/remote-renderer-adapter.test.mjs && node tests/remote-desktop-controls.test.mjs && node tests/remote-hidden-delete.test.mjs",
     "test:mobile-workspace": "node tests/mobile-workspace.test.mjs && node tests/remote-management.test.mjs && node tests/remote-skill-management.test.mjs",
     "test:remote": "pnpm run test:remote-contract && pnpm run test:mobile-workspace && pnpm run test:remote-crypto && pnpm run test:remote-upload && pnpm run test:remote-business-config && pnpm run test:remote-gateway && pnpm run test:remote-config && pnpm run test:remote-conversation-read && pnpm run test:remote-conversation-service && pnpm run test:remote-session",
     "postinstall": "electron-builder install-app-deps",
@@ -49,6 +49,7 @@
     "test:updater-proxy-session": "node tests/updater-proxy-session.test.mjs && node tests/idempotent-apply.test.mjs",
     "test:quick-selection": "node tests/quick-selection.test.mjs",
     "test:agent-message-buffer": "node tests/agent-message-buffer.test.mjs",
+    "test:subagent-request": "node tests/subagent-request.test.mjs",
     "test:markdown-placeholder": "node tests/markdown-placeholder.test.mjs"
   },
   "dependencies": {

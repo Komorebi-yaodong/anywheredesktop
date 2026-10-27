@@ -13,8 +13,13 @@ export function recoverMissingToolProjection(fullHistory = [], chatShow = []) {
   const textOf = content => Array.isArray(content) ? content.filter(part => part?.type === 'text').map(part => part.text || '').join('') : (content || '')
   let separated = 0
   const output = chatShow.map(ui => {
-    const linked = canonicalById.get(ui?.storageId)
+    let linked = canonicalById.get(ui?.storageId)
     const ids = callIds(ui).sort()
+    if (!linked && ids.length && /(?:\*\*错误信息\*\*|\*\*请求已取消\*\*)/.test(textOf(ui.content))) {
+      const errors = fullHistory.map((message, index) => ({message, index})).filter(entry => entry.message.role === 'assistant'
+        && !callsOf(entry.message).length && textOf(entry.message.content) === textOf(ui.content))
+      if (errors.length === 1) linked = errors[0]
+    }
     if (!linked || duplicateIds.has(ui.storageId) || ui.role !== 'assistant' || !ids.length
       || new Set(ids).size !== ids.length || callsOf(linked.message).length
       || textOf(ui.content) !== textOf(linked.message.content)
@@ -28,7 +33,7 @@ export function recoverMissingToolProjection(fullHistory = [], chatShow = []) {
     if (tool?.role !== 'assistant' || !tool.storageId || duplicateIds.has(tool.storageId)
       || ids.length !== previousIds.length || !ids.every((id, index) => id === previousIds[index])) return ui
     separated++
-    return {...ui, tool_calls: []}
+    return {...ui, storageId: linked.message.storageId, tool_calls: []}
   })
   const represented = new Set()
   const representedCalls = new Set()

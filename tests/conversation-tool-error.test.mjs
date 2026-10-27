@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
 import {resolveSafeConversationMutationTarget} from '../render/window/utils/conversationMessageTarget.js'
+import {createConversationDeleteRecovery} from '../render/window/utils/conversationDeleteRecovery.js'
 import {recoverMissingToolProjection} from '../packages/conversation-core/toolProjection.js'
 import * as store from '../main/core/conversationStore.js'
 
@@ -33,7 +34,7 @@ function fixture(stage) {
   if (stage === 'tool-next-request') ui.push({id: 3, storageId: 'assistant-next', role: 'assistant', content: [], tool_calls: []})
   const requests = [], warnings = []
   let counter = 0
-  const c = {console, Set, Date, Error, fullHistory: ref(clone(full)), chat_show: ref(clone(ui)), history: ref([]),
+  const c = {console, Set, Date, Error, createConversationDeleteRecovery, currentConversationStorage: ref(null), fullHistory: ref(clone(full)), chat_show: ref(clone(ui)), history: ref([]),
     loading: ref(false), compacting: ref(false), isMcpLoading: ref(false), isPreparingSend: ref(false), isReasking: false,
     collapsedMessages: ref(new Set()), focusedMessageIndex: ref(null), messageIdCounter: ref(10),
     ensureConversationWriteAccess: () => true, ensureLocalConversationWriteAccess: () => true,

@@ -134,10 +134,20 @@ try {
   let release
   const blocker = f.c.conversationWriteQueue.run(() => new Promise(resolve => {release = resolve}))
   await tick()
+  let firstArrived, secondArrived
+  const firstArrival = new Promise(resolve => {firstArrived = resolve})
+  const secondArrival = new Promise(resolve => {secondArrived = resolve})
+  beforeDispatch = async envelope => {
+    if (envelope.payload.title === 'First') firstArrived()
+    if (envelope.payload.title === 'Second') secondArrived()
+  }
   const first = fromList(f, 'First')
+  await firstArrival; await tick()
   const second = fromList(f, 'Second')
+  await secondArrival; await tick()
+  beforeDispatch = null
   const save = f.c.save({force: true, version: 2})
-  await tick(); release(true); await blocker
+  release(true); await blocker
   assert.equal((await first)[0][0], 'success')
   assert.equal((await second)[0][0], 'success')
   await save

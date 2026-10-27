@@ -14,6 +14,7 @@ import defaultUserAvatarUrl from '../../build/user.png?asset';
 import TextSearchUI from './utils/TextSearchUI.js';
 import { formatTimestamp, sanitizeToolArgs, sanitizeToolFunctionName } from './utils/formatters.js';
 import { resolveSafeConversationMutationTarget } from './utils/conversationMessageTarget.js';
+import { createConversationDeleteRecovery } from './utils/conversationDeleteRecovery.js';
 
 import {replaceConversationEditableText} from './utils/conversationEditableText.js';
 import { createLinkedUserMessagePair } from './utils/linkedUserMessage.js';
@@ -3445,7 +3446,7 @@ const runRemoteConversationCommand = async (input = {}) => {
         if (command.type === 'conversation.message.edit') {
           if (!handleEditMessage(targetIndex, command.content, command)) throw new Error('remote_message_state_changed');
         } else if (command.type === 'conversation.message.delete') {
-          if (!deleteMessage(targetIndex, command)) throw new Error('remote_message_state_changed');
+          if (!await deleteMessage(targetIndex, command)) throw new Error('remote_message_state_changed');
         } else {
           await reaskAI(target.id, command);
           terminalEvent = command.__remoteTerminalEvent || 'assistant.completed';
@@ -11459,7 +11460,24 @@ const reaskAI = async (assistantMessageId = null, remoteCommand = null) => {
   }
 };
 
-const deleteMessage = (index, remoteCommand = null) => {
+// Recovery reads only persisted canonical history and merges an unloaded prefix; it never
+// reloads the UI/draft or replaces a dirty in-memory tail.
+const conversationDeleteRecovery = createConversationDeleteRecovery({
+  getState: () => ({storage: currentConversationStorage.value, full: fullHistory.value, ui: chat_show.value, lease: conversationLease.value, version: sessionMutationVersion}),
+  canMutate: (command) => !loading.value && !compacting.value && !isPreparingSend.value && !isClosingWindow.value && (command ? activeRemoteCommand.value === command && ensureConversationWriteAccess(false) : !activeRemoteCommand.value && ensureLocalConversationWriteAccess(false)),
+  readHistory: (storage) => window.api.openConversation({dirPath: storage.dirPath, reference: storage.conversationId, activeOnly: false, pageSize: 0}),
+  apply: ({fullHistory: merged, uiMessages, loadedFromOrdinal}) => {
+    fullHistory.value = merged;
+    // Keep live message object identities: a concurrent renderer event must not select a new row.
+    uiMessages.forEach((message, index) => {if (message.storageId) chat_show.value[index].storageId = message.storageId;});
+    if (loadedFromOrdinal !== null) currentConversationStorage.value = {...currentConversationStorage.value, loadedFromOrdinal};
+    syncHistoryFromFullHistory();
+  },
+  remove: (index, command, recovered) => deleteMessage(index, command, recovered),
+  onFailure: () => showDismissibleMessage.warning('消息关联无法唯一确认，已阻止删除；未保存内容保持不变，请稍后重试')
+});
+
+const deleteMessage = (index, remoteCommand = null, recovered = false) => {
   if (!(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
 
   if (loading.value || compacting.value) {
@@ -11506,7 +11524,8 @@ const deleteMessage = (index, remoteCommand = null) => {
   // require a verified storage link or one unique semantic anchor match.
   const fullStartIndex = resolveSafeConversationMutationTarget(fullHistory.value, chat_show.value, show_start_idx);
   if (fullStartIndex < 0) {
-    showDismissibleMessage.warning('消息索引未能安全匹配，已阻止删除；请重开会话后重试');
+    if (!recovered && currentConversationStorage.value?.conversationId) return conversationDeleteRecovery.recover(msgToDeleteInShow, remoteCommand);
+    showDismissibleMessage.warning('消息关联无法唯一确认，已阻止删除；未保存内容保持不变');
     return;
   }
   {

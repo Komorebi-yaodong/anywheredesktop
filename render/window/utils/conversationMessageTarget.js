@@ -147,6 +147,34 @@ export function resolveVerifiedStorageTarget(fullHistory = [], chatShow = [], sh
   return candidateIndex;
 }
 
+// Recovery is identity-only: no fuzzy text, no position, and no first-wins duplicate claims.
+export function rebindUniqueConversationLinks(fullHistory = [], chatShow = []) {
+  const claimed = new Set();
+  const unresolved = [];
+  const result = chatShow.slice();
+  const identityMatches = (ui, candidate) => createRenderableMutationSignature(ui)
+    && createRenderableMutationSignature(ui) === createRenderableMutationSignature(candidate)
+    && hasMatchingToolCallIdentity(ui, candidate);
+  for (let index = 0; index < chatShow.length; index++) {
+    const verified = resolveVerifiedStorageTarget(fullHistory, chatShow, index);
+    if (verified >= 0 && !claimed.has(fullHistory[verified].storageId)) claimed.add(fullHistory[verified].storageId);
+    else unresolved.push(index);
+  }
+  const proposals = unresolved.map(index => {
+    const ui = chatShow[index];
+    if (isEmptyRenderableMutation(ui) && !getVerifiedToolCallIds(ui)) return {index, target: null};
+    const matches = fullHistory.filter(candidate => candidate?.storageId && !claimed.has(candidate.storageId) && identityMatches(ui, candidate));
+    return {index, target: matches.length === 1 ? matches[0] : null};
+  });
+  const demand = new Map();
+  for (const {target} of proposals) if (target) demand.set(target.storageId, (demand.get(target.storageId) || 0) + 1);
+  for (const {index, target} of proposals) {
+    if (target && demand.get(target.storageId) === 1) result[index] = {...chatShow[index], storageId: target.storageId};
+  }
+  return result;
+}
+
+
 export function resolveSafeConversationMutationTarget(fullHistory = [], chatShow = [], showIndex = -1) {
   const uiMessage = Array.isArray(chatShow) ? chatShow[showIndex] : null;
   if (!uiMessage) return -1;

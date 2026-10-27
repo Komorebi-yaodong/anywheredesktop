@@ -15,6 +15,7 @@ for (const deleted of [false, true]) {
  const close = vm.runInNewContext(closeSource + '\nclosePage', {
   isClosingWindow: ref(false), isFilePickerOpen: ref(false), remoteConversationDeleted: ref(deleted),
   loading: ref(false), compacting: ref(false), activeAssistantTurnMeta: null, remoteConfigExecutionPromise: null,
+  localMetadataExecutions: new Set(), conversationWriteQueue: {whenIdle: async () => {}},
   waitForPendingWindowMutationsBeforeClose: async () => {}, killAllRunningSubAgentsForCurrentConversation: async () => {},
   currentConversationStorage: ref({conversationId: 'deleted-writer-fixture', dirPath: 'synthetic'}), currentConfig: ref({}),
   conversationPersistenceTracker: {getState: () => ({hasUnpersistedMutations: true, hasUnpersistedFullSnapshot: true})},

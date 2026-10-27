@@ -481,12 +481,35 @@ async function run() {
     conversationId: CID, uiMessageId: 'ui-message-fixture-0003'
   } })
   assert.equal(mutations.commands.at(-1).type, 'conversation.message.reask')
+  assert.equal(mutations.manager.getSession(CID).activeOperation, 'conversation.message.reask')
+  assert.deepEqual(await renderer(mutations, 'conversation.queue.drain', {}, 'request-reask-fixture'), {ok: true, items: []}, 'an empty buffer after a reask tool must not fail the turn')
+  await send(mutations.manager, 'request-reask-buffered', DEVICE, 'input between reask tools')
+  const reaskBatch = await renderer(mutations, 'conversation.queue.drain', {}, 'request-reask-fixture')
+  assert.equal(reaskBatch.items[0].requestId, 'request-reask-buffered')
+  assert.equal(renderer(mutations, 'conversation.queue.appended', {revision: 10}, 'request-reask-buffered').ok, true)
+  assert.equal((await renderer(mutations, 'conversation.queue.drain', {}, 'request-spoof')).ok, false)
+  await assert.rejects(mutations.manager.cancel({deviceId: 'device-other-fixture', requestId: 'cancel-reask-other', params: {conversationId: CID}}), {code: 'remote_request_owner_mismatch'})
+  assert.equal(renderer(mutations, 'conversation.choice.required', {toolCallId: 'call-reask-choice', questions: [{question: 'Synthetic question', options: [{label: 'Yes'}, {label: 'No'}]}]}, 'request-reask-fixture').ok, true)
+  await assert.rejects(mutations.manager.submitChoice({deviceId: 'device-other-fixture', params: {conversationId: CID, toolCallId: 'call-reask-choice', responses: [{questionIndex: 0, type: 'options', selected: ['Yes']}]}}), {code: 'remote_choice_not_pending'})
+  await mutations.manager.submitChoice({deviceId: DEVICE, params: {conversationId: CID, toolCallId: 'call-reask-choice', responses: [{questionIndex: 0, type: 'options', selected: ['Yes']}]}})
+  assert.equal(mutations.commands.at(-1).type, 'conversation.choice.submit', 'reask choices share the send lifecycle without weakening owner checks')
+
+  await mutations.manager.cancel({deviceId: DEVICE, requestId: 'cancel-reask-fixture', params: {conversationId: CID}})
+  assert.equal(mutations.commands.at(-1).targetRequestId, 'request-reask-fixture')
   await assert.rejects(mutations.manager.deleteMessage({ deviceId: DEVICE, requestId: 'request-index-forbidden', params: {
     conversationId: CID, uiMessageId: 'ui-message-fixture-0003', index: 2
   } }), { code: 'remote_parameter_unknown' })
   mutations.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {
     conversationId: CID, requestId: 'request-reask-fixture', event: 'assistant.failed', payload: { code: 'remote_test_failure' }
   } })
+
+
+  assert.equal(mutations.manager.getSession(CID).activeOperation, '', 'terminal reask releases operation identity')
+  const failedReask = fixture({existing: true, dispatchFailure: true, allowControlCommands: true})
+  await failedReask.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}})
+  await assert.rejects(failedReask.manager.reaskMessage({deviceId: DEVICE, requestId: 'request-reask-dispatch-fail', params: {conversationId: CID, uiMessageId: 'ui-message-fixture'}}), {code: 'remote_renderer_dispatch_failed'})
+  assert.equal(failedReask.manager.getSession(CID).activeOperation, '', 'dispatch failure releases operation identity')
+  assert.equal(failedReask.manager.getSession(CID).activeRequestId, '')
 
 
   // User sequence: send -> edit -> reask -> rename -> multi-tool turns -> handoff -> reopen.

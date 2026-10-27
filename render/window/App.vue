@@ -17,6 +17,8 @@ import { resolveSafeConversationMutationTarget } from './utils/conversationMessa
 
 import {replaceConversationEditableText} from './utils/conversationEditableText.js';
 import { createLinkedUserMessagePair } from './utils/linkedUserMessage.js';
+import { createConversationWriteQueue } from './utils/conversationWriteQueue.js';
+import { executeConversationMetadataCommand } from './utils/conversationMetadataCommand.js';
 import { completeConversationClose, createConversationMutationQueue, createConversationPersistenceTracker, mergeConversationMutationRequests as mergeAutoSaveRequests } from './utils/conversationMutationQueue.js';
 import { MAX_AUTOMATIC_NETWORK_RETRIES, createNetworkRetryingStream, runWithNetworkRetries } from './utils/conversationNetworkRetry.js';
 
@@ -461,7 +463,8 @@ const AUTO_SAVE_LOADING_THROTTLE_MS = 2500;
 let autoSaveTimer = null;
 let scheduledAutoSaveRequest = null;
 let autoSaveExecutionPromise = null;
-let conversationMetadataMutationPromise = null;
+const conversationWriteQueue = createConversationWriteQueue();
+const localMetadataExecutions = new Set();
 
 let sessionMutationVersion = 0;
 const conversationPersistenceTracker = createConversationPersistenceTracker();
@@ -1406,7 +1409,9 @@ const reloadConversationWindowFromStore = async ({ activeOnly = true, pageSize =
     }
   }
   replaceFullHistory(opened.sessionData?.fullHistory || []);
+  if (typeof opened.descriptor?.title === 'string') defaultConversationName.value = opened.descriptor.title;
   chat_show.value = Array.isArray(opened.sessionData?.chat_show) ? opened.sessionData.chat_show : [];
+  messageIdCounter.value = chat_show.value.reduce((nextId, message) => Math.max(nextId, (Number(message?.id) || 0) + 1), messageIdCounter.value);
   syncHistoryFromFullHistory();
   const paging = opened.sessionData?.conversationStorage || {};
   currentConversationStorage.value = {
@@ -3351,21 +3356,11 @@ const runRemoteConversationCommand = async (input = {}) => {
             const projects = await window.api.readLocalProjects(dirPath);
             if (command.projectId && !projects?.projects?.some(project => project.id === command.projectId)) throw new Error('remote_project_not_found');
           }
-          const renamed = await window.api.renameConversation({
+          const renamed = await renameOwnedConversation({
             dirPath,
             conversationId: storage.conversationId,
-            title: command.type === 'conversation.rename' ? command.title : defaultConversationName.value || storage.title,
-            ...(command.type === 'conversation.project.set' ? {projectId: command.projectId} : {}),
-            expectedRevision: storage.revision,
-            holderInstanceId: conversationInstanceId,
-            leaseEpoch: conversationLease.value?.leaseEpoch
+            ...(command.type === 'conversation.rename' ? {title: command.title} : {projectId: command.projectId})
           });
-          defaultConversationName.value = renamed.title;
-          currentConversationStorage.value = {
-            ...storage,
-            title: renamed.title,
-            revision: Number(renamed.revision) || storage.revision
-          };
           terminalPayload = {
             operation: command.type,
             title: renamed.title,
@@ -4243,27 +4238,27 @@ const buildMissingToolAbortMessages = () => {
     }));
 };
 
+// A tool/response already in canonical history owns its identity permanently. Errors and
+// cancellation after that point are a separate terminal segment, never a second row with that ID.
+const ensureAssistantTerminalBubble = (bubbleIndex, turnMeta) => {
+  const bubble = chat_show.value[bubbleIndex];
+  if (bubble && !fullHistory.value.some((message) => message?.storageId && message.storageId === bubble.storageId)) return bubbleIndex;
+  chat_show.value.push({
+    id: messageIdCounter.value++, storageId: createConversationStorageId(),
+    role: 'assistant', content: [], reasoning_content: '', status: '', tool_calls: [],
+    aiName: bubble?.aiName || getCurrentAssistantDisplayName(),
+    voiceName: bubble?.voiceName || selectedVoice.value, startTime: Date.now()
+  });
+  const nextIndex = chat_show.value.length - 1;
+  if (turnMeta) turnMeta.assistantMessageId = chat_show.value[nextIndex].id;
+  return nextIndex;
+};
+
+
 const finalizeCancelledAssistantTurn = (turnMeta = activeAssistantTurnMeta) => {
   let assistantBubbleIndex = findAssistantTurnBubbleIndex(turnMeta);
-  if (assistantBubbleIndex === -1) {
-    chat_show.value.push({
-      id: messageIdCounter.value++,
-      storageId: createConversationStorageId(),
-      role: 'assistant',
-      content: [],
-      reasoning_content: "",
-      status: "",
-      aiName: getCurrentAssistantDisplayName(),
-      voiceName: selectedVoice.value,
-      tool_calls: [],
-      startTime: Date.now()
-    });
-    assistantBubbleIndex = chat_show.value.length - 1;
-    if (turnMeta) {
-      turnMeta.assistantMessageId = chat_show.value[assistantBubbleIndex].id;
-    }
-  }
-
+  if (turnMeta?.cancellationRecorded) return assistantBubbleIndex;
+  assistantBubbleIndex = ensureAssistantTerminalBubble(assistantBubbleIndex, turnMeta);
   const currentBubble = chat_show.value[assistantBubbleIndex];
   currentBubble.storageId = currentBubble.storageId || createConversationStorageId();
   delete currentBubble.isPreparing;
@@ -6372,6 +6367,8 @@ const closePage = async (force_save = false) => {
     await remoteConfigExecutionPromise;
 
     await waitForPendingWindowMutationsBeforeClose();
+    await Promise.allSettled([...localMetadataExecutions]);
+    await conversationWriteQueue.whenIdle();
     if (compacting.value) {
       handleCancelCompact();
       await waitForCompactionToSettleBeforeClose();
@@ -6947,6 +6944,11 @@ onMounted(async () => {
     // 优先接桌面端事件总线，同时保留原插件 preload 回退
   if (window.api && typeof window.api.onWindowEvent === 'function') {
     window.api.onWindowEvent(async (envelope) => {
+      if (envelope?.event === 'conversation:metadata-command') {
+        if (envelope.sourceId !== 'conversation-metadata-router') return;
+        await runLocalConversationMetadataCommand(envelope.payload);
+        return;
+      }
       if (envelope?.event === 'conversation.remote.updated' && envelope.sourceId === 'conversation-writer') {
         const update = envelope.payload && typeof envelope.payload === 'object' ? envelope.payload : {};
         const conversationId = typeof update.conversationId === 'string' ? update.conversationId : '';
@@ -8008,9 +8010,7 @@ const clearScheduledAutoSave = () => {
   scheduledAutoSaveRequest = null;
 };
 
-const autoSaveMutationQueue = createConversationMutationQueue(async (request = {}) => {
-  if (conversationMetadataMutationPromise) await conversationMetadataMutationPromise;
-
+const autoSaveMutationQueue = createConversationMutationQueue((request = {}) => conversationWriteQueue.run(async () => {
   if (remoteConversationDeleted.value) return true;
   if ((!request || !request.force) && !shouldPersistCurrentSessionAutomatically()) return false;
 
@@ -8021,7 +8021,47 @@ const autoSaveMutationQueue = createConversationMutationQueue(async (request = {
   return request.stateOnly === true
     ? await autoSaveSessionRequestConfig(Boolean(request.force), saveOptions)
     : await autoSaveSession(Boolean(request.force), saveOptions);
+}));
+
+// All local/remote rename entry points share the same writer lane as autosave.
+const renameOwnedConversation = (input = {}, beforeWrite = null) => conversationWriteQueue.run(async () => {
+  if (beforeWrite) await beforeWrite();
+  if (isClosingWindow.value) throw new Error('conversation_closing');
+  if (remoteConversationDeleted.value) throw new Error('conversation_not_found');
+  if (compacting.value) throw new Error('conversation_busy');
+  if (!ensureConversationWriteAccess(false)) throw new Error('conversation_write_lease_lost');
+  const storage = currentConversationStorage.value;
+  const dirPath = storage?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
+  if (!storage?.conversationId || storage.conversationId !== input.conversationId || dirPath !== input.dirPath) throw new Error('conversation_metadata_window_mismatch');
+  const renamed = await window.api.renameConversation({
+    dirPath, conversationId: storage.conversationId, title: Object.hasOwn(input, 'title') ? input.title : defaultConversationName.value || storage.title,
+    ...(Object.hasOwn(input, 'projectId') ? {projectId: input.projectId} : {}),
+    expectedRevision: storage.revision, holderInstanceId: conversationInstanceId,
+    leaseEpoch: conversationLease.value?.leaseEpoch
+  });
+  defaultConversationName.value = renamed.title;
+  currentConversationStorage.value = {...storage, title: renamed.title, revision: Number(renamed.revision) || storage.revision};
+  scheduleConversationWindowStatusSync();
+  return renamed;
 });
+
+// Local metadata does not acquire Remote control or replace the active AI command.
+const runLocalConversationMetadataCommand = (command) => {
+  const execution = executeConversationMetadataCommand(command, {
+    getStorage: () => currentConversationStorage.value,
+    canWrite: () => ensureConversationWriteAccess(false), isClosing: () => isClosingWindow.value,
+    checkRequest: (input) => window.api.checkConversationMetadataRequest(input),
+    rename: (input) => renameOwnedConversation(input, async () => {
+      if (!(input.expiresAt > Date.now()) || !(await window.api.checkConversationMetadataRequest(input))?.ok) throw new Error('conversation_metadata_request_expired');
+    }),
+    complete: (input) => window.api.completeConversationMetadataRequest(input),
+    publish: () => window.api.updateConversationWindowStatus?.(buildConversationWindowStatus())
+  });
+  localMetadataExecutions.add(execution);
+  void execution.finally(() => localMetadataExecutions.delete(execution));
+  return execution;
+};
+
 
 const executeAutoSaveRequest = async (request = {}) => {
 
@@ -8293,16 +8333,8 @@ const saveSessionToCloud = async () => {
               await acquireCurrentConversationLease();
             } else if (finalBasename !== storage.title) {
               if (!ensureLocalConversationWriteAccess(true)) return;
-              const renamed = await window.api.renameConversation({
-                dirPath: storage.dirPath,
-                conversationId: storage.conversationId,
-                title: finalBasename,
-                expectedRevision: storage.revision,
-                holderInstanceId: conversationInstanceId,
-                leaseEpoch: conversationLease.value?.leaseEpoch
-              });
-              storage = { ...storage, title: renamed.title, revision: Number(renamed.revision) || storage.revision };
-              currentConversationStorage.value = storage;
+              await renameOwnedConversation({dirPath: storage.dirPath, conversationId: storage.conversationId, title: finalBasename});
+              storage = currentConversationStorage.value;
             }
             await executeAutoSaveRequest({ reason: 'manual-cloud-save', force: true, version: ++sessionMutationVersion });
             storage = currentConversationStorage.value;
@@ -8917,20 +8949,7 @@ const saveSessionAsJson = async () => {
               if (currentConversationStorage.value?.conversationId) {
                 if (!ensureLocalConversationWriteAccess(true)) return;
                 const storage = currentConversationStorage.value;
-                const renamed = await window.api.renameConversation({
-                  dirPath: storage.dirPath || localChatPath,
-                  conversationId: storage.conversationId,
-                  title: finalBasename,
-                  expectedRevision: storage.revision,
-                  holderInstanceId: conversationInstanceId,
-                  leaseEpoch: conversationLease.value?.leaseEpoch
-                });
-                currentConversationStorage.value = {
-                  ...storage,
-                  title: renamed.title,
-                  revision: Number(renamed.revision) || storage.revision
-                };
-                defaultConversationName.value = finalBasename;
+                await renameOwnedConversation({dirPath: storage.dirPath || localChatPath, conversationId: storage.conversationId, title: finalBasename});
                 await executeAutoSaveRequest({ reason: 'manual-save', force: true, version: ++sessionMutationVersion });
               } else {
                 const created = await window.api.createConversation({
@@ -9042,45 +9061,15 @@ const handleRenameSession = async () => {
         }
         instance.confirmButtonLoading = true;
         try {
-          if (nextTitle !== oldTitle) {
-            if (autoSaveExecutionPromise) await autoSaveExecutionPromise;
-            let releaseMetadataMutation;
-            conversationMetadataMutationPromise = new Promise((resolve) => { releaseMetadataMutation = resolve; });
-            try {
-              const liveStorage = currentConversationStorage.value || storage;
-              const renamed = await window.api.renameConversation({
-                dirPath: liveStorage.dirPath || localPath,
-                conversationId: liveStorage.conversationId,
-                title: nextTitle,
-                expectedRevision: liveStorage.revision,
-                holderInstanceId: conversationInstanceId,
-                leaseEpoch: conversationLease.value?.leaseEpoch
-              });
-              defaultConversationName.value = renamed.title;
-              currentConversationStorage.value = {
-                ...liveStorage,
-                title: renamed.title,
-                dbFile: liveStorage.dbFile,
-                revision: Number(renamed.revision) || liveStorage.revision
-              };
-            } finally {
-              releaseMetadataMutation?.();
-              conversationMetadataMutationPromise = null;
-            }
-          }
-
-          if (selectedProjectId.value !== originalProjectId) {
-            const data = normalizeWindowProjects(await window.api.readLocalProjects(localPath));
-            let projects = data.projects.map((project) => ({
-              ...project,
-              conversationIds: (project.conversationIds || []).filter((id) => id !== storage.conversationId)
-            }));
-            if (selectedProjectId.value) {
-              projects = projects.map((project) => project.id === selectedProjectId.value
-                ? { ...project, conversationIds: [...project.conversationIds, storage.conversationId] }
-                : project);
-            }
-            await window.api.writeLocalProjects(localPath, { ...data, projects });
+          const projectChanged = selectedProjectId.value !== originalProjectId;
+          if (nextTitle !== oldTitle || projectChanged) {
+            const liveStorage = currentConversationStorage.value || storage;
+            await renameOwnedConversation({
+              dirPath: liveStorage.dirPath || localPath,
+              conversationId: liveStorage.conversationId,
+              ...(nextTitle !== oldTitle ? {title: nextTitle} : {}),
+              ...(projectChanged ? {projectId: selectedProjectId.value} : {})
+            });
           }
           showDismissibleMessage.success('会话名称已更新');
           done();
@@ -11192,15 +11181,8 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
     let errorDisplay = `发生错误: ${formatErrorMessageForDisplay(error)}`;
     if (aborted) errorDisplay = "请求已取消";
 
-    const errorBubbleIndex = currentAssistantChatShowIndex > -1 ? currentAssistantChatShowIndex : chat_show.value.length;
-    if (currentAssistantChatShowIndex === -1) {
-      chat_show.value.push({
-        id: messageIdCounter.value++, storageId: createConversationStorageId(), role: "assistant", content: [], reasoning_content: "", status: "",
-        aiName: modelMap.value[model.value] || model.value.split('|')[1], voiceName: selectedVoice.value
-      });
-    }
-
-    const currentBubble = chat_show.value[errorBubbleIndex];
+    currentAssistantChatShowIndex = ensureAssistantTerminalBubble(currentAssistantChatShowIndex, turnMeta);
+    const currentBubble = chat_show.value[currentAssistantChatShowIndex];
     currentBubble.storageId = currentBubble.storageId || createConversationStorageId();
     delete currentBubble.isPreparing;
     delete currentBubble.retryMessage;
@@ -11452,10 +11434,15 @@ const reaskAI = async (assistantMessageId = null, remoteCommand = null) => {
         return;
       }
 
-      // Delete the verified UI bubble and the authoritative transcript together before starting
-      // the new request. This prevents a stale UI cache from leaving the old reply on screen.
+      const verifiedFullIndex = resolveSafeConversationMutationTarget(fullHistory.value, chat_show.value, showIndex);
+      if (verifiedFullIndex !== lastVisibleMessageIndexInFullHistory) {
+        showDismissibleMessage.warning('消息索引未能安全匹配，未重新请求；请重开会话后重试');
+        return;
+      }
+      // UI identity and canonical/tool identity must name the same tail segment.
+      // Never remove a tool bubble while truncating only a different error row.
       chat_show.value.splice(showIndex, 1);
-      fullHistory.value.splice(lastVisibleMessageIndexInFullHistory);
+      fullHistory.value.splice(verifiedFullIndex);
       syncHistoryFromFullHistory();
     } else if (lastVisibleMessage.role === 'user') {
       // A stale persisted cache can omit this bubble although the outgoing request has it.
@@ -11499,10 +11486,10 @@ const deleteMessage = (index, remoteCommand = null) => {
     msgToDeleteInShow.tool_calls.length > 0
   ) {
     let end = index;
-    while (chat_show.value[end + 1]?.role === 'tool') {
+    const calledIds = new Set(msgToDeleteInShow.tool_calls.map((call) => call?.id).filter(Boolean));
+    while (chat_show.value[end + 1]?.role === 'tool' && calledIds.has(chat_show.value[end + 1]?.tool_call_id)) {
       end += 1;
     }
-    const calledIds = new Set(msgToDeleteInShow.tool_calls.map((call) => call?.id).filter(Boolean));
     while (isToolMediaMessage(chat_show.value[end + 1]) && calledIds.has(chat_show.value[end + 1]?.sourceToolCallId)) {
       end += 1;
     }
@@ -11528,7 +11515,8 @@ const deleteMessage = (index, remoteCommand = null) => {
       const calledIds = new Set((fullHistory.value[fullStartIndex]?.tool_calls || []).map((call) => call?.id).filter(Boolean));
       let cursor = fullStartIndex + 1;
       while (cursor < fullHistory.value.length && fullHistory.value[cursor]?.role === 'tool') {
-        if (calledIds.size === 0 || calledIds.has(fullHistory.value[cursor]?.tool_call_id)) fullDeleteCount += 1;
+        if (!calledIds.has(fullHistory.value[cursor]?.tool_call_id)) break;
+        fullDeleteCount += 1;
         cursor += 1;
       }
       while (isToolMediaMessage(fullHistory.value[cursor]) && calledIds.has(fullHistory.value[cursor]?.sourceToolCallId)) {

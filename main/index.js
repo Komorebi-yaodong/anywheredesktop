@@ -956,6 +956,10 @@ app.whenReady().then(async () => {
     handleFastInputWindowEvent,
     appendPayloadToWindow,
     updateConversationWindowMetadata,
+    getConversationWindowDirectory,
+    notifyConversationMetadataChanged: (result) => {
+      remoteGateway.broadcastEvent('conversation.windows.changed', {reason: 'metadata', conversationId: result.conversationId, title: result.title, revision: result.revision, updatedAt: result.updatedAt})
+    },
     startScreenshotPromptWorkflow,
     confirmScreenshotPromptWorkflow,
     cancelScreenshotPromptWorkflow

@@ -4,6 +4,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { serializeError, serializeIpcPayload } from './dataConverter.js'
 import { runTaskById } from './core/task_runner.js'
 import { getQuickAssistantWeight, recordQuickAssistantUsage } from './core/quickAssistantUsage.js'
+import { createConversationMetadataRouter } from './core/conversationMetadataRouter.js'
 
 const GITHUB_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/Komorebi-yaodong/anywheredesktop/main/package.json'
 const GITEE_PACKAGE_JSON_URL = 'https://gitee.com/Komorebi-yaodong/anywheredesktop/raw/main/package.json'
@@ -138,6 +139,8 @@ export function registerIpcHandlers({
   handleFastInputWindowEvent,
   appendPayloadToWindow,
   updateConversationWindowMetadata,
+  getConversationWindowDirectory,
+  notifyConversationMetadataChanged = () => {},
   startScreenshotPromptWorkflow,
   confirmScreenshotPromptWorkflow,
   cancelScreenshotPromptWorkflow
@@ -201,7 +204,7 @@ export function registerIpcHandlers({
   })
 
   handleInvoke('window:event:emit', async (event, input = {}) => {
-    if (input?.event === 'remote:command') {
+    if (input?.event === 'remote:command' || input?.event === 'conversation:metadata-command') {
       return { ok: false, error: 'remote_command_channel_reserved' }
     }
 
@@ -1438,8 +1441,21 @@ handleInvoke('conversation:saveSnapshot', async (_event, input = {}) => {
   })
 
 
-  handleInvoke('conversation:rename', async (_event, input = {}) => {
-    return conversationApi.renameConversation(input)
+  const conversationMetadataRouter = createConversationMetadataRouter({
+    listWindows,
+    getConversationDirectory: getConversationWindowDirectory,
+    rename: (input) => conversationApi.renameConversation(input),
+    dispatch: (windowRef, payload) => dispatchWindowEvent({sourceId: 'conversation-metadata-router', target: windowRef, event: 'conversation:metadata-command', payload}, {getWindowByRef, listWindows}),
+    onRenamed: notifyConversationMetadataChanged
+  })
+  handleInvoke('conversation:rename', async (event, input = {}) => {
+    return conversationMetadataRouter.request(getWindowRefByWebContentsId(event.sender.id), input)
+  })
+  handleInvoke('conversation:metadataCheck', async (event, input = {}) => {
+    return conversationMetadataRouter.check(getWindowRefByWebContentsId(event.sender.id), input)
+  })
+  handleInvoke('conversation:metadataResult', async (event, input = {}) => {
+    return conversationMetadataRouter.complete(getWindowRefByWebContentsId(event.sender.id), input)
   })
 
   handleInvoke('conversation:delete', async (_event, input = {}) => {

@@ -506,6 +506,8 @@ const api = {
   replaceActiveConversationMessages: (input = {}) => invokeOrThrow('conversation:replaceActiveMessages', toPlainPayload(input)),
   restoreConversationCompaction: (input = {}) => invokeOrThrow('conversation:restoreCompaction', toPlainPayload(input)),
 
+  checkConversationMetadataRequest: (input = {}) => invokeOrThrow('conversation:metadataCheck', toPlainPayload(input)),
+  completeConversationMetadataRequest: (input = {}) => invokeOrThrow('conversation:metadataResult', toPlainPayload(input)),
   renameConversation: (input = {}) => invokeOrThrow('conversation:rename', toPlainPayload(input)),
   deleteConversation: (input = {}) => invokeOrThrow('conversation:delete', toPlainPayload(input)),
   acquireConversationWriteLease: (input = {}) => invokeOrThrow('conversation:acquireLease', toPlainPayload(input)),

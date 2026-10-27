@@ -4,6 +4,7 @@ import vm from 'node:vm'
 import { shallowRef, ref, computed, watch } from 'vue'
 
 import {replaceConversationEditableText} from '../render/window/utils/conversationEditableText.js'
+import {createConversationWriteQueue} from '../render/window/utils/conversationWriteQueue.js'
 
 const source = (await fs.readFile(new URL('../render/window/App.vue', import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
 
@@ -180,7 +181,11 @@ context.executeAutoSaveRequest = async (request) => {
   context.currentConversationStorage.value.revision += 1
   return true
 }
+context.conversationWriteQueue = createConversationWriteQueue()
 const ctx = vm.createContext(context)
+const renameStart = source.indexOf('const renameOwnedConversation =')
+const renameEnd = source.indexOf('// Local metadata does not acquire', renameStart)
+vm.runInContext(source.slice(renameStart, renameEnd) + '\nglobalThis.renameOwnedConversation = renameOwnedConversation;', ctx)
 vm.runInContext(block + '\n globalThis.adapter = { runRemoteConversationCommand, emitRemoteAssistantDelta, activeRemoteCommand, remoteHiddenWriter, pendingRemoteConfigPatch, applyPendingRemoteConfig, getRemoteSessionConfigSnapshot, remoteConversationDeleted };', ctx)
 const adapter = context.adapter
 context.askAI = async () => {

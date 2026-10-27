@@ -1237,6 +1237,7 @@ export function createRemoteSessionManager({
         if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
         session.activeRequestId = safeRequestId
         session.activeDeviceId = safeDeviceId
+        session.activeOperation = operation
         record.windowRef = session.windowRef
         const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
           type: operation, requestId: safeRequestId, deviceId: safeDeviceId,
@@ -1250,7 +1251,7 @@ export function createRemoteSessionManager({
       } catch (error) {
         const session = sessions.get(conversationId)
         if (session?.activeRequestId === safeRequestId && session.activeDeviceId === safeDeviceId) {
-          session.activeRequestId = ''; session.activeDeviceId = ''
+          session.activeRequestId = ''; session.activeDeviceId = ''; session.activeOperation = ''
         }
         publish(record, 'conversation.operation.failed', { code: error?.code || 'remote_renderer_dispatch_failed' })
         throw error
@@ -1565,7 +1566,7 @@ export function createRemoteSessionManager({
     const toolCallId = id(params.toolCallId, 'toolCallId')
     assertActive(generation, deviceId)
     const session = existingSession(conversationId)
-    if (!session?.activeRequestId || session.activeDeviceId !== deviceId || session.activeOperation !== 'conversation.send') {
+    if (!session?.activeRequestId || session.activeDeviceId !== deviceId || !['conversation.send', 'conversation.message.reask'].includes(session.activeOperation)) {
       throw remoteError('remote_choice_not_pending')
     }
     const questions = session.pendingChoices?.get(toolCallId)

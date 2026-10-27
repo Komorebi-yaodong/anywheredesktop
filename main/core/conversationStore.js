@@ -3,6 +3,8 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { DatabaseSync, backup as sqliteBackup } from 'node:sqlite'
 
+import { recoverMissingToolProjection } from '../../packages/conversation-core/toolProjection.js'
+
 import {
   assignConversationProject,
   findConversation,
@@ -1200,7 +1202,27 @@ function repairUiMessageLinks(db, { apply = true } = {}) {
     const updateLink = db.prepare('UPDATE ui_messages SET message_uuid = ? WHERE ui_uuid = ?')
     for (const repair of repairs) updateLink.run(repair.messageStorageId, repair.uiStorageId)
   }
-  return { changed: repairs.length, rebound, unlinked, repairs }
+  const recoveredTools = recoverPersistedToolProjection(db, {apply})
+  return { changed: repairs.length + recoveredTools, rebound, unlinked, repairs, recoveredTools }
+}
+
+
+// Called only by the Renderer-owned lease/backup/revision-checked repair transaction.
+// Work on raw attachment references: no media bodies or canonical messages are rewritten.
+function recoverPersistedToolProjection(db, {apply = true} = {}) {
+  const missing = db.prepare(`SELECT 1 FROM messages m
+    WHERE m.role_code = 'assistant' AND json_array_length(m.payload_json, '$.tool_calls') > 0
+      AND m.message_uuid NOT IN (SELECT message_uuid FROM ui_messages WHERE message_uuid IS NOT NULL)
+    LIMIT 1`).get()
+  if (!missing) return 0
+  const fullHistory = db.prepare('SELECT message_uuid, ordinal, payload_json FROM messages ORDER BY ordinal').all()
+    .map(row => ({...JSON.parse(row.payload_json), storageId: row.message_uuid, storageOrdinal: row.ordinal}))
+  const uiMessages = db.prepare('SELECT ui_uuid, ui_order, message_uuid, payload_json FROM ui_messages ORDER BY ui_order').all()
+    .map(row => ({...JSON.parse(row.payload_json), storageId: row.message_uuid || '', uiStorageId: row.ui_uuid, uiStorageOrder: row.ui_order}))
+  const recovered = recoverMissingToolProjection(fullHistory, uiMessages)
+  const changed = recovered.recovered + recovered.separated
+  if (apply && changed > 0) replaceUiProjection(db, recovered.messages, 1)
+  return changed
 }
 
 

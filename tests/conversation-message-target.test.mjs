@@ -77,4 +77,12 @@ assert.equal(
 )
 
 
+const plainError = {role: 'assistant', storageId: 'plain-error', content: 'same body'}
+const mixedToolUi = {...plainError, tool_calls: [{id: 'call-1'}]}
+assert.equal(resolveSafeConversationMutationTarget([plainError], [mixedToolUi], 0), -1, 'non-empty tool UI cannot bind to a plain error by ID or text')
+assert.equal(resolveSafeConversationMutationTarget([{...plainError, tool_calls: [{id: 'call-1'}]}], [plainError], 0), -1, 'plain UI cannot hide a canonical tool call')
+assert.equal(resolveSafeConversationMutationTarget([{...plainError, tool_calls: [{id: 'other'}]}], [mixedToolUi], 0), -1, 'non-empty tool identities must also match')
+assert.equal(resolveSafeConversationMutationTarget([{...mixedToolUi}], [{...mixedToolUi, storageId: 'stale'}], 0), 0, 'unique non-empty legacy tool target with identical call IDs can rebind safely')
+
+
 console.log('Desktop conversation message target regression passed')

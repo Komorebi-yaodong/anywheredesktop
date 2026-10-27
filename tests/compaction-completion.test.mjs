@@ -53,7 +53,7 @@ async function verifyReloadValidation() {
     currentConversationStorage: { value: { conversationId: 'synthetic', dirPath: 'synthetic' } },
     window: { api: { openConversation: async () => response } },
     replaceFullHistory: () => { replacements += 1 },
-    chat_show: { value: [] }, syncHistoryFromFullHistory() {}
+    chat_show: { value: [] }, messageIdCounter: {value: 1}, syncHistoryFromFullHistory() {}
   })
   const reload = vm.runInContext(source.slice(begin, end) + '\n;reloadConversationWindowFromStore', context)
   await assert.rejects(reload({ expectedSnapshotId: 'new' }), /检查点/)

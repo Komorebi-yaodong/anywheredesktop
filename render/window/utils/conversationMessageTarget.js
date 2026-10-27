@@ -23,9 +23,21 @@ export function createRenderableMutationSignature(message = {}) {
   });
 }
 
-function isSafeEmptyAssistantTerminal(message = {}) {
-  const hasToolCalls = (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0)
+function hasAssistantToolCalls(message = {}) {
+  return (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0)
     || (Array.isArray(message?.toolCalls) && message.toolCalls.length > 0);
+}
+
+function hasMatchingToolCallIdentity(left = {}, right = {}) {
+  if (!hasAssistantToolCalls(left) && !hasAssistantToolCalls(right)) return true;
+  const leftIds = getVerifiedToolCallIds(left);
+  const rightIds = getVerifiedToolCallIds(right);
+  return Boolean(leftIds && rightIds && leftIds.length === rightIds.length
+    && leftIds.every((id, index) => id === rightIds[index]));
+}
+
+function isSafeEmptyAssistantTerminal(message = {}) {
+  const hasToolCalls = hasAssistantToolCalls(message);
   return message?.role === 'assistant'
     && normalizeRenderableContent(message?.content) === null
     && !hasToolCalls
@@ -104,6 +116,7 @@ function resolveUniqueAnchoredTarget(fullHistory = [], chatShow = [], showIndex 
   const candidates = [];
   for (let index = 0; index < fullHistory.length; index += 1) {
     if (createRenderableMutationSignature(fullHistory[index]) !== targetSignature) continue;
+    if (!hasMatchingToolCallIdentity(chatShow[showIndex], fullHistory[index])) continue;
     if (!matchesNeighborAnchors(fullHistory, index, previousAnchors, nextAnchors)) continue;
     candidates.push(index);
     if (candidates.length > 1) return -1;
@@ -122,7 +135,8 @@ export function resolveVerifiedStorageTarget(fullHistory = [], chatShow = [], sh
   if (candidateIndex < 0) return -1;
   const candidate = fullHistory[candidateIndex];
   const uiSignature = createRenderableMutationSignature(uiMessage);
-  if (candidate?.role !== uiMessage.role || !uiSignature || createRenderableMutationSignature(candidate) !== uiSignature) return -1;
+  if (candidate?.role !== uiMessage.role || !uiSignature || createRenderableMutationSignature(candidate) !== uiSignature
+    || !hasMatchingToolCallIdentity(uiMessage, candidate)) return -1;
   // Content-free rows cannot be semantically anchored. Permit only a true assistant terminal,
   // or an exact stable-ID-verified assistant tool-call turn with identical call IDs. Tool-linked
   // rows and every incomplete/mismatched tool-call shape remain fail-closed.

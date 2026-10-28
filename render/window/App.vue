@@ -2054,36 +2054,62 @@ const estimateCurrentDynamicRequestOverhead = async () => (
   (await estimateCurrentDynamicToolPrompt()).totalTokens
 );
 
-const refreshPromptTokenBreakdown = async () => {
+let promptTokenBreakdownJob = null;
+const refreshPromptTokenBreakdown = () => {
+  if (promptTokenBreakdownJob) return promptTokenBreakdownJob;
+  const conversationId = currentConversationStorage.value?.conversationId;
+  const modelInput = model.value;
+  const isCurrent = () => currentConversationStorage.value?.conversationId === conversationId && model.value === modelInput;
   promptTokenBreakdown.value = { ...promptTokenBreakdown.value, loading: true, error: '' };
-  try {
-    const requestMessages = await buildRequestHistoryForCurrentConversation();
-    const systemMessages = requestMessages.filter((message) => message?.role === 'system');
-    const conversationMessages = requestMessages.filter((message) => message?.role !== 'system');
-    const [systemEstimate, conversationEstimate, toolPrompt] = await Promise.all([
-      window.api.estimateCompactTokens(systemMessages, { modelInput: model.value }),
-      window.api.estimateCompactTokens(conversationMessages, { modelInput: model.value }),
-      estimateCurrentDynamicToolPrompt()
-    ]);
-    const systemTokens = Math.max(0, Number(systemEstimate?.tokens) || 0);
-    const conversationTokens = Math.max(0, Number(conversationEstimate?.tokens) || 0);
-    const toolTokens = Math.max(0, Number(toolPrompt?.totalTokens) || 0);
-    promptTokenBreakdown.value = {
-      loading: false,
-      error: '',
-      systemTokens,
-      conversationTokens,
-      toolTokens,
-      effectiveTokens: systemTokens + conversationTokens + toolTokens,
-      updatedAt: Date.now()
-    };
-  } catch (error) {
-    promptTokenBreakdown.value = {
-      ...promptTokenBreakdown.value,
-      loading: false,
-      error: error?.message || String(error)
-    };
-  }
+  const job = (async () => {
+    try {
+      const requestMessages = await buildRequestHistoryForCurrentConversation();
+      if (!isCurrent()) return;
+      // Only the current, not-yet-canonical assistant may supplement the request window.
+      // Never use the UI message list as a substitute for paged canonical history.
+      const streamingBubble = loading.value && activeAssistantTurnMeta
+        ? chat_show.value.find((message) => message?.id === activeAssistantTurnMeta.assistantMessageId)
+        : null;
+      if (streamingBubble?.storageId && !streamingBubble.isPreparing
+        && !fullHistory.value.some((message) => message?.storageId === streamingBubble.storageId)) {
+        const streamingMessage = toHistoryMessageFromUi(streamingBubble);
+        if (streamingMessage) requestMessages.push(deepCloneSafe(streamingMessage));
+      }
+      const systemMessages = requestMessages.filter((message) => message?.role === 'system');
+      const conversationMessages = requestMessages.filter((message) => message?.role !== 'system');
+      const [systemEstimate, conversationEstimate, toolPrompt] = await Promise.all([
+        window.api.estimateCompactTokens(systemMessages, { modelInput }),
+        window.api.estimateCompactTokens(conversationMessages, { modelInput }),
+        estimateCurrentDynamicToolPrompt()
+      ]);
+      const systemTokens = Math.max(0, Number(systemEstimate?.tokens) || 0);
+      const conversationTokens = Math.max(0, Number(conversationEstimate?.tokens) || 0);
+      const toolTokens = Math.max(0, Number(toolPrompt?.totalTokens) || 0);
+      if (!isCurrent()) return;
+      promptTokenBreakdown.value = {
+        loading: false,
+        error: '',
+        systemTokens,
+        conversationTokens,
+        toolTokens,
+        effectiveTokens: systemTokens + conversationTokens + toolTokens,
+        updatedAt: Date.now()
+      };
+    } catch (error) {
+      if (isCurrent()) promptTokenBreakdown.value = {
+        ...promptTokenBreakdown.value,
+        loading: false,
+        error: error?.message || String(error)
+      };
+    }
+  })().finally(() => {
+    if (promptTokenBreakdownJob === job) {
+      promptTokenBreakdownJob = null;
+      promptTokenBreakdown.value = { ...promptTokenBreakdown.value, loading: false };
+    }
+  });
+  promptTokenBreakdownJob = job;
+  return job;
 };
 
 
@@ -3226,9 +3252,10 @@ const runRemoteConversationCommand = async (input = {}) => {
 
   if (command.type === 'conversation.config.get') {
     try {
-      // Snapshot reads never wait for token recount or an unrelated config write.
+      // Return immediately, then warm the numeric cache without taking the AI/write lane.
       if (isClosingWindow.value) throw new Error('remote_conversation_busy');
       await emitRemoteRendererEventAndWait('conversation.config.result', command, getRemoteSessionConfigSnapshot());
+      void refreshPromptTokenBreakdown().catch(() => {});
     } catch {
       await emitRemoteRendererEventAndWait('conversation.operation.failed', command, {code: 'remote_resource_read_failed'}).catch(() => {});
     }

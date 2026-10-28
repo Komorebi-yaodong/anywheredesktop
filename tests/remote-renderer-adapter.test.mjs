@@ -108,6 +108,7 @@ const context = {
   currentConversationStorage: ref({ conversationId: 'conversation-renderer-fixture', revision: 0, dirPath: 'fixture-dir' }),
 
   promptTokenBreakdown: ref({systemTokens: 0, conversationTokens: 0, toolTokens: 0, updatedAt: 0, loading: false, error: ''}),
+  refreshPromptTokenBreakdown: async () => {actions.push('refresh-context-usage')},
   conversationLease: ref({ leaseEpoch: 4 }),
   conversationInstanceId: 'renderer-instance-fixture',
   isWindowBootstrapped: ref(true), isClosingWindow: ref(false), loading: ref(false), compacting: ref(false),
@@ -766,11 +767,12 @@ assert.equal(events.at(-1).payload.ok, true)
 // Snapshot reads must finish even while token recount/config mutation never settles.
 context.isClosingWindow.value = false
 context.remoteConfigExecutionPromise = new Promise(() => {})
-context.refreshPromptTokenBreakdown = async () => {throw new Error('must not recount for snapshot')}
+context.refreshPromptTokenBreakdown = () => new Promise(() => {})
 await adapter.runRemoteConversationCommand({type: 'conversation.config.get', conversationId: command.conversationId, requestId: 'renderer-fast-config-read'})
 assert.equal(events.at(-1).event, 'conversation.config.result')
 const snapshotSource = source.slice(source.indexOf("  if (command.type === 'conversation.config.get') {"), source.indexOf("  if (command.type === 'conversation.config.patch') {"))
-assert.doesNotMatch(snapshotSource, /await remoteConfigExecutionPromise|refreshPromptTokenBreakdown\(/)
+assert.doesNotMatch(snapshotSource, /await remoteConfigExecutionPromise|await refreshPromptTokenBreakdown\(/)
+assert.match(snapshotSource, /void refreshPromptTokenBreakdown\(\)/)
 
 
 assert.doesNotMatch(block, /isAutoApproveTools\.value = true/)

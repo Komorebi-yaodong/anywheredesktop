@@ -10,6 +10,8 @@ import { get as dbGet, put as dbPut, remove as dbRemove, allDocs as dbAllDocs } 
 import { getConfig, updateConfigWithoutFeatures, resolveDefaultAssistantModel } from './data.js'
 import { setCurrentTaskDeviceEnabled } from './task_devices.js'
 import { fetchWithProxy } from './net.js'
+import { app } from 'electron'
+import { fetchWebResource } from './webFetch.js'
 import * as MarkitdownModule from 'markitdown-js'
 import { encode as encodeTokens, decode as decodeTokens } from 'gpt-tokenizer'
 import { openWindow, getWindowByRef, listWindows } from '../windowManager.js'
@@ -1106,13 +1108,14 @@ IMPORTANT:
         },
         {
             name: "builtin_web_fetch",
-            description: "Retrieve and parse the FULL text content of a specific URL. Use this when the user provides a URL or after getting a URL from search results. Capable of parsing complex pages like documentation, papers, and code repositories.",
+            description: "Read a webpage or download an HTTP(S) file. HTML is converted to readable text; JSON/plain text is returned with pagination. PDF, ZIP and other binary/attachment responses are automatically saved to the system default Downloads directory, returning the local absolute path, filename, size and type, NOT their contents. Set download=true to save any response (including HTML/text) instead of reading it. Downloads never overwrite existing files and are not opened, executed or extracted. offset/length apply only to reading text; use offset=0 for downloads.",
             inputSchema: {
                 type: "object",
                 properties: {
-                    url: { type: "string", description: "The URL of the webpage to read." },
-                    offset: { type: "integer", description: "Optional. The character position to start reading from. Defaults to 0.", default: 0 },
-                    length: { type: "integer", description: `Optional. Number of characters to read. Defaults to ${MAX_READ}, hard cap ${MAX_READ_HARD}. Prefer smaller ranges for large pages.`, default: MAX_READ }
+                    url: { type: "string", description: "Full http:// or https:// URL of the webpage or file." },
+                    download: { type: "boolean", description: "Optional. Force saving the response to the system default Downloads directory. Defaults to false; binary files and attachments are downloaded automatically.", default: false },
+                    offset: { type: "integer", description: "Optional. Text character offset, default 0. Downloads require 0 and always save the complete file.", default: 0 },
+                    length: { type: "integer", description: `Optional. Characters of text to return, default ${MAX_READ}, hard cap ${MAX_READ_HARD}. Does not limit download size.`, default: MAX_READ }
                 },
                 required: ["url"]
             }
@@ -3350,75 +3353,31 @@ if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) { $PSStyle.OutputR
         }
     },
 
-    // Web Fetch Handler
-    builtin_web_fetch: async ({ url, offset = 0, length = MAX_READ }, context, signal) => {
-        try {
-            if (!url || !url.startsWith('http')) {
-                return "Error: Invalid URL. Please provide a full URL starting with http:// or https://";
+    // Web Fetch Handler: retain the proxy-aware network stack and native Downloads setting.
+    builtin_web_fetch: async (args, context, signal) => fetchWebResource(args, {
+        fetchImpl: fetchWithProxy,
+        getDownloadsDirectory: () => app.getPath('downloads'),
+        signal,
+        maxRead: MAX_READ,
+        hardMaxRead: MAX_READ_HARD,
+        renderHtml: async (rawText, url) => {
+            const metadata = extractMetadata(rawText);
+            let markdownBody;
+            try {
+                markdownBody = await convertHtmlWithMarkitdownJs(rawText, url);
+            } catch {
+                console.warn('[builtin_web_fetch] HTML conversion failed; using fallback.');
+                markdownBody = convertHtmlToMarkdown(rawText, url);
             }
-
-            const requested = Number(length);
-            const readLength = Math.min(
-                Number.isFinite(requested) && requested > 0 ? requested : MAX_READ,
-                MAX_READ_HARD
-            );
-
-            const headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Referer": "https://www.google.com/"
-            };
-
-            const response = await fetchWithProxy(url, { headers, redirect: 'follow', signal });
-
-            if (response.status === 403 || response.status === 521) {
-                return `Failed to fetch page (Anti-bot protection ${response.status}).`;
+            if (!markdownBody || markdownBody.length < 50) {
+                return `Fetched URL: ${url}\n\nTitle: ${metadata.title}\n\n[System Info]: The extracted content is very short.`;
             }
-            if (!response.ok) {
-                return `Failed to fetch page. Status: ${response.status} ${response.statusText}`;
-            }
-            const contentType = response.headers.get('content-type') || '';
-            const rawText = await response.text();
-            let fullText = "";
-            if (contentType.includes('application/json')) {
-                try { fullText = JSON.stringify(JSON.parse(rawText), null, 2); } catch (e) { fullText = rawText; }
-            } else {
-                const metadata = extractMetadata(rawText);
-                let markdownBody = "";
-                try {
-                    markdownBody = await convertHtmlWithMarkitdownJs(rawText, url);
-                } catch (markitdownError) {
-                    console.warn('[builtin_web_fetch] markitdown-js conversion failed, fallback to legacy converter:', markitdownError?.message || markitdownError);
-                    markdownBody = convertHtmlToMarkdown(rawText, url);
-                }
-                if (!markdownBody || markdownBody.length < 50) {
-                    return `Fetched URL: ${url}\n\nTitle: ${metadata.title}\n\n[System Info]: The extracted content is very short.`;
-                }
-                fullText = `URL: ${url}\n\n`;
-                if (metadata.title) fullText += `# ${metadata.title}\n\n`;
-                if (metadata.description) fullText += `> **Description:** ${metadata.description}\n\n`;
-                fullText += `---\n\n${markdownBody}`;
-            }
-            const totalChars = fullText.length;
-            const startPos = Math.max(0, offset);
-            const contentChunk = fullText.substring(startPos, startPos + readLength);
-            const remainingChars = totalChars - (startPos + contentChunk.length);
-            let result = contentChunk;
-            if (remainingChars > 0) {
-                const nextOffset = startPos + contentChunk.length;
-                result += `\n\n--- [SYSTEM NOTE: CONTENT TRUNCATED] ---\n`;
-                result += `Total characters: ${totalChars}. Current chunk: ${startPos}-${nextOffset}.\n`;
-                result += `Remaining: ${remainingChars}. Call 'builtin_web_fetch' with offset=${nextOffset} to read more.\n`;
-            } else if (startPos > 0) {
-                result += `\n\n--- [SYSTEM NOTE: END OF PAGE REACHED] ---`;
-            }
-            return result;
-
-        } catch (e) {
-            return `Error fetching page: ${e.message}`;
+            let result = `URL: ${url}\n\n`;
+            if (metadata.title) result += `# ${metadata.title}\n\n`;
+            if (metadata.description) result += `> **Description:** ${metadata.description}\n\n`;
+            return result + `---\n\n${markdownBody}`;
         }
-    },
+    }),
 
     // Background Sub-Agent handlers
     sub_agent: async (args, globalContext) => {

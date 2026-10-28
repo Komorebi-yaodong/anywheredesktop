@@ -54,7 +54,8 @@
     "test:quick-selection": "node tests/quick-selection.test.mjs",
     "test:agent-message-buffer": "node tests/agent-message-buffer.test.mjs",
     "test:subagent-request": "node tests/subagent-request.test.mjs",
-    "test:markdown-placeholder": "node tests/markdown-placeholder.test.mjs"
+    "test:markdown-placeholder": "node tests/markdown-placeholder.test.mjs",
+    "test:view-image": "node tests/view-image-compression.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

@@ -48,6 +48,7 @@
     "test:conversation-tool-error": "node tests/conversation-message-target.test.mjs && node tests/conversation-tool-error.test.mjs && node tests/conversation-tool-projection.test.mjs",
     "test:conversation-link-recovery": "node tests/conversation-link-paging.test.mjs && node tests/conversation-delete-recovery.test.mjs",
     "test:conversation-metadata": "node tests/conversation-metadata-router.test.mjs && node tests/conversation-metadata-rename.test.mjs",
+    "test:cloud-project-sync": "node tests/project-sqlite-assignment.test.mjs && node tests/cloud-project-sync.test.mjs",
     "test:conversation-network-retry": "node tests/conversation-network-retry.test.mjs",
     "test:updater-proxy-session": "node tests/updater-proxy-session.test.mjs && node tests/idempotent-apply.test.mjs",
     "test:quick-selection": "node tests/quick-selection.test.mjs",

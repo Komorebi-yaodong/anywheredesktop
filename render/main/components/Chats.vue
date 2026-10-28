@@ -1720,6 +1720,34 @@ const uploadDatabaseConversation = async (file, options = {}) => {
     return { completedFiles: [descriptor.dbFile], projectDescriptors: [descriptor] };
 };
 
+// Upload metadata can be committed before the final whole-project merge (or on its own).
+// Create a missing destination here so readback never depends on a manually created project.
+const mergeUploadedDatabaseProjects = (cloudData, descriptors) => {
+    const conversations = { ...cloudData.conversations };
+    let projects = cloudData.projects.map((project) => ({ ...project, conversationIds: [...(project.conversationIds || [])] }));
+    for (const descriptor of descriptors) {
+        const localProject = (localProjects.value.projects || []).find((project) =>
+            (project.conversationIds || []).includes(descriptor.conversationId)
+            || (descriptor.legacyJson && (project.files || []).includes(descriptor.legacyJson))
+        );
+        projects = projects.map((project) => ({
+            ...project,
+            conversationIds: project.conversationIds.filter((id) => id !== descriptor.conversationId)
+        }));
+        if (localProject) {
+            if (!projects.some((project) => project.id === localProject.id)) {
+                projects.push({ id: localProject.id, name: localProject.name || localProject.id, files: [], conversationIds: [] });
+            }
+            projects = projects.map((project) => project.id === localProject.id
+                ? { ...project, conversationIds: [...project.conversationIds, descriptor.conversationId] }
+                : project);
+        }
+        conversations[descriptor.conversationId] = descriptor;
+    }
+    return normalizeProjectsResult({ ...cloudData, conversations, projects });
+};
+
+
 const commitDatabaseProjectDescriptors = async (descriptors) => {
     const uniqueDescriptors = Array.from(new Map(
         (Array.isArray(descriptors) ? descriptors : [])
@@ -1730,27 +1758,7 @@ const commitDatabaseProjectDescriptors = async (descriptors) => {
 
     await enqueueCloudProjectsWrite(() => retryCloudProjectsWrite(async () => {
         const cloudData = normalizeProjectsResult(await window.api.readCloudProjects(buildWebdavInput()));
-        let projects = cloudData.projects.map((project) => ({ ...project, conversationIds: [...(project.conversationIds || [])] }));
-        const conversations = { ...cloudData.conversations };
-
-        for (const descriptor of uniqueDescriptors) {
-            const localProject = (localProjects.value.projects || []).find((project) =>
-                (project.conversationIds || []).includes(descriptor.conversationId)
-                || (descriptor.legacyJson && (project.files || []).includes(descriptor.legacyJson))
-            );
-            projects = projects.map((project) => ({
-                ...project,
-                conversationIds: (project.conversationIds || []).filter((id) => id !== descriptor.conversationId)
-            }));
-            if (localProject) {
-                projects = projects.map((project) => project.id === localProject.id
-                    ? { ...project, conversationIds: [...project.conversationIds, descriptor.conversationId] }
-                    : project);
-            }
-            conversations[descriptor.conversationId] = descriptor;
-        }
-
-        const nextCloudData = { ...cloudData, conversations, projects };
+        const nextCloudData = mergeUploadedDatabaseProjects(cloudData, uniqueDescriptors);
         await window.api.writeCloudProjects(buildWebdavInput(), nextCloudData);
         cloudProjects.value = normalizeProjectsResult(nextCloudData);
     }));
@@ -1797,25 +1805,7 @@ const reconcileUploadedCloudIndex = async ({ jsonBasenames = [], projectDescript
             });
         }
 
-        const conversations = { ...nextCloudData.conversations };
-        let projects = nextCloudData.projects.map((project) => ({ ...project, conversationIds: [...(project.conversationIds || [])] }));
-        for (const descriptor of uniqueDescriptors) {
-            const localProject = (localProjects.value.projects || []).find((project) =>
-                (project.conversationIds || []).includes(descriptor.conversationId)
-                || (descriptor.legacyJson && (project.files || []).includes(descriptor.legacyJson))
-            );
-            projects = projects.map((project) => ({
-                ...project,
-                conversationIds: (project.conversationIds || []).filter((id) => id !== descriptor.conversationId)
-            }));
-            if (localProject) {
-                projects = projects.map((project) => project.id === localProject.id
-                    ? { ...project, conversationIds: [...project.conversationIds, descriptor.conversationId] }
-                    : project);
-            }
-            conversations[descriptor.conversationId] = descriptor;
-        }
-        nextCloudData = normalizeProjectsResult({ ...nextCloudData, conversations, projects });
+        nextCloudData = mergeUploadedDatabaseProjects(nextCloudData, uniqueDescriptors);
         await window.api.writeCloudProjects(buildWebdavInput(), nextCloudData);
 
         const verified = normalizeProjectsResult(await window.api.readCloudProjects(buildWebdavInput()));

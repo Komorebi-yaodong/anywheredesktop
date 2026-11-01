@@ -660,12 +660,25 @@ html.dark .usage-page .filter-selects :deep(.el-select__wrapper.is-focused) {
 }
 .week-labels {
   display: grid;
-  grid-template-rows: repeat(3, 1fr);
-  padding-top: 12px;
+  grid-template-rows: repeat(7, 14px);
+  row-gap: 4px;
   width: 24px;
   flex-shrink: 0;
   font-size: 9px;
   color: var(--text-secondary);
+}
+.week-labels span {
+  align-self: center;
+  line-height: 14px;
+}
+.week-labels span:nth-child(1) {
+  grid-row: 1;
+}
+.week-labels span:nth-child(2) {
+  grid-row: 3;
+}
+.week-labels span:nth-child(3) {
+  grid-row: 5;
 }
 .heat-grid {
   display: grid;

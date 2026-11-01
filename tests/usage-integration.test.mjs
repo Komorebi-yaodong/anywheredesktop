@@ -176,6 +176,11 @@ for (const key of ['adaptiveScale', 'heatmapScaleHint', 'methodology', 'footnote
   }
 }
 
+assert.match(statisticsPage, /grid-template-rows: repeat\(7, 14px\)/)
+assert.match(statisticsPage, /nth-child\(1\)\s*\{\s*grid-row: 1;/)
+assert.match(statisticsPage, /nth-child\(2\)\s*\{\s*grid-row: 3;/)
+assert.match(statisticsPage, /nth-child\(3\)\s*\{\s*grid-row: 5;/)
+
 const baseline = createHeatmapScale([])
 assert.deepEqual(baseline.thresholds, [10, 25, 50])
 for (const [requests, expected] of [

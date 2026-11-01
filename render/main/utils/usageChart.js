@@ -1,22 +1,3 @@
-export function clampViewport(start, size, length) {
-  const nextSize = Math.max(Math.min(2, length), Math.min(length, Math.round(size)))
-  return {
-    start: Math.max(0, Math.min(Math.max(0, length - nextSize), Math.round(start))),
-    size: nextSize
-  }
-}
-
-export function zoomViewport(view, delta, anchor, length) {
-  if (!length) return { start: 0, size: 0 }
-  const size =
-    delta < 0
-      ? Math.max(2, Math.floor(view.size * 0.8))
-      : Math.max(view.size + 1, Math.ceil(view.size * 1.25))
-  const position = Math.max(0, Math.min(1, anchor))
-  const nextSize = Math.min(length, size)
-  return clampViewport(view.start + position * (view.size - nextSize), nextSize, length)
-}
-
 // Monotone cubic Hermite interpolation: passes through observations without overshoot.
 export function smoothLinePath(points = []) {
   if (!points.length) return ''

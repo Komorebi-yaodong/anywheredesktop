@@ -38,8 +38,7 @@
 
     "showDetails": "查看明细", "heatmapSummary": "最近一年 · {count} 次调用",
 
-    "trend": "用量趋势", "trendHint": "按日统计 · 最多最近 30 天 · 滚轮缩放，拖动平移",
-    "resetZoom": "重置缩放", "hoverHint": "悬停查看当天请求与 Token 用量；方向键平移，+ / − 缩放",
+    "trend": "用量趋势",
     "heatmap": "调用活跃度", "heatmapHint": "最近一年共 {count} 次调用 · 一格一天 · 跟随服务商、智能体与模型筛选",
     "days": "天", "mon": "一", "wed": "三", "fri": "五", "less": "少", "more": "多",
     "breakdown": "调用明细", "breakdownHint": "输入／输出占比以总 Token 为分母，缓存占比以输入 Token 为分母。", "time": "时间",

@@ -1,7 +1,7 @@
 <script setup>
-import { computed, ref, watch, useId } from 'vue'
+import { computed, ref, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { clampViewport, zoomViewport, compactNumber, smoothLinePath } from '../utils/usageChart.js'
+import { compactNumber, smoothLinePath } from '../utils/usageChart.js'
 
 const props = defineProps({
   points: { type: Array, default: () => [] },
@@ -9,9 +9,7 @@ const props = defineProps({
   rangeKey: { type: String, default: '30d' }
 })
 const { t, locale } = useI18n()
-const view = ref({ start: 0, size: 30 })
 const hovered = ref(-1)
-const drag = ref(null)
 const WIDTH = 900,
   HEIGHT = 260,
   LEFT = 52,
@@ -20,9 +18,7 @@ const WIDTH = 900,
   BOTTOM = 38
 const plotWidth = WIDTH - LEFT - RIGHT
 const plotHeight = HEIGHT - TOP - BOTTOM
-const visible = computed(() =>
-  props.points.slice(view.value.start, view.value.start + view.value.size)
-)
+const visible = computed(() => props.points)
 const maxRequests = computed(() => Math.max(1, ...visible.value.map((day) => day.requests)))
 const maxTokens = computed(() => Math.max(1, ...visible.value.map((day) => day.totalTokens)))
 const x = (index) =>
@@ -65,20 +61,6 @@ const periodLabel = (point) =>
     : `${date(point.periodStart ?? point.timestamp)} — ${date((point.periodEnd ?? point.timestamp) - 1)}`
 const number = (value) => compactNumber(value)
 const active = computed(() => visible.value[hovered.value])
-function reset() {
-  view.value = { start: 0, size: props.points.length }
-  hovered.value = -1
-}
-watch(
-  [
-    () => props.points.length,
-    () => props.points[0]?.timestamp,
-    () => props.granularity,
-    () => props.rangeKey
-  ],
-  reset,
-  { immediate: true }
-)
 function pointerFraction(event) {
   const rect = event.currentTarget.getBoundingClientRect()
   return Math.max(
@@ -86,40 +68,8 @@ function pointerFraction(event) {
     Math.min(1, (((event.clientX - rect.left) / rect.width) * WIDTH - LEFT) / plotWidth)
   )
 }
-function wheel(event) {
-  view.value = zoomViewport(view.value, event.deltaY, pointerFraction(event), props.points.length)
-  hovered.value = -1
-}
 function move(event) {
-  if (drag.value) {
-    const rect = event.currentTarget.getBoundingClientRect()
-    const shift =
-      ((event.clientX - drag.value.x) / ((rect.width * plotWidth) / WIDTH)) *
-      Math.max(1, view.value.size - 1)
-    view.value = clampViewport(drag.value.start - shift, view.value.size, props.points.length)
-    hovered.value = -1
-  } else hovered.value = Math.round(pointerFraction(event) * Math.max(0, visible.value.length - 1))
-}
-function down(event) {
-  if (event.button !== 0) return
-  drag.value = { x: event.clientX, start: view.value.start }
-  event.currentTarget.setPointerCapture(event.pointerId)
-}
-function up() {
-  drag.value = null
-}
-function keydown(event) {
-  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-    event.preventDefault()
-    view.value = clampViewport(
-      view.value.start + (event.key === 'ArrowRight' ? 1 : -1),
-      view.value.size,
-      props.points.length
-    )
-  } else if (['+', '=', '-'].includes(event.key)) {
-    event.preventDefault()
-    view.value = zoomViewport(view.value, event.key === '-' ? 1 : -1, 0.5, props.points.length)
-  } else if (event.key === 'Home') reset()
+  hovered.value = Math.round(pointerFraction(event) * Math.max(0, visible.value.length - 1))
 }
 </script>
 
@@ -128,7 +78,6 @@ function keydown(event) {
     <div>
       <h3>{{ t('usage.trend') }}</h3>
     </div>
-    <el-button text size="small" @click="reset">{{ t('usage.resetZoom') }}</el-button>
   </div>
   <div v-if="active" class="trend-detail" aria-live="polite">
     <strong>{{ periodLabel(active) }}</strong>
@@ -143,16 +92,8 @@ function keydown(event) {
     :viewBox="`0 0 ${WIDTH} ${HEIGHT}`"
     role="img"
     :aria-label="t('usage.trend')"
-    tabindex="0"
-    :class="{ dragging: drag }"
-    @wheel.prevent="wheel"
     @pointermove="move"
-    @pointerdown="down"
-    @pointerup="up"
-    @pointercancel="up"
-    @lostpointercapture="up"
     @pointerleave="hovered = -1"
-    @keydown="keydown"
   >
     <g v-for="step in 5" :key="step">
       <line
@@ -270,12 +211,9 @@ p {
   width: 100%;
   min-height: 190px;
   cursor: crosshair;
-  touch-action: pan-y;
+  touch-action: auto;
   user-select: none;
   outline-offset: 4px;
-}
-.dragging {
-  cursor: grabbing;
 }
 .grid-line {
   stroke: var(--el-border-color-lighter);

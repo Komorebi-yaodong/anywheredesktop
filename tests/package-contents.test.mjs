@@ -15,6 +15,8 @@ const files = Array.isArray(builderConfig?.files) ? builderConfig.files : []
 const requiredExclusions = [
   '!tests/**',
   '!coverage/**',
+  '!进度.md',
+  '!项目AGENT.md',
   '!{jest.config.*,vitest.config.*,playwright.config.*}',
   '!node_modules/{fluent-ffmpeg,pngjs}/coverage/**',
   '!node_modules/zod/src/**/tests/**'

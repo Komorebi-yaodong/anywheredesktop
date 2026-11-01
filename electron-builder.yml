@@ -18,6 +18,9 @@ files:
   - '!build/icon.iconset/**'
   - '!build/.iconset-tmp/**'
   - '!.tmp/**'
+
+  - '!进度.md'
+  - '!项目AGENT.md'
   - '!**/*.map'
 asarUnpack:
   - resources/**

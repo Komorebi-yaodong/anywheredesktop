@@ -38,8 +38,7 @@
 
     "showDetails": "View details", "heatmapSummary": "Past year · {count} calls",
 
-    "trend": "Usage trend", "trendHint": "Daily · Up to the last 30 days · Scroll to zoom, drag to pan",
-    "resetZoom": "Reset zoom", "hoverHint": "Hover for daily requests and tokens; arrow keys to pan, + / − to zoom",
+    "trend": "Usage trend",
     "heatmap": "Request activity", "heatmapHint": "{count} calls in the past year · One day per cell · Follows provider, agent and model filters",
     "days": "days", "mon": "M", "wed": "W", "fri": "F", "less": "Less", "more": "More",
     "breakdown": "Usage breakdown", "breakdownHint": "Input/output shares use total tokens; cached share uses input tokens.", "time": "Time",

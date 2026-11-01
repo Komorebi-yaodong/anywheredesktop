@@ -3,8 +3,6 @@ import fs from 'node:fs/promises'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import {
-  zoomViewport,
-  clampViewport,
   compactNumber,
   smoothLinePath,
   createHeatmapScale,
@@ -251,17 +249,13 @@ const trendSource = await read('../render/main/components/UsageTrend.vue')
 assert.ok(!trendSource.includes("t('usage.trendHint')"))
 assert.ok(!trendSource.includes('<polyline'))
 
-let view = { start: 0, size: 30 }
-view = zoomViewport(view, -1, 0.5, 30)
-assert.equal(view.size, 24)
-assert.equal(view.start, 3)
-for (let i = 0; i < 30; i++) view = zoomViewport(view, -1, 0.5, 30)
-assert.equal(view.size, 2)
-assert.deepEqual(clampViewport(-100, 10, 30), { start: 0, size: 10 })
-assert.deepEqual(clampViewport(100, 10, 30), { start: 20, size: 10 })
-for (let i = 0; i < 30; i++) view = zoomViewport(view, 1, 1, 30)
-assert.deepEqual(view, { start: 0, size: 30 })
-assert.deepEqual(zoomViewport(view, 1, 0.5, 0), { start: 0, size: 0 })
+assert.ok(!trendSource.includes('@wheel'), 'chart must not intercept page scrolling')
+assert.ok(!trendSource.includes('@pointerdown'), 'no drag-to-pan interaction')
+assert.ok(!trendSource.includes('@keydown'), 'no zoom/pan shortcuts')
+assert.ok(!trendSource.includes('resetZoom'), 'no obsolete reset button')
+assert.match(trendSource, /const visible = computed\(\(\) => props.points\)/)
+assert.match(trendSource, /@pointermove="move"/)
+assert.match(trendSource, /periodLabel\(active\)/)
 console.log(
-  'Usage integration: real export/import functions, SFC compilation, routing, labels and chart viewport passed'
+  'Usage integration: real export/import functions, SFC compilation, routing, labels and non-intercepting chart passed'
 )

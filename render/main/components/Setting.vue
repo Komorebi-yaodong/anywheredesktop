@@ -1074,6 +1074,10 @@ async function exportConfig() {
       }
     }
 
+    // Statistics are not ordinary config: always export the latest durable journal snapshot.
+    configToExport.usageStatistics = await window.api.getUsageStatistics();
+
+
     const saveResult = await window.api?.showSaveDialog?.({
       title: t('setting.dataManagement.exportButton'),
       defaultPath: 'Anywhere_config.json',
@@ -1148,6 +1152,12 @@ async function importConfig() {
       }
       delete importedData.compactCache;
     }
+
+    if (Object.prototype.hasOwnProperty.call(importedData, 'usageStatistics')) {
+      await window.api.importUsageStatistics(importedData.usageStatistics);
+      delete importedData.usageStatistics;
+    }
+
 
     if (window.api && window.api.restoreImportedConfig) {
       const configResult = await window.api.restoreImportedConfig(importedData);

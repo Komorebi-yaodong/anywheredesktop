@@ -56,7 +56,8 @@
     "test:subagent-request": "node tests/subagent-request.test.mjs",
     "test:markdown-placeholder": "node tests/markdown-placeholder.test.mjs",
     "test:view-image": "node tests/view-image-compression.test.mjs",
-    "test:web-fetch": "node tests/web-fetch.test.mjs"
+    "test:web-fetch": "node tests/web-fetch.test.mjs",
+    "test:usage": "node tests/usage-statistics.test.mjs && node tests/usage-integration.test.mjs && node tests/usage-sdk.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

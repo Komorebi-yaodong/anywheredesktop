@@ -150,6 +150,10 @@ getDroppedFilePath: (file) => {
   removeTaskAppliedDevice: (taskId = '', device = {}) =>
     electronAPI.ipcRenderer.invoke('data:removeTaskAppliedDevice', taskId, toPlainPayload(device) || {}),
 
+  queryUsageStatistics: (filters = {}) => invokeOrThrow('usage:query', toPlainPayload(filters)),
+
+  getUsageStatistics: () => invokeOrThrow('usage:snapshot'),
+  importUsageStatistics: (backup) => invokeOrThrow('usage:import', toPlainPayload(backup)),
   exportMemoryData: () => electronAPI.ipcRenderer.invoke('data:exportMemoryData'),
   importMemoryData: (memories) => electronAPI.ipcRenderer.invoke('data:importMemoryData', memories),
   // Compact cache is stored separately from main config; expose for settings export/import.

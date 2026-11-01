@@ -1948,6 +1948,7 @@ ${userContext || 'No additional context provided.'}
             const currentApiType = apiType || 'chat_completions';
 
             const response = await requestSubAgentCompletion(createChatCompletion, {
+                usageContext: { providerId: providerInfo.providerId, providerName: providerInfo.providerName, agentName: '__DEFAULT__', source: 'sub-agent' },
                 baseUrl: baseUrl,
                 apiKey: apiKey,
                 model: requestModelName,
@@ -2081,6 +2082,7 @@ ${userContext || 'No additional context provided.'}
 
         const currentApiType = apiType || 'chat_completions';
         const summaryResponse = await requestSubAgentCompletion(createChatCompletion, {
+            usageContext: { providerId: providerInfo.providerId, providerName: providerInfo.providerName, agentName: '__DEFAULT__', source: 'sub-agent' },
             baseUrl: baseUrl,
             apiKey: apiKey,
             model: requestModelName,

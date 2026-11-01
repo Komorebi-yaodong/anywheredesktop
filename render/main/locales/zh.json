@@ -20,6 +20,32 @@
       "settings": "设置"
     }
   },
+  "usage": {
+    "title": "数据统计",
+    "description": "让每一次调用都有迹可循，掌握你的智能体与模型用量。",
+    "refresh": "刷新", "updated": "更新于", "timeRange": "时间范围", "granularity": "统计粒度",
+    "ranges": { "24h": "最近 24 小时", "today": "今天", "yesterday": "昨天", "7d": "最近 7 天", "30d": "最近 30 天" },
+    "hour": "按小时", "fourHours": "每 4 小时", "day": "按天", "provider": "服务商", "agent": "智能体", "model": "模型",
+    "allProviders": "全部服务商", "allAgents": "全部智能体", "allModels": "全部模型",
+    "defaultAgent": "默认智能体", "unknownProvider": "未知服务商", "deleted": "已删除",
+    "requests": "请求数", "successRate": "成功率", "failed": "失败数", "totalTokens": "总 Token",
+    "inputTokens": "输入 Token", "outputTokens": "输出 Token", "cachedTokens": "缓存 Token",
+    "completedRequests": "已结束的模型调用（含取消）", "cancelledCount": "另有 {count} 次取消",
+    "reportedCount": "{reported} / {total} 次请求返回用量", "shareOfTotal": "占总 Token", "shareOfInput": "占输入 Token",
+    "share": "占比", "cacheHitRate": "命中率", "successful": "成功", "reportedShort": "{count} 次返回用量",
+
+    "showDetails": "查看明细", "methodology": "统计口径", "heatmapSummary": "最近一年 · {count} 次调用",
+
+    "trend": "用量趋势", "trendHint": "按日统计 · 最多最近 30 天 · 滚轮缩放，拖动平移",
+    "resetZoom": "重置缩放", "hoverHint": "悬停查看当天请求与 Token 用量；方向键平移，+ / − 缩放",
+    "heatmap": "调用活跃度", "heatmapHint": "最近一年共 {count} 次调用 · 一格一天 · 跟随服务商、智能体与模型筛选",
+    "days": "天", "mon": "一", "wed": "三", "fri": "五", "less": "少", "more": "多",
+    "breakdown": "调用明细", "breakdownHint": "输入／输出占比以总 Token 为分母，缓存占比以输入 Token 为分母。", "time": "时间",
+    "empty": "当前时间与筛选范围内暂无调用。从更新后的新请求开始记录，旧会话不推算回填。",
+    "loadFailed": "统计读取失败，已保留上次结果，请稍后刷新。",
+    "footnote": "按本地时间和请求结束时间统计；成功率 = 成功数 ÷ 请求数。取消不计入失败数，但计入请求总数。Token 仅累计服务商返回的用量，未返回不估算；缓存已包含在输入中，不重复加入总量。包含聊天、快捷输入、命名、上下文压缩、子智能体及服务商测试调用，SDK 内部重试按一次调用计。统计随配置一并导出，重复导入自动去重。"
+  },
+
   "doc": {
     "title": "Anywhere 使用指南",
     "loading": "文档加载中...",

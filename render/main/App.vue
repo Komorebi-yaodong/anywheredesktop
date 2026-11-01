@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, onMounted, nextTick, provide, onBeforeUnmount, computed } from 'vue'
 import Chats from './components/Chats.vue'
+import UsageStatistics from './components/UsageStatistics.vue'
 import Tasks from './components/Tasks.vue'
 import Prompts from './components/Prompts.vue'
 import Mcp from './components/Mcp.vue'
@@ -10,7 +11,7 @@ import Skills from './components/Skills.vue'
 import RemoteConnections from './components/RemoteConnections.vue'
 
 import { useI18n } from 'vue-i18n'
-import { Collection, Bell, Connection, Document } from '@element-plus/icons-vue'
+import { Collection, Bell, Connection, Document, DataAnalysis } from '@element-plus/icons-vue'
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { ElBadge, ElMessage, ElMessageBox } from 'element-plus'; // 确保引入 ElBadge
@@ -973,7 +974,8 @@ function updateHeaderText() {
     3: 'app.header.mcp',
     4: 'app.header.skills',
     5: 'app.header.providers',
-    6: 'app.header.settings'
+    6: 'app.header.settings',
+    7: 'usage.title'
   };
   header_text.value = t(tabMap[tab.value]);
 }
@@ -1012,6 +1014,12 @@ watch(locale, () => {
         </el-col>
         <el-col :span="6" class="tabs-col">
           <div class="tabs-container">
+            <el-tooltip :content="t('usage.title')" placement="bottom">
+              <el-button class="tab-button" text :aria-label="t('usage.title')" @click="changeTab(7)" :class="{ 'active-tab': tab === 7 }">
+                <el-icon :size="20"><DataAnalysis /></el-icon>
+              </el-button>
+            </el-tooltip>
+
             <!-- 1. Chats (云端对话) -->
             <el-tooltip :content="t('app.tabs.chats')" placement="bottom">
               <el-button class="tab-button" text @click="changeTab(0)" :class="{ 'active-tab': tab === 0 }">
@@ -1118,6 +1126,8 @@ watch(locale, () => {
         <Skills v-else-if="tab === 4" key="skills" />
         <Providers v-else-if="tab === 5" key="providers" />
         <Setting v-else-if="tab === 6" key="settings" />
+
+        <UsageStatistics v-else-if="tab === 7" key="usage" />
       </KeepAlive>
     </el-main>
 

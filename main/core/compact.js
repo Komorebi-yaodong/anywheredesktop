@@ -1007,6 +1007,7 @@ function extractAssistantTextFromCompletion(response = {}, apiType = 'chat_compl
 
 async function requestSummaryOnce({
   provider,
+  usageContext,
   modelName,
   messages,
   compactPrompt,
@@ -1040,6 +1041,7 @@ async function requestSummaryOnce({
   try {
     const { createChatCompletion } = await import('./chat.js')
     const response = await createChatCompletion({
+      usageContext,
       baseUrl: provider?.url || provider?.baseUrl || '',
       apiKey: provider?.api_key || provider?.apiKey || '',
       model: modelName,
@@ -1092,6 +1094,7 @@ export async function runConversationCompaction({
   messages = [],
   chatShow = [],
   modelValue = '',
+  agentName = '__DEFAULT__',
   provider = null,
   config: configPatch = null,
   stream = true,
@@ -1187,6 +1190,7 @@ export async function runConversationCompaction({
   // The summary remains tool-free, but its network/retry path now matches normal chat.
   const summaryText = await requestSummaryOnce({
     provider,
+    usageContext: { providerId: String(modelValue).includes('|') ? String(modelValue).split('|')[0] : '', providerName: provider?.name, agentName, source: 'compaction' },
     modelName: primaryModelName,
     messages: summarySource,
     compactPrompt: modelConfig.compactPrompt,

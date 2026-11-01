@@ -400,6 +400,7 @@ function buildCreateRequestParams(initPayload = {}, messages = [], signal = unde
   }
 
   const requestParams = {
+    usageContext: { providerId: providerInfo.providerId, providerName: providerInfo.provider?.name, agentName: initPayload.promptKey || '__DEFAULT__', source: 'fast-input' },
     baseUrl: providerInfo.baseUrl,
     apiKey: providerInfo.apiKey,
     model: providerInfo.modelName,

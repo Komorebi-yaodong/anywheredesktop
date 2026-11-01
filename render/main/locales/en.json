@@ -20,6 +20,32 @@
       "settings": "Settings"
     }
   },
+  "usage": {
+    "title": "Usage Statistics",
+    "description": "Every request accounted for. Understand your agent and model usage.",
+    "refresh": "Refresh", "updated": "Updated", "timeRange": "Time range", "granularity": "Granularity",
+    "ranges": { "24h": "Last 24 hours", "today": "Today", "yesterday": "Yesterday", "7d": "Last 7 days", "30d": "Last 30 days" },
+    "hour": "Hourly", "fourHours": "Every 4 hours", "day": "Daily", "provider": "Provider", "agent": "Agent", "model": "Model",
+    "allProviders": "All providers", "allAgents": "All agents", "allModels": "All models",
+    "defaultAgent": "Default Agent", "unknownProvider": "Unknown provider", "deleted": "Deleted",
+    "requests": "Requests", "successRate": "Success rate", "failed": "Failures", "totalTokens": "Total Tokens",
+    "inputTokens": "Input Tokens", "outputTokens": "Output Tokens", "cachedTokens": "Cached Tokens",
+    "completedRequests": "Finished model calls (including cancellations)", "cancelledCount": "Plus {count} cancellations",
+    "reportedCount": "Usage reported by {reported} / {total} requests", "shareOfTotal": "Share of total", "shareOfInput": "Share of input",
+    "share": "Share", "cacheHitRate": "Cache hit", "successful": "succeeded", "reportedShort": "{count} reported",
+
+    "showDetails": "View details", "methodology": "How usage is counted", "heatmapSummary": "Past year · {count} calls",
+
+    "trend": "Usage trend", "trendHint": "Daily · Up to the last 30 days · Scroll to zoom, drag to pan",
+    "resetZoom": "Reset zoom", "hoverHint": "Hover for daily requests and tokens; arrow keys to pan, + / − to zoom",
+    "heatmap": "Request activity", "heatmapHint": "{count} calls in the past year · One day per cell · Follows provider, agent and model filters",
+    "days": "days", "mon": "M", "wed": "W", "fri": "F", "less": "Less", "more": "More",
+    "breakdown": "Usage breakdown", "breakdownHint": "Input/output shares use total tokens; cached share uses input tokens.", "time": "Time",
+    "empty": "No calls match this period and filters. Recording starts with new requests after this update; old chats are not backfilled.",
+    "loadFailed": "Unable to load statistics. Previous results are preserved; please refresh later.",
+    "footnote": "Grouped by local completion time. Success rate = successes / requests. Cancellations count as requests, not failures. Only provider-reported tokens are included; missing usage is not estimated. Cached tokens are part of input, not added again. Includes chats, quick input, naming, compaction, sub-agents and provider tests; internal SDK retries count as one call. Statistics travel with configuration exports and imports are deduplicated."
+  },
+
   "doc": {
     "title": "Anywhere User Guide",
     "loading": "Loading documentation...",

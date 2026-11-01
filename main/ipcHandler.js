@@ -5,6 +5,8 @@ import { serializeError, serializeIpcPayload } from './dataConverter.js'
 import { runTaskById } from './core/task_runner.js'
 import { getQuickAssistantWeight, recordQuickAssistantUsage } from './core/quickAssistantUsage.js'
 import { createConversationMetadataRouter } from './core/conversationMetadataRouter.js'
+import { createUsageStore } from './core/usageStore.js'
+import { setUsageRecordSink } from './core/usageRecorder.js'
 
 const GITHUB_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/Komorebi-yaodong/anywheredesktop/main/package.json'
 const GITEE_PACKAGE_JSON_URL = 'https://gitee.com/Komorebi-yaodong/anywheredesktop/raw/main/package.json'
@@ -806,6 +808,15 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
   handleInvoke('data:runTaskNow', async (_event, taskId = '') => {
     return runTaskById({ taskId, dataApi, openWindow })
   })
+
+  const usageStore = createUsageStore(path.join(app.getPath('userData'), 'usage-statistics.v1.jsonl'))
+  setUsageRecordSink((record) => usageStore.record(record))
+  handleInvoke('usage:record', async (_event, record) => usageStore.record(record))
+  handleInvoke('usage:query', async (_event, filters = {}) => usageStore.query(filters && typeof filters === 'object' ? filters : {}))
+
+  handleInvoke('usage:snapshot', async () => usageStore.snapshot())
+  handleInvoke('usage:import', async (_event, backup) => usageStore.import(backup))
+
 
   handleInvoke('chat:getRandomItem', async (_event, list = '') => {
     return chatApi.getRandomItem(list)

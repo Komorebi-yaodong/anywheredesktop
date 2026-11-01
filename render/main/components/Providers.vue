@@ -683,6 +683,7 @@ async function runBatchProviderTest() {
   batchTestCodeFilter.value = 'ALL';
   try {
     const result = await window.api.batchTestProviderKeys({
+      usageContext: { providerId: String(provider_key.value), providerName: selectedProvider.value.name, agentName: '__DEFAULT__', source: 'provider-test' },
       baseUrl: selectedProvider.value.url,
       apiKeys: selectedProvider.value.api_key,
       model: batchTestForm.model,

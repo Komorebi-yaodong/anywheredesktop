@@ -2432,6 +2432,7 @@ const runConversationCompact = async ({
           ...prefix
         ],
         modelValue: model.value,
+        agentName: CODE.value || '__DEFAULT__',
         provider: resolveProviderByModelValue(model.value),
         config: compactConfig.value,
         stream: (currentConfig.value.prompts?.[CODE.value]?.stream ?? true) && !selectedVoice.value,
@@ -7515,6 +7516,7 @@ const generateConversationNamePrefixWithFastModel = async (firstUserMsg, signal 
 
     const apiType = provider?.apiType || 'chat_completions';
     const response = await window.api.createChatCompletion({
+      usageContext: { providerId, providerName: provider.name, agentName: CODE.value || '__DEFAULT__', source: 'naming' },
       baseUrl: provider.url,
       apiKey: provider.api_key,
       model: modelName,
@@ -10485,6 +10487,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
 
       // 构建请求参数对象
       const requestParams = {
+        usageContext: { providerId: String(currentProviderID.value), providerName: currentProviderConfig?.name, agentName: CODE.value || '__DEFAULT__', source: 'chat' },
         baseUrl: base_url.value,
         apiKey: api_key.value,
         model: model.value.split("|")[1],

@@ -209,12 +209,17 @@ function buildAnthropicRequest(openAiParams) {
 
 function mapUsage(anthropicUsage) {
   if (!anthropicUsage) return undefined
-  const prompt = anthropicUsage.input_tokens || 0
+  // Anthropic input_tokens excludes cache reads/writes; OpenAI prompt_tokens includes them.
+  const cached = anthropicUsage.cache_read_input_tokens || 0
+  const created = anthropicUsage.cache_creation_input_tokens || 0
+  const prompt = (anthropicUsage.input_tokens || 0) + cached + created
   const completion = anthropicUsage.output_tokens || 0
   return {
     prompt_tokens: prompt,
     completion_tokens: completion,
-    total_tokens: prompt + completion
+    total_tokens: prompt + completion,
+    prompt_tokens_details: { cached_tokens: cached },
+    cache_creation_input_tokens: created
   }
 }
 
@@ -222,14 +227,14 @@ function mapUsage(anthropicUsage) {
 async function* streamAnthropicAsOpenAI(anthropicStream) {
   const blockIndexToToolIndex = new Map()
   let toolCount = 0
-  let promptTokens = 0
-  let completionTokens = 0
+  let usage = {}
 
   for await (const event of anthropicStream) {
     if (!event || typeof event !== 'object') continue
 
     if (event.type === 'message_start') {
-      promptTokens = event.message?.usage?.input_tokens || 0
+      usage = { ...usage, ...event.message?.usage }
+      yield { choices: [], usage: mapUsage(usage) }
     } else if (event.type === 'content_block_start') {
       const block = event.content_block
       if (block?.type === 'tool_use') {
@@ -255,16 +260,15 @@ async function* streamAnthropicAsOpenAI(anthropicStream) {
         }
       }
     } else if (event.type === 'message_delta') {
-      if (typeof event.usage?.output_tokens === 'number') {
-        completionTokens = event.usage.output_tokens
-      }
+      usage = { ...usage, ...event.usage }
+      yield { choices: [], usage: mapUsage(usage) }
     }
   }
 
   // 末尾补一个带完整 usage 的 chunk
   yield {
     choices: [{ index: 0, delta: {} }],
-    usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens }
+    usage: mapUsage(usage)
   }
 }
 

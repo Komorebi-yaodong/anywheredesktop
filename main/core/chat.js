@@ -2,6 +2,7 @@ import OpenAI from 'openai'
 import { fetchWithProxy, BRIDGE_UA_HEADER } from './net.js'
 import { createAnthropicCompletion } from './anthropic.js'
 import { normalizeToolCallHistory } from './message_normalize.js'
+import { observeCompletion } from './usageRecorder.js'
 
 const CHAT_REQUEST_TIMEOUT_MS = 120_000
 
@@ -261,6 +262,7 @@ export async function batchTestProviderKeys(params = {}) {
 
       try {
         const response = await createChatCompletion({
+          usageContext: params.usageContext,
           baseUrl,
           apiKey: key,
           model,
@@ -490,6 +492,12 @@ function convertMessagesToResponsesInput(messages = []) {
  * @returns {Promise<any>} 返回流 (Stream) 或完整响应对象
  */
 export async function createChatCompletion(params = {}) {
+  const requestParams = { ...params }
+  delete requestParams.usageContext
+  return observeCompletion(() => executeChatCompletion(requestParams), params)
+}
+
+async function executeChatCompletion(params = {}) {
   const {
     baseUrl,
     apiKey,

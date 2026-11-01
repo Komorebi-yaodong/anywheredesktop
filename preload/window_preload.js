@@ -5,6 +5,9 @@ import os from 'node:os'
 import { electronAPI } from '@electron-toolkit/preload'
 import defaultAiAvatarUrl from '../resources/icon.png?asset'
 import { createChatCompletion, getRandomItem, listProviderModels } from '../main/core/chat.js'
+import { setUsageRecordSink } from '../main/core/usageRecorder.js'
+
+setUsageRecordSink((record) => electronAPI.ipcRenderer.invoke('usage:record', record))
 
 const defaultWindowType = 'window'
 let windowType = defaultWindowType

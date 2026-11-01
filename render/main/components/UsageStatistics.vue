@@ -20,7 +20,7 @@ import {
   Connection
 } from '@element-plus/icons-vue'
 import UsageTrend from './UsageTrend.vue'
-import { compactNumber } from '../utils/usageChart.js'
+import { compactNumber, createHeatmapScale, heatmapLevel } from '../utils/usageChart.js'
 
 const { t, locale } = useI18n()
 const config = inject('config')
@@ -113,11 +113,17 @@ const heatDays = computed(() => {
   const weekday = (new Date(days[0].timestamp).getDay() + 6) % 7
   return [...Array.from({ length: weekday }, () => null), ...days]
 })
-const heatMax = computed(() =>
-  Math.max(1, ...(result.value?.heatmap || []).map((day) => day.requests))
-)
-const heatLevel = (day) =>
-  !day?.requests ? 0 : Math.min(4, Math.max(1, Math.ceil((day.requests / heatMax.value) * 4)))
+const heatScale = computed(() => createHeatmapScale(result.value?.heatmap || []))
+const heatLevel = (day) => heatmapLevel(day?.requests, heatScale.value.thresholds)
+const heatBandLabel = (band) => {
+  const count =
+    band.max === null
+      ? `${number(band.min)}+`
+      : band.min === band.max
+        ? number(band.min)
+        : `${number(band.min)}–${number(band.max)}`
+  return t('usage.heatmapBand', { count })
+}
 const heatTotal = computed(() =>
   (result.value?.heatmap || []).reduce((total, day) => total + day.requests, 0)
 )
@@ -183,91 +189,78 @@ onBeforeUnmount(stop)
 
 <template>
   <section class="usage-page" :aria-label="t('usage.title')">
-    <div class="usage-intro">
-      <div>
-        <h2>{{ t('usage.title') }}</h2>
-      </div>
-      <div class="update-actions">
-        <small v-if="updatedAt"
-          >{{ t('usage.updated') }} {{ updatedAt.toLocaleTimeString(lang) }}</small
-        >
-        <el-button :icon="Refresh" :loading="loading" @click="load()">{{
-          t('usage.refresh')
-        }}</el-button>
-      </div>
-    </div>
     <div class="usage-panel filters-panel">
-      <div class="filter-top">
-        <div class="range-switch" role="radiogroup" :aria-label="t('usage.timeRange')">
-          <button
-            v-for="range in ranges"
-            :key="range"
-            class="range-option"
-            type="button"
-            role="radio"
-            :aria-checked="filters.range === range"
-            :class="{ selected: filters.range === range }"
-            @click="filters.range = range"
-            @keydown.right.prevent="
-              filters.range = ranges[(ranges.indexOf(range) + 1) % ranges.length]
-            "
-            @keydown.left.prevent="
-              filters.range = ranges[(ranges.indexOf(range) + ranges.length - 1) % ranges.length]
-            "
-          >
-            {{ t(`usage.ranges.${range}`) }}
-          </button>
+      <div class="usage-toolbar">
+        <div class="filter-selects">
+          <label class="date-filter"
+            ><span>{{ t('usage.date') }}</span>
+            <el-select v-model="filters.range" :aria-label="t('usage.timeRange')">
+              <el-option
+                v-for="range in ranges"
+                :key="range"
+                :value="range"
+                :label="t(`usage.ranges.${range}`)"
+              />
+            </el-select>
+          </label>
+          <label
+            ><span>{{ t('usage.provider') }}</span
+            ><el-select
+              v-model="filters.providerId"
+              clearable
+              filterable
+              :placeholder="t('usage.allProviders')"
+              :aria-label="t('usage.provider')"
+            >
+              <el-option
+                v-for="provider in providerOptions"
+                :key="provider.id"
+                :value="provider.id"
+                :label="provider.label"
+              /> </el-select
+          ></label>
+          <label
+            ><span>{{ t('usage.agent') }}</span
+            ><el-select
+              v-model="filters.agentName"
+              clearable
+              filterable
+              :placeholder="t('usage.allAgents')"
+              :aria-label="t('usage.agent')"
+            >
+              <el-option
+                v-for="agent in result?.options.agents || []"
+                :key="agent"
+                :value="agent"
+                :label="agentLabel(agent)"
+              /> </el-select
+          ></label>
+          <label
+            ><span>{{ t('usage.model') }}</span
+            ><el-select
+              v-model="filters.model"
+              clearable
+              filterable
+              :placeholder="t('usage.allModels')"
+              :aria-label="t('usage.model')"
+            >
+              <el-option
+                v-for="model in result?.options.models || []"
+                :key="model"
+                :value="model"
+                :label="model || '—'"
+              /> </el-select
+          ></label>
         </div>
-      </div>
-      <div class="filter-selects">
-        <label
-          ><span>{{ t('usage.provider') }}</span
-          ><el-select
-            v-model="filters.providerId"
-            clearable
-            filterable
-            :placeholder="t('usage.allProviders')"
-            :aria-label="t('usage.provider')"
+        <div class="update-actions">
+          <small v-if="updatedAt"
+            >{{ t('usage.updated') }}
+            <time>{{ updatedAt.toLocaleTimeString(lang, { hourCycle: 'h23' }) }}</time></small
           >
-            <el-option
-              v-for="provider in providerOptions"
-              :key="provider.id"
-              :value="provider.id"
-              :label="provider.label"
-            /> </el-select
-        ></label>
-        <label
-          ><span>{{ t('usage.agent') }}</span
-          ><el-select
-            v-model="filters.agentName"
-            clearable
-            filterable
-            :placeholder="t('usage.allAgents')"
-            :aria-label="t('usage.agent')"
-          >
-            <el-option
-              v-for="agent in result?.options.agents || []"
-              :key="agent"
-              :value="agent"
-              :label="agentLabel(agent)"
-            /> </el-select
-        ></label>
-        <label
-          ><span>{{ t('usage.model') }}</span
-          ><el-select
-            v-model="filters.model"
-            clearable
-            filterable
-            :placeholder="t('usage.allModels')"
-            :aria-label="t('usage.model')"
-          >
-            <el-option
-              v-for="model in result?.options.models || []"
-              :key="model"
-              :value="model"
-              :label="model || '—'"
-            /> </el-select
-        ></label>
+          <el-button :icon="Refresh" :loading="loading" @click="load()">{{
+            t('usage.refresh')
+          }}</el-button>
+        </div>
       </div>
     </div>
     <el-alert
@@ -351,17 +344,19 @@ onBeforeUnmount(stop)
           >
             <template #default="{ row }"
               ><span :title="number(row[key])">{{ compact(row[key]) }}</span
-              ><small v-if="key !== 'totalTokens'" class="table-ratio">{{
-                percent(
-                  row[
-                    key === 'inputTokens'
-                      ? 'inputRatio'
-                      : key === 'outputTokens'
-                        ? 'outputRatio'
-                        : 'cacheRatio'
-                  ]
-                )
-              }}</small></template
+              ><small v-if="key !== 'totalTokens'" class="table-ratio">
+                ({{
+                  percent(
+                    row[
+                      key === 'inputTokens'
+                        ? 'inputRatio'
+                        : key === 'outputTokens'
+                          ? 'outputRatio'
+                          : 'cacheRatio'
+                    ]
+                  )
+                }})</small
+              ></template
             >
           </el-table-column>
         </el-table>
@@ -405,12 +400,30 @@ onBeforeUnmount(stop)
         </div>
       </div>
       <div class="heat-legend">
-        <span>{{ t('usage.less') }}</span
-        ><span
-          v-for="level in [0, 1, 2, 3, 4]"
-          :key="level"
-          :class="`heat-cell heat-${level}`"
-        /><span>{{ t('usage.more') }}</span>
+        <el-tooltip
+          :content="t('usage.heatmapScaleHint')"
+          placement="top"
+          :show-after="120"
+          popper-class="usage-methodology-tooltip"
+          ><span class="heat-scale-note" tabindex="0">{{
+            t('usage.adaptiveScale')
+          }}</span></el-tooltip
+        >
+        <span>{{ t('usage.less') }}</span>
+        <el-tooltip
+          v-for="band in heatScale.bands"
+          :key="band.level"
+          :content="heatBandLabel(band)"
+          placement="top"
+          :show-after="100"
+        >
+          <span
+            :class="`heat-cell heat-${band.level}`"
+            :aria-label="heatBandLabel(band)"
+            tabindex="0"
+          />
+        </el-tooltip>
+        <span>{{ t('usage.more') }}</span>
       </div>
     </div>
 
@@ -441,25 +454,6 @@ onBeforeUnmount(stop)
 .usage-page > * {
   flex-shrink: 0;
 }
-.usage-intro {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-  padding: 2px 4px 0;
-}
-.eyebrow {
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.16em;
-  color: var(--text-secondary);
-}
-h2 {
-  font-size: 25px;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-  margin: 5px 0 7px;
-}
 h3 {
   font-size: 15px;
   font-weight: 650;
@@ -474,8 +468,12 @@ p {
 .update-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-shrink: 0;
+  white-space: nowrap;
+}
+.update-actions time {
+  font-variant-numeric: tabular-nums;
 }
 .update-actions small {
   font-size: 11px;
@@ -488,57 +486,21 @@ p {
   box-shadow: 0 5px 20px -15px rgba(24, 24, 27, 0.15);
 }
 .filters-panel {
-  padding: 18px 20px;
-}
-.filter-top {
-  display: flex;
-  gap: 12px;
-}
-.range-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 4px;
-  background: var(--bg-tertiary);
-  border-radius: 12px;
-  max-width: 100%;
+  padding: 12px;
   overflow-x: auto;
 }
-.range-option {
-  appearance: none;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  padding: 8px 14px;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background 0.15s,
-    color 0.15s,
-    box-shadow 0.15s;
-}
-.range-option:hover {
-  color: var(--text-primary);
-}
-.range-option.selected {
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.08);
-  font-weight: 650;
-}
-.range-option:focus-visible {
-  outline: 2px solid var(--text-secondary);
-  outline-offset: -2px;
+.usage-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 930px;
 }
 .filter-selects {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin-top: 18px;
+  grid-template-columns: 1.15fr repeat(3, 1fr);
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
 }
 .filter-selects label {
   display: flex;
@@ -783,10 +745,18 @@ html.dark .heat-4 {
   margin-top: 10px;
 }
 .table-ratio {
-  display: block;
-  font-size: 10px;
+  display: inline;
+  font-size: 11px;
   color: var(--text-secondary);
-  line-height: 1.2;
+}
+.trend-breakdown :deep(.el-table .cell) {
+  white-space: nowrap;
+}
+.heat-scale-note {
+  margin-right: 5px;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
 }
 .usage-notes {
   display: flex;
@@ -819,17 +789,11 @@ html.dark .heat-4 {
   color: var(--text-secondary);
 }
 @media (max-width: 900px) {
-  .update-actions small {
-    display: none;
-  }
   .metrics-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (max-width: 640px) {
-  .usage-intro {
-    align-items: flex-start;
-  }
   .filter-selects {
     gap: 8px;
   }

@@ -34,6 +34,9 @@
     "reportedCount": "Usage reported by {reported} / {total} requests", "shareOfTotal": "Share of total", "shareOfInput": "Share of input",
     "share": "Share", "cacheHitRate": "Cache hit", "successful": "succeeded", "reportedShort": "{count} reported",
 
+    "date": "Date", "adaptiveScale": "Adaptive scale", "heatmapBand": "{count} requests per day",
+    "heatmapScaleHint": "Color indicates activity, not failures or warnings. Baseline bands: 1–10, 11–25, 26–50, 51+ calls. Bands scale up using the 90th percentile of nonzero days in the filtered past year, with a minimum baseline of 50. Hover over each legend cell for its current range.",
+
     "showDetails": "View details", "methodology": "How usage is counted", "heatmapSummary": "Past year · {count} calls",
 
     "trend": "Usage trend", "trendHint": "Daily · Up to the last 30 days · Scroll to zoom, drag to pan",

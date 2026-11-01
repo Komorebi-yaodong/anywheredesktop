@@ -55,6 +55,37 @@ export function smoothLinePath(points = []) {
   return line
 }
 
+// Use active-day P90 rather than the single busiest day. Baseline bands stay meaningful
+// for new/low-volume users, while the same ratios scale with sustained personal usage.
+export function createHeatmapScale(days = []) {
+  const activeCounts = days
+    .map((day) => day?.requests)
+    .filter((count) => Number.isSafeInteger(count) && count > 0)
+    .sort((left, right) => left - right)
+  const p90 = activeCounts.length ? activeCounts[Math.ceil(activeCounts.length * 0.9) - 1] : 0
+  const factor = Math.max(1, p90 / 50)
+  const thresholds = [10, 25, 50].map((limit) => Math.ceil(limit * factor))
+  return {
+    p90,
+    thresholds,
+    bands: [
+      { level: 0, min: 0, max: 0 },
+      ...thresholds.map((max, index) => ({
+        level: index + 1,
+        min: index === 0 ? 1 : thresholds[index - 1] + 1,
+        max
+      })),
+      { level: 4, min: thresholds[2] + 1, max: null }
+    ]
+  }
+}
+
+export function heatmapLevel(requests, thresholds) {
+  if (!Number.isSafeInteger(requests) || requests <= 0) return 0
+  const index = thresholds.findIndex((limit) => requests <= limit)
+  return index < 0 ? 4 : index + 1
+}
+
 // Token units are decimal K/M/B in every UI language (never locale-dependent 万/亿).
 export function compactNumber(value) {
   const numeric = Number.isFinite(Number(value)) ? Number(value) : 0

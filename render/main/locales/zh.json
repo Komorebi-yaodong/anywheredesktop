@@ -34,6 +34,9 @@
     "reportedCount": "{reported} / {total} 次请求返回用量", "shareOfTotal": "占总 Token", "shareOfInput": "占输入 Token",
     "share": "占比", "cacheHitRate": "命中率", "successful": "成功", "reportedShort": "{count} 次返回用量",
 
+    "date": "日期", "adaptiveScale": "自适应分级", "heatmapBand": "每天 {count} 次请求",
+    "heatmapScaleHint": "颜色仅表示调用活跃度，不代表失败或告警。基础档为1–10、11–25、26–50、51+次；按当前筛选下近一年活跃日（非零）的90分位数自适应放大，50次以下不放大。悬停图例查看实际区间。",
+
     "showDetails": "查看明细", "methodology": "统计口径", "heatmapSummary": "最近一年 · {count} 次调用",
 
     "trend": "用量趋势", "trendHint": "按日统计 · 最多最近 30 天 · 滚轮缩放，拖动平移",

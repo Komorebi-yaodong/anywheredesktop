@@ -400,15 +400,6 @@ onBeforeUnmount(stop)
         </div>
       </div>
       <div class="heat-legend">
-        <el-tooltip
-          :content="t('usage.heatmapScaleHint')"
-          placement="top"
-          :show-after="120"
-          popper-class="usage-methodology-tooltip"
-          ><span class="heat-scale-note" tabindex="0">{{
-            t('usage.adaptiveScale')
-          }}</span></el-tooltip
-        >
         <span>{{ t('usage.less') }}</span>
         <el-tooltip
           v-for="band in heatScale.bands"
@@ -425,16 +416,6 @@ onBeforeUnmount(stop)
         </el-tooltip>
         <span>{{ t('usage.more') }}</span>
       </div>
-    </div>
-
-    <div class="usage-notes">
-      <el-tooltip
-        :content="t('usage.footnote')"
-        placement="top"
-        :show-after="200"
-        popper-class="usage-methodology-tooltip"
-        ><el-button text size="small">{{ t('usage.methodology') }}</el-button></el-tooltip
-      >
     </div>
   </section>
 </template>
@@ -752,17 +733,6 @@ html.dark .heat-4 {
 .trend-breakdown :deep(.el-table .cell) {
   white-space: nowrap;
 }
-.heat-scale-note {
-  margin-right: 5px;
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
-  cursor: help;
-}
-.usage-notes {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: -12px;
-}
 .trend-breakdown {
   border-top: 1px solid var(--el-border-color-light);
   margin-top: 16px;
@@ -776,10 +746,6 @@ html.dark .heat-4 {
 }
 .trend-breakdown[open] summary {
   margin-bottom: 14px;
-}
-:global(.usage-methodology-tooltip) {
-  max-width: 460px;
-  line-height: 1.8;
 }
 .usage-empty {
   font-size: 12px;

@@ -165,6 +165,14 @@ assert.ok(!statisticsPage.includes('heatMax'), 'no busiest-day max scaling')
 assert.ok(!statisticsPage.includes('v-model="filters.granularity"'))
 assert.match(statisticsPage, /:points="result\?\.trend \|\| \[\]"/)
 
+for (const key of ['adaptiveScale', 'heatmapScaleHint', 'methodology', 'footnote']) {
+  assert.ok(!statisticsPage.includes(`usage.${key}`), 'no developer explanations in the dashboard')
+  for (const language of ['zh', 'en']) {
+    const messages = JSON.parse(await read(`../render/main/locales/${language}.json`))
+    assert.equal(messages.usage[key], undefined)
+  }
+}
+
 const baseline = createHeatmapScale([])
 assert.deepEqual(baseline.thresholds, [10, 25, 50])
 for (const [requests, expected] of [

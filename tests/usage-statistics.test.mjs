@@ -284,7 +284,24 @@ assert.equal(stats.heatmap.find((d) => d.date === dayKey(shiftDay(dayStart(now),
 assert.equal(aggregateUsage(records, { range: '30d' }, now).trend.length, 30)
 assert.equal(usageRange('24h', now).start, now - 24 * HOUR)
 assert.equal(usageRange('7d', now).start, shiftDay(dayStart(now), -6))
-assert.equal(aggregateUsage([], { range: 'today' }, now).summary.successRate, 0)
+for (const range of ['24h', 'today', 'yesterday', '7d', '30d']) {
+  const zero = aggregateUsage([], { range }, now)
+  for (const key of [
+    'requests',
+    'successRate',
+    'inputTokens',
+    'outputTokens',
+    'cachedTokens',
+    'totalTokens',
+    'inputRatio',
+    'outputRatio',
+    'cacheRatio'
+  ])
+    assert.equal(zero.summary[key], 0)
+  assert.ok(zero.trend.length > 0, 'empty usage still supplies regular zero-valued chart points')
+  assert.ok(zero.trend.every((point) => point.requests === 0 && point.totalTokens === 0))
+  assert.ok(zero.buckets.every((bucket) => bucket.requests === 0))
+}
 // Each request belongs to exactly one visible bucket, including partial edge hours.
 for (const [range, granularity] of [
   ['24h', 'hour'],

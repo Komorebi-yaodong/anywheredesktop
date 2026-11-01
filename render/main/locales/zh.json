@@ -42,7 +42,6 @@
     "heatmap": "调用活跃度", "heatmapHint": "最近一年共 {count} 次调用 · 一格一天 · 跟随服务商、智能体与模型筛选",
     "days": "天", "mon": "一", "wed": "三", "fri": "五", "less": "少", "more": "多",
     "breakdown": "调用明细", "breakdownHint": "输入／输出占比以总 Token 为分母，缓存占比以输入 Token 为分母。", "time": "时间",
-    "empty": "暂无调用记录",
     "loadFailed": "统计读取失败，已保留上次结果，请稍后刷新。"
   },
 

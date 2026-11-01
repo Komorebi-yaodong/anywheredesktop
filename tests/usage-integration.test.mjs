@@ -163,7 +163,12 @@ assert.ok(!statisticsPage.includes('heatMax'), 'no busiest-day max scaling')
 assert.ok(!statisticsPage.includes('v-model="filters.granularity"'))
 assert.match(statisticsPage, /:points="result\?\.trend \|\| \[\]"/)
 
-for (const key of ['adaptiveScale', 'heatmapScaleHint', 'methodology', 'footnote']) {
+assert.ok(
+  !statisticsPage.includes('usage-empty'),
+  'zero usage must keep the regular dashboard layout'
+)
+assert.match(statisticsPage, /class="metrics-grid"/)
+for (const key of ['adaptiveScale', 'heatmapScaleHint', 'methodology', 'footnote', 'empty']) {
   assert.ok(!statisticsPage.includes(`usage.${key}`), 'no developer explanations in the dashboard')
   for (const language of ['zh', 'en']) {
     const messages = JSON.parse(await read(`../render/main/locales/${language}.json`))

@@ -270,9 +270,6 @@ onBeforeUnmount(stop)
       :closable="false"
       show-icon
     />
-    <div v-if="!loading && result && !summary.requests" class="usage-empty" role="status">
-      {{ t('usage.empty') }}
-    </div>
     <div class="metrics-grid" :aria-busy="loading">
       <article
         v-for="card in cards"
@@ -746,13 +743,6 @@ html.dark .heat-4 {
 }
 .trend-breakdown[open] summary {
   margin-bottom: 14px;
-}
-.usage-empty {
-  font-size: 12px;
-  border: 1px dashed var(--el-border-color);
-  border-radius: 12px;
-  padding: 14px 18px;
-  color: var(--text-secondary);
 }
 @media (max-width: 900px) {
   .metrics-grid {

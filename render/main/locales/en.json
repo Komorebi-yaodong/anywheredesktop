@@ -42,7 +42,6 @@
     "heatmap": "Request activity", "heatmapHint": "{count} calls in the past year · One day per cell · Follows provider, agent and model filters",
     "days": "days", "mon": "M", "wed": "W", "fri": "F", "less": "Less", "more": "More",
     "breakdown": "Usage breakdown", "breakdownHint": "Input/output shares use total tokens; cached share uses input tokens.", "time": "Time",
-    "empty": "No requests found",
     "loadFailed": "Unable to load statistics. Previous results are preserved; please refresh later."
   },
 

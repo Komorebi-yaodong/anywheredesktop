@@ -273,7 +273,7 @@ export function createRemoteConversationReadService({
   }
 
   return {
-    historyChunk: historyPager.chunk,
+    historyPayload: historyPager.payload,
     listConversations,
     listMessages,
     getWindows

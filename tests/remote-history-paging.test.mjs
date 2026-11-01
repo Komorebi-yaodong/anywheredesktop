@@ -27,11 +27,11 @@ while (before !== null) {
    ids.push(message.uiMessageId)
    const ref = message.payload.fullPayload
    if (ref) {
-     assert.throws(() => pager.chunk({deviceId: 'foreign-device-fixture', params: {conversationId, id: ref.id, offset: 0}}), {code: 'remote_history_part_expired'})
+     assert.throws(() => pager.payload({deviceId: 'foreign-device-fixture', params: {conversationId, id: ref.id, offset: 0}}), {code: 'remote_history_part_expired'})
      let text = '', offset = 0
      while (offset < ref.totalChars) {
-       const chunk = pager.chunk({deviceId, params: {conversationId, id: ref.id, offset}})
-       session.encrypt({kind: 'response', requestId: 'chunk-history-fixture', ok: true, result: chunk})
+       const chunk = pager.payload({deviceId, params: {conversationId, id: ref.id, offset}})
+      assert.ok(Buffer.byteLength(JSON.stringify(chunk)) < 32 * 1024 * 1024)
        text += chunk.text; offset = chunk.nextOffset
      }
      assert.deepEqual(JSON.parse(text), rows.find(row => row.uiMessageId === message.uiMessageId).payload)
@@ -42,6 +42,21 @@ while (before !== null) {
 }
 assert.equal(new Set(ids).size, rows.length)
 assert.equal(ids.length, rows.length)
+// New unified history payload is a single immutable byte-transfer snapshot,
+// not serial 16K character RPCs. Check escaped/multilingual data and ownership.
+for (const content of ['中😀完整\n'.repeat(200000), '\\"\n'.repeat(200000)]) {
+  const expected = payload(content)
+  const projected = pager.page({messages: [{uiMessageId: 'ui-large-unified', order: 1, role: 'assistant', payload: expected}], tasks: [], page: {hasMore: false}}, deviceId, conversationId)
+  const ref = projected.messages[0].payload.fullPayload
+  assert.throws(() => pager.payload({deviceId: 'wrong-device-fixture', params: {conversationId, id: ref.id, offset: 0}}), {code: 'remote_history_part_expired'})
+  assert.throws(() => pager.payload({deviceId, params: {conversationId: 'other-conversation-fixture', id: ref.id, offset: 0}}), {code: 'remote_history_part_expired'})
+  const result = pager.payload({deviceId, params: {conversationId, id: ref.id, offset: 0}})
+  assert.equal(result.nextOffset, ref.totalChars)
+  assert.deepEqual(JSON.parse(result.text), expected)
+  assert.equal(crypto.createHash('sha256').update(result.text).digest('hex'), ref.sha256)
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) < 32 * 1024 * 1024)
+}
+
 session.close()
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-history-media-'))
 try {

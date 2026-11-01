@@ -1579,18 +1579,18 @@ export async function createConversation({ dirPath, title, sessionData = {}, pro
   return { ok: true, descriptor, databasePath }
 }
 
-export async function openConversation({ dirPath, reference, activeOnly = true, pageSize = 200 } = {}) {
+export async function openConversation({ dirPath, reference, activeOnly = true, pageSize = 200, remoteReadOnly = false } = {}) {
   const normalizedDir = path.resolve(normalizeText(dirPath).trim())
-  let projects = await synchronizeLocalProjectsWithDatabases(normalizedDir)
+  let projects = remoteReadOnly ? await readLocalProjects(normalizedDir) : await synchronizeLocalProjectsWithDatabases(normalizedDir)
   let descriptor = findConversation(projects, reference)
-  if (!descriptor && normalizeBasename(reference).toLowerCase().endsWith('.json')) {
+  if (!remoteReadOnly && !descriptor && normalizeBasename(reference).toLowerCase().endsWith('.json')) {
     const migration = await migrateJsonConversation({ dirPath: normalizedDir, jsonBasename: reference })
     descriptor = migration.descriptor
     projects = await readLocalProjects(normalizedDir)
   }
   if (!descriptor) throw new Error('conversation_not_found')
   const databasePath = resolveDatabasePath(normalizedDir, descriptor.dbFile)
-  const db = openDatabase(databasePath, { readOnly: true })
+  const db = openDatabase(databasePath, { readOnly: true, ...(remoteReadOnly ? {timeout: 0} : {}) })
   try {
     const row = getConversationRow(db)
     const state = loadState(db)

@@ -40,18 +40,26 @@ export function createHistoryPager() {
     const hasMore = trimmed || value.page.hasMore
     return {...value, messages: selected, page: {...value.page, hasMore, nextBeforeUiOrder: hasMore ? selected[0]?.order ?? value.page.nextBeforeUiOrder : null}}
   }
-  function chunk({deviceId, params}) {
+  function payload({deviceId, params}) {
     if (!params || Object.keys(params).some(key => !['conversationId', 'id', 'offset'].includes(key))) throw remoteError('remote_parameter_unknown')
     prune()
     const entry = refs.get(params.id)
     if (!entry || entry.deviceId !== deviceId || entry.conversationId !== params.conversationId) throw remoteError('remote_history_part_expired')
     const offset = params.offset
     if (!Number.isSafeInteger(offset) || offset < 0 || offset >= entry.text.length) throw remoteError('remote_history_range_invalid')
-    // Code-unit slicing is reassembled before JSON parse/hash; surrogate pairs
-    // are JSON-escaped by the transport and are never decoded independently.
-    const text = entry.text.slice(offset, offset + 16384)
+    // One immutable result snapshot, read through the negotiated adaptive byte
+    // channel. Very large/escaped payloads use bounded snapshot segments, not a
+    // second fixed 16K/256K character transport nested inside that channel.
+    let length = Math.min(entry.text.length - offset, 8 * 1024 * 1024)
+    let result
+    do {
+      const text = entry.text.slice(offset, offset + length)
+      result = {id: params.id, offset, totalChars: entry.text.length, sha256: entry.sha256, text, nextOffset: offset + text.length}
+      if (bytes(result) <= 31 * 1024 * 1024) break
+      length = Math.max(1, Math.floor(length / 2))
+    } while (length > 0)
     entry.expires = Date.now() + TTL_MS
-    return {id: params.id, offset, totalChars: entry.text.length, sha256: entry.sha256, text, nextOffset: offset + text.length}
+    return result
   }
-  return {page, chunk}
+  return {page, payload}
 }

@@ -336,7 +336,7 @@ export function createRemoteGateway({
     if (businessProtocol.available()) capabilities.push('conversation.control.get', 'conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'operation.status.batch', 'transfer.request')
     if (conversationReadService) {
 
-      if (typeof conversationReadService.historyChunk === 'function') capabilities.push('conversation.history.chunk.get')
+      if (typeof conversationReadService.historyPayload === 'function') capabilities.push('conversation.history.payload.get')
       capabilities.push('conversation.list', 'conversation.messages.list', 'conversation.windows.list')
       if (typeof getConversationMedia === 'function') capabilities.push('conversation.media.get')
     }
@@ -523,6 +523,14 @@ export function createRemoteGateway({
     }
   }
 
+  let deviceMutationTail = Promise.resolve()
+  function mutateDevices(change) {
+    const next = deviceMutationTail.catch(() => {}).then(async () => change(await readDevices()))
+    deviceMutationTail = next.catch(() => {})
+    return next
+  }
+
+
   async function writeDevices(data) {
     const devices = Array.isArray(data?.devices) ? data.devices.slice(0, REMOTE_MAX_DEVICES) : []
     await storageSet(DEVICES_STORAGE_KEY, { version: REMOTE_PROTOCOL_VERSION, devices })
@@ -579,12 +587,13 @@ export function createRemoteGateway({
     return decodeBase64Url(serialized, 'device.rootSecret', { minBytes: 32, maxBytes: 32 })
   }
 
-  async function touchDevice(deviceId) {
-    const data = await readDevices()
+  async function touchDevice(deviceId, encryptedRootSecret) {
+    return mutateDevices(async data => {
     const index = data.devices.findIndex((device) => device.deviceId === deviceId)
-    if (index < 0) return
+    if (index < 0 || data.devices[index].encryptedRootSecret !== encryptedRootSecret) return
     data.devices[index] = { ...data.devices[index], lastSeenAt: nowIso() }
     await writeDevices(data)
+    })
   }
 
 
@@ -592,7 +601,7 @@ export function createRemoteGateway({
     if (!params || typeof params !== 'object' || Array.isArray(params)) throw remoteError('remote_parameter_invalid')
     const allowed = new Set(['platform', 'deviceModel', 'appVersion'])
     if (Object.keys(params).some((key) => !allowed.has(key))) throw remoteError('remote_parameter_unknown')
-    const data = await readDevices()
+    return mutateDevices(async data => {
     const index = data.devices.findIndex((device) => device.deviceId === deviceId)
     if (index < 0) throw remoteError('remote_device_not_found')
     const current = data.devices[index]
@@ -602,9 +611,11 @@ export function createRemoteGateway({
       deviceModel: Object.hasOwn(params, 'deviceModel') ? normalizeDisplayName(params.deviceModel, '').slice(0, 80) : current.deviceModel,
       appVersion: Object.hasOwn(params, 'appVersion') ? normalizeDisplayName(params.appVersion, '').slice(0, 80) : current.appVersion
     }
+    if (['platform', 'deviceModel', 'appVersion'].every(key => current[key] === next[key])) return {ok: true, device: publicDevice(current)}
     data.devices.splice(index, 1, next)
     await writeDevices(data)
     return { ok: true, device: publicDevice(next) }
+    })
   }
 
   function zeroPairingAttempt(attempt) {
@@ -725,8 +736,14 @@ export function createRemoteGateway({
     return sendPlain(socket, frame)
   }
 
-  function sendRpcResult(socket, context, requestId, result, largeTransfer = false) {
+  function sendRpcResult(socket, context, requestId, result, largeTransfer = false, snapshot = false) {
     if (!isOpen(socket) || !context?.session) return false
+
+    if (snapshot) {
+      const transfer = resultTransfers.put(context, result)
+      try {return sendPlain(socket, context.session.encrypt({kind: 'response', requestId, ok: true, transfer}))}
+      catch (error) {resultTransfers.release(context, {id: transfer.id}); throw error}
+    }
     let frame
     try {
       frame = context.session.encrypt({ kind: 'response', requestId, ok: true, result }, {largeTransfer: context.adaptiveTransfers && largeTransfer})
@@ -1006,7 +1023,7 @@ export function createRemoteGateway({
     pairingAttempts.delete(confirmation.pairingAttemptId)
     const persistedRootSecret = attempt.rootSecret.toString('base64url')
     const identity = await getIdentity()
-    const devices = await readDevices()
+    const nextDevice = await mutateDevices(async devices => {
     const existingIndex = devices.devices.findIndex((device) => device.deviceId === attempt.device.deviceId)
     const createdAt = existingIndex >= 0 ? devices.devices[existingIndex].createdAt || nowIso() : nowIso()
     const nextDevice = {
@@ -1020,6 +1037,8 @@ export function createRemoteGateway({
     if (existingIndex >= 0) devices.devices.splice(existingIndex, 1, nextDevice)
     else devices.devices.push(nextDevice)
     await writeDevices(devices)
+    return nextDevice
+    })
 
     pairings.delete(attempt.pairingId)
     for (const [attemptId, candidate] of pairingAttempts) {
@@ -1444,10 +1463,11 @@ export function createRemoteGateway({
         case 'remote.contract.negotiate':
           result = businessProtocol.negotiate(context, params)
           break
-        case 'conversation.history.chunk.get':
-          if (typeof conversationReadService?.historyChunk !== 'function') throw remoteError('remote_method_unavailable')
-          result = conversationReadService.historyChunk({deviceId: context.device.deviceId, params})
+        case 'conversation.history.payload.get':
+          if (!context.resultTransfers || !context.adaptiveTransfers || typeof conversationReadService?.historyPayload !== 'function') throw remoteError('remote_method_unavailable')
+          result = conversationReadService.historyPayload({deviceId: context.device.deviceId, params})
           break
+
 
         case 'conversation.control.get':
           result = businessProtocol.control(context, params)
@@ -1466,7 +1486,7 @@ export function createRemoteGateway({
           result = await dispatchLegacy(context, requestId, method, params)
       }
 
-      if (!sendRpcResult(socket, context, requestId, result, method === 'remote.transfer.chunk' || method === 'conversation.media.get' || method === 'resource.get' && params.resource === 'conversation.media.get')) {
+      if (!sendRpcResult(socket, context, requestId, result, method === 'remote.transfer.chunk' || method === 'conversation.media.get' || method === 'resource.get' && params.resource === 'conversation.media.get', method === 'conversation.history.payload.get')) {
         safeSocketClose(socket, 1011, 'response_send_failed')
         return
       }
@@ -1538,12 +1558,6 @@ export function createRemoteGateway({
       const sockets = activeSocketsByDeviceId.get(device.deviceId) || new Set()
       sockets.add(socket)
       activeSocketsByDeviceId.set(device.deviceId, sockets)
-      await touchDevice(device.deviceId)
-      notifyStatus()
-      await appendAudit('remote.session.opened', {
-        deviceId: device.deviceId, deviceName: device.displayName,
-        deviceModel: device.deviceModel, appVersion: device.appVersion, result: 'ok'
-      })
 
       if (!sendEncrypted(socket, context, {
         kind: 'event',
@@ -1557,6 +1571,17 @@ export function createRemoteGateway({
       })) {
         throw remoteError('remote_welcome_send_failed')
       }
+
+      notifyStatus()
+      // Security admission is complete. Non-essential persistence must not hold
+      // the welcome/handshake, and a storage error must not kill a valid session.
+      setImmediate(() => {
+        touchDevice(device.deviceId, device.encryptedRootSecret).catch(() => {})
+        appendAudit('remote.session.opened', {
+          deviceId: device.deviceId, deviceName: device.displayName,
+          deviceModel: device.deviceModel, appVersion: device.appVersion, result: 'ok'
+        })
+      })
     } catch (error) {
       if (!context.authenticated && helloReplayKey && seenSessionHelloNonces.get(helloReplayKey) === helloReplayExpiry) {
         seenSessionHelloNonces.delete(helloReplayKey)
@@ -1832,12 +1857,14 @@ export function createRemoteGateway({
 
   async function revokeDevice(deviceId) {
     const normalizedId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
-    const data = await readDevices()
+    const {removed, removedDevice} = await mutateDevices(async data => {
     const removedDevice = data.devices.find((device) => device.deviceId === normalizedId)
     const nextDevices = data.devices.filter((device) => device.deviceId !== normalizedId)
     const removed = nextDevices.length !== data.devices.length
+    if (removed) await writeDevices({ version: REMOTE_PROTOCOL_VERSION, devices: nextDevices })
+    return {removed, removedDevice}
+    })
     if (removed) {
-      await writeDevices({ version: REMOTE_PROTOCOL_VERSION, devices: nextDevices })
       closeDeviceSockets(normalizedId, 4001, 'device_revoked')
 
       await activeSessionManager?.revokeDevice?.(normalizedId)
@@ -1856,14 +1883,16 @@ export function createRemoteGateway({
     const normalizedId = normalizeIdentifier(deviceId, 'deviceId', { minLength: 16, maxLength: 160 })
     const normalizedName = normalizeDisplayName(displayName, '')
     if (!normalizedName) throw remoteError('remote_device_name_required')
-    const data = await readDevices()
+    const device = await mutateDevices(async data => {
     const index = data.devices.findIndex((device) => device.deviceId === normalizedId)
     if (index < 0) throw remoteError('remote_device_not_found')
     data.devices[index] = { ...data.devices[index], displayName: normalizedName }
     await writeDevices(data)
+    return data.devices[index]
+    })
     await appendAudit('remote.device.renamed', { deviceId: normalizedId, result: 'ok' })
     notifyStatus()
-    return { ok: true, device: publicDevice(data.devices[index]) }
+    return { ok: true, device: publicDevice(device) }
   }
 
   async function getAuditLog() {

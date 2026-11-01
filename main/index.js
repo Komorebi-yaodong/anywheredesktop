@@ -67,6 +67,9 @@ import { createRemoteGateway } from './core/remote/index.js'
 import { createRemoteConversationReadService } from './core/remote/conversationRead.js'
 
 import createCatalogWorker from './core/remote/catalogWorker.js?nodeWorker'
+
+import createConversationWorker from './core/remote/conversationWorker.js?nodeWorker'
+import {createConversationReader} from './core/remote/conversationReader.js'
 import {createCatalogReader} from './core/remote/catalogReader.js'
 import { createRemoteSessionManager } from './core/remote/sessionManager.js'
 import { createRemoteUploadManager } from './core/remote/uploadManager.js'
@@ -163,11 +166,13 @@ const remoteUploadManager = createRemoteUploadManager({
 
 const remoteConversationMediaService = createRemoteConversationMediaService()
 
+const remoteConversationReader = createConversationReader(createConversationWorker)
+
 const remoteConversationReadService = createRemoteConversationReadService({
   getConfig: dataApi.getConfig,
   listLocalConversations: createCatalogReader(createCatalogWorker),
   readLocalProjects: projectsApi.readLocalProjects,
-  loadRemoteConversationPage: conversationApi.loadRemoteConversationPage,
+  loadRemoteConversationPage: remoteConversationReader.page,
   registerMedia: remoteConversationMediaService.register,
   listWindows
 })
@@ -212,7 +217,7 @@ function notifyRemoteControlChanged(broadcast = true) {
 
 const remoteSessionManager = createRemoteSessionManager({
   getConfig: dataApi.getConfig,
-  openConversation: conversationApi.openConversation,
+  openConversation: remoteConversationReader.open,
 
   conversationExists: conversationApi.conversationExists,
 

@@ -7,6 +7,8 @@ import path from 'node:path'
 import { once } from 'node:events'
 import { WebSocket } from 'ws'
 import { createRemoteGateway } from '../main/core/remote/index.js'
+
+import {createHistoryPager} from '../main/core/remote/historyPager.js'
 import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
 import { createRemoteUploadManager } from '../main/core/remote/uploadManager.js'
 import { REMOTE_MAX_FRAME_BYTES } from '../main/core/remote/protocol.js'
@@ -290,6 +292,9 @@ async function main() {
     getName: () => 'Anywhere Remote Test'
   }
   let observedPairing = null
+
+  let holdDeviceMetadata = false, deviceMetadataStarted = false, releaseDeviceMetadata
+  const deviceMetadataGate = new Promise(resolve => {releaseDeviceMetadata = resolve})
   const conversationCalls = []
   let fixtureLanAddress = '127.0.0.1'
 
@@ -297,7 +302,13 @@ async function main() {
 
   let largePageTasks = []
 
+  const historyPager = createHistoryPager()
+  const historyPayload = {content: '完整结果中😀\n'.repeat(250000), reasoningContent: '', toolCalls: []}
+  const historyPage = historyPager.page({messages: [{uiMessageId: 'unified-history-id', order: 1, role: 'assistant', payload: historyPayload}], tasks: [], page: {hasMore: false}}, 'device-remote-gateway-fixture-0001', 'conversation-gateway-fixture-0001')
+
   const conversationReadService = {
+
+    historyPayload: historyPager.payload,
     async listConversations(params = {}) {
       conversationCalls.push({ method: 'conversation.list', params: structuredClone(params) })
 
@@ -360,7 +371,10 @@ async function main() {
     app,
     safeStorage: createMemorySecureStorage(),
     dbStorageGetItem: storage.get,
-    dbStorageSetItem: storage.set,
+    dbStorageSetItem: async (key, value) => {
+      if (holdDeviceMetadata && key === 'remote:v2:devices') {deviceMetadataStarted = true; await deviceMetadataGate}
+      return storage.set(key, value)
+    },
     conversationReadService,
 
     getConversationMedia: input => mediaService.get(input),
@@ -639,6 +653,8 @@ async function main() {
     fixtureLanAddress = '127.0.0.1'
 
 
+    holdDeviceMetadata = true
+
     const { socket, session, welcome } = await connectEncrypted({
       endpoint,
       rootSecret: mobilePairing2.rootSecret,
@@ -646,6 +662,12 @@ async function main() {
       desktopId: qr2.desktopId
     })
     assert.ok(welcome.payload.capabilities.includes('conversation.create'))
+
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-welcome-before-disk', method: 'remote.ping'})).ok, true)
+    assert.equal(deviceMetadataStarted, true)
+    holdDeviceMetadata = false
+    releaseDeviceMetadata()
+
     const assistantList = await sendEncryptedRequest({socket, session, requestId: 'request-list-assistants', method: 'conversation.assistants.list'})
     assert.deepEqual(assistantList.result.assistants, [{code: 'Code', name: 'Code Agent', icon: 'https://example.test/code.png', model: 'Fixture Provider | model', defaultProjectName: 'Fixture Project', mcpCount: 1, skillCount: 1, usageWeight: 0}])
     assert.equal(JSON.stringify(assistantList).includes('PRIVATE'), false)
@@ -892,6 +914,16 @@ async function main() {
     const adaptiveOpt = await sendEncryptedRequest({socket, session, requestId: 'request-adaptive-opt', method: 'remote.transfer.negotiate', params: {capabilities: ['remote.transfer.v1', 'remote.transfer.adaptive.v1']}})
     assert.ok(adaptiveOpt.result.capabilities.includes('remote.transfer.adaptive.v1'))
     session.enableAdaptiveTransfers()
+
+    const historyRef = historyPage.messages[0].payload.fullPayload
+    const unified = await sendEncryptedRequest({socket, session, requestId: 'request-unified-history', method: 'conversation.history.payload.get', params: {conversationId: 'conversation-gateway-fixture-0001', id: historyRef.id, offset: 0}})
+    assert.equal(unified.ok, true)
+    assert.ok(unified.transfer, 'history bypasses ordinary frame encryption and uses one snapshot')
+    const fullHistory = await readTransferredResult({socket, session}, unified.transfer)
+    assert.equal(fullHistory.sha256, historyRef.sha256)
+    assert.equal(fullHistory.nextOffset, historyRef.totalChars)
+    assert.deepEqual(JSON.parse(fullHistory.text), historyPayload)
+
     const eightMiB = 8 * 1024 * 1024
     const maximumData = Buffer.alloc(eightMiB, 0x6c)
     const maximumSha = crypto.createHash('sha256').update(maximumData).digest('base64url')

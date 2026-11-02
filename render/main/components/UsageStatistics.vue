@@ -25,7 +25,7 @@ import { compactNumber, createHeatmapScale, heatmapLevel } from '../utils/usageC
 const { t, locale } = useI18n()
 const config = inject('config')
 const filters = reactive({
-  range: '30d',
+  range: '24h',
   providerId: '',
   agentName: '',
   model: ''

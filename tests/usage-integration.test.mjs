@@ -156,6 +156,8 @@ assert.match(statisticsPage, /<el-tooltip placement="top"/)
 assert.match(statisticsPage, /class="metric-meta"/)
 assert.match(statisticsPage, /class="usage-toolbar"/)
 assert.match(statisticsPage, /v-model="filters.range"/)
+
+assert.match(statisticsPage, /const filters = reactive\(\{\s*range: '24h'/)
 assert.ok(!statisticsPage.includes('<h2>'), 'dashboard must not repeat the main header title')
 assert.match(statisticsPage, /class="table-ratio"/)
 assert.ok(!statisticsPage.includes('heatMax'), 'no busiest-day max scaling')

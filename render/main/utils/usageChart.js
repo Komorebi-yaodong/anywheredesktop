@@ -36,34 +36,25 @@ export function smoothLinePath(points = []) {
   return line
 }
 
-// Use active-day P90 rather than the single busiest day. Baseline bands stay meaningful
-// for new/low-volume users, while the same ratios scale with sustained personal usage.
-export function createHeatmapScale(days = []) {
-  const activeCounts = days
-    .map((day) => day?.requests)
-    .filter((count) => Number.isSafeInteger(count) && count > 0)
-    .sort((left, right) => left - right)
-  const p90 = activeCounts.length ? activeCounts[Math.ceil(activeCounts.length * 0.9) - 1] : 0
-  const factor = Math.max(1, p90 / 50)
-  const thresholds = [10, 25, 50].map((limit) => Math.ceil(limit * factor))
+// Fixed request-count bands keep “more” meaningful regardless of historical spikes.
+const HEATMAP_THRESHOLDS = [20, 50, 100]
+
+export function createHeatmapScale() {
   return {
-    p90,
-    thresholds,
+    thresholds: HEATMAP_THRESHOLDS,
     bands: [
       { level: 0, min: 0, max: 0 },
-      ...thresholds.map((max, index) => ({
-        level: index + 1,
-        min: index === 0 ? 1 : thresholds[index - 1] + 1,
-        max
-      })),
-      { level: 4, min: thresholds[2] + 1, max: null }
+      { level: 1, min: 1, max: 20 },
+      { level: 2, min: 21, max: 50 },
+      { level: 3, min: 51, max: 100 },
+      { level: 4, min: 101, max: null }
     ]
   }
 }
 
-export function heatmapLevel(requests, thresholds) {
+export function heatmapLevel(requests) {
   if (!Number.isSafeInteger(requests) || requests <= 0) return 0
-  const index = thresholds.findIndex((limit) => requests <= limit)
+  const index = HEATMAP_THRESHOLDS.findIndex((limit) => requests <= limit)
   return index < 0 ? 4 : index + 1
 }
 

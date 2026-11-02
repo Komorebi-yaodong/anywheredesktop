@@ -113,8 +113,8 @@ const heatDays = computed(() => {
   const weekday = (new Date(days[0].timestamp).getDay() + 6) % 7
   return [...Array.from({ length: weekday }, () => null), ...days]
 })
-const heatScale = computed(() => createHeatmapScale(result.value?.heatmap || []))
-const heatLevel = (day) => heatmapLevel(day?.requests, heatScale.value.thresholds)
+const heatScale = computed(() => createHeatmapScale())
+const heatLevel = (day) => heatmapLevel(day?.requests)
 const heatBandLabel = (band) => {
   const count =
     band.max === null

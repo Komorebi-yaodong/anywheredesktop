@@ -181,46 +181,43 @@ assert.match(statisticsPage, /nth-child\(1\)\s*\{\s*grid-row: 1;/)
 assert.match(statisticsPage, /nth-child\(2\)\s*\{\s*grid-row: 3;/)
 assert.match(statisticsPage, /nth-child\(3\)\s*\{\s*grid-row: 5;/)
 
-const baseline = createHeatmapScale([])
-assert.deepEqual(baseline.thresholds, [10, 25, 50])
+const scale = createHeatmapScale()
+assert.deepEqual(scale.thresholds, [20, 50, 100])
+assert.deepEqual(scale.bands, [
+  { level: 0, min: 0, max: 0 },
+  { level: 1, min: 1, max: 20 },
+  { level: 2, min: 21, max: 50 },
+  { level: 3, min: 51, max: 100 },
+  { level: 4, min: 101, max: null }
+])
 for (const [requests, expected] of [
+  [NaN, 0],
+  [-1, 0],
   [0, 0],
   [1, 1],
-  [2, 1],
-  [10, 1],
-  [11, 2],
-  [25, 2],
-  [26, 3],
-  [50, 3],
-  [51, 4]
+  [20, 1],
+  [21, 2],
+  [50, 2],
+  [51, 3],
+  [100, 3],
+  [101, 4],
+  [150, 4],
+  [10_000, 4]
 ]) {
-  assert.equal(heatmapLevel(requests, baseline.thresholds), expected)
+  assert.equal(heatmapLevel(requests), expected)
 }
-for (const counts of [[2], [2, 2], Array(365).fill(0), [...Array(19).fill(10), 10000]]) {
+for (const days of [
+  [],
+  [{ requests: 2 }],
+  [{ requests: 10 }, { requests: 15 }, { requests: 49 }, { requests: 50 }, { requests: 150 }],
+  Array.from({ length: 365 }, (_, index) => ({ requests: index * 1000 }))
+]) {
   assert.deepEqual(
-    createHeatmapScale(counts.map((requests) => ({ requests }))).thresholds,
-    [10, 25, 50]
+    createHeatmapScale(days).thresholds,
+    [20, 50, 100],
+    'history must not move fixed bands'
   )
 }
-const adapted = createHeatmapScale(
-  [...Array(365).fill(0), ...Array(20).fill(100)].map((requests) => ({ requests }))
-)
-assert.equal(adapted.p90, 100, 'inactive days do not distort the personal baseline')
-assert.deepEqual(adapted.thresholds, [20, 50, 100])
-assert.equal(heatmapLevel(2, adapted.thresholds), 1)
-assert.equal(heatmapLevel(100, adapted.thresholds), 3)
-assert.equal(heatmapLevel(101, adapted.thresholds), 4)
-for (const counts of [[51], [1000], [10, 20, 30, 40, 100, 150, 170]]) {
-  const scale = createHeatmapScale(counts.map((requests) => ({ requests })))
-  scale.bands.slice(1).forEach((band, index) => {
-    assert.equal(band.min, scale.bands[index].max + 1)
-    if (band.max !== null) assert.ok(band.max >= band.min)
-  })
-}
-assert.deepEqual(
-  createHeatmapScale([{ requests: NaN }, { requests: -1 }, { requests: Infinity }]).thresholds,
-  [10, 25, 50]
-)
 
 assert.equal(smoothLinePath([]), '')
 assert.equal(smoothLinePath([{ x: 1, y: 2 }]), 'M 1 2')

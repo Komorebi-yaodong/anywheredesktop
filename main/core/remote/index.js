@@ -1,6 +1,5 @@
 import crypto from 'node:crypto'
 
-import {createTransportTrace} from './transportTrace.js'
 
 import {createBusinessProtocol} from './businessProtocol.js'
 
@@ -258,7 +257,6 @@ export function createRemoteGateway({
   if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function') throw new Error('remote_safe_storage_required')
   if (typeof dbStorageGetItem !== 'function' || typeof dbStorageSetItem !== 'function') throw new Error('remote_storage_required')
 
-  const transportTrace = createTransportTrace() // TEMPORARY field diagnostics
 
   let server = null
   let webSocketServer = null
@@ -685,11 +683,7 @@ export function createRemoteGateway({
       const text = JSON.stringify(payload)
       const context = socketContexts.get(socket)
       if (Buffer.byteLength(text) > (context?.adaptiveTransfers ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES)) return false
-      const began = Date.now(), bytes = Buffer.byteLength(text)
-      const ack = payload.type === 'remote.encrypted' && context?.traceReplies?.has(payload.sequence)
-      transportTrace.record(ack ? 'ack_submit' : 'send_submit', {generation: context?.traceGeneration, sequence: payload.sequence, bytes, bufferedBytes: socket.bufferedAmount})
-      context?.traceReplies?.delete(payload.sequence)
-      socket.send(text, error => {transportTrace.record(error ? 'send_failed' : ack ? 'ack_flushed' : 'send_flushed', {generation: context?.traceGeneration, sequence: payload.sequence, bytes, elapsedMs: Date.now() - began, bufferedBytes: socket.bufferedAmount})})
+      socket.send(text)
       return true
     } catch {
       return false
@@ -741,7 +735,6 @@ export function createRemoteGateway({
         try {frame = context.session.encrypt({kind: 'event', event: 'conversation.windows.changed', payload: {}})} catch {return false}
       }
     }
-    if (payload.kind === 'response') context.traceReplies?.add(frame.sequence)
     return sendPlain(socket, frame)
   }
 
@@ -776,7 +769,6 @@ export function createRemoteGateway({
     }
     // Never try an error response once a frame has consumed a sequence and
     // delivery is uncertain; that would create a gap on the same session.
-    context.traceReplies?.add(frame.sequence)
     return sendPlain(socket, frame)
   }
 
@@ -1433,10 +1425,6 @@ export function createRemoteGateway({
   async function handleEncryptedRpc({ socket, context, request }) {
     const requestId = normalizeIdentifier(request.requestId, 'requestId', { minLength: 8, maxLength: 160 })
 
-    const traceMethod = request.method === 'transfer.request' ? request.params?.method : request.method
-    const uploadTrace = ['attachment.begin', 'attachment.chunk', 'attachment.complete', 'attachment.abort'].includes(traceMethod)
-    const traceBegan = Date.now()
-    if (uploadTrace) transportTrace.record('upload_start', {generation: context.traceGeneration, method: traceMethod})
     const method = typeof request.method === 'string' ? request.method.trim() : ''
     const params = request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {}
 
@@ -1508,7 +1496,6 @@ export function createRemoteGateway({
           result = await dispatchLegacy(context, requestId, method, params)
       }
 
-      if (uploadTrace) transportTrace.record('upload_done', {generation: context.traceGeneration, method: traceMethod, elapsedMs: Date.now() - traceBegan})
 
       if (!sendRpcResult(socket, context, requestId, result, method === 'remote.transfer.chunk' || method === 'conversation.media.get' || method === 'resource.get' && params.resource === 'conversation.media.get', method === 'conversation.history.payload.get')) {
         safeSocketClose(socket, 1011, 'response_send_failed')
@@ -1516,7 +1503,6 @@ export function createRemoteGateway({
       }
       await appendAudit('remote.rpc', { deviceId: context.device.deviceId, result: 'ok', meta: { method } })
     } catch (error) {
-      if (uploadTrace) transportTrace.record('upload_failed', {generation: context.traceGeneration, method: traceMethod, code: error?.code, elapsedMs: Date.now() - traceBegan})
 
       const rawCode = typeof error?.code === 'string' ? error.code : typeof error?.message === 'string' ? error.message : ''
       const code = rawCode.startsWith('remote_')
@@ -1631,7 +1617,6 @@ export function createRemoteGateway({
 
       const request = binary ? context.session.decryptBinary(raw) : context.session.decrypt(message)
 
-      transportTrace.record('decrypted', {generation: context.traceGeneration, sequence: binary ? Number(raw.readBigUInt64BE(4)) : message.sequence, method: request.method === 'transfer.request' ? request.params?.method : request.method})
       if (request.kind !== 'request') throw remoteError('remote_request_invalid')
       // Validate admission while still in the ordered frame lane. Negotiation
       // executes synchronously before its first await; business completion does not.
@@ -1648,7 +1633,6 @@ export function createRemoteGateway({
       })).catch(() => {if (!context.closed) safeSocketClose(socket, 1011, 'rpc_dispatch_failed')})
     } catch (error) {
       const code = typeof error?.code === 'string' ? error.code : 'remote_socket_error'
-      transportTrace.record('rejected', {generation: context.traceGeneration, code})
 
       log('warn', 'socket message rejected', { code, deviceId: context.device?.deviceId || '' })
       if (context.authenticated) {
@@ -1672,8 +1656,6 @@ export function createRemoteGateway({
       }
 
       const context = {
-        traceGeneration: transportTrace.nextGeneration(),
-        traceReplies: new Set(),
 
         binaryInFlight: 0,
         incomingBytes: 0,
@@ -1693,22 +1675,8 @@ export function createRemoteGateway({
       }, HANDSHAKE_TIMEOUT_MS)
       socketContexts.set(socket, context)
 
-      transportTrace.record('connection', {generation: context.traceGeneration})
-      let inputBytes = 0, recordedBytes = 0
-      const onInput = chunk => {
-        inputBytes += chunk.length
-        if (inputBytes - recordedBytes >= 65536) {recordedBytes = inputBytes;transportTrace.record('input_progress', {generation: context.traceGeneration, totalBytes: inputBytes})}
-      }
-      socket._socket?.on('data', onInput) // lengths only; do not retain chunk
-      socket.on('ping', data => {transportTrace.record('ping_received', {generation: context.traceGeneration, bytes: data.length});transportTrace.record('pong_submitted', {generation: context.traceGeneration, bufferedBytes: socket.bufferedAmount})})
-      socket.on('pong', data => transportTrace.record('pong_received', {generation: context.traceGeneration, bytes: data.length}))
-      socket.once('close', code => {socket._socket?.off('data', onInput);transportTrace.record('close', {generation: context.traceGeneration, closeCode: code, totalBytes: inputBytes})})
-      socket.once('error', () => transportTrace.record('socket_error', {generation: context.traceGeneration}))
-
-
       socket.on('message', (raw, isBinary) => {
 
-        transportTrace.record('frame', {generation: context.traceGeneration, bytes: raw.length})
         if (isBinary && (!context.authenticated || !context.binaryUploads)) {safeSocketClose(socket, 1003, 'binary_frames_not_supported'); return}
         if (isBinary && raw.length > 2 * 1024 * 1024 + 2048 || context.incomingBytes + raw.length > 32 * 1024 * 1024) {safeSocketClose(socket, 1009, 'remote_payload_size_invalid');return}
         context.incomingBytes += raw.length
@@ -1779,7 +1747,6 @@ export function createRemoteGateway({
     server = nextServer
     webSocketServer = nextWebSocketServer
 
-    transportTrace.start()
     activeSessionManager?.resume?.()
     runtime = {
       running: true,
@@ -1801,7 +1768,6 @@ export function createRemoteGateway({
 
   async function stopNow({ clearEnabled = false } = {}) {
 
-    transportTrace.stop()
     cleanupExpiredPairings()
     pairings.clear()
     for (const attempt of pairingAttempts.values()) zeroPairingAttempt(attempt)
@@ -2002,7 +1968,6 @@ export function createRemoteGateway({
     configure: (config = {}) => queue(() => configureNow(config)),
     stop: () => queue(() => stopNow({ clearEnabled: false })),
     getStatus,
-    getTransportDiagnostics: () => transportTrace.snapshot(), // TEMPORARY
 
     getPublicSettings: () => sanitizeRemoteSettingsForConfig(configuredSettings),
     broadcastEvent: (event, payload = {}) => broadcastEncryptedEvent(event, payload),

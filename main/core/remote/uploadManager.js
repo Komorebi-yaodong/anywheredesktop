@@ -255,15 +255,17 @@ export function createRemoteUploadManager({
     return { ok: true, upload: publicRecord(record, maxChunkBytes) }
   }
 
-  async function chunk({ deviceId, params = {}, adaptive = false } = {}) {
+  async function chunk({ deviceId, params = {}, adaptive = false, binaryData = null } = {}) {
     await ensureInitialized()
     await cleanupExpired()
-    const source = parameters(params, ['uploadId', 'index', 'data'])
+    const source = parameters(params, binaryData === null ? ['uploadId', 'index', 'data'] : ['uploadId', 'index'])
     const record = getOwnedRecord(deviceId, source.uploadId)
     if (record.state !== 'uploading') throw remoteError('remote_upload_state_invalid')
     const index = Number(source.index)
     if (!Number.isSafeInteger(index) || index < 0) throw remoteError('remote_upload_chunk_order_invalid')
-    const data = decodeBase64Url(source.data, 'data', { minBytes: 1, maxBytes: Math.min(record.maxChunkBytes || maxChunkBytes, adaptive ? TRANSFER_MAX_CHUNK_BYTES : maxChunkBytes) })
+    const allowedBytes = Math.min(record.maxChunkBytes || maxChunkBytes, adaptive ? TRANSFER_MAX_CHUNK_BYTES : maxChunkBytes)
+    if (binaryData !== null && (!Buffer.isBuffer(binaryData) || binaryData.length < 1 || binaryData.length > Math.min(2 * 1024 * 1024, allowedBytes))) throw remoteError('remote_upload_size_invalid')
+    const data = binaryData === null ? decodeBase64Url(source.data, 'data', {minBytes: 1, maxBytes: allowedBytes}) : binaryData
     if (index === record.nextChunkIndex - 1 && record.lastChunk?.index === index) {
       const chunkSha256 = crypto.createHash('sha256').update(data).digest('base64url')
       if (record.lastChunk.size !== data.length || record.lastChunk.sha256 !== chunkSha256) {
@@ -487,6 +489,7 @@ export function createRemoteUploadManager({
     initialize,
     begin: (input) => queued(() => begin(input)),
     chunk: (input) => queued(() => chunk(input)),
+    chunkBytes: ({deviceId, params, data, adaptive}) => queued(() => chunk({deviceId, params, adaptive, binaryData: data})),
     complete: (input) => queued(() => complete(input)),
     abort: (input) => queued(() => abort(input)),
     reserveForRequest: input => queued(() => reserveForRequest(input)),

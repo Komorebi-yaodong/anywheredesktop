@@ -234,6 +234,27 @@ function run() {
     requestId: 'request-order-0001'
   })
 
+  const binaryConnection = createConnectedSessions({rootSecret: fixture.deviceResponse.rootSecret, deviceId: 'device-binary-crypto-fixture', desktopId: fixture.context.desktopId})
+  const meta = {requestId: 'request-binary-crypto-fixture', uploadId: 'upload-binary-crypto-fixture', index: 0}, bytes = Buffer.alloc(131072, 0x5a)
+  const binary = binaryConnection.deviceSession.encryptBinary(meta, bytes)
+  assert.ok(binary.length < bytes.length + 1024)
+  const badTag = Buffer.from(binary);badTag[badTag.length - 1] = (badTag[badTag.length - 1] + 1) % 256
+  expectCode(() => binaryConnection.accepted.session.decryptBinary(badTag), 'remote_frame_auth_failed')
+  const badMagic = Buffer.from(binary);badMagic[0] = 0
+  expectCode(() => binaryConnection.accepted.session.decryptBinary(badMagic), 'remote_binary_frame_invalid')
+  const outOfOrderBinary = Buffer.from(binary);outOfOrderBinary.writeBigUInt64BE(2n, 4)
+  expectCode(() => binaryConnection.accepted.session.decryptBinary(outOfOrderBinary), 'remote_frame_out_of_order')
+  expectCode(() => binaryConnection.accepted.session.decryptBinary(Buffer.alloc(2 * 1024 * 1024 + 2049)), 'remote_binary_frame_invalid')
+  const binaryResult = binaryConnection.accepted.session.decryptBinary(binary)
+  assert.deepEqual(binaryResult.params.params.data, bytes)
+  expectCode(() => binaryConnection.accepted.session.decryptBinary(binary), 'remote_frame_replayed')
+  const mixedText = binaryConnection.deviceSession.encrypt({kind: 'request', requestId: 'request-after-binary', method: 'remote.ping', params: {}})
+  assert.equal(binaryConnection.accepted.session.decrypt(mixedText).method, 'remote.ping')
+  expectCode(() => binaryConnection.deviceSession.encryptBinary({...meta, index: -1}, bytes), 'remote_binary_frame_invalid')
+  expectCode(() => binaryConnection.deviceSession.encryptBinary(meta, Buffer.alloc(2 * 1024 * 1024 + 1)), 'remote_binary_frame_invalid')
+  binaryConnection.accepted.session.close();binaryConnection.deviceSession.close()
+
+
   assert.equal(REMOTE_MAX_FRAME_BYTES, 1024 * 1024)
 
   assert.equal(publicKeyFromPrivate(fixture.desktop.privateKey), fixture.desktop.publicKey)

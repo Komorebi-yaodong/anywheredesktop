@@ -334,7 +334,7 @@ export function createRemoteGateway({
 
 
   function getCapabilities() {
-    const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get', RESULT_TRANSFER_CAPABILITY, ADAPTIVE_TRANSFER_CAPABILITY]
+    const capabilities = ['remote.ping', 'remote.status.get', 'remote.device.self.get', 'remote.image.binary.v1', RESULT_TRANSFER_CAPABILITY, ADAPTIVE_TRANSFER_CAPABILITY]
 
     capabilities.push('remote.contract.negotiate')
     if (businessProtocol.available()) capabilities.push('conversation.control.get', 'conversation.view.get', 'conversation.changes.get', 'operation.get', 'resource.get', 'command.submit', 'operation.status.get', 'operation.status.batch', 'transfer.request')
@@ -1263,7 +1263,9 @@ export function createRemoteGateway({
           break
         case 'attachment.chunk':
           if (!uploadManager) throw remoteError('remote_method_unavailable')
-          result = await uploadManager.chunk({ deviceId: context.device.deviceId, params, adaptive: context.adaptiveTransfers })
+          result = Buffer.isBuffer(params.data)
+            ? await uploadManager.chunkBytes({deviceId: context.device.deviceId, params: {uploadId: params.uploadId, index: params.index}, data: params.data, adaptive: context.adaptiveTransfers})
+            : await uploadManager.chunk({ deviceId: context.device.deviceId, params, adaptive: context.adaptiveTransfers })
           break
         case 'attachment.complete':
           if (!uploadManager) throw remoteError('remote_method_unavailable')
@@ -1442,6 +1444,11 @@ export function createRemoteGateway({
       let result
       switch (method) {
 
+        case 'remote.image.binary.negotiate':
+          if (!uploadManager || !context.capabilities.includes('attachment.chunk') || Object.keys(params).length) throw remoteError('remote_method_unavailable')
+          context.binaryUploads = true
+          result = {ok: true}
+          break
         case 'remote.transfer.negotiate':
           if (!Array.isArray(params.capabilities) || params.capabilities.length < 1 || params.capabilities.length > 2 || !params.capabilities.includes(RESULT_TRANSFER_CAPABILITY) || new Set(params.capabilities).size !== params.capabilities.length || params.capabilities.some(value => ![RESULT_TRANSFER_CAPABILITY, ADAPTIVE_TRANSFER_CAPABILITY].includes(value)) || Object.keys(params).length !== 1) throw remoteError('remote_parameter_invalid')
           context.resultTransfers = true
@@ -1611,25 +1618,32 @@ export function createRemoteGateway({
     }
   }
 
-  async function handleSocketMessage(socket, raw) {
+  async function handleSocketMessage(socket, raw, binary = false) {
     const context = socketContexts.get(socket)
     if (!context) return
     try {
-      const message = parsePlainSocketMessage(raw, context.adaptiveTransfers ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES)
+      if (binary && (!context.authenticated || !context.binaryUploads)) throw remoteError('remote_binary_not_negotiated')
+      const message = binary ? null : parsePlainSocketMessage(raw, context.adaptiveTransfers ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES)
       if (!context.authenticated) {
         await authenticateSocket(socket, context, message)
         return
       }
 
-      const request = context.session.decrypt(message)
+      const request = binary ? context.session.decryptBinary(raw) : context.session.decrypt(message)
 
-      transportTrace.record('decrypted', {generation: context.traceGeneration, sequence: message.sequence, method: request.method === 'transfer.request' ? request.params?.method : request.method})
+      transportTrace.record('decrypted', {generation: context.traceGeneration, sequence: binary ? Number(raw.readBigUInt64BE(4)) : message.sequence, method: request.method === 'transfer.request' ? request.params?.method : request.method})
       if (request.kind !== 'request') throw remoteError('remote_request_invalid')
       // Validate admission while still in the ordered frame lane. Negotiation
       // executes synchronously before its first await; business completion does not.
       normalizeIdentifier(request.requestId, 'requestId', {minLength: 8, maxLength: 160})
       void Promise.resolve(context.rpcScheduler.schedule(request, () => {
-        if (context.closed) return
+        if (context.closed) {if (binary) request.params.params.data.fill(0);return}
+        if (binary) {
+          const bytes = request.params.params.data
+          if (context.binaryInFlight + bytes.length > 8 * 1024 * 1024) {bytes.fill(0);throw remoteError('remote_transfer_capacity')}
+          context.binaryInFlight += bytes.length
+          return handleEncryptedRpc({socket, context, request}).finally(() => {context.binaryInFlight -= bytes.length;bytes.fill(0)})
+        }
         return handleEncryptedRpc({socket, context, request})
       })).catch(() => {if (!context.closed) safeSocketClose(socket, 1011, 'rpc_dispatch_failed')})
     } catch (error) {
@@ -1660,6 +1674,9 @@ export function createRemoteGateway({
       const context = {
         traceGeneration: transportTrace.nextGeneration(),
         traceReplies: new Set(),
+
+        binaryInFlight: 0,
+        incomingBytes: 0,
         closed: false,
         authenticated: false,
         authenticating: false,
@@ -1692,15 +1709,15 @@ export function createRemoteGateway({
       socket.on('message', (raw, isBinary) => {
 
         transportTrace.record('frame', {generation: context.traceGeneration, bytes: raw.length})
-        if (isBinary) {
-          safeSocketClose(socket, 1003, 'binary_frames_not_supported')
-          return
-        }
+        if (isBinary && (!context.authenticated || !context.binaryUploads)) {safeSocketClose(socket, 1003, 'binary_frames_not_supported'); return}
+        if (isBinary && raw.length > 2 * 1024 * 1024 + 2048 || context.incomingBytes + raw.length > 32 * 1024 * 1024) {safeSocketClose(socket, 1009, 'remote_payload_size_invalid');return}
+        context.incomingBytes += raw.length
         // Only authentication/decryption/admission share this lane. Business
         // completion must not delay the next AEAD sequence check or heartbeat.
         context.messageQueue = context.messageQueue
           .then(async () => {
-            if (!context.closed) await handleSocketMessage(socket, raw)
+            try {if (!context.closed) await handleSocketMessage(socket, raw, isBinary)}
+            finally {context.incomingBytes -= raw.length}
           })
           .catch(() => {})
       })

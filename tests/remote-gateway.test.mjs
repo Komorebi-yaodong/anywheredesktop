@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+
 import crypto from 'node:crypto'
 import https from 'node:https'
 import fs from 'node:fs/promises'
@@ -944,6 +945,28 @@ async function main() {
     assert.equal(fullHistory.sha256, historyRef.sha256)
     assert.equal(fullHistory.nextOffset, historyRef.totalChars)
     assert.deepEqual(JSON.parse(fullHistory.text), historyPayload)
+
+    // Actual gateway: mixed text/binary sequence, owner enforcement and SHA.
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-binary-contract', method: 'remote.contract.negotiate', params: {versions: [{major: 1, minor: 1}]}})).ok, true)
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-binary-opt', method: 'remote.image.binary.negotiate'})).ok, true)
+    const binaryBytes = Buffer.alloc(200000, 0x5a), binarySha = crypto.createHash('sha256').update(binaryBytes).digest('base64url')
+    const binaryBegin = await sendEncryptedRequest({socket, session, requestId: 'request-binary-begin', method: 'attachment.begin', params: {name: 'binary.jpg', type: 'image/jpeg', size: binaryBytes.length, sha256: binarySha}})
+    async function binaryRequest(requestId, uploadId, index, data) {
+      const received = waitForMessage(socket, frame => frame.type === 'remote.encrypted').then(frame => session.decrypt(frame))
+      socket.send(session.encryptBinary({requestId, uploadId, index}, data))
+      return received
+    }
+    const binaryFirst = await binaryRequest('request-binary-chunk-first', binaryBegin.result.upload.uploadId, 0, binaryBytes.subarray(0, 131072))
+    assert.equal(binaryFirst.ok, true);assert.equal(binaryFirst.result.upload.receivedBytes, 131072)
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-binary-mixed-ping', method: 'remote.ping'})).ok, true)
+    const binaryLast = await binaryRequest('request-binary-chunk-last', binaryBegin.result.upload.uploadId, 1, binaryBytes.subarray(131072))
+    assert.equal(binaryLast.ok, true)
+    const binaryComplete = await sendEncryptedRequest({socket, session, requestId: 'request-binary-complete', method: 'attachment.complete', params: {uploadId: binaryBegin.result.upload.uploadId}})
+    assert.equal(binaryComplete.result.upload.sha256, binarySha)
+    const foreignBinary = await uploadManager.begin({deviceId: 'device-other-binary-fixture', requestId: 'request-foreign-binary', params: {name: 'foreign.jpg', type: 'image/jpeg', size: 1, sha256: crypto.createHash('sha256').update(Buffer.from([1])).digest('base64url')}})
+    const deniedBinary = await binaryRequest('request-binary-foreign-owner', foreignBinary.upload.uploadId, 0, Buffer.from([1]))
+    assert.equal(deniedBinary.ok, false)
+    assert.equal(deniedBinary.error.code, 'remote_upload_not_found')
 
     const eightMiB = 8 * 1024 * 1024
     const maximumData = Buffer.alloc(eightMiB, 0x6c)

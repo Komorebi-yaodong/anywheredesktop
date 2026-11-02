@@ -609,6 +609,53 @@ export function createRemoteCryptoSession({ sessionId, sendKey, receiveKey, send
         aad?.fill(0)
       }
     },
+    encryptBinary({requestId, uploadId, index}, data) {
+      assertOpen()
+      if (sendDirection !== 'client-to-desktop' || !Buffer.isBuffer(data) || data.length < 1 || data.length > 2 * 1024 * 1024 || !Number.isSafeInteger(index) || index < 0) throw remoteError('remote_binary_frame_invalid')
+      normalizeIdentifier(requestId, 'requestId', {minLength: 8, maxLength: 160}); normalizeIdentifier(uploadId, 'uploadId', {minLength: 16, maxLength: 160})
+      const meta = canonicalBuffer({requestId, uploadId, index}), length = Buffer.alloc(4)
+      length.writeUInt32BE(meta.length)
+      const sequence = normalizeSequence(nextSendSequence), nonce = crypto.randomBytes(12)
+      const plain = Buffer.concat([length, meta, data])
+      try {
+        const cipher = crypto.createCipheriv('aes-256-gcm', sendKey, nonce)
+        cipher.setAAD(canonicalBuffer({direction: sendDirection, sequence, sessionId: safeSessionId, type: 'remote.binary', v: 2}))
+        const encrypted = Buffer.concat([cipher.update(plain), cipher.final()])
+        const head = Buffer.alloc(24); head.write('AWB1'); head.writeBigUInt64BE(BigInt(sequence), 4); nonce.copy(head, 12)
+        const frame = Buffer.concat([head, encrypted, cipher.getAuthTag()])
+        if (frame.length > (adaptive ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES)) throw remoteError('remote_payload_size_invalid')
+        nextSendSequence++
+        return frame
+      } finally {plain.fill(0)}
+    },
+
+    decryptBinary(frame) {
+      assertOpen()
+      if (!Buffer.isBuffer(frame) || frame.length < 45 || frame.length > Math.min(2 * 1024 * 1024 + 2048, adaptive ? TRANSFER_MAX_FRAME_BYTES : REMOTE_MAX_FRAME_BYTES) || frame.subarray(0, 4).toString('ascii') !== 'AWB1') throw remoteError('remote_binary_frame_invalid')
+      const rawSequence = frame.readBigUInt64BE(4)
+      if (rawSequence < 1n || rawSequence > BigInt(Number.MAX_SAFE_INTEGER)) throw remoteError('remote_sequence_invalid')
+      const sequence = Number(rawSequence)
+      if (sequence !== nextReceiveSequence) throw remoteError(sequence < nextReceiveSequence ? 'remote_frame_replayed' : 'remote_frame_out_of_order')
+      const aad = canonicalBuffer({direction: receiveDirection, sequence, sessionId: safeSessionId, type: 'remote.binary', v: 2})
+      const decipher = crypto.createDecipheriv('aes-256-gcm', receiveKey, frame.subarray(12, 24))
+      decipher.setAAD(aad); decipher.setAuthTag(frame.subarray(-16))
+      let plain
+      try {plain = Buffer.concat([decipher.update(frame.subarray(24, -16)), decipher.final()])} catch {throw remoteError('remote_frame_auth_failed')}
+      try {
+        if (plain.length < 6) throw remoteError('remote_binary_frame_invalid')
+        const length = plain.readUInt32BE(0)
+        if (length < 2 || length > 1024 || 4 + length >= plain.length) throw remoteError('remote_binary_frame_invalid')
+        let meta
+        try {meta = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(plain.subarray(4, 4 + length)))} catch {throw remoteError('remote_binary_frame_invalid')}
+        if (!meta || typeof meta !== 'object' || Array.isArray(meta) || Object.keys(meta).sort().join(',') !== 'index,requestId,uploadId') throw remoteError('remote_binary_frame_invalid')
+        const requestId = normalizeIdentifier(meta.requestId, 'requestId', {minLength: 8, maxLength: 160})
+        const uploadId = normalizeIdentifier(meta.uploadId, 'uploadId', {minLength: 16, maxLength: 160})
+        if (!Number.isSafeInteger(meta.index) || meta.index < 0 || plain.length - 4 - length > 2 * 1024 * 1024) throw remoteError('remote_binary_frame_invalid')
+        const data = Buffer.from(plain.subarray(4 + length))
+        nextReceiveSequence++
+        return {kind: 'request', requestId, method: 'transfer.request', params: {method: 'attachment.chunk', params: {uploadId, index: meta.index, data}}}
+      } finally {plain.fill(0); aad.fill(0)}
+    },
     decrypt(frame) {
       assertOpen()
       if (!frame || typeof frame !== 'object' || frame.type !== 'remote.encrypted' || Number(frame.v) !== REMOTE_PROTOCOL_VERSION) {

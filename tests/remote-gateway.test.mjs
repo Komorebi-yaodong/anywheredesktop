@@ -754,6 +754,27 @@ async function main() {
     const photoComplete = await sendEncryptedRequest({socket, session, requestId: 'request-photo-pipeline-complete', method: 'attachment.complete', params: {uploadId: photoUploadId}})
     assert.equal(photoComplete.result.upload.sha256, photoSha)
     assert.equal(photoComplete.result.upload.state, 'completed')
+
+    // TEMPORARY trace assertions: actual TLS gateway, AEAD, upload and ws pong.
+    const diagnosticPong = once(socket, 'pong')
+    socket.ping('synthetic-private-control-payload')
+    await diagnosticPong
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const traceSnapshot = gateway.getTransportDiagnostics()
+    const rows = traceSnapshot.rows
+    assert.ok(rows.length <= 512)
+    assert.ok(rows.some(row => row.event === 'input_progress' && row.totalBytes > 512 * 1024))
+    assert.ok(rows.some(row => row.event === 'frame' && row.bytes > 900000))
+    assert.ok(rows.some(row => row.event === 'decrypted' && row.method === 'attachment.chunk'))
+    assert.ok(rows.some(row => row.event === 'upload_done' && row.method === 'attachment.chunk'))
+    assert.ok(rows.some(row => row.event === 'ack_submit'))
+    assert.ok(rows.some(row => row.event === 'ack_flushed'))
+    assert.ok(rows.some(row => row.event === 'ping_received'))
+    assert.ok(rows.some(row => row.event === 'pong_submitted'))
+    for (const row of rows) assert.ok(Object.keys(row).every(key => ['atMs', 'event', 'generation', 'bytes', 'totalBytes', 'elapsedMs', 'bufferedBytes', 'sequence', 'closeCode', 'method', 'code'].includes(key)))
+    const traceText = JSON.stringify(traceSnapshot)
+    for (const forbidden of [photoUploadId, deviceId, photoSha, 'synthetic-photo.jpg', 'synthetic-private-control-payload', sandbox]) assert.equal(traceText.includes(forbidden), false)
+
     await sendEncryptedRequest({socket, session, requestId: 'request-photo-pipeline-abort', method: 'attachment.abort', params: {uploadId: photoUploadId}})
 
 
@@ -1346,6 +1367,8 @@ async function main() {
     assert.equal(stopped.enabled, false)
     assert.equal(stopped.port, port)
     assert.equal(stopped.publicEndpoint, 'https://tunnel.example.test')
+
+    assert.ok(gateway.getTransportDiagnostics().rows.length > 0, 'diagnostics remain exportable after disconnect/stop')
 
     console.log(JSON.stringify({ ok: true, suite: 'remote-gateway', protocolVersion: 2 }))
   } finally {

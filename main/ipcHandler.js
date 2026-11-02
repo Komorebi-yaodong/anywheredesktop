@@ -483,6 +483,10 @@ export function registerIpcHandlers({
     }
   })
 
+  // TEMPORARY diagnostic snapshot; gateway projects metadata only, no disk reads.
+  handleInvoke('remote:getTransportDiagnostics', async () => remoteGateway.getTransportDiagnostics())
+
+
   handleInvoke('remote:getStatus', async () => {
     return remoteGateway.getStatus()
   })

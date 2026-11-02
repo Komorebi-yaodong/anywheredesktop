@@ -71,6 +71,8 @@ const api = {
   getAppVersion: () => invokeOrThrow('app:getVersion'),
   // ===== Remote v2: management-only surface. No gateway/device private key is exposed. =====
   getRemoteStatus: () => invokeOrThrow('remote:getStatus'),
+
+  getRemoteTransportDiagnostics: () => invokeOrThrow('remote:getTransportDiagnostics'),
   saveAndConfigureRemote: (settings = {}) =>
     invokeOrThrow('remote:saveAndConfigure', toPlainPayload(settings) || {}),
   createRemotePairing: () => invokeOrThrow('remote:createPairing'),

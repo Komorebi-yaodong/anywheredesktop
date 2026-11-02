@@ -171,6 +171,16 @@ async function copyText(value, successMessage) {
   }
 }
 
+// TEMPORARY: remove with field diagnostics after root-cause verification.
+async function copyTransportDiagnostics() {
+  try {
+    const snapshot = await window.api.getRemoteTransportDiagnostics()
+    await window.api.copyText(JSON.stringify(snapshot))
+    ElMessage.success('连接诊断已复制。')
+  } catch {ElMessage.error('复制连接诊断失败，请稍后重试。')}
+}
+
+
 async function renameDevice(device) {
   try {
     const { value } = await ElMessageBox.prompt('请输入设备名称', '重命名已配对设备', {
@@ -255,6 +265,8 @@ defineExpose({ openDialog })
           </div>
         </div>
         <div class="remote-service-actions">
+          <el-button plain @click="copyTransportDiagnostics">复制连接诊断</el-button>
+
           <span class="port-label">端口</span>
           <el-input-number v-model="settings.port" :min="1024" :max="65535" :step="1" :disabled="loading" controls-position="right" />
           <el-button plain :disabled="loading" @click="saveAndConfigure(settings.enabled)">保存配置</el-button>

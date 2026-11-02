@@ -217,4 +217,26 @@ await assert.rejects(
   { code: 'remote_parameter_unknown' }
 )
 
+// Concurrent first paint reads share only in-flight work; later reads are fresh.
+{
+  let reads = 0, users = 0, projectsRead = 0, normalized = 0
+  let unblock
+  const gate = new Promise(resolve => {unblock = resolve})
+  const fixtureConfig = {webdav: {localChatPath: 'SYNTHETIC_DIRECTORY'}, prompts: {AI: {name: 'Synthetic', enable: true, icon: 'data:image/png;base64,AA=='}}, providers: {}}
+  const shared = createMobileWorkspaceService({
+    getConfig: async () => {reads++; await gate; return {config: structuredClone(fixtureConfig)}},
+    getUser: async () => {users++; await gate; return {nickname: 'Synthetic', avatar: 'data:image/png;base64,AA=='}},
+    updateConfig: async () => ({success: true}),
+    readLocalProjects: async () => {projectsRead++; return {projects: []}}, writeLocalProjects: async () => ({ok: true}),
+    normalizeAvatarDataUrl: async value => {normalized++; await Promise.resolve(); return value}
+  })
+  const first = shared.bootstrap(), second = shared.bootstrap(), list = shared.assistantList()
+  assert.equal(reads, 1); assert.equal(users, 1)
+  unblock(); await Promise.all([first, second, list])
+  assert.equal(projectsRead, 1); assert.equal(normalized, 1)
+  await shared.bootstrap()
+  assert.equal(reads, 2); assert.equal(users, 2)
+}
+
+
 console.log(JSON.stringify({ ok: true, suite: 'mobile-workspace' }))

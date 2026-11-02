@@ -444,18 +444,34 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
   const avatarNormalizationCache = new Map()
   let mutationTail = Promise.resolve()
 
+  let currentRead, profileRead
+  const normalizing = new Map()
+
+  // Sharing is only for in-flight reads. A writer must never join a snapshot
+  // captured before its previous mutation finished.
+  const saveConfig = updateConfig, saveProjects = writeLocalProjects
+  updateConfig = async input => {
+    currentRead = null; profileRead = null
+    try {return await saveConfig(input)} finally {currentRead = null; profileRead = null}
+  }
+  writeLocalProjects = async (...args) => {
+    currentRead = null
+    try {return await saveProjects(...args)} finally {currentRead = null}
+  }
+
+
+
   async function embeddedAvatar(value) {
     const source = avatarSourceDataUrl(value)
     if (!source) return null
     const sourceKey = crypto.createHash('sha256').update(source).digest('base64url')
     const cached = avatarNormalizationCache.get(sourceKey)
     if (cached) return cached
-    let avatar = null
-    try {
-      avatar = parseAvatarDataUrl(await normalizeAvatarDataUrl(source), MAX_REMOTE_AVATAR_BYTES)
-    } catch {
-      avatar = null
-    }
+    if (normalizing.has(sourceKey)) return normalizing.get(sourceKey)
+    const pending = Promise.resolve().then(() => normalizeAvatarDataUrl(source)).then(value => parseAvatarDataUrl(value, MAX_REMOTE_AVATAR_BYTES)).catch(() => null)
+    normalizing.set(sourceKey, pending)
+    let avatar
+    try {avatar = await pending} finally {normalizing.delete(sourceKey)}
     if (!avatar) return null
     avatarNormalizationCache.set(sourceKey, avatar)
     while (avatarNormalizationCache.size > MAX_AVATAR_RESOURCES) {
@@ -464,7 +480,14 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     return avatar
   }
 
-  async function current() {
+  function current() {
+    if (!currentRead) {
+      const pending = readCurrent().finally(() => {if (currentRead === pending) currentRead = null})
+      currentRead = pending
+    }
+    return currentRead
+  }
+  async function readCurrent() {
     const result = await getConfig()
     const config = object(result?.config)
     if (!Object.keys(config).length) throw remoteError('remote_workspace_unavailable')
@@ -474,7 +497,14 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     return { config, rawProjects, projects, directoryConfigured }
   }
 
-  async function profile() {
+  function profile() {
+    if (!profileRead) {
+      const pending = readProfile().finally(() => {if (profileRead === pending) profileRead = null})
+      profileRead = pending
+    }
+    return profileRead
+  }
+  async function readProfile() {
     const user = await getUser()
     const avatar = await embeddedAvatar(user?.avatar)
     const metadata = avatarMetadata(avatar)

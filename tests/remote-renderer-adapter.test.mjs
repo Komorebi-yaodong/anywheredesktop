@@ -85,6 +85,8 @@ for (const failure of ['focus', 'mcp', 'compact', 'none']) {
 
 const events = [], actions = [], consumedUploads = [], appendedMessages = []
 const context = {
+  activeApplyMcpPromise: null,
+
   shallowRef, ref, computed, watch, console, setTimeout, clearTimeout,
   window: { api: {
     emitRemoteRendererEvent: async (event) => { events.push(structuredClone(event)); actions.push(event.event); return {ok: true} },

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import {createOperationJournal} from '../main/core/remote/operationJournal.js'
+import contract from '../packages/remote-contract/index.cjs'
+const {validateDurableOperation} = contract
+
 const clone = value => structuredClone(value)
 let disk = null
 let clock = 1800000000000
@@ -126,6 +129,41 @@ assert.equal(Object.hasOwn(largeRestored.limits, 'maxRecords'), false)
  // Existing operation IDs are queried, not revalidated/replayed as new writes.
  const duplicate = await ordered.execute({...base, commandId: 'ordered-first'}, () => {throw new Error('replayed')}, true, {admit: () => {throw new Error('stale epoch must not hide old result')}})
  assert.equal(duplicate.operationId, 'ordered-first')
+}
+
+
+// A dispatch failure after an earlier pending query cannot expose stale
+// nonterminal progress under a terminal operation (strict Mobile validation).
+{
+ const j = createOperationJournal({load: async () => null, save: async () => {}})
+ const issuedAt = Date.now(), deviceId = 'device-failed-query-fixture', commandId = 'command-failed-query-fixture'
+ let reject
+ await j.execute({deviceId, commandId, issuedAt, method: 'conversation.create', params: {}}, () => new Promise((_, no) => {reject = no}), true)
+ await j.update(deviceId, commandId, {requestId: commandId, conversationId: '', terminal: false, event: 'conversation.command.pending'})
+ reject(Object.assign(new Error('failed'), {code: 'remote_conversation_busy'}))
+ await new Promise(resolve => setImmediate(resolve))
+ const failed = validateDurableOperation(await j.get(deviceId, commandId))
+ assert.equal(failed.state, 'failed'); assert.equal(failed.progress, null)
+}
+
+
+// Creation has no conversation identity until Renderer has saved it. The
+// actual Mobile contract must accept the very first pending status too.
+{
+ const j = createOperationJournal({load: async () => null, save: async () => {}})
+ const issuedAt = Date.now(), deviceId = 'device-create-query-fixture', commandId = 'command-create-query-fixture'
+ let release
+ await j.execute({deviceId, commandId, issuedAt, method: 'conversation.create', params: {promptCode: 'Code'}}, () => new Promise(resolve => {release = resolve}), true)
+ await j.update(deviceId, commandId, {requestId: commandId, conversationId: '', terminal: false, event: 'conversation.command.pending', eventSequence: 0})
+ const pending = validateDurableOperation(await j.get(deviceId, commandId))
+ assert.equal(pending.conversationId, null); assert.equal(pending.progress.conversationId, null)
+ const conversationId = 'conversation-new-query-fixture'
+ release({conversationId, title: 'New'})
+ await new Promise(resolve => setImmediate(resolve))
+ validateDurableOperation(await j.get(deviceId, commandId))
+ await j.update(deviceId, commandId, {requestId: commandId, conversationId, terminal: true, event: 'conversation.operation.completed', result: {conversationId, title: 'New'}})
+ const completed = validateDurableOperation(await j.get(deviceId, commandId))
+ assert.equal(completed.progress.result.conversationId, conversationId)
 }
 
 

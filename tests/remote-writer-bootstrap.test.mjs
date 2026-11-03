@@ -205,6 +205,78 @@ for (const change of [
   assert.equal(checkCalls, 1)
 }
 
+// Run the REAL pre-mutation branch + lease check with MCP held. Old source
+// rejects busy immediately. New source waits, then denies changed target/lease.
+for (const changed of [
+  'target',
+  'expired-lease',
+  'closing',
+  'generating',
+  'handoff',
+  'lease-replaced'
+]) {
+  let release
+  const wait = new Promise((resolve) => {
+    release = resolve
+  })
+  const events = [],
+    cid = 'conversation-mcp-wait-fixture'
+  const c = {
+    Date,
+    Error,
+    command: {
+      type: 'conversation.delete',
+      conversationId: cid,
+      requestId: 'mcp-wait-request',
+      confirmed: true
+    },
+    currentConversationStorage: ref({ conversationId: cid }),
+    conversationLease: ref({
+      leaseEpoch: 1,
+      expiresAt: new Date(Date.now() + 60000).toISOString()
+    }),
+    conversationLeasePending: ref(false),
+    conversationReadOnly: ref(false),
+    loading: ref(false),
+    compacting: ref(false),
+    isPreparingSend: ref(false),
+    isClosingWindow: ref(false),
+    isMcpLoading: ref(true),
+    activeRemoteCommand: ref(null),
+    activeApplyMcpPromise: wait,
+    mobileControlActive: ref(true),
+    desktopTakeoverPending: ref(false),
+    emitRemoteRendererEvent: (event, command, payload) => events.push({ event, payload }),
+    showDismissibleMessage: { warning() {} }
+  }
+  c.ensureConversationWriteAccess = vm.runInNewContext(
+    source.slice(
+      source.indexOf('const ensureConversationWriteAccess ='),
+      source.indexOf('const ensureLocalConversationWriteAccess =')
+    ) + '\nensureConversationWriteAccess',
+    c
+  )
+  const gates =
+    metadataHandler.slice(0, metadataHandler.indexOf('    activeRemoteCommand.value = command;')) +
+    '\n}'
+  const running = vm.runInNewContext(`(async () => {${gates}})()`, c)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(events.length, 0, 'MCP wait is not a busy failure')
+  if (changed === 'target')
+    c.currentConversationStorage.value.conversationId = 'another-conversation'
+  if (changed === 'expired-lease') c.conversationLease.value.expiresAt = new Date(0).toISOString()
+  if (changed === 'closing') c.isClosingWindow.value = true
+  if (changed === 'generating') c.loading.value = true
+  if (changed === 'handoff') c.mobileControlActive.value = false
+  if (changed === 'lease-replaced') c.conversationLease.value.leaseEpoch = 2
+
+  c.isMcpLoading.value = false
+  release()
+  await running
+  assert.equal(events.length, 1)
+  assert.equal(events[0].event, 'conversation.operation.failed')
+}
+
 // Actual Renderer metadata branch -> actual SQLite store with its own lease.
 // No Main write fallback. All fixtures are created in a new temporary directory.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'anywhere-remote-bootstrap-'))
@@ -238,7 +310,10 @@ try {
     const cid = created.descriptor.conversationId,
       items = [],
       executions = []
-    let manager, renderer
+    let manager, renderer, releaseMcp
+    const mcpReady = new Promise((resolve) => {
+      releaseMcp = resolve
+    })
     manager = createRemoteSessionManager({
       getConfig: async () => ({ config: { webdav: { localChatPath: root } } }),
       openConversation: store.openConversation,
@@ -277,7 +352,8 @@ try {
           loading: ref(false),
           compacting: ref(false),
           isPreparingSend: ref(false),
-          isMcpLoading: ref(false),
+          isMcpLoading: ref(true),
+          activeApplyMcpPromise: mcpReady,
           autoSaveExecutionPromise: null,
           currentConversationStorage: ref({ ...opened.descriptor, dirPath: root }),
           currentConfig: ref({ webdav: { localChatPath: root } }),
@@ -286,7 +362,13 @@ try {
           remoteConversationDeleted: ref(false),
           mobileControlActive: ref(true),
           remoteHiddenWriter: ref(true),
-          ensureConversationWriteAccess: () => lease.ok,
+          desktopTakeoverPending: ref(false),
+
+          conversationLeasePending: ref(false),
+          conversationReadOnly: ref(false),
+          ensureConversationWriteAccess: null,
+          showDismissibleMessage: { warning() {} },
+
           emitRemoteRendererEvent: emit,
           emitRemoteRendererEventAndWait: emit,
           finalizeRemoteCommand: (event, command, payload) => {
@@ -320,6 +402,14 @@ try {
           flushAppendBuffer: async () => {},
           remoteCommandExecutionPromise: null
         }
+        renderer.ensureConversationWriteAccess = vm.runInNewContext(
+          source.slice(
+            source.indexOf('const ensureConversationWriteAccess ='),
+            source.indexOf('const ensureLocalConversationWriteAccess =')
+          ) + '\nensureConversationWriteAccess',
+          renderer
+        )
+
         item.rendererReady = true
         item.leasePending = false
         return { ok: true, id: item.id }
@@ -355,6 +445,24 @@ try {
       params: { conversationId: cid, ...extra },
       preconditions: { controlEpoch: 'window-none' }
     })
+    const startDeadline = Date.now() + 2000
+    while (!executions.length && Date.now() < startDeadline)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.equal(
+      executions.length,
+      1,
+      'actual Renderer must receive the admitted command while MCP is pending'
+    )
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(
+      (await protocol.operationStatus(context, { operationId: commandId })).terminal,
+      false,
+      'MCP initialization is not a busy failure'
+    )
+    assert.equal(await store.conversationExists({ dirPath: root, conversationId: cid }), true)
+    renderer.isMcpLoading.value = false
+    releaseMcp()
+
     const until = Date.now() + 3000
     let state
     do {

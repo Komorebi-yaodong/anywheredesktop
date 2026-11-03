@@ -3355,6 +3355,25 @@ const runRemoteConversationCommand = async (input = {}) => {
 
 
   if (['conversation.rename', 'conversation.delete', 'conversation.project.set'].includes(command.type)) {
+    // Restoring a hidden writer may still be applying its MCP selection. This
+    // is preparation, not an AI turn. Await it, then revalidate all write gates.
+    if (!loading.value && !compacting.value && !isPreparingSend.value && !activeRemoteCommand.value && activeApplyMcpPromise) {
+      const leaseEpoch = conversationLease.value?.leaseEpoch;
+      try { await activeApplyMcpPromise; }
+      catch {
+        emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_mcp_apply_failed' });
+        return;
+      }
+      if (!mobileControlActive.value || desktopTakeoverPending.value || conversationLease.value?.leaseEpoch !== leaseEpoch) {
+        emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_read_only' });
+        return;
+      }
+    }
+    if (currentConversationStorage.value?.conversationId !== command.conversationId) {
+      emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_not_found' });
+      return;
+    }
+
     if (!ensureConversationWriteAccess(false) || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
       emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_conversation_busy' });
       return;

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import contract from '../packages/remote-contract/index.cjs'
+
 
 import crypto from 'node:crypto'
 import https from 'node:https'
@@ -1075,11 +1077,17 @@ async function main() {
     assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-fast-create-ping', method: 'remote.ping'})).ok, true)
     const pendingCreation = await sendEncryptedRequest({socket, session, requestId: 'request-fast-create-state', method: 'operation.status.get', params: {operationId: fastId}})
     assert.equal(pendingCreation.result.terminal, false)
+    contract.validateDurableOperation(pendingCreation.result)
+    assert.equal(pendingCreation.result.conversationId, null)
+    assert.equal(pendingCreation.result.progress.conversationId, null)
+
     releaseCreate();heldCreate = null
     let finalCreation
     const creationDeadline = Date.now() + 5000
     do {
       finalCreation = await sendEncryptedRequest({socket, session, requestId: 'request-fast-create-final-' + Date.now(), method: 'operation.status.get', params: {operationId: fastId}})
+      contract.validateDurableOperation(finalCreation.result)
+
       if (finalCreation.result.terminal) break
       assert.ok(Date.now() < creationDeadline);await new Promise(resolve => setTimeout(resolve, 10))
     } while (true)

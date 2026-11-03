@@ -58,7 +58,8 @@ export function createOperationJournal({load, save, saveChanges, now = Date.now}
   function safeRecord(record) {
     return {operationId: record.commandId, conversationId: record.conversationId || null,
       state: record.state, terminal: record.terminal, code: record.code || null,
-      receipt: record.receipt || null, progress: record.progress ? {...record.progress,
+      receipt: record.receipt || null, progress: record.progress && record.progress.terminal === record.terminal ? {...record.progress,
+        conversationId: record.conversationId || null,
         result: {...(record.receipt || {}), ...(record.progress.result || {})}} : null,
       acceptedAt: record.acceptedAt, expiresAt: record.acceptedAt + RETENTION_MS}
   }

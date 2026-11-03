@@ -34,8 +34,17 @@ contract.validateDurableOperation(await service.command(A, command))
 await service.command(A, command)
 assert.equal(calls, before + 1)
 await assert.rejects(service.command(A, {...command, params: {name: 'different'}}), {code: 'remote_command_id_conflict'})
-const stale = await service.command(A, {...command, commandId: `command-${issuedAt}-stale-command-fixture`, method: 'conversation.rename', params: {conversationId: frozen.runtime.conversationId, title: 'Synthetic'}, preconditions: {controlEpoch: 'stale'}})
-assert.equal(stale.code, 'remote_control_epoch_conflict')
+await assert.rejects(service.command(A, {...command, commandId: `command-${issuedAt}-stale-command-fixture`, method: 'conversation.rename', params: {conversationId: frozen.runtime.conversationId, title: 'Synthetic'}, preconditions: {controlEpoch: 'stale'}}), {code: 'remote_control_epoch_conflict'})
+
+const acceptedIssuedAt = Date.now()
+let releaseCommand
+const acceptedService = createBusinessProtocol({readService: {listMessages: async () => structuredClone(frozen.page)}, getManager: () => manager, operations: createOperationJournal({load: async () => null, save: async () => {}}),
+  dispatch: async () => new Promise(resolve => {releaseCommand = () => resolve({ok: true})})})
+acceptedService.negotiate(A, {versions: [{major: 1, minor: 1}]})
+const admitted = await acceptedService.command(A, {commandId: `command-${acceptedIssuedAt}-accepted-resource-fixture`, issuedAt: acceptedIssuedAt, method: 'conversation.rename', params: {conversationId: frozen.runtime.conversationId, title: 'Synthetic'}, preconditions: {controlEpoch: epoch}})
+assert.equal(admitted.state, 'accepted')
+releaseCommand()
+
 assert.equal(calls, before + 1)
 await service.transfer(A, 'request-transfer', {method: 'attachment.abort', params: {uploadId: 'synthetic-upload'}})
 assert.equal(calls, before + 2)

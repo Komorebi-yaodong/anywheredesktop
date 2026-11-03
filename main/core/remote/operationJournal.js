@@ -11,6 +11,8 @@ export function createOperationJournal({load, save, saveChanges, now = Date.now}
   let initialized
   let queue = Promise.resolve()
   const live = new Map()
+  const executionTails = new Map()
+  const interrupts = new Set(['conversation.cancel', 'conversation.compact.cancel', 'conversation.choice.submit'])
   const key = (deviceId, commandId) => `${deviceId}:${commandId}`
   const serial = fn => {
     const next = queue.catch(() => {}).then(fn)
@@ -56,10 +58,11 @@ export function createOperationJournal({load, save, saveChanges, now = Date.now}
   function safeRecord(record) {
     return {operationId: record.commandId, conversationId: record.conversationId || null,
       state: record.state, terminal: record.terminal, code: record.code || null,
-      receipt: record.receipt || null, progress: record.progress || null,
+      receipt: record.receipt || null, progress: record.progress ? {...record.progress,
+        result: {...(record.receipt || {}), ...(record.progress.result || {})}} : null,
       acceptedAt: record.acceptedAt, expiresAt: record.acceptedAt + RETENTION_MS}
   }
-  async function execute({deviceId, commandId, issuedAt, method, params}, dispatch, asynchronous = false) {
+  async function execute({deviceId, commandId, issuedAt, method, params}, dispatch, asynchronous = false, {admit = () => {}, background = asynchronous} = {}) {
     await initialize()
     const fingerprint = crypto.createHash('sha256').update(stableStringify({method, params})).digest('hex')
     const recordKey = key(deviceId, commandId)
@@ -70,6 +73,7 @@ export function createOperationJournal({load, save, saveChanges, now = Date.now}
         if (previous.fingerprint !== fingerprint) throw remoteError('remote_command_id_conflict')
         return previous
       }
+      admit()
       if (!Number.isFinite(issuedAt) || issuedAt < now() - MAX_AGE_MS || issuedAt > now() + FUTURE_MS) throw remoteError('remote_command_expired')
       for (const [id, item] of records) if (now() - item.acceptedAt > RETENTION_MS) {records.delete(id); removed.add(id)}
       // Retained dedupe history is not a usage quota; keep valid records without
@@ -82,11 +86,18 @@ export function createOperationJournal({load, save, saveChanges, now = Date.now}
       return next
     })
     if (!created) {
-      if (live.has(recordKey)) await live.get(recordKey)
+      // A duplicate async write is never a reason to wait or redispatch. Its
+      // retained operation is the only authoritative source of final state.
+      if (!background && live.has(recordKey)) await live.get(recordKey)
       if (storageFailed) await serial(persist)
       return safeRecord(record)
     }
-    const run = (async () => {
+    // The RPC admission lane can now finish early. Keep the execution lane until
+    // dispatch finishes, matching the pre-accept ordering for writes. Interrupts
+    // must still bypass it to settle work another write is waiting on.
+    const lane = typeof params.conversationId === 'string' ? 'conversation:' + params.conversationId : 'management'
+    const previous = interrupts.has(method) ? Promise.resolve() : executionTails.get(lane) || Promise.resolve()
+    const run = previous.catch(() => {}).then(async () => {
       try {
         const receipt = await dispatch()
         await serial(async () => {
@@ -94,6 +105,8 @@ export function createOperationJournal({load, save, saveChanges, now = Date.now}
           record.receipt = receipt
           if (typeof receipt?.conversationId === 'string') record.conversationId = receipt.conversationId
           if (!record.terminal) {record.state = asynchronous ? 'running' : 'succeeded'; record.terminal = !asynchronous}
+          // Persist the final dispatch receipt even if a terminal event arrived
+          // first, so create IDs and final results remain recoverable.
           await persist(record)
         })
       } catch (error) {
@@ -103,9 +116,20 @@ export function createOperationJournal({load, save, saveChanges, now = Date.now}
           await persist(record)
         })
       }
-    })()
+    })
+    if (!interrupts.has(method)) executionTails.set(lane, run)
     live.set(recordKey, run)
-    try {await run} finally {live.delete(recordKey)}
+    const finish = () => {
+      if (live.get(recordKey) === run) live.delete(recordKey)
+      if (executionTails.get(lane) === run) executionTails.delete(lane)
+    }
+    if (background) {
+      // The durable record is written before dispatch. Returning now lets the
+      // client render a truthful accepted state without waiting on Renderer IO.
+      run.finally(finish).catch(() => {})
+      return safeRecord(record)
+    }
+    try {await run} finally {finish()}
     if (storageFailed) throw remoteError('remote_operation_storage_failed')
     return safeRecord(record)
   }

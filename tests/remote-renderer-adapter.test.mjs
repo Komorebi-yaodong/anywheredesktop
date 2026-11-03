@@ -550,6 +550,50 @@ assert.equal(context.currentSystemPrompt.value, 'Next system');
 assert.equal(context.selectedVoice.value, 'Voice A');
 assert.equal(adapter.pendingRemoteConfigPatch.value, null);
 assert.ok(actions.includes('remote-next-turn-applied'));
+// Run the real model-loop request preparation twice in the same active turn.
+const loopStart = source.indexOf('      isModelIterationConfigLocked.value = false;', source.indexOf('// --- 3. 开始工具调用循环 ---'));
+const loopEnd = source.indexOf('      const preparingIndex =', loopStart);
+assert.ok(loopStart > 0 && loopEnd > loopStart);
+context.isModelIterationConfigLocked = ref(false);
+context.isApplyMcpRunning = ref(false);context.activeApplyMcpPromise = null;context.pendingApplyMcpRequest = ref(null);
+context.currentProviderID = ref('provider');context.base_url = ref('https://fixture.invalid/old');context.api_key = ref('synthetic-old');
+context.currentConfig.value.providers = {provider: {name: 'Old', apiType: 'chat_completions', retryCount: 1}, alternate: {name: 'New', apiType: 'responses', retryCount: 2}};
+context.modelMap.value['alternate|model-next'] = {};
+context.handleChangeModel = value => {context.model.value = value;context.currentProviderID.value = value.split('|')[0];context.base_url.value = 'https://fixture.invalid/' + context.currentProviderID.value;context.api_key.value = 'synthetic-' + context.currentProviderID.value;};
+context.openaiFormattedTools = ref([]);
+context.requestApplyMcpTools = async () => {context.openaiFormattedTools.value = context.sessionMcpServerIds.value.map(id => ({type: 'function', function: {name: id}}));};
+context.buildRequestHistoryForCurrentConversation = async () => [{role: 'system', content: context.currentSystemPrompt.value}, {role: 'tool', content: 'synthetic result', tool_call_id: 'fixture-call'}];
+context.rehydrateHistoryToolsIfNeeded = () => {};context.ensureAssistantReasoningContentForThinkingMode = () => {};
+context.generateMcpSystemPrompt = () => '\n## Tool Use Rules';context.normalizeToolsForRequest = tools => tools;
+context.getRuntimeSkillPath = async () => 'synthetic-skill-root';
+context.window.api.getSkillToolDefinition = async (_path, ids) => ({type: 'function', function: {name: 'skills-' + ids.join('-')}});
+context.requestSignal = new AbortController().signal;context.throwIfTurnAborted = () => {};
+vm.runInContext('globalThis.buildNextModelRequest = async () => {let firstRequestMessages = null;\n' + source.slice(loopStart, loopEnd) + '\nreturn {params: requestParams, skills: iterationSkillIds, contextLength: compactConfig.value.contextLength};};', ctx);
+context.selectedVoice.value = '';context.loading.value = true;adapter.activeRemoteCommand.value = activeGeneration;
+const firstIteration = await context.buildNextModelRequest();
+const oldSnapshot = JSON.stringify(firstIteration);
+await adapter.runRemoteConversationCommand({type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-mid-tool-next-request', patch: {model: 'alternate|model-next', reasoningEffort: 'high', systemPrompt: 'New iteration system', mcpServerIds: ['mcp-b'], skillIds: ['skill-b'], compact: {contextLength: 32768}}});
+assert.equal(JSON.stringify(firstIteration), oldSnapshot, 'in-flight request DTO is immutable');
+const nextIteration = await context.buildNextModelRequest();
+assert.equal(context.loading.value, true);assert.equal(adapter.activeRemoteCommand.value, activeGeneration);
+assert.equal(nextIteration.params.model, 'model-next');assert.equal(nextIteration.params.apiType, 'responses');assert.equal(nextIteration.params.baseUrl, 'https://fixture.invalid/alternate');
+assert.equal(nextIteration.params.reasoning_effort, 'high');assert.equal(nextIteration.contextLength, 32768);
+assert.ok(nextIteration.params.tools.some(tool => tool.function.name === 'mcp-b'));
+assert.ok(nextIteration.params.tools.some(tool => tool.function.name === 'skills-Skill B'));
+assert.ok(nextIteration.params.messages[0].content.startsWith('New iteration system'));
+assert.equal(JSON.stringify(firstIteration), oldSnapshot);assert.equal(adapter.pendingRemoteConfigPatch.value, null);
+// A failed next-request application must stop preparation and keep the patch.
+await adapter.runRemoteConversationCommand({type: 'conversation.config.patch', conversationId: command.conversationId, requestId: 'renderer-next-request-rollback', patch: {reasoningEffort: 'low'}});
+const goodExecutor = context.executeAutoSaveRequest;
+context.executeAutoSaveRequest = async () => false;
+await assert.rejects(context.buildNextModelRequest(), /remote_conversation_save_failed/);
+assert.equal(context.tempReasoningEffort.value, 'high');assert.equal(adapter.pendingRemoteConfigPatch.value.reasoningEffort, 'low');
+context.executeAutoSaveRequest = goodExecutor;
+await context.buildNextModelRequest();assert.equal(context.tempReasoningEffort.value, 'low');
+
+context.loading.value = false;adapter.activeRemoteCommand.value = null;
+
+
 context.activeAssistantTurnMeta = null;
 context.mobileControlActive.value = true;
 await adapter.runRemoteConversationCommand({type: 'conversation.desktop.takeover', conversationId: command.conversationId, requestId: 'renderer-desktop-control'});

@@ -115,26 +115,27 @@ export function createBusinessProtocol({readService, getManager, operations = nu
     const timestamp = /^command-(\d{13})-[A-Za-z0-9_-]{16,}$/.exec(commandId)
     if (!timestamp || Number(timestamp[1]) !== params.issuedAt) throw remoteError('remote_command_id_invalid')
     const body = params.params && typeof params.params === 'object' && !Array.isArray(params.params) ? params.params : {}
-    return operations.execute({deviceId: context.device.deviceId, commandId, issuedAt: params.issuedAt, method: params.method, params: body}, async () => {
-      let expectedEpoch = params.preconditions?.controlEpoch
-      let freshWriter = null
-      const check = () => {
-        if (routes.controlRequired.includes(params.method) && body.conversationId) {
-          const session = getManager().getSession?.(body.conversationId)
-          const runtime = getManager().runtimeSnapshot({deviceId: context.device.deviceId, params: {conversationId: body.conversationId}})
-          // Closed history has no writer yet. Creating a new hidden writer for
-          // the same device is allowed; an existing/foreign writer is not.
-          if (expectedEpoch === 'window-none' && session?.hidden && !session.mobileControlled) freshWriter = session.windowRef
-          if (freshWriter && session?.windowRef === freshWriter && session.hidden && (!session.mobileControlled || runtime.control.owner === 'this_device')) {
-            expectedEpoch = runtime.control.epoch
-            if (runtime.control.owner === 'this_device') freshWriter = null
-          }
-          if (typeof expectedEpoch !== 'string' || expectedEpoch !== runtime.control.epoch) throw remoteError('remote_control_epoch_conflict')
+    let expectedEpoch = params.preconditions?.controlEpoch
+    let freshWriter = null
+    const check = () => {
+      if (routes.controlRequired.includes(params.method) && body.conversationId) {
+        const session = getManager().getSession?.(body.conversationId)
+        const runtime = getManager().runtimeSnapshot({deviceId: context.device.deviceId, params: {conversationId: body.conversationId}})
+        // Closed history has no writer yet. Creating a new hidden writer for
+        // the same device is allowed; an existing/foreign writer is not.
+        if (expectedEpoch === 'window-none' && session?.hidden && !session.mobileControlled) freshWriter = session.windowRef
+        if (freshWriter && session?.windowRef === freshWriter && session.hidden && (!session.mobileControlled || runtime.control.owner === 'this_device')) {
+          expectedEpoch = runtime.control.epoch
+          if (runtime.control.owner === 'this_device') freshWriter = null
         }
+        if (typeof expectedEpoch !== 'string' || expectedEpoch !== runtime.control.epoch) throw remoteError('remote_control_epoch_conflict')
       }
+    }
+    // Deduplicate before checking admission, then recheck at actual execution.
+    return operations.execute({deviceId: context.device.deviceId, commandId, issuedAt: params.issuedAt, method: params.method, params: body}, () => {
       check()
       return getManager().withCommandGuard(check, () => dispatch(context, commandId, params.method, body))
-    }, routes.async.includes(params.method))
+    }, routes.async.includes(params.method), {admit: check, background: routes.async.includes(params.method) || params.method === 'conversation.close'})
   }
   async function operationStatus(context, params) {
     authorize(context)

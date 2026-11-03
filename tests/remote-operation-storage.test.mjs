@@ -33,6 +33,11 @@ try {
   }, true)
   assert.equal(cutovers, 1)
   await journal.update(input.deviceId, input.commandId, {event: 'assistant.delta', terminal: false, text: 'a', eventSequence: 1})
+  const receiptDeadline = Date.now() + 2000
+  while (!(await journal.get(input.deviceId, input.commandId)).receipt) {
+    assert.ok(Date.now() < receiptDeadline, 'dispatch receipt must finish before measuring token-only writes')
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
   const beforePolling = (await fs.stat(storage.file)).size
   for (let i = 0; i < 5; i++) await journal.update(input.deviceId, input.commandId, {event: 'assistant.delta', terminal: false, text: 'a'.repeat(i + 1), eventSequence: i + 2})
   assert.equal((await fs.stat(storage.file)).size, beforePolling, 'progress polling cannot rewrite history')
@@ -45,11 +50,14 @@ try {
   assert.equal(calls, 1, 'restart must not replay a completed operation')
   // Crash after an accepted prewrite yields interrupted, never redispatched.
   const pending = {...input, commandId: 'command-storage-pending'}
-  await journal.execute(pending, async () => ({ok: true}), true)
+  let finishPending
+  await journal.execute(pending, () => new Promise(resolve => {finishPending = resolve}), true)
   const pendingRestart = createOperationJournal(createOperationStorage(options))
   assert.equal((await pendingRestart.get(input.deviceId, pending.commandId)).state, 'interrupted')
   await pendingRestart.execute(pending, async () => {calls++; return {ok: true}})
   assert.equal(calls, 1)
+  finishPending({ok: true})
+  while (!(await journal.get(input.deviceId, pending.commandId)).receipt) await new Promise(resolve => setTimeout(resolve, 10))
   // Incomplete tail is discarded only; committed ciphertext corruption fails closed.
   await fs.appendFile(storage.file, 'incomplete')
   await createOperationStorage(options).load()

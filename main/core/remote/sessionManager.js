@@ -1020,7 +1020,7 @@ export function createRemoteSessionManager({
         // Mobile routes use the exact same Desktop-owned seven-day weight as
         // the quick assistant panel. Recording must never block a valid chat.
         await recordAssistantUsage(promptCode).catch(() => {})
-        publish(record, 'conversation.operation.completed', { operation: 'conversation.create' })
+        publish(record, 'conversation.operation.completed', { ...result, operation: 'conversation.create' })
         // A newly created hidden writer may remain idle if Mobile leaves before
         // sending its first message. Release its Renderer lease after the same
         // short idle window used for completed requests.

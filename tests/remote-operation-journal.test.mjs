@@ -19,6 +19,18 @@ assert.equal((await restored.get(input.deviceId, input.commandId)).state, 'succe
 await restored.execute(input, dispatch)
 assert.equal(calls, 1, 'restart duplicate cannot redispatch')
 await assert.rejects(restored.get('another-device-fixture', input.commandId), {code: 'remote_operation_not_found'})
+const accepted = {...input, commandId: 'command-accepted-fixture'}
+let releaseAccepted
+const blockedDispatch = () => new Promise(resolve => {releaseAccepted = () => resolve({conversationId: input.params.conversationId, ok: true})})
+const immediatelyAccepted = await journal.execute(accepted, blockedDispatch, true)
+assert.equal(immediatelyAccepted.state, 'accepted', 'async operations return after durable admission, not Renderer completion')
+assert.equal((await journal.get(input.deviceId, accepted.commandId)).state, 'accepted')
+const acceptedDuplicate = await journal.execute(accepted, async () => {throw new Error('must not redispatch')}, true)
+assert.equal(acceptedDuplicate.state, 'accepted')
+releaseAccepted()
+await new Promise(resolve => setImmediate(resolve))
+assert.equal((await journal.get(input.deviceId, accepted.commandId)).state, 'running')
+
 const active = {...input, commandId: 'command-running-fixture'}
 await journal.execute(active, dispatch, true)
 assert.equal((await createOperationJournal(options).get(input.deviceId, active.commandId)).state, 'interrupted')
@@ -31,7 +43,9 @@ const completed = await journal.execute(early, async () => {
   await journal.update(input.deviceId, early.commandId, {requestId: early.commandId, conversationId: input.params.conversationId, event: 'conversation.operation.completed', terminal: true, eventSequence: 1, text: '', reasoning: '', result: {ok: true}})
   return {ok: true}
 }, true)
-assert.equal(completed.state, 'succeeded', 'early terminal must not regress to running')
+assert.equal(completed.state, 'accepted', 'async admission returns before Renderer terminal state')
+await new Promise(resolve => setImmediate(resolve))
+assert.equal((await journal.get(input.deviceId, early.commandId)).state, 'succeeded', 'early terminal must not regress to running')
 // A post-dispatch durability failure is uncertain, never safe to rerun.
 let failNextSave = false, uncertainDisk = null, uncertainCalls = 0
 const uncertain = createOperationJournal({load: async () => uncertainDisk, save: async value => {if (failNextSave) throw new Error('disk unavailable'); uncertainDisk = clone(value)}, now: () => clock})
@@ -94,6 +108,27 @@ assert.equal(capacityCalls, 19)
 await largeRestored.execute({...input, commandId: 'capacity-large-0'}, capacityDispatch)
 assert.equal(capacityCalls, 19)
 assert.equal(Object.hasOwn(largeRestored.limits, 'maxRecords'), false)
+// Early admission must not release the actual same-conversation execution lane.
+{
+ const ordered = createOperationJournal({load: async () => null, save: async () => {}, now: () => clock})
+ const sequence = [], releases = []
+ const base = {...input, issuedAt: clock}
+ const first = await ordered.execute({...base, commandId: 'ordered-first'}, async () => {sequence.push('first');await new Promise(resolve => releases.push(resolve));return {ok: true}}, true)
+ const second = await ordered.execute({...base, commandId: 'ordered-second'}, async () => {sequence.push('second');return {ok: true}}, true)
+ assert.equal(first.state, 'accepted');assert.equal(second.state, 'accepted');assert.deepEqual(sequence, ['first'])
+ await ordered.execute({...base, commandId: 'ordered-interrupt', method: 'conversation.cancel'}, async () => {sequence.push('cancel');return {ok: true}})
+ assert.deepEqual(sequence, ['first', 'cancel'])
+ const foreign = await ordered.execute({...base, commandId: 'ordered-other', params: {conversationId: 'other-conversation'}}, async () => {sequence.push('other');return {ok: true}}, false)
+ assert.equal(foreign.terminal, true)
+ releases[0]()
+ while (!(await ordered.get(base.deviceId, 'ordered-second')).receipt) await new Promise(resolve => setImmediate(resolve))
+ assert.deepEqual(sequence, ['first', 'cancel', 'other', 'second'])
+ // Existing operation IDs are queried, not revalidated/replayed as new writes.
+ const duplicate = await ordered.execute({...base, commandId: 'ordered-first'}, () => {throw new Error('replayed')}, true, {admit: () => {throw new Error('stale epoch must not hide old result')}})
+ assert.equal(duplicate.operationId, 'ordered-first')
+}
+
+
 clock += 8 * 86400000
 await largeRestored.execute({...input, issuedAt: clock, commandId: 'capacity-after-retention'}, capacityDispatch)
 await assert.rejects(largeRestored.execute(nextInput, capacityDispatch), {code: 'remote_command_expired'})

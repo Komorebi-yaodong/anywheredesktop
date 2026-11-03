@@ -65,6 +65,9 @@ for (const failure of [false, true]) {
  service.negotiate(context, {versions: [{major: 1, minor: 1}]})
  const issuedAt = Date.now()
  const result = await service.command(context, {commandId: `command-${issuedAt}-hidden-delete-fixture`, issuedAt, method: 'conversation.delete', params: {conversationId: cid, confirmed: true}, preconditions: {controlEpoch: 'window-none'}})
+ assert.equal(result.state, 'accepted')
+ const deadline = Date.now() + 2000
+ while (!commands.includes('conversation.delete') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
  assert.ok(commands.includes('conversation.delete'), `delete must dispatch after writer readiness: ${result.code}`)
  await new Promise(resolve => setTimeout(resolve, 20))
  assert.equal(items.length, 0, 'new hidden writer must not remain after deletion or failed metadata command')

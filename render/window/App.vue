@@ -10384,16 +10384,21 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
     });
   }
 
-  const currentPromptConfig = currentConfig.value.prompts[CODE.value];
   let tool_calls_count = 0;
-
-  // 获取当前服务商的 API 类型
-  const currentProviderConfig = currentConfig.value.providers[currentProviderID.value];
-  const apiType = currentProviderConfig?.apiType || 'chat_completions';
 
   try {
     // --- 3. 开始工具调用循环 ---
     while (!isTurnAborted()) {
+      // Each HTTP request owns an immutable runtime snapshot. Remote patches
+      // saved during the previous response/tool work apply at this boundary.
+      isModelIterationConfigLocked.value = false;
+      const hadPendingRemoteConfig = Boolean(pendingRemoteConfigPatch.value || remoteConfigExecutionPromise);
+      await applyPendingRemoteConfig();
+      throwIfTurnAborted();
+      if (hadPendingRemoteConfig) firstRequestMessages = null;
+      const currentPromptConfig = currentConfig.value.prompts[CODE.value];
+      const currentProviderConfig = currentConfig.value.providers[currentProviderID.value];
+      const apiType = currentProviderConfig?.apiType || 'chat_completions';
 
       if (isApplyMcpRunning.value && activeApplyMcpPromise) {
         await activeApplyMcpPromise;
@@ -11157,6 +11162,8 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
 
         // 关键：tool 结果写回后、进入下一轮 AI 请求前做上下文检测。
         // 超限则先压缩，压缩完成后再 continue 循环发送。
+        await applyPendingRemoteConfig();
+        throwIfTurnAborted();
         await maybeAutoCompactBeforeNextRequest({ reason: 'after-tool-results' });
         throwIfTurnAborted();
       } else {

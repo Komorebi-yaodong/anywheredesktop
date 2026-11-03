@@ -144,7 +144,7 @@ async function connectEncrypted({ endpoint, rootSecret, deviceId, desktopId }) {
   return { socket, session, welcome }
 }
 
-async function sendEncryptedRequest({ socket, session, requestId, method, params = {} }) {
+async function sendEncryptedRequest({ socket, session, requestId, method, params = {}, latencyMs = 0 }) {
   const events = []
   const response = new Promise((resolve, reject) => {
     const timer = setTimeout(() => { cleanup(); reject(new Error('rpc_timeout')) }, 5000)
@@ -153,13 +153,14 @@ async function sendEncryptedRequest({ socket, session, requestId, method, params
         const frame = JSON.parse(raw.toString())
         if (frame.type !== 'remote.encrypted') return
         const message = session.decrypt(frame)
-        if (message.kind === 'response' && message.requestId === requestId) { cleanup(); resolve(message) }
+        if (message.kind === 'response' && message.requestId === requestId) { cleanup(); setTimeout(() => resolve(message), latencyMs) }
         else events.push(message)
       } catch (error) { cleanup(); reject(error) }
     }
     const cleanup = () => { clearTimeout(timer); socket.off('message', onMessage) }
     socket.on('message', onMessage)
   })
+  if (latencyMs) await new Promise(resolve => setTimeout(resolve, latencyMs))
   socket.send(JSON.stringify(session.encrypt({ kind: 'request', requestId, method, params })))
   const result = await response
   result.events = events
@@ -390,6 +391,8 @@ async function main() {
 
   const writerCommands = []
   let mobileUsageRecords = 0
+  let heldCreate = null, releaseCreate = null
+  let createdWindowCount = 0
   const writerWindows = [
     { id: 'window-fixture', type: 'window', conversationId: 'conversation-gateway-fixture-0001', rendererReady: true, remoteHidden: false },
     { id: 'window-fixture-revoke', type: 'window', conversationId: 'conversation-gateway-fixture-0002', rendererReady: true, remoteHidden: false }
@@ -400,7 +403,9 @@ async function main() {
     openWindow: async (type, payload) => {
       assert.equal(payload.remoteCreate, true)
       assert.equal(payload.code, 'Code')
-      const item = {id: 'window-created-fixture', type, conversationId: 'conversation-created-gateway-fixture',
+      if (heldCreate) await heldCreate
+      const ordinal = createdWindowCount++
+      const item = {id: ordinal ? 'window-created-fixture-' + ordinal : 'window-created-fixture', type, conversationId: ordinal ? 'conversation-created-gateway-fixture-' + ordinal : 'conversation-created-gateway-fixture',
         conversationTitle: payload.conversationTitle, rendererReady: true, remoteHidden: true}
       writerWindows.push(item)
       return {ok: true, id: item.id}
@@ -1054,6 +1059,33 @@ async function main() {
     const storedOperations = await storage.get('remote:operations:v1', null)
     assert.ok(storedOperations.value.encrypted)
     assert.equal(JSON.stringify(storedOperations).includes('Durable Synthetic Project'), false)
+    // The real TLS/AEAD gateway must acknowledge durable admission while
+    // Renderer creation is still blocked. Status and ping cannot wait for it.
+    heldCreate = new Promise(resolve => {releaseCreate = resolve})
+    const fastIssuedAt = Date.now(), fastId = 'command-' + fastIssuedAt + '-fast-accept-create-fixture'
+    const fastInput = {commandId: fastId, issuedAt: fastIssuedAt, method: 'conversation.create', params: {promptCode: 'Code'}}
+    const fastBegan = Date.now()
+    const fastAck = await sendEncryptedRequest({socket, session, requestId: 'request-fast-create', method: 'command.submit', params: fastInput, latencyMs: 250})
+    assert.equal(fastAck.ok, true);assert.equal(fastAck.result.state, 'accepted');assert.equal(fastAck.result.terminal, false)
+    assert.equal(createdWindowCount, 1, 'held creation has not reached Renderer readiness')
+    const admittedMs = Date.now() - fastBegan
+    assert.ok(admittedMs >= 480 && admittedMs < 2500, 'one injected 500ms RTT, independent of blocked Renderer')
+    const duplicateAck = await sendEncryptedRequest({socket, session, requestId: 'request-fast-create-duplicate', method: 'command.submit', params: fastInput})
+    assert.equal(duplicateAck.result.operationId, fastId);assert.equal(createdWindowCount, 1)
+    assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-fast-create-ping', method: 'remote.ping'})).ok, true)
+    const pendingCreation = await sendEncryptedRequest({socket, session, requestId: 'request-fast-create-state', method: 'operation.status.get', params: {operationId: fastId}})
+    assert.equal(pendingCreation.result.terminal, false)
+    releaseCreate();heldCreate = null
+    let finalCreation
+    const creationDeadline = Date.now() + 5000
+    do {
+      finalCreation = await sendEncryptedRequest({socket, session, requestId: 'request-fast-create-final-' + Date.now(), method: 'operation.status.get', params: {operationId: fastId}})
+      if (finalCreation.result.terminal) break
+      assert.ok(Date.now() < creationDeadline);await new Promise(resolve => setTimeout(resolve, 10))
+    } while (true)
+    assert.equal(finalCreation.result.state, 'succeeded');assert.equal(finalCreation.result.progress.result.conversationId, 'conversation-created-gateway-fixture-1')
+    assert.equal(createdWindowCount, 2, 'duplicate never creates a second writer')
+    console.log(JSON.stringify({ok: true, suite: 'gateway-fast-command-admission', admittedMs, injectedRttMs: 500, completed: true, pingWhileBlocked: true}))
     await sendEncryptedRequest({socket, session, requestId: 'request-back-v10', method: 'remote.contract.negotiate', params: {versions: [{major: 1, minor: 0}]}})
 
 

@@ -300,6 +300,8 @@ export function createRemoteSessionManager({
   const revokedDevices = new Set()
   const deletedConversations = new Set()
   const closingConversations = new Set()
+  const openingConversations = new Map()
+
   let enabled = true
   let generation = 0
   let closing = null
@@ -444,7 +446,7 @@ export function createRemoteSessionManager({
     throw remoteError(requireConversationId ? 'remote_conversation_create_timeout' : 'remote_renderer_not_ready')
   }
 
-  async function ensureSession(conversationId, check) {
+  async function ensureSession(conversationId, check, temporaryMetadata = false) {
     check()
     if (closingConversations.has(conversationId)) throw remoteError('remote_conversation_closing')
     if (deletedConversations.has(conversationId)) throw remoteError('remote_conversation_not_found')
@@ -470,6 +472,8 @@ export function createRemoteSessionManager({
           if (!created?.ok || !created.id) throw remoteError('remote_hidden_window_create_failed')
           // Register even if stop/revoke raced window creation, so closeAll can collect it.
           const session = remember(conversationId, windowItem(created.id) || { id: created.id, remoteHidden: true })
+          if (temporaryMetadata) session.temporaryMetadata = true
+
           commandGuard.getStore()?.createdWriter?.({conversationId, windowRef: created.id, controlEpoch: session.controlEpoch})
           return session
         })()
@@ -531,6 +535,13 @@ export function createRemoteSessionManager({
   }
 
   function finishClosed(session) {
+    for (const record of requests.values()) {
+      if (record.windowRef === session.windowRef && record.metadataCompletion && !record.metadataFinalizing && !record.terminal) {
+        publish(record, 'conversation.operation.failed', {code: 'remote_renderer_closed'})
+        record.resolveMetadata?.()
+      }
+    }
+
     closingConversations.delete(session.conversationId)
     session.closing = false
     for (const [key, read] of configReads) {
@@ -591,7 +602,7 @@ export function createRemoteSessionManager({
   }
 
   function scheduleIdleRelease(session) {
-    if (!session || deletedConversations.has(session.conversationId) || session.idleReleaseTimer || !session.hidden || session.mobileControlled) return
+    if (!session || deletedConversations.has(session.conversationId) || session.idleReleaseTimer || !session.hidden || session.mobileControlled && !session.temporaryMetadata) return
     session.idleReleaseTimer = setTimeout(() => {
       session.idleReleaseTimer = null
       if (!enabled || sessions.get(session.conversationId) !== session) return
@@ -687,6 +698,10 @@ export function createRemoteSessionManager({
       if (!writer || writer.readOnly === true) continue
       seen.add(item.conversationId)
       const session = sessions.get(item.conversationId)
+      if (session?.temporaryMetadata) continue
+      if (!session && writer.remoteHidden && creations.has(item.conversationId)) continue
+
+
       const hasDesktopObserver = candidates.some((candidate) =>
         candidate.id !== writer.id && candidate.remoteHidden !== true
       )
@@ -710,6 +725,13 @@ export function createRemoteSessionManager({
     const safeDeviceId = id(deviceId, 'deviceId')
     const conversationId = id(params.conversationId, 'conversationId')
     const epoch = generation
+    // An explicit open promotes an idle/background metadata writer. It must
+    // never be collected as a one-shot writer after this device chose to use it.
+    const intentKey = `${safeDeviceId}:${conversationId}`
+    openingConversations.set(intentKey, (openingConversations.get(intentKey) || 0) + 1)
+    const opening = sessions.get(conversationId)
+    if (opening?.temporaryMetadata && (!opening.mobileDeviceId || opening.mobileDeviceId === safeDeviceId) && !opening.releasing) opening.temporaryMetadata = false
+
     const guardedCommand = commandGuard.getStore()
     const check = () => {assertActive(epoch, safeDeviceId); guardedCommand?.()}
     return serialize(conversationId, async () => {
@@ -721,12 +743,14 @@ export function createRemoteSessionManager({
         ensureMobileControl(session, safeDeviceId)
       } else if (session.mobileControlled) {
         requireMobileController(session, safeDeviceId)
+        ensureMobileControl(session, safeDeviceId)
       } else if (session.hidden) {
         await ready(session.windowRef, check)
         ensureMobileControl(session, safeDeviceId)
       }
       const item = windowItem(session.windowRef)
       session.mobileOpened = true
+      session.temporaryMetadata = false
       return {
         ok: true,
         conversationId,
@@ -735,6 +759,10 @@ export function createRemoteSessionManager({
         mobileControlled: session.mobileControlled === true && (!session.mobileDeviceId || session.mobileDeviceId === safeDeviceId),
         observingDesktop: item?.remoteHidden !== true && session.mobileControlled !== true
       }
+    }).finally(() => {
+      const count = (openingConversations.get(intentKey) || 1) - 1
+      if (count) openingConversations.set(intentKey, count)
+      else openingConversations.delete(intentKey)
     })
   }
 
@@ -1306,14 +1334,20 @@ export function createRemoteSessionManager({
       const hadSession = Boolean(existingSession(conversationId))
       record.createdHiddenWriter = !hadSession
       try {
-        const session = await ensureSession(conversationId, check)
+        const session = await ensureSession(conversationId, check, !hadSession)
         check()
+        if (!hadSession) session.temporaryMetadata = !openingConversations.has(`${safeDeviceId}:${conversationId}`)
         ensureMobileControl(session, safeDeviceId)
+        if (session.temporaryMetadata) session.mobileOpened = false
         check()
         const item = windowItem(session.windowRef)
         if (session.activeRequestId || item?.busy || item?.generating || item?.compacting) throw remoteError('remote_conversation_busy')
         session.activeRequestId = safeRequestId
         session.activeDeviceId = safeDeviceId
+        if (session.temporaryMetadata && operation !== 'conversation.delete') {
+          record.metadataCompletion = new Promise(resolve => {record.resolveMetadata = resolve})
+        }
+
         session.activeOperation = operation
         record.windowRef = session.windowRef
         const dispatched = await dispatchRemoteCommandToWindow(session.windowRef, {
@@ -1327,6 +1361,7 @@ export function createRemoteSessionManager({
         const result = { ok: true, operation, conversationId, windowId: session.windowRef, hidden: session.hidden, created: !hadSession }
         record.result = result
         if (record.eventSequence === 0) publish(record, 'conversation.command.accepted', result)
+        if (record.metadataCompletion) await record.metadataCompletion
         return result
       } catch (error) {
         const session = sessions.get(conversationId)
@@ -1696,6 +1731,29 @@ export function createRemoteSessionManager({
       if (!sanitizedPayload.toolCallId || !sanitizedPayload.questions.length) return { ok: false, error: 'remote_choice_event_invalid' }
       session.pendingChoices.set(sanitizedPayload.toolCallId, sanitizedPayload.questions)
     }
+    if (record.metadataCompletion && TERMINAL_EVENTS.has(data.event)) {
+      // Ack the Renderer event now (it may await this IPC). Publish terminal
+      // only after normal hidden-writer close; never deadlock its finalizer.
+      if (record.metadataFinalizing) return {ok: true}
+      record.metadataFinalizing = true
+      session.activeRequestId = ''; session.activeDeviceId = ''; session.activeOperation = ''
+      Promise.resolve().then(async () => {
+        let cleanupFailed = false
+        if (session.temporaryMetadata && session.hidden && session.mobileDeviceId === record.deviceId) {
+          try {await releaseHiddenSession(session)} catch {cleanupFailed = true; scheduleIdleRelease(session)}
+        }
+        const revision = Math.max(0, Number(sanitizedPayload?.revision) || 0)
+        if (revision > 0) {try {onConversationRevision?.({windowRef, conversationId: record.conversationId, revision})} catch { /* observer only */ }}
+        publish(record, cleanupFailed ? 'conversation.operation.failed' : data.event,
+          cleanupFailed ? {code: 'remote_writer_release_timeout'} : sanitizedPayload)
+        record.resolveMetadata?.()
+      }).catch(() => {
+        publish(record, 'conversation.operation.failed', {code: 'remote_writer_release_timeout'})
+        record.resolveMetadata?.()
+      })
+      return {ok: true}
+    }
+
     publish(record, data.event, sanitizedPayload)
 
     const revision = Math.max(0, Number(sanitizedPayload?.revision) || 0)

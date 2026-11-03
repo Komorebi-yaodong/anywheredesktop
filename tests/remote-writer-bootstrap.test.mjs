@@ -416,6 +416,12 @@ try {
       },
       dispatchRemoteCommandToWindow: async (_, command) => {
         if (command.type === 'remote.shutdown') {
+          await store.releaseWriteLease({
+            dirPath: root,
+            conversationId: cid,
+            holderInstanceId: renderer.conversationInstanceId,
+            leaseEpoch: renderer.conversationLease.value.leaseEpoch
+          })
           items.splice(0)
           return { ok: true }
         }
@@ -471,6 +477,9 @@ try {
     } while (!state.terminal && Date.now() < until)
     assert.equal(state.state, 'succeeded', JSON.stringify(state))
     await Promise.all(executions)
+    assert.equal(items.length, 0, 'one-shot metadata completion must leave no hidden writer')
+    assert.equal(manager.openedSessions({ deviceId }).sessions.length, 0)
+
     projects = await readLocalProjects(root)
     if (method === 'conversation.delete') {
       await assert.rejects(fs.stat(path.join(root, created.descriptor.dbFile)), { code: 'ENOENT' })

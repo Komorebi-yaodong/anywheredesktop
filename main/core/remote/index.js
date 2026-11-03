@@ -248,6 +248,7 @@ export function createRemoteGateway({
   businessConfigService = null,
   mobileWorkspaceService = null,
   remoteManagementService = null,
+  usageService = null,
   onStatusChanged = null,
   onPairingCreated = null,
   getLanAddresses = getLanIpv4Addresses,
@@ -358,6 +359,8 @@ export function createRemoteGateway({
 
     if (uploadManager) capabilities.push('attachment.begin', 'attachment.chunk', 'attachment.complete', 'attachment.abort')
     if (businessConfigService) capabilities.push('business.config.get', 'business.config.replace')
+    if (typeof usageService?.get === 'function') capabilities.push('workspace.usage.get')
+
     if (mobileWorkspaceService) capabilities.push(
       'workspace.bootstrap.get', 'workspace.avatar.get', 'workspace.assistants.list', 'workspace.assistant.get', 'workspace.assistant.patch',
       'workspace.agent.catalog', 'workspace.agent.get', 'workspace.agent.mutate', 'workspace.agent.routes.mutate', 'workspace.agent.tags.mutate',
@@ -1140,6 +1143,11 @@ export function createRemoteGateway({
         case 'management.mutate':
           if (!remoteManagementService) throw remoteError('remote_method_unavailable')
           result = await remoteManagementService.mutate({deviceId: context.device.deviceId, requestId, params})
+          break
+
+        case 'workspace.usage.get':
+          if (!context.capabilities.includes('workspace.usage.get') || typeof usageService?.get !== 'function') throw remoteError('remote_method_unavailable')
+          result = await usageService.get({params})
           break
 
         case 'workspace.bootstrap.get':
@@ -1968,6 +1976,8 @@ export function createRemoteGateway({
     configure: (config = {}) => queue(() => configureNow(config)),
     stop: () => queue(() => stopNow({ clearEnabled: false })),
     getStatus,
+
+    setUsageService: service => {usageService = service},
 
     getPublicSettings: () => sanitizeRemoteSettingsForConfig(configuredSettings),
     broadcastEvent: (event, payload = {}) => broadcastEncryptedEvent(event, payload),

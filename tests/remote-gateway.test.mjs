@@ -10,6 +10,9 @@ import path from 'node:path'
 import { once } from 'node:events'
 import { WebSocket } from 'ws'
 import { createRemoteGateway } from '../main/core/remote/index.js'
+import {createRemoteUsageService} from '../main/core/remote/usage.js'
+import {aggregateUsage} from '../main/core/usageAnalytics.js'
+
 
 import {createHistoryPager} from '../main/core/remote/historyPager.js'
 import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
@@ -385,6 +388,8 @@ async function main() {
     uploadManager,
     businessConfigService,
     remoteManagementService,
+    usageService: createRemoteUsageService({query: async filters => aggregateUsage(Array.from({length: 7}, () => ({providerId: 'synthetic', providerName: 'Synthetic', agentName: 'Code', model: 'fixture', endedAt: Date.now() - 1000, status: 'success', usageKnown: true, inputTokens: 10, outputTokens: 5, cachedTokens: 2, totalTokens: 15})), filters)}),
+
     getDesktopDisplayName: async () => 'Fixture Workspace',
     onPairingCreated: (payload) => { observedPairing = payload },
     getLanAddresses: () => [fixtureLanAddress],
@@ -670,6 +675,10 @@ async function main() {
       desktopId: qr2.desktopId
     })
     assert.ok(welcome.payload.capabilities.includes('conversation.create'))
+    assert.ok(welcome.payload.capabilities.includes('workspace.usage.get'))
+    const usageRead = await sendEncryptedRequest({socket, session, requestId: 'usage-read-synthetic', method: 'workspace.usage.get', params: {range: '7d'}})
+    assert.equal(usageRead.result.summary.requests, 7)
+
 
     assert.equal((await sendEncryptedRequest({socket, session, requestId: 'request-welcome-before-disk', method: 'remote.ping'})).ok, true)
     assert.equal(deviceMetadataStarted, true)

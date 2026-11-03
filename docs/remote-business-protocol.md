@@ -37,6 +37,15 @@ Existing service parameter allowlists, permission/revision checks, quotas and fi
 
 `conversation.config.get` is a read resource that waits for the independent Renderer snapshot result. SDK provides a short-lived read receipt to existing UI callers; reads do not consume durable mutation capacity. No current generation/controller is replaced by a settings read.
 
+## Optional aggregate usage read
+
+The authenticated welcome advertises `workspace.usage.get` only when Main has registered the usage service. This independent, read-only extension is dispatched directly by the encrypted gateway; it does not modify the released 1.1 route package and never enters `command.submit` or the mutation journal. An absent capability is an explicit unavailable result, not a fallback to config/log reads.
+
+`workspace.usage.get({range?,providerId?,agentName?,model?})` accepts only `24h|today|yesterday|7d|30d` and bounded string filters. It queries the same Main-owned usage store as the local dashboard. Its `schemaVersion:'1.0'` DTO contains Desktop `timeZone`, range, generation time, summary metrics, at most 64 complete time buckets, 366 daily activity counts and bounded display/filter options (200 entries and 8 KiB per category; 96 KiB total DTO). It never returns journal records, conversation content, paths, credentials or arbitrary config. Current provider names override stored name snapshots; deleted providers retain their snapshot names. It neither opens a Renderer nor acquires conversation control/leases.
+
+Mobile polls serially only while the statistics tab is visible, the app is foreground and the Desktop is online. Filter/Desktop/tab changes invalidate pending callbacks; failures preserve only the last result for the same Desktop/filter scope. Day boundaries and labels use the Desktop timezone, with the existing aggregation and fixed heatmap bands unchanged.
+
+
 ## Conversation view, content and runtime
 
 

@@ -6,6 +6,8 @@ import { runTaskById } from './core/task_runner.js'
 import { getQuickAssistantWeight, recordQuickAssistantUsage } from './core/quickAssistantUsage.js'
 import { createConversationMetadataRouter } from './core/conversationMetadataRouter.js'
 import { createUsageStore } from './core/usageStore.js'
+import { createRemoteUsageService } from './core/remote/usage.js'
+
 import { setUsageRecordSink } from './core/usageRecorder.js'
 
 const GITHUB_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/Komorebi-yaodong/anywheredesktop/main/package.json'
@@ -812,6 +814,8 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
   })
 
   const usageStore = createUsageStore(path.join(app.getPath('userData'), 'usage-statistics.v1.jsonl'))
+  remoteGateway.setUsageService?.(createRemoteUsageService({query: filters => usageStore.query(filters), getConfig: dataApi.getConfig}))
+
   setUsageRecordSink((record) => usageStore.record(record))
   handleInvoke('usage:record', async (_event, record) => usageStore.record(record))
   handleInvoke('usage:query', async (_event, filters = {}) => usageStore.query(filters && typeof filters === 'object' ? filters : {}))

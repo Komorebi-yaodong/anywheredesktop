@@ -51,7 +51,7 @@ async function openControlledSession(session) {
 async function takeOverSession(session) {
   if (sessionAction.value) return
   try {
-    await ElMessageBox.confirm('接管将停止当前生成、取消远端待发消息，保存后由 Desktop 控制，Mobile 将只读。', '强制接管会话', {type: 'warning', confirmButtonText: '接管', cancelButtonText: '取消'})
+    await ElMessageBox.confirm('接管后由 Desktop 控制，当前请求与已发送的待发消息继续执行，Mobile 将只读。', '强制接管会话', {type: 'warning', confirmButtonText: '接管', cancelButtonText: '取消'})
     sessionAction.value = session.conversationId
     await window.api.takeoverRemoteConversation(session.conversationId, true)
     await refreshControlledSessions()

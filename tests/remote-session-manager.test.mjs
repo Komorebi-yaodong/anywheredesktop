@@ -26,7 +26,8 @@ function fixture({ existing = false, dispatchFailure = false, allowControlComman
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       commands.push({ windowRef, ...command })
 
-      if (command.type === 'conversation.mobile.takeover' && takeoverReceipt !== 'timeout' && (!dispatchFailure || allowControlCommands)) manager.handleRendererEvent({windowRef, payload: {conversationId: command.conversationId, requestId: command.requestId, event: 'conversation.mobile.control.result', payload: {ok: takeoverReceipt === 'ok', code: 'remote_conversation_save_failed'}}})
+      if (command.type === 'conversation.mobile.takeover' && takeoverReceipt !== 'timeout' && (!dispatchFailure || allowControlCommands)) manager.handleRendererEvent({windowRef, payload: {conversationId: command.conversationId, requestId: command.requestId, event: 'conversation.mobile.control.result', payload: {ok: takeoverReceipt === 'ok', code: 'remote_conversation_save_failed', controlEpoch: command.controlEpoch}}})
+      if (command.type === 'conversation.mobile.handoff') manager.handleRendererEvent({windowRef, payload: {conversationId: command.conversationId, requestId: command.requestId, event: 'conversation.handoff.control.result', payload: {ok: true, controlEpoch: command.controlEpoch}}})
       if (command.type === 'remote.shutdown') {
         const item = items.find(item => item.id === windowRef)
         if (item?.remoteHidden || command.closeWindow) items.splice(items.indexOf(item), 1)
@@ -166,7 +167,7 @@ async function run() {
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(f.commands.at(-1).requestId, 'request-fixture-0002')
   assert.equal(f.manager.listSendQueue({ deviceId: DEVICE, params: { conversationId: CID } }).items.length, 0)
-  await assert.rejects(f.manager.cancel({ deviceId: 'device-other-fixture', requestId: 'cancel-fixture', params: { conversationId: CID } }), { code: 'remote_request_owner_mismatch' })
+  await assert.rejects(f.manager.cancel({ deviceId: 'device-other-fixture', requestId: 'cancel-fixture', params: { conversationId: CID } }), { code: 'remote_conversation_controlled_by_other_device' })
   await f.manager.cancel({ deviceId: DEVICE, requestId: 'cancel-fixture', params: { conversationId: CID } })
   assert.equal(f.commands.at(-1).targetRequestId, 'request-fixture-0002')
   renderer(f, 'assistant.cancelled', {}, 'request-fixture-0002')
@@ -221,9 +222,9 @@ async function run() {
     renderer(drainingTakeover, 'conversation.queue.drain', {}, 'request-drain-takeover-parent'),
     new Promise(resolve => setTimeout(() => resolve({ok: 'blocked'}), 100)),
   ])
-  assert.equal(drainDuringTakeover.ok, false, 'reject immediately rather than deadlocking on takeover serialization')
+  assert.equal(drainDuringTakeover.ok, true, 'running tool boundary continues during control transfer')
   const takeoverCommand = drainingTakeover.commands.find(item => item.type === 'conversation.desktop.takeover')
-  renderer(drainingTakeover, 'conversation.desktop.control.result', {ok: true}, takeoverCommand.requestId)
+  renderer(drainingTakeover, 'conversation.desktop.control.result', {ok: true, controlEpoch: takeoverCommand.controlEpoch}, takeoverCommand.requestId)
   renderer(drainingTakeover, 'assistant.cancelled', {}, 'request-drain-takeover-parent')
   await takeoverFinished
 
@@ -297,7 +298,7 @@ async function run() {
 
   for (const takeoverReceipt of ['timeout', 'failed']) {
     const rejected = fixture({existing: true, takeoverReceipt})
-    await assert.rejects(rejected.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}}), {code: takeoverReceipt === 'timeout' ? 'remote_mobile_takeover_timeout' : 'remote_conversation_save_failed'})
+    await assert.rejects(rejected.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}}), {code: takeoverReceipt === 'timeout' ? 'remote_control_transfer_timeout' : 'remote_conversation_save_failed'})
     assert.equal(rejected.manager.openedSessions({deviceId: DEVICE, params: {}}).sessions[0].mobileControlled, false)
     const command = rejected.commands.at(-1)
     assert.equal(renderer(rejected, 'conversation.mobile.control.result', {ok: true}, command.requestId).ok, false, 'late receipt cannot take control')
@@ -325,7 +326,8 @@ async function run() {
   assert.equal(rejectedBeforeDispatch.terminal, true, 'pre-dispatch rejection must not remain pending')
   assert.equal(rejectedBeforeDispatch.result.code, 'remote_conversation_takeover_required')
   takeoverFixture.items[0].busy = true
-  await assert.rejects(takeoverFixture.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}}), {code: 'remote_conversation_busy'})
+  assert.equal((await takeoverFixture.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}})).mobileControlled, true)
+  await takeoverFixture.manager.handoff({deviceId: DEVICE, params: {conversationId: CID}})
   takeoverFixture.items[0].busy = false
 
   const openedForMobile = await takeoverFixture.manager.openForMobile({ deviceId: DEVICE, params: { conversationId: CID } })
@@ -432,11 +434,14 @@ async function run() {
   await new Promise(resolve => setImmediate(resolve));
   const transfer = localControl.commands.at(-1);
   assert.equal(transfer.type, 'conversation.desktop.takeover');
-  assert.equal(localControl.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-local-queued'}}).event, 'assistant.cancelled');
+  assert.equal(localControl.manager.getRequest({deviceId: DEVICE, params: {requestId: 'request-local-queued'}}).event, 'conversation.queue.pending');
   assert.equal(localControl.manager.handleRendererEvent({windowRef: 'spoof-window', payload: {event: 'conversation.desktop.control.result', requestId: transfer.requestId, conversationId: CID, payload: {ok: true}}}).ok, false);
-  renderer(localControl, 'assistant.cancelled', {}, 'request-local-active');
-  renderer(localControl, 'conversation.desktop.control.result', {ok: true}, transfer.requestId);
+  renderer(localControl, 'conversation.desktop.control.result', {ok: true, controlEpoch: transfer.controlEpoch}, transfer.requestId);
   await taking;
+  assert.equal(localControl.manager.getSession(CID).activeRequestId, 'request-local-active');
+  renderer(localControl, 'assistant.completed', {}, 'request-local-active');
+  await new Promise(resolve => setImmediate(resolve));
+  renderer(localControl, 'assistant.completed', {}, 'request-local-queued');
   assert.equal(localControl.opens.length, 1);
   assert.equal(localControl.manager.controlledSessions().sessions.length, 0);
   assert.equal(localControl.manager.openedSessions({deviceId: DEVICE}).sessions[0].controlledByThisDevice, false);
@@ -446,8 +451,8 @@ async function run() {
   await failedControl.manager.openForMobile({deviceId: DEVICE, params: {conversationId: CID}});
   const failedTaking = failedControl.manager.takeoverOnDesktop({conversationId: CID, confirmed: true});
   await new Promise(resolve => setImmediate(resolve));
-  renderer(failedControl, 'conversation.desktop.control.result', {ok: false}, failedControl.commands.at(-1).requestId);
-  await assert.rejects(failedTaking, {code: 'remote_desktop_takeover_failed'});
+  renderer(failedControl, 'conversation.desktop.control.result', {ok: false, controlEpoch: failedControl.commands.at(-1).controlEpoch}, failedControl.commands.at(-1).requestId);
+  await assert.rejects(failedTaking, {code: 'remote_control_transfer_failed'});
   assert.equal(failedControl.manager.controlledSessions().sessions.length, 1);
 
 
@@ -488,9 +493,9 @@ async function run() {
   assert.equal(reaskBatch.items[0].requestId, 'request-reask-buffered')
   assert.equal(renderer(mutations, 'conversation.queue.appended', {revision: 10}, 'request-reask-buffered').ok, true)
   assert.equal((await renderer(mutations, 'conversation.queue.drain', {}, 'request-spoof')).ok, false)
-  await assert.rejects(mutations.manager.cancel({deviceId: 'device-other-fixture', requestId: 'cancel-reask-other', params: {conversationId: CID}}), {code: 'remote_request_owner_mismatch'})
+  await assert.rejects(mutations.manager.cancel({deviceId: 'device-other-fixture', requestId: 'cancel-reask-other', params: {conversationId: CID}}), {code: 'remote_conversation_controlled_by_other_device'})
   assert.equal(renderer(mutations, 'conversation.choice.required', {toolCallId: 'call-reask-choice', questions: [{question: 'Synthetic question', options: [{label: 'Yes'}, {label: 'No'}]}]}, 'request-reask-fixture').ok, true)
-  await assert.rejects(mutations.manager.submitChoice({deviceId: 'device-other-fixture', params: {conversationId: CID, toolCallId: 'call-reask-choice', responses: [{questionIndex: 0, type: 'options', selected: ['Yes']}]}}), {code: 'remote_choice_not_pending'})
+  await assert.rejects(mutations.manager.submitChoice({deviceId: 'device-other-fixture', params: {conversationId: CID, toolCallId: 'call-reask-choice', responses: [{questionIndex: 0, type: 'options', selected: ['Yes']}]}}), {code: 'remote_conversation_controlled_by_other_device'})
   await mutations.manager.submitChoice({deviceId: DEVICE, params: {conversationId: CID, toolCallId: 'call-reask-choice', responses: [{questionIndex: 0, type: 'options', selected: ['Yes']}]}})
   assert.equal(mutations.commands.at(-1).type, 'conversation.choice.submit', 'reask choices share the send lifecycle without weakening owner checks')
 
@@ -527,7 +532,8 @@ async function run() {
     await send(lifecycle.manager, requestId)
     renderer(lifecycle, 'assistant.started', {}, requestId)
     for (let segment = 0; segment < 3; segment++) renderer(lifecycle, 'assistant.delta', {segmentId: `segment-${segment}`, toolCalls: [{id: `tool-${segment}`, name: 'read_file', status: 'finished'}]}, requestId)
-    await assert.rejects(lifecycle.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}}), {code: 'remote_conversation_busy'})
+    assert.equal((await lifecycle.manager.takeover({deviceId: DEVICE, params: {conversationId: CID}})).mobileControlled, true)
+    assert.equal(lifecycle.manager.getSession(CID).activeRequestId, requestId)
     renderer(lifecycle, 'assistant.completed', {revision: 5 + index}, requestId)
     assert.equal(lifecycle.manager.listSendQueue({deviceId: DEVICE, params: {conversationId: CID}}).activeRequestId, '')
   }
@@ -670,7 +676,7 @@ async function run() {
   assert.equal(compactState.event, 'conversation.compact.progress')
   assert.equal(compactFixture.events.at(-1).payload.percent, 44)
   assert.equal(JSON.stringify(compactFixture.events.at(-1)).includes('NO'), false)
-  await assert.rejects(compactFixture.manager.cancelCompact({ deviceId: 'device-other-fixture', requestId: 'cancel-compact-other', params: { conversationId: CID } }), { code: 'remote_request_owner_mismatch' })
+  await assert.rejects(compactFixture.manager.cancelCompact({ deviceId: 'device-other-fixture', requestId: 'cancel-compact-other', params: { conversationId: CID } }), { code: 'remote_conversation_controlled_by_other_device' })
   await compactFixture.manager.cancelCompact({ deviceId: DEVICE, requestId: 'cancel-compact-fixture', params: { conversationId: CID } })
   assert.equal(compactFixture.commands.at(-1).type, 'conversation.compact.cancel')
   compactFixture.manager.handleRendererEvent({ windowRef: 'window-existing', payload: {

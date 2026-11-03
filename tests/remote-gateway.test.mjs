@@ -427,10 +427,11 @@ async function main() {
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       writerCommands.push(command)
 
+      if (command.type === 'conversation.mobile.handoff') sessionManager.handleRendererEvent({windowRef, payload: {conversationId: command.conversationId, requestId: command.requestId, event: 'conversation.handoff.control.result', payload: {ok: true, controlEpoch: command.controlEpoch}}})
       if (command.type === 'conversation.mobile.takeover') {
         const receipt = sessionManager.handleRendererEvent({windowRef, payload: {
           conversationId: command.conversationId, requestId: command.requestId,
-          event: 'conversation.mobile.control.result', payload: {ok: true}
+          event: 'conversation.mobile.control.result', payload: {ok: true, controlEpoch: command.controlEpoch}
         }})
         assert.equal(receipt.ok, true, 'encrypted takeover waits for the actual writer receipt')
       }

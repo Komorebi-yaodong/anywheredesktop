@@ -14,7 +14,7 @@ function fixture(hidden) {
     dispatchRemoteCommandToWindow: async (windowRef, command) => {
       commands.push(command)
       const emit = (requestId, ok, ref = windowRef) => manager.handleRendererEvent({windowRef: ref, payload: {conversationId, requestId, event: 'conversation.shutdown.result', payload: {ok}}})
-      if (command.type === 'conversation.mobile.takeover') manager.handleRendererEvent({windowRef, payload: {conversationId, requestId: command.requestId, event: 'conversation.mobile.control.result', payload: {ok: true}}})
+      if (command.type === 'conversation.mobile.takeover') manager.handleRendererEvent({windowRef, payload: {conversationId, requestId: command.requestId, event: 'conversation.mobile.control.result', payload: {ok: true, controlEpoch: command.controlEpoch}}})
       if (command.type === 'remote.shutdown') {
         receipts.push(emit('stale-stop-attempt', false))
         receipts.push(emit(command.requestId, false, 'foreign-window'))

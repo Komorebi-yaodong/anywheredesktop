@@ -72,7 +72,7 @@ for (const failure of ['focus', 'mcp', 'compact', 'none']) {
     currentTaskConfig: {value: null}, scheduleAutoSave: () => {},
     maybeAutoCompactAfterTurn: async () => {if (failure === 'compact') throw new Error('fixture-compact-finalize')},
     currentConversationStorage: {value: {revision: 7}}, syncAutoCloseOnBlurListener: () => {},
-    flushAppendBuffer: async () => {}, settled: false
+    flushAppendBuffer: async () => {}, settleLocalExecution: async () => {}, settled: false
   }
   const run = vm.runInNewContext(`(async () => {${source.slice(turnFinalizerStart, turnFinalizerEnd)}})()`, finalized)
   await run
@@ -115,7 +115,7 @@ const context = {
   conversationInstanceId: 'renderer-instance-fixture',
   isWindowBootstrapped: ref(true), isClosingWindow: ref(false), loading: ref(false), compacting: ref(false),
   isPreparingSend: ref(false), isMcpLoading: ref(false), chat_show: ref([]),
-  desktopTakeoverPending: ref(false), mobileControlActive: ref(false),
+  desktopTakeoverPending: ref(false), controlTransferPending: ref(false), mobileControlActive: ref(false),
   scheduleConversationWindowStatusSync() {}, buildConversationWindowStatus: () => ({}),
   showDismissibleMessage: {info() {}, success() {}, error() {}}, deepCloneSafe: value => structuredClone(value),
   sessionMutationVersion: 0, lastPersistedSessionVersion: 0,
@@ -189,8 +189,18 @@ const ctx = vm.createContext(context)
 const renameStart = source.indexOf('const renameOwnedConversation =')
 const renameEnd = source.indexOf('// Local metadata does not acquire', renameStart)
 vm.runInContext(source.slice(renameStart, renameEnd) + '\nglobalThis.renameOwnedConversation = renameOwnedConversation;', ctx)
-vm.runInContext(block + '\n globalThis.adapter = { runRemoteConversationCommand, emitRemoteAssistantDelta, activeRemoteCommand, remoteHiddenWriter, pendingRemoteConfigPatch, applyPendingRemoteConfig, getRemoteSessionConfigSnapshot, remoteConversationDeleted };', ctx)
+vm.runInContext(block + '\n globalThis.adapter = { runRemoteConversationCommand, emitRemoteAssistantDelta, activeRemoteCommand, remoteHiddenWriter, pendingRemoteConfigPatch, applyPendingRemoteConfig, getRemoteSessionConfigSnapshot, remoteConversationDeleted, activeLocalExecution, settleLocalExecution };', ctx)
 const adapter = context.adapter
+for (const registered of [true, false]) {
+  const local = {requestId: 'local-settlement-fixture', __local: true, __registered: registered, __remoteTerminalEvent: 'assistant.cancelled'};
+  adapter.activeLocalExecution.value = local;
+  const before = events.length;
+  await adapter.settleLocalExecution(local);
+  await adapter.settleLocalExecution(local);
+  assert.equal(events.length - before, registered ? 1 : 0);
+  assert.equal(adapter.activeLocalExecution.value, null);
+  if (registered) assert.equal(events.at(-1).event, 'assistant.cancelled');
+}
 context.askAI = async () => {
   adapter.activeRemoteCommand.value.__remoteStarted = true
   adapter.emitRemoteAssistantDelta(adapter.activeRemoteCommand.value, 'first', 'reason', 'end', 'bubble-1')
@@ -614,14 +624,29 @@ await adapter.runRemoteConversationCommand({type: 'conversation.desktop.takeover
 assert.equal(context.mobileControlActive.value, true, 'expired local takeover receipt cannot unlock Desktop');
 context.window.api.emitRemoteRendererEvent = savedEmitter;
 
-// Mobile takeover must acknowledge the actual idle lease-owning Renderer.
+// Lost reply after Main commitment reconciles by exact receipt, never replays takeover.
+context.mobileControlActive.value = true;
+let transferReplies = 0;
+context.window.api.emitRemoteRendererEvent = async event => {
+  if (event.event === 'conversation.desktop.control.result') {transferReplies++; throw new Error('synthetic lost reply');}
+  if (event.event === 'conversation.control.status') return {ok: true, mobileControlled: false};
+  return {ok: true};
+};
+await adapter.runRemoteConversationCommand({type: 'conversation.desktop.takeover', conversationId: command.conversationId, requestId: 'renderer-lost-control-reply'});
+assert.equal(context.mobileControlActive.value, false);
+assert.equal(transferReplies, 2, 'one success receipt and one failure notification, never a second transfer command');
+context.window.api.emitRemoteRendererEvent = savedEmitter;
+
+// Mobile takeover keeps the same busy lease-owning Renderer running.
 context.conversationReadOnly = ref(false);
 context.mobileControlActive.value = false;
 const mobileTakeoverCommand = {type: 'conversation.mobile.takeover', conversationId: command.conversationId, requestId: 'renderer-mobile-control'};
 context.loading.value = true;
 await adapter.runRemoteConversationCommand(mobileTakeoverCommand);
-assert.equal(events.at(-1).payload.code, 'remote_conversation_busy');
-assert.equal(context.mobileControlActive.value, false);
+assert.equal(events.at(-1).payload.ok, true);
+assert.equal(context.mobileControlActive.value, true);
+assert.equal(context.loading.value, true);
+context.mobileControlActive.value = false;
 context.loading.value = false;
 context.executeAutoSaveRequest = async () => false;
 await adapter.runRemoteConversationCommand(mobileTakeoverCommand);
@@ -638,6 +663,26 @@ assert.equal(events.at(-1).payload.ok, true);
 assert.equal(context.mobileControlActive.value, true);
 assert.equal(context.desktopTakeoverPending.value, false);
 
+
+// Actual Renderer transfer logic must not cancel, replace or await the running stack.
+const running = {requestId: 'renderer-live-transfer-parent'};
+const controller = new AbortController();
+context.activeAssistantTurnMeta = {controller};
+adapter.activeRemoteCommand.value = running;
+context.loading.value = true;
+const cancels = actions.filter(action => action === 'cancel').length;
+for (const type of ['conversation.mobile.handoff', 'conversation.mobile.takeover', 'conversation.desktop.takeover']) {
+  await adapter.runRemoteConversationCommand({type, conversationId: command.conversationId, requestId: `receipt-${type}`});
+  assert.equal(context.loading.value, true);
+  assert.equal(adapter.activeRemoteCommand.value, running);
+  assert.equal(controller.signal.aborted, false);
+  assert.equal(context.mobileControlActive.value, type === 'conversation.mobile.takeover');
+}
+assert.equal(actions.filter(action => action === 'cancel').length, cancels);
+context.loading.value = false;
+context.activeAssistantTurnMeta = null;
+adapter.activeRemoteCommand.value = null;
+context.mobileControlActive.value = true;
 
 context.promptTokenBreakdown = ref({systemTokens: 100, conversationTokens: 300, toolTokens: 50, updatedAt: 1234, loading: false, error: ''});
 context.refreshPromptTokenBreakdown = async () => {actions.push('refresh-context-usage')};
@@ -780,7 +825,7 @@ assert.equal(context.mobileControlActive.value, false, 'a removed conversation c
 assert.equal(actions.at(-1), 'buffer-flush')
 assert.equal(actions.filter((item) => item === 'window-close').length, windowCloseCountBeforeDelete + 1)
 
-assert.match(source, /if \(!turnRemoteCommand\) await flushAppendBuffer\(\)/)
+assert.match(source, /if \(!turnRemoteCommand \|\| turnRemoteCommand.__local\) await flushAppendBuffer\(\)/)
 assert.match(source, /approvalStatus: autoApproveThisTurn\(\)/)
 const savesAfterDeletion = actions.filter(item => item === 'desktop-takeover' || item === 'remote-shutdown').length
 await adapter.runRemoteConversationCommand({type: 'remote.shutdown', conversationId: command.conversationId, conversationDeleted: true, closeWindow: true})

@@ -79,6 +79,13 @@ An opaque per-device control epoch reflects Writer/control changes. Command chec
 
 Mobile rejects superseded reads, restores missed choices from snapshots, retains history but disables stale write permission on synchronization failure, and retries until a successful view. Selected runtime does not incorrectly govern other opened conversations.
 
+## Live control transfer
+
+Mobile takeover/handoff and explicit Desktop takeover preserve the existing Renderer, SQLite lease and in-flight request/device identity. They never cancel/restart the model call or clear accepted queued inputs. The Renderer locks new local actions, saves through its existing writer lane and acknowledges a request/window/deadline/previous-control-version-bound receipt. Main commits only that receipt, rotates control authority and retains a short-lived local-writer-only status for lost-ACK reconciliation. Late, foreign and superseded receipts cannot grant control. Save/dispatch failure retains prior authority; unknown transport outcomes require state queries, not mutation replay.
+
+New operations require the current controller. Existing admitted queue items retain their device/request/upload scope, revocation/window checks and single-claim acknowledgement after a tool-result boundary; control handover alone does not invalidate accepted work. Cancels and interactive choices require the current controller rather than the operation's original device. Original operation receipts remain queryable by their owner; a Mobile that explicitly takes over may observe the current local execution only, not arbitrary other-device records. Local run registration is Renderer-authenticated, ephemeral and bounded; Remote shutdown does not cancel an unclaimed ordinary Desktop run. Mobile restores the running ID from runtime without issuing a second send or retiring progress merely because takeover succeeded.
+
+
 ## Synchronization
 
 Existing encrypted push events are low-latency hints. A 512-entry in-memory invalidation journal and 2.5-second cursor pull repair missed hints. Journal stores only resource names and conversation IDs; private operation invalidations are device-scoped.

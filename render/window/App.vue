@@ -2649,9 +2649,10 @@ const conversationReadOnly = ref(false);
 const mobileControlActive = ref(false);
 
 const desktopTakeoverPending = ref(false);
+const controlTransferPending = ref(false);
 const requestDesktopTakeover = async () => {
   try {
-    await ElMessageBox.confirm('接管将停止本轮生成和远端待发消息，保存后由 Desktop 控制，Mobile 将变为只读。', '接管会话', {type: 'warning', confirmButtonText: '接管', cancelButtonText: '取消'});
+    await ElMessageBox.confirm('接管后由 Desktop 控制，当前请求继续运行，Mobile 将变为只读。', '接管会话', {type: 'warning', confirmButtonText: '接管', cancelButtonText: '取消'});
     const result = await window.api.takeoverRemoteConversation(currentConversationStorage.value?.conversationId, true);
     if (result?.ok === false) throw new Error(result.error || 'remote_desktop_takeover_failed');
   } catch (error) {
@@ -2713,6 +2714,7 @@ watch([
 ], scheduleConversationWindowStatusSync, { immediate: true });
 
 const activeRemoteCommand = shallowRef(null);
+const activeLocalExecution = shallowRef(null);
 let remoteCommandExecutionPromise = null;
 let remoteConfigExecutionPromise = null;
 const pendingRemoteConfigPatch = ref(null);
@@ -2754,6 +2756,19 @@ const finalizeRemoteCommand = (event, command = activeRemoteCommand.value, paylo
   return true;
 };
 
+// The original local call must settle even when cancelAskAI already detached its UI turn.
+const settleLocalExecution = async (command) => {
+  if (!command?.__local || command.__settled) return;
+  command.__settled = true;
+  try {
+    if (command.__registered) {
+      const saved = await persistRemoteTranscript('local-turn-finalized').catch(() => false);
+      const event = saved ? command.__remoteTerminalEvent || 'assistant.completed' : 'assistant.failed';
+      await emitRemoteRendererEventAndWait(event, command, saved ? command.__remoteTerminalPayload || {} : {code: 'remote_conversation_save_failed'}).catch(() => null);
+    }
+  } finally {if (activeLocalExecution.value === command) activeLocalExecution.value = null;}
+};
+
 const extractRemoteText = (content) => {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -2780,7 +2795,7 @@ const remoteToolSnapshot = (toolCalls = []) => (Array.isArray(toolCalls) ? toolC
   .filter(Boolean);
 
 const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = '', reasoning = '', status = '', segmentId = '', toolCalls = []) => {
-  if (!command || command !== activeRemoteCommand.value) return;
+  if (!command || command !== activeRemoteCommand.value && command !== activeAssistantTurnMeta?.remoteCommand) return;
   const safeSegmentId = String(segmentId || 'assistant');
   if (command.__remoteSegmentId !== safeSegmentId) {
     command.__remoteSegmentId = safeSegmentId;
@@ -2820,7 +2835,7 @@ const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = ''
 
 // Called only after the complete tool-result batch has been appended to history.
 const drainRemoteAppendBuffer = async (command) => {
-  if (!command || activeRemoteCommand.value !== command || command.__remoteCancelled ||
+  if (!command || command.__local && !command.__registered || (activeRemoteCommand.value !== command && activeAssistantTurnMeta?.remoteCommand !== command) || command.__remoteCancelled ||
       isClosingWindow.value || desktopTakeoverPending.value || !ensureConversationWriteAccess(false)) return;
   const response = await emitRemoteRendererEventAndWait('conversation.queue.drain', command);
   if (!response?.ok) throw new Error('remote_buffered_message_unavailable');
@@ -2835,7 +2850,7 @@ const drainRemoteAppendBuffer = async (command) => {
         if (!attachment?.content) throw new Error('remote_attachment_parse_failed');
         content.push(attachment.content);
       }
-      if (activeRemoteCommand.value !== command || command.__remoteCancelled || isClosingWindow.value || desktopTakeoverPending.value || !ensureConversationWriteAccess(false)) throw new Error('remote_request_cancelled');
+      if ((activeRemoteCommand.value !== command && activeAssistantTurnMeta?.remoteCommand !== command) || command.__remoteCancelled || isClosingWindow.value || desktopTakeoverPending.value || !ensureConversationWriteAccess(false)) throw new Error('remote_request_cancelled');
       if (!content.length) throw new Error('remote_message_invalid');
       appendLinkedUserMessage({
         historyContent: content.length === 1 && content[0].type === 'text' ? content[0].text : content,
@@ -2864,6 +2879,8 @@ const normalizeRemoteCommand = (input = {}) => {
     type,
     requestId,
     conversationId,
+    controlEpoch: typeof input.controlEpoch === 'string' ? input.controlEpoch : '',
+    expiresAt: Number(input.expiresAt) || 0,
     text: typeof input.text === 'string' ? input.text : '',
     content: typeof input.content === 'string' ? input.content : '',
     uiMessageId: typeof input.uiMessageId === 'string' ? input.uiMessageId.trim() : '',
@@ -3078,78 +3095,40 @@ const runRemoteConversationCommand = async (input = {}) => {
   const activeConversationId = currentConversationStorage.value?.conversationId || '';
   if (command.conversationId !== activeConversationId) return;
 
-  if (command.type === 'conversation.desktop.takeover') {
-    if (desktopTakeoverPending.value || isClosingWindow.value) return;
-    desktopTakeoverPending.value = true;
+  if (['conversation.desktop.takeover', 'conversation.mobile.takeover', 'conversation.mobile.handoff'].includes(command.type)) {
+    const event = command.type === 'conversation.mobile.takeover' ? 'conversation.mobile.control.result'
+      : command.type === 'conversation.mobile.handoff' ? 'conversation.handoff.control.result' : 'conversation.desktop.control.result';
+    const mobile = command.type === 'conversation.mobile.takeover';
+    const reply = (ok, code = '') => emitRemoteRendererEventAndWait(event, command, {ok, code, controlEpoch: command.controlEpoch});
+    if (!isWindowBootstrapped.value || controlTransferPending.value || desktopTakeoverPending.value || isClosingWindow.value || !ensureConversationWriteAccess(false)) {
+      await reply(false, 'remote_conversation_read_only'); return;
+    }
+    // Control admission is briefly locked; the active AI/tool stack is never cancelled.
+    // Saving uses the existing writer lane and does not await the whole AI request.
+    const previous = mobileControlActive.value;
+    controlTransferPending.value = true;
     try {
-      if (activeRemoteCommand.value) activeRemoteCommand.value.__remoteCancelled = true;
-      if (compacting.value) handleCancelCompact();
-      if (loading.value) cancelAskAI();
-      await remoteCommandExecutionPromise;
-      await activeAssistantTurnMeta?.settlementPromise;
-      await remoteConfigExecutionPromise;
-      if (!ensureConversationWriteAccess(false)) throw new Error('conversation_write_lease_lost');
-      if (!await persistRemoteTranscript('desktop-takeover')) throw new Error('remote_conversation_save_failed');
-      const accepted = await emitRemoteRendererEventAndWait('conversation.desktop.control.result', command, {ok: true});
-      if (accepted?.ok !== true) throw new Error('remote_desktop_takeover_expired');
-      mobileControlActive.value = false;
-      await window.api.updateConversationWindowStatus?.(buildConversationWindowStatus());
+      const saved = await persistRemoteTranscript(mobile ? 'mobile-takeover' : 'mobile-handoff').catch(() => false);
+      if (!saved || isClosingWindow.value || !ensureConversationWriteAccess(false)) {await reply(false, 'remote_conversation_save_failed'); return;}
+      if (command.expiresAt && Date.now() >= command.expiresAt) return;
+      mobileControlActive.value = mobile;
+      const accepted = await reply(true);
+      if (accepted?.ok !== true) {mobileControlActive.value = previous; return;}
       scheduleConversationWindowStatusSync();
     } catch {
-      mobileControlActive.value = true;
+      // An IPC failure is not proof that Main rejected the transfer. Never
+      // unlock Desktop on an unknown result; query this exact receipt only.
+      let state = null;
+      for (let attempt = 0; attempt < 3 && state?.ok !== true; attempt++) {
+        state = await emitRemoteRendererEventAndWait('conversation.control.status', command).catch(() => null);
+      }
+      if (state?.ok === true) mobileControlActive.value = state.mobileControlled === true;
+      else mobileControlActive.value = true;
+      await reply(false, 'remote_conversation_save_failed').catch(() => {});
       scheduleConversationWindowStatusSync();
-      await emitRemoteRendererEventAndWait('conversation.desktop.control.result', command, {ok: false});
-      showDismissibleMessage.error('接管未完成，已保留远端控制；请等待保存后重试。');
-    }
-    finally { desktopTakeoverPending.value = false; }
+    } finally { controlTransferPending.value = false; }
     return;
   }
-
-
-  if (command.type === 'conversation.mobile.takeover') {
-    const fail = (code) => emitRemoteRendererEventAndWait('conversation.mobile.control.result', command, {ok: false, code});
-    if (!isWindowBootstrapped.value || desktopTakeoverPending.value || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeRemoteCommand.value) {
-      await fail('remote_conversation_busy'); return;
-    }
-    if (!ensureConversationWriteAccess(false) || conversationReadOnly.value || !conversationLease.value?.leaseEpoch) {
-      await fail('remote_conversation_read_only'); return;
-    }
-    // Lock local input while persisting, then require Main to accept this exact
-    // handover receipt. Expired/closed-window receipts cannot grant control.
-    desktopTakeoverPending.value = true;
-    try {
-      const saved = await persistRemoteTranscript('mobile-takeover').catch(() => false);
-      if (!saved) { await fail('remote_conversation_save_failed'); return; }
-      const accepted = await emitRemoteRendererEventAndWait('conversation.mobile.control.result', command, {ok: true});
-      if (accepted?.ok !== true) return;
-      mobileControlActive.value = true;
-      scheduleConversationWindowStatusSync();
-      showDismissibleMessage.info('该会话正在由 Mobile 控制，本窗口将实时观察更新');
-    } finally { desktopTakeoverPending.value = false; }
-    return;
-  }
-  if (command.type === 'conversation.mobile.handoff') {
-    if (!isWindowBootstrapped.value || loading.value || compacting.value || isPreparingSend.value || activeRemoteCommand.value) return;
-    const storage = currentConversationStorage.value;
-    if (command.reload && storage?.conversationId) {
-      await reloadConversationWindowFromStore({ activeOnly: true, pageSize: Number(storage.pageSize) || 200 }).catch(() => {});
-    }
-    if (command.acquireLease && storage?.conversationId) {
-      conversationReadOnly.value = false;
-      await acquireCurrentConversationLease();
-      if (conversationReadOnly.value || !conversationLease.value?.leaseEpoch) return;
-    }
-    if (conversationLease.value?.leaseEpoch && !conversationReadOnly.value) {
-      const saved = await persistRemoteTranscript('mobile-handoff').catch(() => false);
-      if (!saved) return;
-    }
-    mobileControlActive.value = false;
-    scheduleConversationWindowStatusSync();
-    showDismissibleMessage.success('Mobile 已交还会话控制权');
-    return;
-  }
-
-
   if (command.type === 'remote.revealed') {
     remoteHiddenWriter.value = false;
     return;
@@ -3194,8 +3173,11 @@ const runRemoteConversationCommand = async (input = {}) => {
     return;
   }
   if (command.type === 'conversation.choice.submit') {
-    if (!isWindowBootstrapped.value || !command.toolCallId || pendingChoices.value.size === 0) return;
-    handleChoiceSubmit(command.toolCallId, { responses: command.responses });
+    if (!isWindowBootstrapped.value || !command.toolCallId) return;
+    if (pendingToolApprovals.value.has(command.toolCallId)) {
+      const approved = command.responses?.[0]?.selected?.includes('允许执行') === true;
+      handleToolApproval(command.toolCallId, approved, true);
+    } else handleChoiceSubmit(command.toolCallId, { responses: command.responses }, true);
     return;
   }
 
@@ -3204,8 +3186,9 @@ const runRemoteConversationCommand = async (input = {}) => {
     return;
   }
   if (command.type === 'conversation.cancel') {
-    if (!activeRemoteCommand.value || activeRemoteCommand.value.requestId !== command.targetRequestId) return;
-    activeRemoteCommand.value.__remoteCancelled = true;
+    const target = activeRemoteCommand.value || activeAssistantTurnMeta?.remoteCommand;
+    if (!target || target.requestId !== command.targetRequestId) return;
+    target.__remoteCancelled = true;
     if (loading.value) cancelAskAI();
     return;
   }
@@ -3666,7 +3649,7 @@ const ensureConversationWriteAccess = (message = '') => {
 };
 
 const ensureLocalConversationWriteAccess = (message = '') => {
-  if (mobileControlActive.value) {
+  if (mobileControlActive.value || controlTransferPending.value) {
     if (message) showDismissibleMessage.warning('该会话正在由 Mobile 控制，本窗口保持实时观察');
     return false;
   }
@@ -4064,6 +4047,7 @@ const enqueueInputToBuffer = () => {
 };
 
 const removeBufferedMessage = (index) => {
+  if (!ensureLocalConversationWriteAccess(false)) return;
   if (index >= 0 && index < pendingAppendBuffer.value.length) {
     pendingAppendBuffer.value.splice(index, 1);
     scheduleAutoSave({ reason: 'append-buffer-removed', immediate: true });
@@ -4141,14 +4125,14 @@ const flushAppendBuffer = async () => {
   // A buffered turn may begin only after the previous turn has fully released ownership.
   // isMcpLoading is deliberately declared before this function.
   if (desktopTakeoverPending.value || isClosingWindow.value || !ensureConversationWriteAccess(false)) return;
-  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta) return;
+  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta || activeLocalExecution.value) return;
   isFlushingAppendBuffer = true;
   let startedTurn = false;
   try {
     const appendedAny = await drainBufferIntoHistory();
     if (appendedAny) {
       startedTurn = true;
-      await askAI(true);
+      await askAI(true, null, true);
     }
   } finally {
     isFlushingAppendBuffer = false;
@@ -4740,11 +4724,14 @@ const resolvePendingToolApprovals = (isApproved = false) => {
   pendingToolApprovals.value.clear();
 };
 
-const handleToolApproval = (toolCallId, isApproved) => {
+const handleToolApproval = (toolCallId, isApproved, remote = false) => {
+  if (!remote && !ensureLocalConversationWriteAccess(false)) return;
   const resolver = pendingToolApprovals.value.get(toolCallId);
   if (resolver) {
     resolver(isApproved);
     pendingToolApprovals.value.delete(toolCallId);
+    const execution = activeRemoteCommand.value || activeAssistantTurnMeta?.remoteCommand;
+    if (execution) emitRemoteRendererEvent('conversation.choice.resolved', execution, {toolCallId});
   }
 };
 
@@ -4758,11 +4745,14 @@ const resolvePendingChoices = (payload = null) => {
   pendingChoices.value.clear();
 };
 
-const handleChoiceSubmit = (toolCallId, payload) => {
+const handleChoiceSubmit = (toolCallId, payload, remote = false) => {
+  if (!remote && !ensureLocalConversationWriteAccess(false)) return;
   const resolver = pendingChoices.value.get(toolCallId);
   if (resolver) {
     resolver(payload);
     pendingChoices.value.delete(toolCallId);
+    const execution = activeRemoteCommand.value || activeAssistantTurnMeta?.remoteCommand;
+    if (execution) emitRemoteRendererEvent('conversation.choice.resolved', execution, {toolCallId});
   }
 };
 
@@ -4813,8 +4803,9 @@ const applyTaskList = (tasks) => {
   if (taskList.value.length > 0) {
     taskPanelVisible.value = true;
   }
-  if (activeRemoteCommand.value) {
-    emitRemoteRendererEvent('conversation.tasks.updated', activeRemoteCommand.value, {
+  const execution = activeRemoteCommand.value || activeAssistantTurnMeta?.remoteCommand;
+  if (execution) {
+    emitRemoteRendererEvent('conversation.tasks.updated', execution, {
       tasks: taskList.value
     });
   }
@@ -4851,8 +4842,9 @@ const handleBetterWorkTool = async (toolCall, args, uiToolCall, onToolUpdate = (
       // Register before notifying Mobile so an immediate tap cannot arrive
       // before this renderer has a resolver for the tool call.
       pendingChoices.value.set(toolCall.id, resolve);
-      if (activeRemoteCommand.value) {
-        emitRemoteRendererEvent('conversation.choice.required', activeRemoteCommand.value, {
+      const execution = activeRemoteCommand.value || activeAssistantTurnMeta?.remoteCommand;
+      if (execution) {
+        emitRemoteRendererEvent('conversation.choice.required', execution, {
           toolCallId: toolCall.id,
           questions
         });
@@ -4884,6 +4876,7 @@ const handleBetterWorkTool = async (toolCall, args, uiToolCall, onToolUpdate = (
 };
 
 const handleToggleAutoApprove = (val) => {
+  if (!ensureLocalConversationWriteAccess(false)) return;
   isAutoApproveTools.value = val;
 
   if (val) {
@@ -5859,6 +5852,7 @@ const handleSubmit = () => {
   askAI(false);
 };
 const handleCancel = () => {
+  if (!ensureLocalConversationWriteAccess(false)) return;
   if (compacting.value) {
     handleCancelCompact();
     return;
@@ -10273,9 +10267,9 @@ const appendCurrentInputToHistory = async () => {
   return false;
 };
 
-const askAI = async (forceSend = false, remoteCommand = null) => {
-  if (activeRemoteCommand.value && activeRemoteCommand.value !== remoteCommand) return;
-  if (desktopTakeoverPending.value || isClosingWindow.value || !(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
+const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = false) => {
+  if (activeLocalExecution.value || activeRemoteCommand.value && activeRemoteCommand.value !== remoteCommand) return;
+  if (desktopTakeoverPending.value || isClosingWindow.value || !(remoteCommand || admittedBuffer ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
   if (loading.value || isPreparingSend.value || compacting.value) return;
   if (isMcpLoading.value) {
     showDismissibleMessage.info('正在加载工具，请稍后再试...');
@@ -10305,7 +10299,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
   // This bubble is deliberately absent from fullHistory until a real assistant result exists.
   loading.value = true;
   syncAutoCloseOnBlurListener();
-  const turnRemoteCommand = remoteCommand || activeRemoteCommand.value;
+  const turnRemoteCommand = remoteCommand || activeRemoteCommand.value || (currentConversationStorage.value?.conversationId ? {requestId: `desktop-turn-${crypto.randomUUID()}`, __local: true} : null);
   const autoApproveThisTurn = () => turnRemoteCommand?.autoApproveTools === true || isAutoApproveTools.value;
   if (turnRemoteCommand) {
     turnRemoteCommand.__remoteStarted = true;
@@ -10321,6 +10315,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
   const turnSettlementPromise = new Promise((resolve) => { resolveTurnSettlement = resolve; });
   const turnMeta = {
     id: turnId,
+    remoteCommand: turnRemoteCommand,
     controller: requestAbortController,
     assistantMessageId: null,
     cancellationRecorded: false,
@@ -10329,6 +10324,11 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
     resolveSettlement: resolveTurnSettlement
   };
   activeAssistantTurnMeta = turnMeta;
+  if (turnRemoteCommand?.__local) {
+    activeLocalExecution.value = turnRemoteCommand;
+    const registered = await emitRemoteRendererEventAndWait('conversation.execution.started', turnRemoteCommand, {admittedBuffer: true}).catch(() => null);
+    turnRemoteCommand.__registered = registered?.ok === true;
+  }
   const isCurrentAssistantTurn = () => activeAssistantTurnId.value === turnId && activeAssistantTurnMeta === turnMeta;
   const isTurnAborted = () => requestSignal.aborted || !isCurrentAssistantTurn();
   const throwIfTurnAborted = () => {
@@ -10366,6 +10366,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
   }
   if (isTurnAborted()) {
     if (!turnMeta.cancellationRecorded) finalizeCancelledAssistantTurn(turnMeta);
+    if (turnRemoteCommand?.__local) {turnRemoteCommand.__remoteTerminalEvent = 'assistant.cancelled'; await settleLocalExecution(turnRemoteCommand);}
     return;
   }
 
@@ -10391,6 +10392,7 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
   if (preparingBubble) preparingBubble.status = 'preparing';
   if (isTurnAborted()) {
     if (!turnMeta.cancellationRecorded) finalizeCancelledAssistantTurn(turnMeta);
+    if (turnRemoteCommand?.__local) {turnRemoteCommand.__remoteTerminalEvent = 'assistant.cancelled'; await settleLocalExecution(turnRemoteCommand);}
     return;
   }
 
@@ -11001,6 +11003,9 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
               try {
                 const isApproved = await new Promise((resolve) => {
                   pendingToolApprovals.value.set(toolCall.id, resolve);
+                  if (turnRemoteCommand) emitRemoteRendererEvent('conversation.choice.required', turnRemoteCommand, {
+                    toolCallId: toolCall.id, questions: [{question: `是否允许执行工具 ${toolCall.function.name}？`, options: [{label: '允许执行'}, {label: '拒绝执行'}]}]
+                  });
                 });
 
                 if (!isApproved) {
@@ -11369,13 +11374,14 @@ const askAI = async (forceSend = false, remoteCommand = null) => {
       // has settled. They must never strand the writer in loading forever.
       try {
         if (signalController.value === requestAbortController) signalController.value = null;
+        await settleLocalExecution(turnRemoteCommand);
         if (activeAssistantTurnMeta === turnMeta) {
           activeAssistantTurnMeta = null;
           loading.value = false;
           syncAutoCloseOnBlurListener();
-          if (!turnRemoteCommand) await flushAppendBuffer();
+          if (!turnRemoteCommand || turnRemoteCommand.__local) await flushAppendBuffer();
         }
-      } finally { turnMeta.resolveSettlement?.(); }
+      } finally { turnMeta.resolveSettlement?.(); if (turnRemoteCommand?.__local) nextTick(() => {flushAppendBuffer();}); }
     }
   }
 };
@@ -11386,7 +11392,7 @@ const cancelAskAI = () => {
   }
 
   const turnMeta = activeAssistantTurnMeta;
-  const cancelledRemoteCommand = activeRemoteCommand.value;
+  const cancelledRemoteCommand = activeRemoteCommand.value || activeLocalExecution.value;
   const requestAbortController = signalController.value;
   if (turnMeta) {
     turnMeta.cancelledByUser = true;
@@ -12059,7 +12065,7 @@ const scrollToMessageByIndex = async (index) => {
         </div>
 
         <ChatInput ref="chatInputRef" v-model:prompt="prompt" v-model:fileList="fileList"
-          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting" :write-locked="conversationReadOnly || mobileControlActive || desktopTakeoverPending || conversationLeasePending || isClosingWindow" :remote-controlled="mobileControlActive" :takeover-pending="desktopTakeoverPending" @takeover-session="requestDesktopTakeover"
+          v-model:selectedVoice="selectedVoice" v-model:tempReasoningEffort="tempReasoningEffort" :loading="loading || compacting" :write-locked="conversationReadOnly || mobileControlActive || controlTransferPending || desktopTakeoverPending || conversationLeasePending || isClosingWindow" :remote-controlled="mobileControlActive" :takeover-pending="desktopTakeoverPending" @takeover-session="requestDesktopTakeover"
           :ctrlEnterToSend="currentConfig.CtrlEnterToSend" :layout="inputLayout" :voiceList="currentConfig.voiceList"
           :is-mcp-active="isMcpActive" :all-mcp-servers="availableMcpServers" :active-mcp-ids="sessionMcpServerIds"
           :active-skill-ids="sessionSkillIds" :all-skills="allSkillsList"
@@ -12078,7 +12084,7 @@ const scrollToMessageByIndex = async (index) => {
           @open-subagent-detail="openSubAgentDetailFromInput" @close-subagent-detail="closeSubAgentDetailFromInput"
           @open-compact-dialog="handleOpenCompactDialog"
           @run-compact="handleRunCompactWithConfig"
-          @cancel-compact="handleCancelCompact"
+          @cancel-compact="handleCancel"
           @save-compact-config="handleSaveCompactConfig"
           @apply-compact-advanced-global="handleApplyCompactAdvancedGlobal"
           @reset-compact-config="handleResetCompactConfig"

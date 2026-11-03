@@ -1353,7 +1353,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     return {
       ok: true,
       sections: [
-        { id: 'assistants', title: '快捷助手', count: Object.keys(prompts).length },
+        { id: 'assistants', title: '智能体', count: Object.keys(prompts).length },
         { id: 'providers', title: '服务商', count: Object.keys(providers).length },
         { id: 'mcp', title: 'MCP', count: Object.keys(mcpServers).length },
         { id: 'skills', title: 'Skill', count: 0 },

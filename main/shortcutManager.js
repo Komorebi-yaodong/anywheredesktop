@@ -359,7 +359,7 @@ function collectBindings(desktopConfig = {}) {
     bindings.push({
       id: item.id || `prompt-${index}`,
       kind: 'promptBinding',
-      label: `快捷助手快捷键 ${item.promptKey || index + 1}`,
+      label: `智能体快捷键 ${item.promptKey || index + 1}`,
       accelerator: item.accelerator || '',
       promptKey: item.promptKey || '',
       enabled: true
@@ -406,7 +406,7 @@ export function validateDesktopShortcuts(desktopConfig = {}, options = {}) {
     if (binding.kind === 'promptBinding' && !binding.promptKey) {
       return {
         ok: false,
-        error: '快捷助手快捷键必须绑定到具体的快捷助手'
+        error: '智能体快捷键必须绑定到具体的智能体'
       }
     }
 

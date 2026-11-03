@@ -1014,7 +1014,7 @@ if (!Array.isArray(config.providerOrder) || config.providerOrder.length === 0) {
       changed = true
     }
 
-    // 空模型表示快捷助手不绑定专属模型，运行时再回退到默认模型/首个可用模型；
+    // 空模型表示智能体不绑定专属模型，运行时再回退到默认模型/首个可用模型；
     // 这里只修复“非空但已失效”的旧模型配置。
     if (promptConfig.model && !isValidProviderModelKey(config, promptConfig.model)) {
       const resolvedPromptModel = resolveDefaultAssistantModel(config)

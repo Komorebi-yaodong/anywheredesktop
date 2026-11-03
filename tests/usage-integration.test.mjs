@@ -127,6 +127,14 @@ for (const lang of ['zh', 'en']) {
     assert.equal(messages.usage.agent, '智能体')
     assert.equal(messages.usage.defaultAgent, '默认智能体')
     assert.ok(!JSON.stringify(messages.usage).includes('快捷助手'))
+    assert.equal(messages.app.header.prompts, '智能体')
+    assert.equal(messages.tasks.targetPromptLabel, '选择目标智能体')
+    assert.equal(messages.setting.desktop.promptShortcuts.title, '智能体快捷键')
+  } else {
+    assert.equal(messages.app.header.prompts, 'Agents')
+    assert.equal(messages.tasks.targetPromptLabel, 'Target Agent')
+    assert.equal(messages.setting.desktop.promptShortcuts.title, 'Agent shortcut list')
+    assert.ok(!JSON.stringify(messages).includes('Quick Assistant'))
   }
 }
 for (const [value, expected] of [

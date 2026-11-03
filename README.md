@@ -1,6 +1,6 @@
 # Anywhere Desktop
 
-> 面向桌面工作流的本地 AI 工具，提供多模型接入、MCP 与 Skill、独立对话、历史管理、定时任务和 WebDAV 同步，定义专属于你的Agent！
+> 面向桌面工作流的本地 AI 工具，提供多模型接入、MCP 与 Skill、独立对话、历史管理、定时任务和 WebDAV 同步，定义专属于你的智能体（Agent）！
 
 <p align="center">
   <a href="https://github.com/Komorebi-yaodong/anywheredesktop">
@@ -42,7 +42,7 @@ AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。�
 
 ## 核心特性
 
-### MCP支持（内置强大工具满足Agent基本功能）
+### MCP 支持（内置强大工具满足智能体（Agent）基本功能）
 
 通过 MCP，Anywhere Desktop 可以把文件、Shell、Python、联网搜索、任务调度等能力真正接到模型手上，让 AI 从“会聊”变成“会做事”。
 
@@ -67,9 +67,9 @@ AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。�
 <details>
 <summary><b>点击展开更多桌面端界面截图</b></summary>
 
-|                                                                      快捷助手管理                                                                      |                                                                 服务商配置                                                                 |
+|                                                                      智能体管理                                                                      |                                                                 服务商配置                                                                 |
 | :----------------------------------------------------------------------------------------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------------------------------: |
-| ![快捷助手界面](https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/image/%E5%BF%AB%E6%8D%B7%E5%8A%A9%E6%89%8B%E7%95%8C%E9%9D%A2.png) | ![服务商界面](https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/image/%E6%9C%8D%E5%8A%A1%E5%95%86%E7%95%8C%E9%9D%A2.png) |
+| ![智能体（Agent）管理](https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/image/%E5%BF%AB%E6%8D%B7%E5%8A%A9%E6%89%8B%E7%95%8C%E9%9D%A2.png) | ![服务商界面](https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/image/%E6%9C%8D%E5%8A%A1%E5%95%86%E7%95%8C%E9%9D%A2.png) |
 
 |                                                             设置中心                                                             |
 | :------------------------------------------------------------------------------------------------------------------------------: |
@@ -90,7 +90,7 @@ AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。�
    * 支持 Better Work 选择卡片与任务面板，让 AI 可在长任务中请求确认、展示待办、实时更新执行状态。
 3. **快捷输入与快捷召唤 (Fast / Quick)**
    * 适合高频轻任务与快速投递内容。
-   * 图片类助手可接入截图捕获与截图后标注工作流。
+   * 图片类智能体可接入截图捕获与截图后标注工作流。
 4. **全局追问与消息缓冲 (Append / Follow-up)**
    * 可将任意软件中的文本、图片或文件直接继续发送到已打开的目标窗口中。
    * 请求进行中继续发送的消息会进入缓冲区，等待当前 AI 回复或工具调用完成后自动续接。
@@ -144,7 +144,7 @@ Anywhere Desktop 的用户指南已从主程序仓中拆分出来，统一维护
 | :--------------------- | :--------------------------------------------------------------- | :----------------------------------------------------------------------------------------- |
 | **定时任务**     | 创建自动化任务，让 AI 定时执行并生成结果。                       | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/task_doc.md)     |
 | **历史对话**     | 管理本地与云端会话记录，支持项目分组、恢复、清理与导出。         | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/chat_doc.md)     |
-| **快捷助手**     | 创建不同类型的助手，掌握快捷召唤、全局追问、消息缓冲与截图标注。 | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/ai_doc.md)       |
+| **智能体（Agent）** | 创建不同类型的智能体，掌握快捷召唤、全局追问、消息缓冲与截图标注。 | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/ai_doc.md)       |
 | **MCP 服务**     | 启用内置工具、Better Work 交互工具，并接入第三方 MCP 服务。      | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/mcp_doc.md)      |
 | **Skill 技能库** | 编写 SOP、封装技能、使用子智能体模式。                           | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/skill_doc.md)    |
 | **服务商管理**   | 配置 API 服务商、模型协议、多 Key 轮询与自定义 Header。          | [查看文档](https://github.com/Komorebi-yaodong/anywhere_doc/blob/main/docs/provider_doc.md) |
@@ -259,7 +259,7 @@ Anywhere Desktop 是一个持续进化的开源项目，欢迎交流、反馈与
 * `Anywhere_desktop`：负责桌面端功能实现与发布；
 * `Anywhere_doc`：负责官方用户指南、帮助文档与截图资源维护。
 
-欢迎一起把 Anywhere Desktop 打磨成更稳定、更强大、更适合真实桌面工作流的本地 AI Agent 平台。
+欢迎一起把 Anywhere Desktop 打磨成更稳定、更强大、更适合真实桌面工作流的本地 AI 智能体（Agent）平台。
 
 ---
 

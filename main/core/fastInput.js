@@ -396,7 +396,7 @@ function buildCreateRequestParams(initPayload = {}, messages = [], signal = unde
   const providerInfo = initPayload?.providerInfo || {}
 
   if (!providerInfo?.baseUrl || !providerInfo?.apiKey || !providerInfo?.modelName) {
-    throw new Error('当前快捷助手未配置可用模型或服务商')
+    throw new Error('当前智能体未配置可用模型或服务商')
   }
 
   const requestParams = {

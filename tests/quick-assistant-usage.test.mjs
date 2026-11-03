@@ -31,4 +31,4 @@ assert.equal(getQuickAssistantWeight(usage, 'Alpha'), 1 / 7)
 assert.equal(getQuickAssistantWeight(usage, 'Beta'), 0)
 assert.equal(getQuickAssistantWeight(usage, 'Gamma'), (2 + 3 + 4 + 5 + 6 + 7) / 7)
 
-console.log('Quick assistant usage regression passed: active usage days, skipped calendar days, seven-day retention, weighted ranking')
+console.log('Agent usage regression passed: active usage days, skipped calendar days, seven-day retention, weighted ranking')

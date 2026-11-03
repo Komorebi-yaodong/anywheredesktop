@@ -1133,7 +1133,7 @@ onBeforeUnmount(() => {
             type="text"
             spellcheck="false"
             autocomplete="off"
-            placeholder="搜索快捷助手，或粘贴文本、图片、文件"
+            placeholder="搜索智能体，或粘贴文本、图片、文件"
             @paste="handlePaste"
             @keydown="handleKeydown"
           />

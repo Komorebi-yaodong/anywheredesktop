@@ -1048,7 +1048,7 @@ export function createRemoteSessionManager({
         const result = { ok: true, conversationId, windowId: windowRef, hidden: session.hidden, created: true,
           promptCode, title: text(item.conversationTitle, 240) || `${promptCode} - 新会话` }
         // Mobile routes use the exact same Desktop-owned seven-day weight as
-        // the quick assistant panel. Recording must never block a valid chat.
+        // the Agent summon panel. Recording must never block a valid chat.
         await recordAssistantUsage(promptCode).catch(() => {})
         publish(record, 'conversation.operation.completed', { ...result, operation: 'conversation.create' })
         // A newly created hidden writer may remain idle if Mobile leaves before

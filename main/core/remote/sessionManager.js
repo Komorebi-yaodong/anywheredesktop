@@ -469,7 +469,9 @@ export function createRemoteSessionManager({
           })
           if (!created?.ok || !created.id) throw remoteError('remote_hidden_window_create_failed')
           // Register even if stop/revoke raced window creation, so closeAll can collect it.
-          return remember(conversationId, windowItem(created.id) || { id: created.id, remoteHidden: true })
+          const session = remember(conversationId, windowItem(created.id) || { id: created.id, remoteHidden: true })
+          commandGuard.getStore()?.createdWriter?.({conversationId, windowRef: created.id, controlEpoch: session.controlEpoch})
+          return session
         })()
         creations.set(conversationId, creation)
         creation.finally(() => { if (creations.get(conversationId) === creation) creations.delete(conversationId) }).catch(() => {})
@@ -1045,17 +1047,23 @@ export function createRemoteSessionManager({
     if (session?.desktopTakingOver) throw remoteError('remote_desktop_takeover_in_progress')
     if (session?.mobileControlled) {
       if (session.mobileDeviceId && session.mobileDeviceId !== deviceId) throw remoteError('remote_conversation_controlled_by_other_device')
-      if (!session.mobileDeviceId) {session.mobileDeviceId = deviceId; session.controlEpoch = crypto.randomUUID()}
+      if (!session.mobileDeviceId) {
+        const previousEpoch = session.controlEpoch
+        session.mobileDeviceId = deviceId; session.controlEpoch = crypto.randomUUID()
+        commandGuard.getStore()?.bindWriter?.(session, deviceId, previousEpoch)
+      }
       return
     }
     // A hidden writer only exists for Mobile. The first paired device that
     // reaches a freshly created hidden session owns it; visible Desktop writers
     // must be explicitly taken over instead of being silently commandeered.
     if (session?.hidden) {
+      const previousEpoch = session.controlEpoch
       session.mobileOpened = true
       session.mobileControlled = true
       session.mobileDeviceId = deviceId
       session.controlEpoch = crypto.randomUUID()
+      commandGuard.getStore()?.bindWriter?.(session, deviceId, previousEpoch)
       onControlChanged()
       return
     }
@@ -1854,6 +1862,6 @@ export function createRemoteSessionManager({
     revokeDevice, closeAll,
     resume: () => { enabled = true },
     authorizeDevice: (deviceId) => { revokedDevices.delete(deviceId) },
-    getSession: (conversationId) => { const session = existingSession(conversationId); return session ? { ...session } : null }
+    getSession: (conversationId) => { const session = existingSession(conversationId); return session ? { ...session, readOnly: windowItem(session.windowRef)?.readOnly === true } : null }
   }
 }

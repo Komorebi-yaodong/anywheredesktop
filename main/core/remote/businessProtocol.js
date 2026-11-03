@@ -121,16 +121,33 @@ export function createBusinessProtocol({readService, getManager, operations = nu
       if (routes.controlRequired.includes(params.method) && body.conversationId) {
         const session = getManager().getSession?.(body.conversationId)
         const runtime = getManager().runtimeSnapshot({deviceId: context.device.deviceId, params: {conversationId: body.conversationId}})
-        // Closed history has no writer yet. Creating a new hidden writer for
-        // the same device is allowed; an existing/foreign writer is not.
-        if (expectedEpoch === 'window-none' && session?.hidden && !session.mobileControlled) freshWriter = session.windowRef
-        if (freshWriter && session?.windowRef === freshWriter && session.hidden && (!session.mobileControlled || runtime.control.owner === 'this_device')) {
+        // Only ensureSession may attest the writer created by THIS dispatch.
+        // Renderer startup can report mobileControlled before Main binds a device.
+        if (freshWriter) {
+          if (session?.windowRef !== freshWriter.windowRef || session.controlEpoch !== freshWriter.controlEpoch ||
+            !session.hidden || session.readOnly || session.closing || session.releasing || session.desktopTakingOver ||
+            session.mobileDeviceId && session.mobileDeviceId !== context.device.deviceId) throw remoteError('remote_control_epoch_conflict')
           expectedEpoch = runtime.control.epoch
-          if (runtime.control.owner === 'this_device') freshWriter = null
+          if (session.mobileDeviceId === context.device.deviceId && runtime.control.owner === 'this_device') freshWriter = null
         }
         if (typeof expectedEpoch !== 'string' || expectedEpoch !== runtime.control.epoch) throw remoteError('remote_control_epoch_conflict')
       }
     }
+    check.createdWriter = ({conversationId, windowRef, controlEpoch}) => {
+      if (!routes.controlRequired.includes(params.method)) return
+
+      if (expectedEpoch !== 'window-none' || freshWriter || conversationId !== body.conversationId) throw remoteError('remote_control_epoch_conflict')
+      freshWriter = {windowRef, controlEpoch}
+    }
+    check.bindWriter = (session, deviceId, previousEpoch) => {
+      if (!freshWriter) return
+      if (session.conversationId !== body.conversationId || session.windowRef !== freshWriter.windowRef ||
+        previousEpoch !== freshWriter.controlEpoch || deviceId !== context.device.deviceId || !session.hidden ||
+        session.mobileDeviceId !== deviceId) throw remoteError('remote_control_epoch_conflict')
+      freshWriter.controlEpoch = session.controlEpoch
+      check()
+    }
+
     // Deduplicate before checking admission, then recheck at actual execution.
     return operations.execute({deviceId: context.device.deviceId, commandId, issuedAt: params.issuedAt, method: params.method, params: body}, () => {
       check()

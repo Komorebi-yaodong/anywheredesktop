@@ -272,7 +272,8 @@ function sanitizeEvent(event, payload) {
   if (TERMINAL_EVENTS.has(event)) return {
     completedAt: text(source.completedAt, 80), revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
     operation: text(source.operation, 40), uiMessageId: text(source.uiMessageId, 160),
-    title: text(source.title, 240), deleted: source.deleted === true
+    title: text(source.title, 240), deleted: source.deleted === true,
+    ...(source.operation === 'conversation.message.fork' ? {forkedConversationId: text(source.forkedConversationId, 160)} : {})
   }
   return { hidden: source.hidden === true, created: source.created === true }
 }
@@ -1888,6 +1889,7 @@ export function createRemoteSessionManager({
     listSendQueue, removeQueuedSend, submitChoice,
     listAssistants, createConversation,
 
+    forkMessage: (input) => mutate({ ...input, operation: 'conversation.message.fork' }),
     editMessage: (input) => mutate({ ...input, operation: 'conversation.message.edit' }),
     deleteMessage: (input) => mutate({ ...input, operation: 'conversation.message.delete' }),
     reaskMessage: (input) => mutate({ ...input, operation: 'conversation.message.reask' }),

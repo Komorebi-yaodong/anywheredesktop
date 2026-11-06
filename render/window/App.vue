@@ -3441,7 +3441,7 @@ const runRemoteConversationCommand = async (input = {}) => {
 
 
 
-  if (['conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask'].includes(command.type)) {
+  if (['conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask', 'conversation.message.fork'].includes(command.type)) {
     const targetIndex = chat_show.value.findIndex((message) => message?.uiStorageId === command.uiMessageId);
     const target = targetIndex >= 0 ? chat_show.value[targetIndex] : null;
     if (!target || ['system', 'tool', 'compaction'].includes(target.role)) {
@@ -3469,7 +3469,9 @@ const runRemoteConversationCommand = async (input = {}) => {
       let terminalEvent = 'conversation.operation.completed';
       let terminalPayload = { operation: command.type, uiMessageId: command.uiMessageId };
       try {
-        if (command.type === 'conversation.message.edit') {
+        if (command.type === 'conversation.message.fork') {
+          terminalPayload = {...terminalPayload, ...await handleForkMessage(targetIndex, command)};
+        } else if (command.type === 'conversation.message.edit') {
           if (!handleEditMessage(targetIndex, command.content, command)) throw new Error('remote_message_state_changed');
         } else if (command.type === 'conversation.message.delete') {
           if (!await deleteMessage(targetIndex, command)) throw new Error('remote_message_state_changed');
@@ -8177,6 +8179,29 @@ const saveWindowSize = async () => {
   }
 }
 
+const forkInProgress = ref(false);
+const handleForkMessage = async (index, remoteCommand = null) => {
+  if (forkInProgress.value || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value) throw new Error('remote_conversation_busy');
+  if (!(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) throw new Error('remote_conversation_read_only');
+  const target = chat_show.value[index];
+  if (!target || !['user', 'assistant'].includes(target.role)) throw new Error('remote_message_not_found');
+  forkInProgress.value = true;
+  try {
+    clearScheduledAutoSave();
+    const saved = await executeAutoSaveRequest({reason: 'fork-source', force: true, stateOnly: false, version: ++sessionMutationVersion});
+    await autoSaveMutationQueue.whenIdle();
+    if (!saved || isClosingWindow.value) throw new Error('remote_conversation_save_failed');
+    const storage = currentConversationStorage.value;
+    const dirPath = storage?.dirPath || currentConfig.value?.webdav?.localChatPath || '';
+    if (!storage?.conversationId || !dirPath || !target.uiStorageId) throw new Error('请先开启本地会话存储');
+    const forked = await window.api.forkConversation({dirPath, conversationId: storage.conversationId, uiMessageId: target.uiStorageId});
+    const conversation = {...forked, dirPath, storageMode: 'local'};
+    if (!remoteCommand) await window.api.openWindow('window', {type: 'conversation', conversation});
+    return {forkedConversationId: forked.descriptor.conversationId, title: forked.descriptor.title};
+  } finally {forkInProgress.value = false;}
+};
+const onForkMessage = (index) => {void handleForkMessage(index).catch(error => showDismissibleMessage.error(`Fork失败: ${error?.message || error}`));};
+
 const getSessionDataAsObject = (options = {}) => {
   const createStorageId = createConversationStorageId;
   fullHistory.value.forEach((message) => {
@@ -11926,7 +11951,7 @@ const scrollToMessageByIndex = async (index) => {
             :user-avatar="UserAvart" :user-nickname="userNickname" :ai-avatar="AIAvart" :is-collapsed="isCollapsed(index)"
             :is-dark-mode="currentConfig.isDarkMode" @delete-message="handleDeleteMessage" @copy-text="handleCopyText"
             @re-ask="handleReAsk" @toggle-collapse="handleToggleCollapse" @show-system-prompt="handleShowSystemPrompt"
-            @avatar-click="onAvatarClick" @edit-message-requested="handleEditStart" @edit-finished="handleEditEnd"
+            @avatar-click="onAvatarClick" @fork-message="onForkMessage" @edit-message-requested="handleEditStart" @edit-finished="handleEditEnd"
             @edit-message="handleEditMessage" @cancel-tool-call="handleCancelToolCall"
             @submit-choice="handleChoiceSubmit" @restore-compact="handleRestoreCompact" />
         </el-main>

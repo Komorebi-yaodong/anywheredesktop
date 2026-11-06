@@ -50,6 +50,20 @@ function renderer(f, event, payload = {}, requestId = 'request-fixture-0001', wi
 }
 
 async function run() {
+  {
+    const f = fixture();
+    const input = {deviceId: DEVICE, requestId: 'request-fork-fixture', params: {conversationId: CID, uiMessageId: 'message-fork-fixture'}};
+    await f.manager.forkMessage(input);
+    await f.manager.forkMessage(input);
+    assert.equal(f.commands.filter(c => c.type === 'conversation.message.fork').length, 1);
+    renderer(f, 'conversation.operation.completed', {operation: 'conversation.message.fork', forkedConversationId: 'new-fork-conversation-0001', title: 'fork-Fixture', privatePath: 'MUST_NOT_LEAK'}, input.requestId);
+    const result = f.manager.getRequest({deviceId: DEVICE, params: {requestId: input.requestId}});
+    assert.equal(result.result.forkedConversationId, 'new-fork-conversation-0001');
+    assert.equal(JSON.stringify(result).includes('MUST_NOT_LEAK'), false);
+    await assert.rejects(f.manager.forkMessage({...input, deviceId: 'another-device-fork', requestId: 'request-fork-foreign'}));
+    await f.manager.closeAll();
+  }
+
 
   {
     const hidden = fixture()

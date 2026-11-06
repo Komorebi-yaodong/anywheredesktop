@@ -1428,6 +1428,8 @@ handleInvoke('conversation:saveSnapshot', async (_event, input = {}) => {
     return conversationApi.saveConversationSnapshot(input)
   })
 
+  handleInvoke('conversation:fork', async (_event, input = {}) => conversationApi.forkConversation(input))
+
   handleInvoke('conversation:saveState', async (_event, input = {}) => {
     return conversationApi.saveConversationState(input)
   })

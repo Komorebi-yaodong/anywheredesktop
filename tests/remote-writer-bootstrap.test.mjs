@@ -273,8 +273,12 @@ for (const changed of [
   c.isMcpLoading.value = false
   release()
   await running
-  assert.equal(events.length, 1)
-  assert.equal(events[0].event, 'conversation.operation.failed')
+  if (changed === 'expired-lease') {
+    assert.equal(events.length, 0, 'database lease expiry no longer blocks commands')
+  } else {
+    assert.equal(events.length, 1)
+    assert.equal(events[0].event, 'conversation.operation.failed')
+  }
 }
 
 // Actual Renderer metadata branch -> actual SQLite store with its own lease.

@@ -185,6 +185,6 @@ assert.match(appSource, /await waitForAssistantTurnToSettleBeforeClose\(assistan
 
 assert.match(appSource, /if \(!added\) return;[\s\S]{0,1800}if \(isClosingWindow\.value\) return;[\s\S]{0,160}loading\.value = true/)
 
-assert.match(appSource, /:write-locked="conversationReadOnly \|\| mobileControlActive \|\| desktopTakeoverPending \|\| conversationLeasePending \|\| isClosingWindow"/)
+assert.match(appSource, /:write-locked="conversationReadOnly \|\| mobileControlActive \|\| controlTransferPending \|\| desktopTakeoverPending \|\| conversationLeasePending \|\| isClosingWindow"/)
 
 console.log('Desktop conversation persistence lifecycle regression passed')

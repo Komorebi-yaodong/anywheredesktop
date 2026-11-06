@@ -1193,6 +1193,20 @@ const dynamicBaseConfig =
     targetType === 'window'
       ? await buildWindowInitMessage(openPayload, id, fullConfig, dialogWindowConfig?.promptCode)
       : null
+  // Check after the last await so simultaneous opens cannot create duplicate writers.
+  const conversationId = normalizeConversationMetadataId(openPayload?.conversation?.descriptor?.conversationId)
+  const conversationDir = openPayload?.conversation?.dirPath || openPayload?.conversation?.worktreeDir
+    || openPayload?.conversation?.sessionData?.conversationStorage?.dirPath || fullConfig?.webdav?.localChatPath || ''
+  if (targetType === 'window' && conversationId && conversationDir) {
+    for (const [existingId, location] of conversationDirectoryStore) {
+      if (location.conversationId !== conversationId || !location.dirPath
+        || path.resolve(location.dirPath) !== path.resolve(conversationDir)) continue
+      const existing = multiStore.get(existingId)
+      if (!existing || existing.isDestroyed()) continue
+      if (openPayload?.remoteHidden !== true) revealRemoteConversationWindow(existingId)
+      return { ok: true, type: targetType, id: existingId, reused: true }
+    }
+  }
   const titleSuffix = targetType === 'window' ? dialogWindowConfig?.promptCode || id : id
   const win = createBrowserWindow(targetType, config, titleSuffix, id, initMessage)
 
@@ -1200,7 +1214,7 @@ const dynamicBaseConfig =
 
   if (targetType === 'window') {
     conversationDirectoryStore.set(id, {conversationId: normalizeConversationMetadataId(openPayload?.conversation?.descriptor?.conversationId),
-      dirPath: openPayload?.conversation?.sessionData?.conversationStorage?.dirPath || fullConfig?.webdav?.localChatPath || ''})
+      dirPath: conversationDir})
     windowMetadataStore.set(
       id,
       buildWindowMetadata(id, openPayload, fullConfig, dialogWindowConfig?.promptCode || resolvePromptCode(openPayload), dialogWindowConfig?.promptConfig)

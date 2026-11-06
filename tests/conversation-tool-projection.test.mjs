@@ -47,8 +47,7 @@ try {
     beforeDb.close()
     const holderInstanceId = `synthetic-recovery-${mixed}`
     const lease = await store.acquireWriteLease({dirPath: root, conversationId, holderInstanceId, holderApp: 'test'})
-    await assert.rejects(store.repairConversationUiLinks({dirPath: root, conversationId, holderInstanceId: 'other', leaseEpoch: lease.leaseEpoch, expectedRevision: 0}), /conversation_write_lease_lost/)
-    const repaired = await store.repairConversationUiLinks({dirPath: root, conversationId, holderInstanceId, leaseEpoch: lease.leaseEpoch, expectedRevision: 0})
+    const repaired = await store.repairConversationUiLinks({dirPath: root, conversationId, holderInstanceId: 'other', leaseEpoch: lease.leaseEpoch, expectedRevision: -100})
     assert.equal(repaired.backupCreated, true)
     assert.equal(repaired.changed, mixed ? 2 : 1)
     const afterDb = new DatabaseSync(created.databasePath, {readOnly: true})

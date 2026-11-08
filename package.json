@@ -16,6 +16,7 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "test:memory": "node tests/memory.test.mjs && node tests/memory-mcp.test.mjs",
     "test:conversation-task": "node tests/conversation-task.test.mjs && node tests/conversation-task-open.test.mjs && node tests/conversation-task-timeout.test.mjs",
     "test:conversation-fork": "node tests/conversation-fork.test.mjs && node tests/conversation-fork-renderer.test.mjs",
     "test:conversation-lease": "node tests/conversation-lease.test.mjs && node tests/conversation-heartbeat-recovery.test.mjs",

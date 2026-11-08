@@ -573,6 +573,10 @@ context.currentConfig.value.providers = {provider: {name: 'Old', apiType: 'chat_
 context.modelMap.value['alternate|model-next'] = {};
 context.handleChangeModel = value => {context.model.value = value;context.currentProviderID.value = value.split('|')[0];context.base_url.value = 'https://fixture.invalid/' + context.currentProviderID.value;context.api_key.value = 'synthetic-' + context.currentProviderID.value;};
 context.openaiFormattedTools = ref([]);
+const memoryRequestToolsStart = source.indexOf('const getRequestMcpTools =');
+const memoryRequestToolsEnd = source.indexOf('\n};', memoryRequestToolsStart) + 3;
+assert.ok(memoryRequestToolsStart >= 0 && memoryRequestToolsEnd > memoryRequestToolsStart);
+vm.runInContext(source.slice(memoryRequestToolsStart, memoryRequestToolsEnd), ctx);
 context.requestApplyMcpTools = async () => {context.openaiFormattedTools.value = context.sessionMcpServerIds.value.map(id => ({type: 'function', function: {name: id}}));};
 context.buildRequestHistoryForCurrentConversation = async () => [{role: 'system', content: context.currentSystemPrompt.value}, {role: 'tool', content: 'synthetic result', tool_call_id: 'fixture-call'}];
 context.rehydrateHistoryToolsIfNeeded = () => {};context.ensureAssistantReasoningContentForThinkingMode = () => {};

@@ -2016,7 +2016,7 @@ const estimateCurrentDynamicToolPrompt = async () => {
   if (openaiFormattedTools.value.length > 0 || sessionSkillIds.value.length > 0) {
     overheadMessages.push({ role: 'system', content: generateMcpSystemPrompt() });
   }
-  let activeTools = [...openaiFormattedTools.value];
+  let activeTools = await getRequestMcpTools();
   if (sessionSkillIds.value.length > 0) {
     try {
       const runtimeSkillPath = await getRuntimeSkillPath();
@@ -10153,7 +10153,11 @@ const getSystemTime = () => {
 
 const MEMORY_MCP_TOOL_NAMES = new Set([
   'create_memory',
-  'list_memories',
+  'update_memory',
+  'rename_section',
+  'delete_section',
+  'replace_memory_text',
+  'delete_list_item',
   'get_memory_summary',
   'get_full_memory',
   'get_section',
@@ -10168,6 +10172,20 @@ const MEMORY_MCP_TOOL_NAMES = new Set([
 const hasBuiltinMemoryMcpTools = computed(() => {
   return openaiFormattedTools.value.some(tool => MEMORY_MCP_TOOL_NAMES.has(tool?.function?.name));
 });
+
+// Discovery metadata is refreshed before each model request, including tool continuations.
+// It never enters fullHistory or triggers MCP client reinitialization.
+const getRequestMcpTools = async () => {
+  if (sessionMcpServerIds.value.includes('builtin_memory') && window.api?.refreshMemoryTools) {
+    const updates = await window.api.refreshMemoryTools();
+    const descriptions = new Map(updates.map(item => [item.name, item.description]));
+    openaiFormattedTools.value = openaiFormattedTools.value.map(tool => descriptions.has(tool?.function?.name)
+      ? { ...tool, function: { ...tool.function, description: descriptions.get(tool.function.name) } }
+      : tool);
+  }
+  return [...openaiFormattedTools.value];
+};
+
 
 const TASK_MCP_TOOL_NAMES = new Set(['task_write', 'task_read']);
 const hasTaskMcpTool = computed(() => {
@@ -10518,7 +10536,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
       if (iterationReasoningEffort && iterationReasoningEffort !== 'default') requestParams.reasoning_effort = iterationReasoningEffort;
 
       // --- 构建工具列表 (MCP + Skill) ---
-      let activeTools = [...openaiFormattedTools.value];
+      let activeTools = await getRequestMcpTools();
 
       if (iterationSkillIds.length > 0) {
         try {

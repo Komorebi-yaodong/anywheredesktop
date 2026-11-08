@@ -651,6 +651,21 @@ return {
   }
 }
 
+// Refresh metadata only: no client teardown, schema persistence or conversation-history writes.
+export async function refreshMemoryTools(sessionKey = 'global') {
+  const runtime = getSessionRuntime(getSessionKey(sessionKey), false)
+  const entries = [...(runtime?.fullToolInfoMap.entries() || [])].filter(([, info]) =>
+    info.isBuiltin && info.serverConfig?.id === 'builtin_memory' && info.rawName === 'get_memory_summary')
+  if (!entries.length) return []
+  const tools = await getBuiltinTools('builtin_memory')
+  const description = tools.find(tool => tool.name === 'get_memory_summary').description
+  return entries.map(([name, info]) => {
+    info.description = description
+    return { name, description }
+  })
+}
+
+
 function buildOpenaiFormattedTools(sessionKey = 'global') {
   const runtime = getSessionRuntime(sessionKey, false)
   if (!runtime) return []

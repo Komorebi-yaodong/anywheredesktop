@@ -874,6 +874,15 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
     return mcpApi.initializeMcpClient(activeServerConfigs, cache, dataApi.saveMcpToolCache, { sessionKey })
   })
 
+  handleInvoke('mcp:refreshMemoryTools', async (event, meta = {}) => {
+    const senderId = BrowserWindow.fromWebContents(event.sender)?.id || event.sender?.id || null
+    const sessionKey = typeof meta?.sessionKey === 'string' && meta.sessionKey.trim()
+      ? meta.sessionKey.trim()
+      : (senderId ? String(senderId) : 'global')
+    return mcpApi.refreshMemoryTools(sessionKey)
+  })
+
+
   handleInvoke('mcp:testConnection', async (_event, serverConfig = {}) => {
     const normalizedConfig = {
       transport: serverConfig.type,

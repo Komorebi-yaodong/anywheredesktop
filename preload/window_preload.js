@@ -376,6 +376,7 @@ const api = {
     return result?.cache || result || {}
   },
   saveMcpToolCache: (serverId, tools = []) => electronAPI.ipcRenderer.invoke('mcp:saveToolCache', serverId, toPlainPayload(tools) || []),
+  refreshMemoryTools: () => electronAPI.ipcRenderer.invoke('mcp:refreshMemoryTools', { sessionKey: senderId || '' }),
   initializeMcpClient: (activeServerConfigs = {}, meta = {}) => electronAPI.ipcRenderer.invoke('mcp:initializeClient', toPlainPayload(activeServerConfigs) || {}, toPlainPayload(meta) || {}),
   testMcpConnection: (serverConfig = {}) => electronAPI.ipcRenderer.invoke('mcp:testConnection', toPlainPayload(serverConfig) || {}),
   testInvokeMcpTool: (serverConfig = {}, toolName = '', args = {}) => electronAPI.ipcRenderer.invoke('mcp:testInvokeTool', toPlainPayload(serverConfig) || {}, toolName, toPlainPayload(args) || {}),

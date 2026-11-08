@@ -132,6 +132,14 @@ config.providers = {
 }
 config.providerOrder = ['p', 'root']
 config.providerFolders = { 'work-folder': { name: '工作', collapsed: false } }
+const settingsBefore = await service.settingsRevision({params: {}})
+assert.match(settingsBefore.revision, /^[A-Za-z0-9_-]{43}$/)
+assert.equal((await service.settingsRevision({params: {}})).revision, settingsBefore.revision)
+config.providers.p.name = 'cache revision change'
+assert.notEqual((await service.settingsRevision({params: {}})).revision, settingsBefore.revision)
+assert.deepEqual(Object.keys(settingsBefore).sort(), ['ok', 'revision'])
+await assert.rejects(service.settingsRevision({params: {dirPath: 'forbidden'}}), {code: 'remote_parameter_unknown'})
+
 const providerCatalog = await service.providerCatalog({ params: {} })
 assert.equal(providerCatalog.folders[0].name, '工作')
 assert.deepEqual(providerCatalog.providers.map((provider) => provider.id), ['p', 'root'])

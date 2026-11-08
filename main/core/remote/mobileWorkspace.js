@@ -662,6 +662,23 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     }
   }
 
+  // Per-process keyed token prevents offline guessing of low-entropy secret changes.
+  const settingsRevisionKey = crypto.randomBytes(32)
+  // Opaque, read-only invalidation token; never sends configuration or credentials.
+  async function settingsRevision({params = {}} = {}) {
+    parameters(params, [])
+    const result = await getConfig()
+    const config = object(result?.config)
+    const skillRoot = text(config.skillPath, 32768)
+    const skills = await listSkillsForToggle(skillRoot)
+    const keys = ['prompts', 'providers', 'providerFolders', 'providerOrder', 'tags', 'tasks', 'mcpServers', 'skillPath', 'voiceList', 'defaultTaskModel', 'defaultSuperiorModel', 'defaultFastModel', 'language', 'themeMode']
+    const relevant = Object.fromEntries(keys.map(key => [key, config[key] ?? null]))
+    relevant.profile = object(config.desktop).profile || null
+    const projects = config.webdav?.localChatPath ? await readLocalProjects(config.webdav.localChatPath) : null
+    return {ok: true, revision: crypto.createHmac('sha256', settingsRevisionKey).update(stableStringify({relevant, skills, projects})).digest('base64url')}
+  }
+
+
   async function providerCatalog({ params = {} } = {}) {
     parameters(params, [])
     const { config } = await current()
@@ -1366,5 +1383,5 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     }
   }
 
-  return { bootstrap, profile, avatarGet, assistantList, assistantGet, mutate, agentCatalog, agentGet, agentMutate, agentRoutesMutate, agentTagsMutate, providerCatalog, providerGet, providerMutate, providerFoldersMutate, providerOrderMutate, providerModelsFetch, projectCreate, projectUpdate, projectRemove, managementCatalog, managementDetails, managementPatch }
+  return { settingsRevision, bootstrap, profile, avatarGet, assistantList, assistantGet, mutate, agentCatalog, agentGet, agentMutate, agentRoutesMutate, agentTagsMutate, providerCatalog, providerGet, providerMutate, providerFoldersMutate, providerOrderMutate, providerModelsFetch, projectCreate, projectUpdate, projectRemove, managementCatalog, managementDetails, managementPatch }
 }

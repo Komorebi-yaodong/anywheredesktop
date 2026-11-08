@@ -34,4 +34,10 @@ for (const filename of process.argv.slice(2).length ? process.argv.slice(2) : [n
   context.loading.value = true
   await assert.rejects(fork(0), /remote_conversation_busy/)
 }
+const message = await fs.readFile(new URL('../render/window/components/ChatMessage.vue', import.meta.url), 'utf8')
+const forkIcon = await fs.readFile(new URL('../render/window/components/ForkIcon.vue', import.meta.url), 'utf8')
+assert.equal((message.match(/:icon="ForkIcon"/g) || []).length, 2, 'both user and assistant actions use fork, never a share glyph')
+assert.doesNotMatch(message, /:icon="Share"/)
+assert.equal((forkIcon.match(/<circle /g) || []).length, 3)
+
 console.log('PASS actual fork renderer saves-before-copy / opens-target / failed-save / busy guards')

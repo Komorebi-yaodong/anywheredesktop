@@ -388,6 +388,10 @@ async function main() {
     uploadManager,
     businessConfigService,
     remoteManagementService,
+    mobileWorkspaceService: {settingsRevision: async ({params}) => {
+      if (Object.keys(params).length) throw Object.assign(new Error('remote_parameter_unknown'), {code: 'remote_parameter_unknown'})
+      return {ok: true, revision: 'synthetic-settings-revision'}
+    }},
     usageService: createRemoteUsageService({query: async filters => aggregateUsage(Array.from({length: 7}, () => ({providerId: 'synthetic', providerName: 'Synthetic', agentName: 'Code', model: 'fixture', endedAt: Date.now() - 1000, status: 'success', usageKnown: true, inputTokens: 10, outputTokens: 5, cachedTokens: 2, totalTokens: 15})), filters)}),
 
     getDesktopDisplayName: async () => 'Fixture Workspace',
@@ -677,6 +681,10 @@ async function main() {
     })
     assert.ok(welcome.payload.capabilities.includes('conversation.create'))
     assert.ok(welcome.payload.capabilities.includes('workspace.usage.get'))
+    assert.ok(welcome.payload.capabilities.includes('workspace.settings.revision.get'))
+    const settingsRead = await sendEncryptedRequest({socket, session, requestId: 'settings-revision-synthetic', method: 'workspace.settings.revision.get'})
+    assert.equal(settingsRead.ok, true)
+    assert.deepEqual(settingsRead.result, {ok: true, revision: 'synthetic-settings-revision'})
     const usageRead = await sendEncryptedRequest({socket, session, requestId: 'usage-read-synthetic', method: 'workspace.usage.get', params: {range: '7d'}})
     assert.equal(usageRead.result.summary.requests, 7)
 

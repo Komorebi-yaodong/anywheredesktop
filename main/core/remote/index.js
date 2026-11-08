@@ -367,6 +367,8 @@ export function createRemoteGateway({
       'workspace.provider.catalog', 'workspace.provider.get', 'workspace.provider.mutate', 'workspace.provider.folders.mutate', 'workspace.provider.order.mutate', 'workspace.provider.models.fetch',
       'workspace.project.create', 'workspace.project.update', 'workspace.project.remove', 'workspace.management.catalog.get', 'workspace.management.details.get', 'workspace.management.patch'
     )
+    if (typeof mobileWorkspaceService?.settingsRevision === 'function') capabilities.push('workspace.settings.revision.get')
+
     if (remoteManagementService) capabilities.push('management.catalog', 'management.mutate')
 
     return capabilities
@@ -1148,6 +1150,11 @@ export function createRemoteGateway({
         case 'workspace.usage.get':
           if (!context.capabilities.includes('workspace.usage.get') || typeof usageService?.get !== 'function') throw remoteError('remote_method_unavailable')
           result = await usageService.get({params})
+          break
+
+        case 'workspace.settings.revision.get':
+          if (!context.capabilities.includes('workspace.settings.revision.get') || typeof mobileWorkspaceService?.settingsRevision !== 'function') throw remoteError('remote_method_unavailable')
+          result = await mobileWorkspaceService.settingsRevision({params})
           break
 
         case 'workspace.bootstrap.get':

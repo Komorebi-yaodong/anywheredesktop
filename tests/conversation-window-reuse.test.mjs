@@ -17,6 +17,10 @@ const context = {path, normalizeConversationMetadataId: value => value || '', ta
 const open = () => vm.runInNewContext(`(() => {${block}; return null})()`, context)
 assert.equal(open().id, 'active')
 assert.equal(reveals, 1)
+context.openPayload.preserveExistingVisibility = true
+assert.equal(open().reused, true)
+assert.equal(reveals, 1, 'scheduled task keeps the existing visibility and focus')
+context.openPayload.preserveExistingVisibility = false
 context.openPayload.remoteHidden = true
 assert.equal(open().reused, true)
 assert.equal(reveals, 1, 'Mobile open does not reveal an existing writer')

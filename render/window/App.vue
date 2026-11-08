@@ -3951,11 +3951,19 @@ const taskPanelVisible = ref(false);
 
 // --- 追加消息缓冲区：loading 期间发送的消息暂存于此，本轮结束后自动追加并续请求 ---
 const pendingAppendBuffer = ref([]);
+// Admission saves reserve the queue, never the active AI turn or composer.
+let scheduledTaskQueueSaving = 0;
 
 
 const normalizePendingInputBuffer = (items) => (Array.isArray(items) ? items : [])
-  .filter((item) => item?.kind === 'input' || item?.kind === 'agent')
+  .filter((item) => ['input', 'agent', 'scheduled-task'].includes(item?.kind))
   .map((item) => {
+    if (item.kind === 'scheduled-task') {
+      if (typeof item.requestId !== 'string' || !item.requestId || typeof item.text !== 'string'
+        || !item.taskConfig?.id || !item.taskConfig?.conversationId) return null;
+      return {kind: 'scheduled-task', requestId: item.requestId, text: item.text,
+        taskConfig: JSON.parse(JSON.stringify(item.taskConfig)), preview: item.preview || item.taskConfig.name || '定时任务'};
+    }
     if (item.kind === 'agent') {
       const text = typeof item.text === 'string' ? item.text : '';
       const filePaths = Array.isArray(item.filePaths) ? item.filePaths.filter((path) => typeof path === 'string' && path.trim()) : [];
@@ -4013,7 +4021,10 @@ const drainBufferIntoHistory = async ({ toolBoundaryTurn = null } = {}) => {
       ? activeAssistantTurnMeta === toolBoundaryTurn && !toolBoundaryTurn.controller?.signal?.aborted
       : !loading.value && !activeAssistantTurnMeta);
   if (!canDrain() || pendingAppendBuffer.value.length === 0) return false;
-  const items = pendingAppendBuffer.value.splice(0, pendingAppendBuffer.value.length);
+  // Tasks are independent turns, never merged into another task or a tool continuation.
+  if (scheduledTaskQueueSaving) return false;
+  const taskIndex = pendingAppendBuffer.value.findIndex(item => item.kind === 'scheduled-task');
+  const items = pendingAppendBuffer.value.splice(0, taskIndex < 0 ? pendingAppendBuffer.value.length : taskIndex);
   // 还原用户在缓冲期间可能输入但尚未发送的内容
   const savedPrompt = prompt.value;
   const savedFiles = Array.isArray(fileList.value) ? fileList.value.slice() : [];
@@ -4069,10 +4080,15 @@ const flushAppendBuffer = async () => {
   // A buffered turn may begin only after the previous turn has fully released ownership.
   // isMcpLoading is deliberately declared before this function.
   if (desktopTakeoverPending.value || isClosingWindow.value || !ensureConversationWriteAccess(false)) return;
-  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta || activeLocalExecution.value) return;
+  if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta || activeLocalExecution.value || scheduledTaskQueueSaving || currentTaskConfig.value || controlTransferPending.value || activeRemoteCommand.value || remoteCommandExecutionPromise) return;
   isFlushingAppendBuffer = true;
   let startedTurn = false;
   try {
+    if (pendingAppendBuffer.value[0]?.kind === 'scheduled-task') {
+      if (!conversationTaskReady.value) return;
+      startedTurn = await startQueuedConversationTask(pendingAppendBuffer.value[0]);
+      return;
+    }
     const appendedAny = await drainBufferIntoHistory();
     if (appendedAny) {
       startedTurn = true;
@@ -4085,7 +4101,7 @@ const flushAppendBuffer = async () => {
   }
 };
 
-watch([isMcpLoading, compacting, isPreparingSend], (now, prev) => {
+watch([isMcpLoading, compacting, isPreparingSend, controlTransferPending, desktopTakeoverPending, activeRemoteCommand, activeLocalExecution], (now, prev) => {
   if (!isFlushingAppendBuffer && prev.some((busy, index) => busy && !now[index])) {
     nextTick(() => { flushAppendBuffer(); });
   }
@@ -5605,7 +5621,7 @@ const handleChangeModel = (chosenModel) => {
 const handleAutoCloseOnBlur = () => closePage(false);
 const syncAutoCloseOnBlurListener = () => {
   window.removeEventListener('blur', handleAutoCloseOnBlur);
-  if (autoCloseOnBlur.value && !loading.value) {
+  if (autoCloseOnBlur.value && !loading.value && !currentTaskConfig.value && !pendingAppendBuffer.value.length && !scheduledTaskQueueSaving) {
     window.addEventListener('blur', handleAutoCloseOnBlur);
   }
 };
@@ -6870,6 +6886,7 @@ onMounted(async () => {
 
     await fetchSkillsList();
     conversationTaskReady.value = true;
+    nextTick(() => {flushAppendBuffer();});
 
     if (data?.remoteCreate === true && remoteHiddenWriter.value && !currentConversationStorage.value?.conversationId) {
       autoCloseOnBlur.value = false;
@@ -8207,28 +8224,86 @@ const handleForkMessage = async (index, remoteCommand = null) => {
 const onForkMessage = (index) => {void handleForkMessage(index).catch(error => showDismissibleMessage.error(`Fork失败: ${error?.message || error}`));};
 
 const conversationTaskReady = ref(false);
-let conversationTaskAdmitting = false;
+const acceptedConversationTaskRequests = new Set();
+// Called under the append-buffer lock; each task owns a separate model turn.
+const startQueuedConversationTask = async (item) => {
+  if (item.taskConfig.conversationId !== currentConversationStorage.value?.conversationId) return false;
+  currentTaskConfig.value = {...item.taskConfig};
+  appendLinkedUserMessage({historyContent: item.text, uiContent: [{type: 'text', text: item.text}], timestamp: new Date().toISOString(),
+    historyExtras: {scheduledTaskRequestId: item.requestId}, uiExtras: {scheduledTaskRequestId: item.requestId}});
+  let started = false;
+  const admit = async () => {
+    const index = pendingAppendBuffer.value.indexOf(item);
+    if (index < 0) return false;
+    pendingAppendBuffer.value.splice(index, 1);
+    const saved = await executeAutoSaveRequest({reason: 'scheduled-task-started', force: true, stateOnly: false, version: ++sessionMutationVersion}).catch(() => false);
+    if (saved !== true || isClosingWindow.value || currentConversationStorage.value?.conversationId !== item.taskConfig.conversationId) {
+      pendingAppendBuffer.value.splice(index, 0, item);
+      showDismissibleMessage.error('定时任务启动前保存失败，消息已保留在缓冲队列。');
+      return false;
+    }
+    started = true;
+    return true;
+  };
+  try {
+    await askAI(true, null, true, admit);
+  } finally {
+    if (!started) {
+      // No model was admitted. Roll back only this staged user message, never other history/drafts.
+      fullHistory.value = fullHistory.value.filter(message => message.scheduledTaskRequestId !== item.requestId);
+      chat_show.value = chat_show.value.filter(message => message.scheduledTaskRequestId !== item.requestId);
+      currentTaskConfig.value = null;
+      scheduleAutoSave({reason: 'scheduled-task-start-rollback', immediate: true, force: true});
+    }
+  }
+  return started;
+};
 const handleConversationTask = async (input = {}) => {
   const receipt = {requestId: input.requestId, conversationId: input.conversationId};
   const reply = (ok, reason = '') => window.api.reportConversationTask({...receipt, ok, reason});
-  if (conversationTaskAdmitting || input.expiresAt <= Date.now()) {await reply(false, 'task_busy'); return;}
-  conversationTaskAdmitting = true;
+  if (!input.requestId || !(input.expiresAt > Date.now())) {await reply(false, 'task_expired'); return;}
+  let item = null;
+  scheduledTaskQueueSaving++;
+  syncAutoCloseOnBlurListener();
   try {
     while (!conversationTaskReady.value && Date.now() < input.expiresAt && !isClosingWindow.value) await new Promise(resolve => setTimeout(resolve, 30));
-    if (activeApplyMcpPromise) await activeApplyMcpPromise;
     if (Date.now() >= input.expiresAt || isClosingWindow.value || currentConversationStorage.value?.conversationId !== input.conversationId
-      || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeAssistantTurnMeta || currentTaskConfig.value
-      || !ensureLocalConversationWriteAccess(false)) {await reply(false, 'task_conversation_busy'); return;}
-    currentTaskConfig.value = {...input.taskConfig, conversationId: input.conversationId};
-    const content = `## Scheduled Task\n\n**system_time**:${new Date().toLocaleString('sv-SE')}\n\n${input.payload || ''}\n\nScheduled task triggered! Execute autonomously and provide correct feedback.`;
-    appendLinkedUserMessage({historyContent: content, uiContent: [{type: 'text', text: content}], timestamp: new Date().toISOString()});
-    let started = false;
-    // forceSend uses the appended message, leaving the existing composer draft untouched.
-    await askAI(true, null, false, () => {started = true; return reply(true);});
-    if (!started) {currentTaskConfig.value = null; await reply(false, 'task_not_started');}
+      || !ensureConversationWriteAccess(false)) {await reply(false, 'task_target_unavailable'); return;}
+    if (!input.taskConfig?.id) {await reply(false, 'task_config_invalid'); return;}
+    if (acceptedConversationTaskRequests.has(input.requestId)) {await reply(true, 'task_queued'); return;}
+    item = pendingAppendBuffer.value.find(entry => entry.kind === 'scheduled-task' && entry.requestId === input.requestId);
+    if (!item) {
+      const text = `## Scheduled Task
+
+**system_time**:${new Date().toLocaleString('sv-SE')}
+
+${input.payload || ''}
+
+Scheduled task triggered! Execute autonomously and provide correct feedback.`;
+      item = {kind: 'scheduled-task', requestId: input.requestId, text,
+        taskConfig: JSON.parse(JSON.stringify({...input.taskConfig, conversationId: input.conversationId})),
+        preview: `定时任务：${input.taskConfig.name || input.taskConfig.id}`};
+      pendingAppendBuffer.value.push(item);
+    }
+    // Queue admission is durable, not a promise that model execution has completed.
+    const saved = await executeAutoSaveRequest({reason: 'scheduled-task-enqueued', force: true, stateOnly: true, version: ++sessionMutationVersion});
+    if (saved !== true || isClosingWindow.value || currentConversationStorage.value?.conversationId !== input.conversationId) throw new Error('task_queue_save_failed');
+    acceptedConversationTaskRequests.add(input.requestId);
+    // Keep only live-window dedup receipts; persisted queue entries carry their own IDs.
+    if (acceptedConversationTaskRequests.size > 2000) acceptedConversationTaskRequests.delete(acceptedConversationTaskRequests.values().next().value);
+    await reply(true, 'task_queued');
   } catch (error) {
+    if (!acceptedConversationTaskRequests.has(input.requestId) && item) {
+      const index = pendingAppendBuffer.value.indexOf(item);
+      if (index >= 0) pendingAppendBuffer.value.splice(index, 1);
+      scheduleAutoSave({reason: 'scheduled-task-admission-failed', immediate: true, force: true, stateOnly: true});
+    }
     await reply(false, error?.message || 'task_conversation_failed');
-  } finally {conversationTaskAdmitting = false;}
+  } finally {
+    scheduledTaskQueueSaving--;
+    syncAutoCloseOnBlurListener();
+    if (!scheduledTaskQueueSaving) nextTick(() => {flushAppendBuffer();});
+  }
 };
 
 const getSessionDataAsObject = (options = {}) => {
@@ -10275,7 +10350,7 @@ const appendCurrentInputToHistory = async () => {
 
 const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = false, onStarted = null) => {
   if (activeLocalExecution.value || activeRemoteCommand.value && activeRemoteCommand.value !== remoteCommand) return;
-  if (desktopTakeoverPending.value || isClosingWindow.value || !(remoteCommand || admittedBuffer ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
+  if (desktopTakeoverPending.value || controlTransferPending.value || isClosingWindow.value || !(remoteCommand || admittedBuffer ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
   if (loading.value || isPreparingSend.value || compacting.value) return;
   if (isMcpLoading.value) {
     showDismissibleMessage.info('正在加载工具，请稍后再试...');
@@ -10286,7 +10361,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
   try { await applyPendingRemoteConfig(); }
   catch { showDismissibleMessage.error('下一轮配置应用失败，已保留设置；请检查模型或工具配置后重试。'); return; }
   finally { isPreparingSend.value = false; }
-  if (desktopTakeoverPending.value || isClosingWindow.value) return;
+  if (desktopTakeoverPending.value || controlTransferPending.value || isClosingWindow.value) return;
 
   // --- 1. 处理用户输入 ---
   if (!forceSend) {
@@ -10304,9 +10379,28 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
   // --- 2. 初始化 AI 回合并立即显示 UI 专用准备气泡 ---
   // This bubble is deliberately absent from fullHistory until a real assistant result exists.
   loading.value = true;
-  if (onStarted) await Promise.resolve(onStarted()).catch(() => {});
-  syncAutoCloseOnBlurListener();
   const turnRemoteCommand = remoteCommand || activeRemoteCommand.value || (currentConversationStorage.value?.conversationId ? {requestId: `desktop-turn-${crypto.randomUUID()}`, __local: true} : null);
+  // A scheduled turn must reserve the shared executor before removing its durable queue item.
+  // Otherwise a pending Mobile send can win Main's slot during the admission save await.
+  if (onStarted && admittedBuffer && turnRemoteCommand?.__local) {
+    activeLocalExecution.value = turnRemoteCommand;
+    const reserved = await emitRemoteRendererEventAndWait('conversation.execution.started', turnRemoteCommand, {admittedBuffer: true}).catch(() => null);
+    turnRemoteCommand.__registered = reserved?.ok === true;
+    if (!turnRemoteCommand.__registered && (mobileControlActive.value || reserved?.error === 'remote_conversation_busy')) {
+      activeLocalExecution.value = null;
+      loading.value = false;
+      return;
+    }
+  }
+  if (onStarted && await Promise.resolve(onStarted()).catch(() => false) === false) {
+    if (turnRemoteCommand?.__local && activeLocalExecution.value === turnRemoteCommand) {
+      if (turnRemoteCommand.__registered) await emitRemoteRendererEventAndWait('assistant.failed', turnRemoteCommand, {code: 'remote_conversation_save_failed'}).catch(() => null);
+      activeLocalExecution.value = null;
+    }
+    loading.value = false;
+    return;
+  }
+  syncAutoCloseOnBlurListener();
   const autoApproveThisTurn = () => turnRemoteCommand?.autoApproveTools === true || isAutoApproveTools.value;
   if (turnRemoteCommand) {
     turnRemoteCommand.__remoteStarted = true;
@@ -10333,8 +10427,10 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
   activeAssistantTurnMeta = turnMeta;
   if (turnRemoteCommand?.__local) {
     activeLocalExecution.value = turnRemoteCommand;
-    const registered = await emitRemoteRendererEventAndWait('conversation.execution.started', turnRemoteCommand, {admittedBuffer: true}).catch(() => null);
-    turnRemoteCommand.__registered = registered?.ok === true;
+    if (!turnRemoteCommand.__registered) {
+      const registered = await emitRemoteRendererEventAndWait('conversation.execution.started', turnRemoteCommand, {admittedBuffer: true}).catch(() => null);
+      turnRemoteCommand.__registered = registered?.ok === true;
+    }
   }
   const isCurrentAssistantTurn = () => activeAssistantTurnId.value === turnId && activeAssistantTurnMeta === turnMeta;
   const isTurnAborted = () => requestSignal.aborted || !isCurrentAssistantTurn();
@@ -11340,7 +11436,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
           });
 
           // 自动关闭窗口
-          if (currentTaskConfig.value.autoClose) {
+          if (currentTaskConfig.value.autoClose && !pendingAppendBuffer.value.length && !scheduledTaskQueueSaving && !mobileControlActive.value && !controlTransferPending.value) {
             window.api.windowControl('close-window');
           }
         } catch (taskErr) {

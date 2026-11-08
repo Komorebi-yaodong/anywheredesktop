@@ -293,6 +293,8 @@ async function main() {
       })
       revision = snapshot.revision
       const statePatch = {
+        pendingAppendBuffer: [{kind: 'scheduled-task', requestId: `queued-${round}`, text: `instruction-${round}`, taskConfig: {id: `task-${round}`, conversationId}, preview: 'scheduled'}],
+        promptDraft: 'preserved draft', draftFileList: [{name: 'synthetic.txt'}],
         pendingRemoteConfigPatch: {model: `provider|next-${round}`, systemPrompt: `next-${round}`, compact: {triggerRatio: 0.8}},
         model: `provider|patched-${round}`,
         currentPromptConfig: {
@@ -328,6 +330,8 @@ async function main() {
       if (round === 2) assert.equal(requestMessages.messages.find((message) => message.storageId === 'message-1')?.content, 'round-2-message-1')
       if (round === 3) assert.equal(requestMessages.messages.some((message) => message.storageId === 'message-1'), false)
       assert.deepEqual(opened.sessionData.pendingRemoteConfigPatch, statePatch.pendingRemoteConfigPatch, 'next-turn config survives state save and reopen without changing transcript')
+      assert.deepEqual(opened.sessionData.pendingAppendBuffer, statePatch.pendingAppendBuffer, 'scheduled task identity/config survive SQLite state-only save and reopen')
+      assert.equal(opened.sessionData.promptDraft, 'preserved draft')
       assert.equal(opened.sessionData.model, statePatch.model)
       assert.deepEqual(opened.sessionData.currentPromptConfig, statePatch.currentPromptConfig)
       assert.equal(opened.sessionData.selectedVoice, statePatch.selectedVoice)

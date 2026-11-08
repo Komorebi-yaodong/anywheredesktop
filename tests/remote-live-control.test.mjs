@@ -180,6 +180,17 @@ assert.equal(
   false
 )
 assert.equal(item.generating, true, 'control transfer never changes request execution flags')
+// Scheduled/buffered sends are admitted while Mobile keeps ownership, with a live observer.
+await manager.takeover({deviceId: device, params: {conversationId: cid}})
+const scheduledId = `desktop-turn-${crypto.randomUUID()}`
+assert.equal(render('conversation.execution.started', scheduledId, {admittedBuffer: true}).ok, true)
+assert.equal(runtime(device).control.owner, 'this_device')
+assert.equal(runtime(device).execution.operationId, scheduledId)
+assert.equal(render('assistant.delta', scheduledId, {textDelta: 'scheduled output', segmentId: 'scheduled-segment'}).ok, true)
+assert.equal(manager.getRequest({deviceId: device, params: {requestId: scheduledId}}).text, 'scheduled output')
+assert.equal(render('assistant.completed', scheduledId, {revision: 4}).ok, true)
+assert.equal(runtime(device).control.owner, 'this_device', 'scheduled run never hands control back to Desktop')
+await manager.handoff({deviceId: device, params: {conversationId: cid}})
 const nextLocal = `desktop-turn-${crypto.randomUUID()}`
 assert.equal(render('conversation.execution.started', nextLocal).ok, true)
 const beforeStop = commands.length

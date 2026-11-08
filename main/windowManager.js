@@ -1013,7 +1013,7 @@ export const completeConversationTask = (windowId, result) => conversationTaskDe
 export async function runTaskInConversation({dirPath, conversationId, taskConfig, payload}) {
   const api = await import('./core/conversationStore.js')
   const opened = await api.openConversation({dirPath, reference: conversationId, activeOnly: true, pageSize: 200})
-  const result = await openWindow('window', {type: 'conversation', code: opened.sessionData?.CODE || '__DEFAULT__', conversation: {...opened, dirPath}})
+  const result = await openWindow('window', {type: 'conversation', preserveExistingVisibility: true, code: opened.sessionData?.CODE || '__DEFAULT__', conversation: {...opened, dirPath}})
   if (!result?.ok || !await waitForWindowReady(result.id, 30000)) return {ok: false, reason: 'task_window_not_ready'}
   const readyDeadline = Date.now() + 30000
   while (windowMetadataStore.get(result.id)?.rendererReady !== true) {
@@ -1226,7 +1226,7 @@ const dynamicBaseConfig =
         || path.resolve(location.dirPath) !== path.resolve(conversationDir)) continue
       const existing = multiStore.get(existingId)
       if (!existing || existing.isDestroyed()) continue
-      if (openPayload?.remoteHidden !== true) revealRemoteConversationWindow(existingId)
+      if (openPayload?.remoteHidden !== true && openPayload?.preserveExistingVisibility !== true) revealRemoteConversationWindow(existingId)
       return { ok: true, type: targetType, id: existingId, reused: true }
     }
   }

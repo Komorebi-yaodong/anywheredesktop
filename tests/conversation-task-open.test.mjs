@@ -10,7 +10,7 @@ let ready = false, deliveries = 0, opens = 0
 const context = {fixtureApi: {openConversation: async input => {
   assert.equal(input.reference, 'target');
   return {descriptor: {conversationId: 'target'}, sessionData: {CODE: 'Code'}}
-}}, openWindow: async (type, payload) => {opens++; assert.equal(type, 'window'); assert.equal(payload.type, 'conversation'); return {ok: true, id: 'writer', reused: true}},
+}}, openWindow: async (type, payload) => {opens++; assert.equal(type, 'window'); assert.equal(payload.type, 'conversation'); assert.equal(payload.preserveExistingVisibility, true); return {ok: true, id: 'writer', reused: true}},
   waitForWindowReady: async () => true, Date,
   windowMetadataStore: {get: () => ({rendererReady: ready})}, getWindowByRef: () => ({}),
   setTimeout: fn => {ready = true; fn()},

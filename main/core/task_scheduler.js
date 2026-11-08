@@ -153,6 +153,14 @@ async function checkTasks({ dataApi, openWindow } = {}) {
       try {
         const runResult = await runTaskById({ taskId, dataApi, openWindow })
         if (!runResult?.success) {
+          // A delivered command with a lost receipt is unknown, never safe to replay.
+          if (runResult?.reason === 'task_receipt_timeout') {
+            task.lastRunTime = Date.now()
+            task.lastRunSlotKey = slotKey
+            processedRunSlots.set(slotKey, task.lastRunTime)
+            if (task.triggerType === 'single') setCurrentTaskDeviceEnabled(task, false)
+            needsUpdate = true
+          }
           console.warn(`[Task Scheduler] task ${taskId} due but window did not open:`, runResult)
           continue
         }

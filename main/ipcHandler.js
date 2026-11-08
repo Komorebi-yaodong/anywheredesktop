@@ -1,3 +1,4 @@
+import {completeConversationTask} from './windowManager.js'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { app, BrowserWindow, ipcMain } from 'electron'
@@ -809,6 +810,7 @@ handleInvoke('data:coderedirect', async (event, label = '', payload = null) => {
     }
   })
 
+  handleInvoke('task:conversationReceipt', (event, input = {}) => completeConversationTask(getWindowRefByWebContentsId(event.sender.id), input))
   handleInvoke('data:runTaskNow', async (_event, taskId = '') => {
     return runTaskById({ taskId, dataApi, openWindow })
   })

@@ -1277,6 +1277,7 @@ IMPORTANT:
                 properties: {
                     name: { type: "string", description: "Task name: concise, clear, and unique." },
                     instruction: { type: "string", description: "The specific, self-contained prompt sent to the AI when the schedule triggers. Since it executes autonomously without human interaction, the instruction MUST be highly detailed and actionable. Explicitly state the exact goal, what tools to invoke (e.g., 'Use builtin_web_search to find...', 'Use write_file to save...'), and the desired output format. Example: 'Search the web for today's AI news, summarize the top 3 items in a markdown list, and save the result as a local file to...'" },
+                    conversation_id: { type: "string", description: "Optional existing local conversation ID. Mutually exclusive with agent_name; requires local conversation storage." },
                     agent_name: { type: "string", description: "Optional. Name of the Quick Prompt to use. Defaults to '__DEFAULT__'." },
                     schedule_type: {
                         type: "string", enum: ["interval", "daily", "weekly", "monthly", "single"],
@@ -1326,6 +1327,7 @@ IMPORTANT:
                     task_name_or_id: { type: "string" },
                     new_name: { type: "string" },
                     instruction: { type: "string", description: "New prompt content. Provide a highly detailed, self-contained instruction for autonomous execution (explicitly stating tools to use, goals, and output formats)." },
+                    conversation_id: { type: "string", description: "Optional existing local conversation ID. Mutually exclusive with agent_name; requires local conversation storage." },
                     agent_name: { type: "string" },
                     schedule_type: { type: "string", enum: ["interval", "daily", "weekly", "monthly", "single"] },
                     time_param: { type: "string" },
@@ -3658,7 +3660,7 @@ ${agentStr}`;
             details += `- ID: ${targetId}\n`;
             details += `- Name: ${task.name}\n`;
             details += `- Enabled: ${task.enabled}\n`;
-            details += `- Agent: ${task.promptKey}\n`;
+            details += task.conversationId ? `- Conversation: ${task.conversationId}\n` : `- Agent: ${task.promptKey}\n`;
             details += `- Schedule Type: ${task.triggerType}\n`;
 
             if (task.triggerType === 'interval') {
@@ -3695,7 +3697,7 @@ ${agentStr}`;
         return "Current Tasks (Summary):\n" + taskList.join('\n') + "\n\n(Tip: Use 'task_name_or_id' argument to see full details of a specific task)";
     },
 
-    create_task: async ({ name, instruction, agent_name = '__DEFAULT__', schedule_type, time_param, enabled = true, single_date, interval_time_ranges, weekly_days, monthly_days, extra_mcp, extra_skills, }) => {
+    create_task: async ({ name, instruction, agent_name, conversation_id, schedule_type, time_param, enabled = true, single_date, interval_time_ranges, weekly_days, monthly_days, extra_mcp, extra_skills, }) => {
         const unlock = await acquireLock('config_tasks');
         try {
                         const configData = await getConfig();
@@ -3704,6 +3706,13 @@ ${agentStr}`;
 
             if (Object.values(tasks).some(t => t.name === name)) return `Error: A task with name "${name}" already exists.`;
 
+            if (conversation_id && agent_name) return 'Error: conversation_id and agent_name are mutually exclusive.';
+            if (conversation_id) {
+                const dirPath = configData.config.webdav?.localChatPath;
+                if (!dirPath) return 'Error: local conversation storage is required.';
+                const projects = await (await import('./projects.js')).readLocalProjects(dirPath);
+                if (!projects.conversations?.[conversation_id]) return 'Error: conversation not found.';
+            }
             let targetPromptKey = '__DEFAULT__';
             if (agent_name && agent_name !== '__DEFAULT__') {
                 const exactMatch = Object.keys(prompts).find(k => k === agent_name);
@@ -3719,7 +3728,8 @@ ${agentStr}`;
             const newTask = {
                 name: name,
                 description: instruction || "",
-                promptKey: targetPromptKey,
+                promptKey: conversation_id ? '' : targetPromptKey,
+                conversationId: conversation_id || '',
                 triggerType: schedule_type,
                 enabled: enabled,
                 intervalMinutes: 60, intervalStartTime: '00:00', intervalTimeRanges: [],
@@ -3793,7 +3803,7 @@ ${agentStr}`;
         }
     },
 
-    edit_task: async ({ task_name_or_id, new_name, instruction, agent_name, schedule_type, time_param, single_date, interval_time_ranges, weekly_days, monthly_days, extra_mcp, extra_skills }) => {
+    edit_task: async ({ task_name_or_id, new_name, instruction, agent_name, conversation_id, schedule_type, time_param, single_date, interval_time_ranges, weekly_days, monthly_days, extra_mcp, extra_skills }) => {
         const unlock = await acquireLock('config_tasks');
         try {
                         const configData = await getConfig();
@@ -3816,6 +3826,15 @@ ${agentStr}`;
 
             if (instruction !== undefined) task.description = instruction;
 
+            if (conversation_id && agent_name) return 'Error: conversation_id and agent_name are mutually exclusive.';
+            if (conversation_id) {
+                const dirPath = configData.config.webdav?.localChatPath;
+                if (!dirPath) return 'Error: local conversation storage is required.';
+                const projects = await (await import('./projects.js')).readLocalProjects(dirPath);
+                if (!projects.conversations?.[conversation_id]) return 'Error: conversation not found.';
+            }
+            if (conversation_id !== undefined) {task.conversationId = conversation_id || ''; task.promptKey = conversation_id ? '' : '__DEFAULT__';}
+            if (agent_name) task.conversationId = '';
             if (agent_name) {
                 if (agent_name === '__DEFAULT__') {
                     task.promptKey = '__DEFAULT__';

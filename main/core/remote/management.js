@@ -51,7 +51,8 @@ const schemas = {
     ...common,
     field('enabled', '在当前 Desktop 启用', 'boolean'),
     field('description', '任务内容', 'multiline'),
-    field('promptKey', '助手', 'assistant'),
+    field('promptKey', '智能体', 'assistant'),
+    field('conversationId', '目标会话', 'conversation'),
     field('triggerType', '频率', 'select', {
       options: ['interval', 'daily', 'weekly', 'monthly', 'single']
     }),
@@ -232,6 +233,7 @@ export function createRemoteManagementService({
       ? await readProjects(c.webdav.localChatPath)
       : { projects: [] }
     const options = {
+      conversation: Object.values(obj(projects.conversations)).slice(0, 500).map(item => ({value: item.conversationId, label: item.title || item.conversationId})),
       model: Object.entries(obj(c.providers)).flatMap(([id, p]) =>
         (p.enable !== false && Array.isArray(p.modelList) ? p.modelList : []).map((name) => ({
           value: `${id}|${name}`,
@@ -419,6 +421,17 @@ export function createRemoteManagementService({
               const merged = { ...defaults, ...raw, ...patch }
               if (section === 'providers' && patch.api_key === '')
                 merged.api_key = raw?.api_key || ''
+              if (section === 'tasks') {
+                if (patch.conversationId && patch.promptKey) throw remoteError('remote_task_target_conflict')
+                if (patch.conversationId) merged.promptKey = ''
+                if (patch.promptKey) merged.conversationId = ''
+                if (merged.promptKey === '' && !merged.conversationId) throw remoteError('remote_task_conversation_required')
+                if (merged.conversationId) {
+                  if (!c.webdav?.localChatPath) throw remoteError('remote_task_local_storage_required')
+                  const projects = await readProjects(c.webdav.localChatPath)
+                  if (!Object.hasOwn(obj(projects.conversations), merged.conversationId)) throw remoteError('remote_conversation_not_found')
+                }
+              }
               if (section === 'tasks' && merged.enabled) {
                 const timeKey = {
                   daily: 'dailyTime',
@@ -435,7 +448,7 @@ export function createRemoteManagementService({
                 )
                   throw remoteError('remote_management_invalid')
                 if (
-                  merged.promptKey !== '__DEFAULT__' &&
+                  !merged.conversationId && merged.promptKey !== '__DEFAULT__' &&
                   !Object.hasOwn(obj(c.prompts), merged.promptKey)
                 )
                   throw remoteError('remote_assistant_invalid')

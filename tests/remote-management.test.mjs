@@ -23,7 +23,7 @@ const service = createRemoteManagementService({
     config = structuredClone(next)
     return { success: true }
   },
-  readProjects: async () => ({ projects: [] }),
+  readProjects: async () => ({ projects: [], conversations: {'conversation-task-fixture': {conversationId: 'conversation-task-fixture', title: 'Task target', dbFile: 'PRIVATE_DATABASE'}} }),
   skills: {
     list: async () => [...skillMap].map(([id, s]) => ({ id, ...s })),
     get: async (_root, id) => skillMap.get(id) || null,
@@ -109,4 +109,18 @@ await assert.rejects(
   mutate({ section: 'tasks', id: 'bad-time', operation: 'create', patch: { weeklyTime: '99:99' } }),
   { code: 'remote_management_invalid' }
 )
+config.webdav = {localChatPath: 'PRIVATE_LOCAL_PATH'}
+const taskCatalog = await service.catalog({params: {section: 'tasks'}})
+assert.deepEqual(taskCatalog.options.conversation, [{value: 'conversation-task-fixture', label: 'Task target'}])
+assert.equal(JSON.stringify(taskCatalog).includes('PRIVATE_'), false)
+await mutate({section: 'tasks', id: 'target-task', operation: 'create', patch: {name: 'Target task', conversationId: 'conversation-task-fixture', promptKey: '', enabled: true}})
+let targetDetail = await service.catalog({params: {section: 'tasks', id: 'target-task'}})
+assert.equal(targetDetail.value.promptKey, '')
+assert.equal(targetDetail.value.conversationId, 'conversation-task-fixture')
+await assert.rejects(mutate({section: 'tasks', id: 'target-task', operation: 'patch', expectedRevision: targetDetail.revision, patch: {conversationId: 'conversation-task-fixture', promptKey: '__DEFAULT__'}}), {code: 'remote_task_target_conflict'})
+await mutate({section: 'tasks', id: 'target-task', operation: 'patch', expectedRevision: targetDetail.revision, patch: {promptKey: '__DEFAULT__'}})
+targetDetail = await service.catalog({params: {section: 'tasks', id: 'target-task'}})
+assert.equal(targetDetail.value.conversationId, '')
+config.webdav.localChatPath = ''
+await assert.rejects(mutate({section: 'tasks', id: 'target-task', operation: 'patch', expectedRevision: targetDetail.revision, patch: {conversationId: 'conversation-task-fixture'}}), {code: 'remote_task_local_storage_required'})
 console.log(JSON.stringify({ ok: true, suite: 'remote-management' }))

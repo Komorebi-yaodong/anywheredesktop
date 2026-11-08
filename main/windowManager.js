@@ -1,3 +1,4 @@
+import {createConversationTaskDelivery} from './core/conversationTaskDelivery.js'
 import { BrowserWindow, shell, screen, nativeTheme } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { randomUUID } from 'node:crypto'
@@ -999,6 +1000,28 @@ win.webContents.once('did-finish-load', () => {
   })
 
   return win
+}
+
+const conversationTaskDelivery = createConversationTaskDelivery({send: async (windowId, payload) => {
+  const win = getWindowByRef(windowId)
+  if (!win || win.isDestroyed()) return {ok: false}
+  win.webContents.send(WINDOW_EVENT_CHANNEL, {sourceId: 'task-runner', event: 'task:conversation-run', payload})
+  return {ok: true}
+}})
+export const completeConversationTask = (windowId, result) => conversationTaskDelivery.complete(windowId, result)
+
+export async function runTaskInConversation({dirPath, conversationId, taskConfig, payload}) {
+  const api = await import('./core/conversationStore.js')
+  const opened = await api.openConversation({dirPath, reference: conversationId, activeOnly: true, pageSize: 200})
+  const result = await openWindow('window', {type: 'conversation', code: opened.sessionData?.CODE || '__DEFAULT__', conversation: {...opened, dirPath}})
+  if (!result?.ok || !await waitForWindowReady(result.id, 30000)) return {ok: false, reason: 'task_window_not_ready'}
+  const readyDeadline = Date.now() + 30000
+  while (windowMetadataStore.get(result.id)?.rendererReady !== true) {
+    if (Date.now() >= readyDeadline || !getWindowByRef(result.id)) return {ok: false, reason: 'task_window_not_ready'}
+    await new Promise(resolve => setTimeout(resolve, 30))
+  }
+  const receipt = await conversationTaskDelivery.deliver(result.id, {conversationId, taskConfig, payload})
+  return {...receipt, id: result.id}
 }
 
 export async function openWindow(type = 'main', payload = null) {

@@ -1,6 +1,6 @@
 import { reconcileTaskDeviceState } from './task_devices.js'
 
-export async function runTaskById({ taskId = '', dataApi, openWindow } = {}) {
+export async function runTaskById({ taskId = '', dataApi, openWindow, runConversation = async input => (await import('../windowManager.js')).runTaskInConversation(input) } = {}) {
   const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : ''
   if (!normalizedTaskId) {
     return {
@@ -47,6 +47,18 @@ export async function runTaskById({ taskId = '', dataApi, openWindow } = {}) {
       reason: 'task_not_enabled_on_current_device',
       taskId: normalizedTaskId
     }
+  }
+
+  if (task.promptKey === '' && !task.conversationId) return {success: false, reason: 'task_conversation_required', taskId: normalizedTaskId}
+  if (task.conversationId) {
+    if (task.promptKey) return {success: false, reason: 'task_target_conflict', taskId: normalizedTaskId}
+    const dirPath = fullConfig.webdav?.localChatPath
+    if (!dirPath) return {success: false, reason: 'task_local_storage_required', taskId: normalizedTaskId}
+    try {
+      const result = await runConversation({dirPath, conversationId: task.conversationId,
+        taskConfig: {...task, id: normalizedTaskId}, payload: task.description || ''})
+      return {success: result?.ok === true, reason: result?.reason, taskId: normalizedTaskId, target: result?.id, result}
+    } catch (error) {return {success: false, reason: error?.message || 'task_conversation_failed', taskId: normalizedTaskId}}
   }
 
   const promptKey = typeof task.promptKey === 'string' && task.promptKey ? task.promptKey : '__DEFAULT__'

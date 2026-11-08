@@ -3444,7 +3444,7 @@ const runRemoteConversationCommand = async (input = {}) => {
   if (['conversation.message.edit', 'conversation.message.delete', 'conversation.message.reask', 'conversation.message.fork'].includes(command.type)) {
     const targetIndex = chat_show.value.findIndex((message) => message?.uiStorageId === command.uiMessageId);
     const target = targetIndex >= 0 ? chat_show.value[targetIndex] : null;
-    if (!target || ['system', 'tool', 'compaction'].includes(target.role)) {
+    if ((!target || ['system', 'tool', 'compaction'].includes(target.role)) && command.type !== 'conversation.message.fork') {
       emitRemoteRendererEvent('conversation.operation.failed', command, { code: 'remote_message_not_found' });
       return;
     }
@@ -6692,7 +6692,7 @@ onMounted(async () => {
           dbFile: descriptor.dbFile,
           title: descriptor.title,
           revision: Number(descriptor.revision) || 0,
-          dirPath: data.conversation.worktreeDir || currentConfig.value?.webdav?.localChatPath || '',
+          dirPath: data.conversation.dirPath || data.conversation.worktreeDir || currentConfig.value?.webdav?.localChatPath || '',
           storageMode: data.conversation.storageMode || descriptor.storageMode || 'local',
           isPaged: data.conversation.sessionData?.conversationStorage?.isPaged === true,
           loadedFromOrdinal: Number(data.conversation.sessionData?.conversationStorage?.loadedFromOrdinal) || 0,
@@ -6869,6 +6869,7 @@ onMounted(async () => {
     }
 
     await fetchSkillsList();
+    conversationTaskReady.value = true;
 
     if (data?.remoteCreate === true && remoteHiddenWriter.value && !currentConversationStorage.value?.conversationId) {
       autoCloseOnBlur.value = false;
@@ -6920,6 +6921,9 @@ onMounted(async () => {
     // 优先接桌面端事件总线，同时保留原插件 preload 回退
   if (window.api && typeof window.api.onWindowEvent === 'function') {
     window.api.onWindowEvent(async (envelope) => {
+      if (envelope?.event === 'task:conversation-run' && envelope.sourceId === 'task-runner') {
+        await handleConversationTask(envelope.payload); return;
+      }
       if (envelope?.event === 'conversation:metadata-command') {
         if (envelope.sourceId !== 'conversation-metadata-router') return;
         await runLocalConversationMetadataCommand(envelope.payload);
@@ -8183,8 +8187,8 @@ const forkInProgress = ref(false);
 const handleForkMessage = async (index, remoteCommand = null) => {
   if (forkInProgress.value || isClosingWindow.value || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value) throw new Error('remote_conversation_busy');
   if (!(remoteCommand ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) throw new Error('remote_conversation_read_only');
-  const target = chat_show.value[index];
-  if (!target || !['user', 'assistant'].includes(target.role)) throw new Error('remote_message_not_found');
+  const target = remoteCommand ? {uiStorageId: remoteCommand.uiMessageId} : chat_show.value[index];
+  if (!target || !remoteCommand && !['user', 'assistant'].includes(target.role)) throw new Error('remote_message_not_found');
   forkInProgress.value = true;
   try {
     clearScheduledAutoSave();
@@ -8196,11 +8200,36 @@ const handleForkMessage = async (index, remoteCommand = null) => {
     if (!storage?.conversationId || !dirPath || !target.uiStorageId) throw new Error('请先开启本地会话存储');
     const forked = await window.api.forkConversation({dirPath, conversationId: storage.conversationId, uiMessageId: target.uiStorageId});
     const conversation = {...forked, dirPath, storageMode: 'local'};
-    if (!remoteCommand) await window.api.openWindow('window', {type: 'conversation', conversation});
+    if (!remoteCommand) await window.api.openWindow('window', {type: 'conversation', code: forked.sessionData?.CODE || CODE.value, conversation});
     return {forkedConversationId: forked.descriptor.conversationId, title: forked.descriptor.title};
   } finally {forkInProgress.value = false;}
 };
 const onForkMessage = (index) => {void handleForkMessage(index).catch(error => showDismissibleMessage.error(`Fork失败: ${error?.message || error}`));};
+
+const conversationTaskReady = ref(false);
+let conversationTaskAdmitting = false;
+const handleConversationTask = async (input = {}) => {
+  const receipt = {requestId: input.requestId, conversationId: input.conversationId};
+  const reply = (ok, reason = '') => window.api.reportConversationTask({...receipt, ok, reason});
+  if (conversationTaskAdmitting || input.expiresAt <= Date.now()) {await reply(false, 'task_busy'); return;}
+  conversationTaskAdmitting = true;
+  try {
+    while (!conversationTaskReady.value && Date.now() < input.expiresAt && !isClosingWindow.value) await new Promise(resolve => setTimeout(resolve, 30));
+    if (activeApplyMcpPromise) await activeApplyMcpPromise;
+    if (Date.now() >= input.expiresAt || isClosingWindow.value || currentConversationStorage.value?.conversationId !== input.conversationId
+      || loading.value || compacting.value || isPreparingSend.value || isMcpLoading.value || activeAssistantTurnMeta || currentTaskConfig.value
+      || !ensureLocalConversationWriteAccess(false)) {await reply(false, 'task_conversation_busy'); return;}
+    currentTaskConfig.value = {...input.taskConfig, conversationId: input.conversationId};
+    const content = `## Scheduled Task\n\n**system_time**:${new Date().toLocaleString('sv-SE')}\n\n${input.payload || ''}\n\nScheduled task triggered! Execute autonomously and provide correct feedback.`;
+    appendLinkedUserMessage({historyContent: content, uiContent: [{type: 'text', text: content}], timestamp: new Date().toISOString()});
+    let started = false;
+    // forceSend uses the appended message, leaving the existing composer draft untouched.
+    await askAI(true, null, false, () => {started = true; return reply(true);});
+    if (!started) {currentTaskConfig.value = null; await reply(false, 'task_not_started');}
+  } catch (error) {
+    await reply(false, error?.message || 'task_conversation_failed');
+  } finally {conversationTaskAdmitting = false;}
+};
 
 const getSessionDataAsObject = (options = {}) => {
   const createStorageId = createConversationStorageId;
@@ -10226,7 +10255,7 @@ const appendCurrentInputToHistory = async () => {
   return false;
 };
 
-const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = false) => {
+const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = false, onStarted = null) => {
   if (activeLocalExecution.value || activeRemoteCommand.value && activeRemoteCommand.value !== remoteCommand) return;
   if (desktopTakeoverPending.value || isClosingWindow.value || !(remoteCommand || admittedBuffer ? ensureConversationWriteAccess(false) : ensureLocalConversationWriteAccess(true))) return;
   if (loading.value || isPreparingSend.value || compacting.value) return;
@@ -10257,6 +10286,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
   // --- 2. 初始化 AI 回合并立即显示 UI 专用准备气泡 ---
   // This bubble is deliberately absent from fullHistory until a real assistant result exists.
   loading.value = true;
+  if (onStarted) await Promise.resolve(onStarted()).catch(() => {});
   syncAutoCloseOnBlurListener();
   const turnRemoteCommand = remoteCommand || activeRemoteCommand.value || (currentConversationStorage.value?.conversationId ? {requestId: `desktop-turn-${crypto.randomUUID()}`, __local: true} : null);
   const autoApproveThisTurn = () => turnRemoteCommand?.autoApproveTools === true || isAutoApproveTools.value;
@@ -11254,9 +11284,9 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
         let savedFileName = '未保存';
         let savedConversationId = '';
         try {
-          if (currentTaskConfig.value.autoSave && currentConfig.value.webdav?.localChatPath) {
+          if ((currentTaskConfig.value.autoSave || currentTaskConfig.value.conversationId) && currentConfig.value.webdav?.localChatPath) {
             const timeStr = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[\/ :]/g, '-').replace(/,/g, '');
-            defaultConversationName.value = `定时任务-${currentTaskConfig.value.name}-${timeStr}`;
+            if (!currentTaskConfig.value.conversationId) defaultConversationName.value = `定时任务-${currentTaskConfig.value.name}-${timeStr}`;
             const dirPath = currentConfig.value.webdav.localChatPath;
             const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(dirPath));
             const taskProjectId = typeof currentTaskConfig.value.autoSaveProjectId === 'string' ? currentTaskConfig.value.autoSaveProjectId : '';
@@ -11279,7 +11309,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
                 storageMode: 'local'
               };
             } else {
-              await executeAutoSaveRequest({ reason: 'scheduled-task-finalized', force: true, version: ++sessionMutationVersion });
+              if (!await executeAutoSaveRequest({ reason: 'scheduled-task-finalized', force: true, version: ++sessionMutationVersion })) throw new Error('task_save_failed');
             }
             savedFileName = defaultConversationName.value;
             savedConversationId = currentConversationStorage.value?.conversationId || '';

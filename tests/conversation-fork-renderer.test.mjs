@@ -14,13 +14,20 @@ for (const filename of process.argv.slice(2).length ? process.argv.slice(2) : [n
     ensureLocalConversationWriteAccess: () => true, ensureConversationWriteAccess: () => true,
     clearScheduledAutoSave: () => events.push('clear'), sessionMutationVersion: 0,
     executeAutoSaveRequest: async () => {events.push('save'); return saved}, autoSaveMutationQueue: {whenIdle: async () => {events.push('idle')}},
-    currentConversationStorage: ref({conversationId: 'source', dirPath: 'synthetic-dir'}), currentConfig: ref({}),
+    currentConversationStorage: ref({conversationId: 'source', dirPath: 'synthetic-dir'}), currentConfig: ref({}), CODE: ref('Code'),
     showDismissibleMessage: {error() {}},
     window: {api: {forkConversation: async input => {events.push('fork'); assert.equal(input.uiMessageId, 'ui-target'); return {descriptor: {conversationId: 'forked', title: 'fork-Test'}, sessionData: {}}},
       openWindow: async () => {events.push('open')}, openConversationWindow: async () => {events.push('open')}}}}
   const fork = vm.runInNewContext(`${block}; handleForkMessage`, context)
   assert.equal((await fork(0)).forkedConversationId, 'forked')
   assert.deepEqual(events, ['clear','save','idle','fork','open'])
+  if (source.includes('ensureLocalConversationWriteAccess')) {
+    events.length = 0;
+    context.chat_show.value = [];
+    assert.equal((await fork(-1, {uiMessageId: 'ui-target'})).forkedConversationId, 'forked');
+    assert.deepEqual(events, ['clear','save','idle','fork'], 'Remote fork may target an earlier page without reloading the live writer');
+    context.chat_show.value = [{role: 'user', uiStorageId: 'ui-target'}];
+  }
   saved = false; events.length = 0
   await assert.rejects(fork(0), /remote_conversation_save_failed/)
   assert.deepEqual(events, ['clear','save','idle'])

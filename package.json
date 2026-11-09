@@ -59,7 +59,8 @@
     "test:agent-message-buffer": "node tests/agent-message-buffer.test.mjs",
     "test:subagent-request": "node tests/subagent-request.test.mjs",
     "test:markdown-placeholder": "node tests/markdown-placeholder.test.mjs",
-    "test:view-image": "node tests/view-image-compression.test.mjs",
+    "test:view-image": "node tests/view-image-compression.test.mjs && node tests/view-image-url.test.mjs",
+    "test:shell-output": "node tests/shell-output.test.mjs",
     "test:web-fetch": "node tests/web-fetch.test.mjs",
     "test:usage": "node tests/usage-statistics.test.mjs && node tests/usage-integration.test.mjs && node tests/usage-sdk.test.mjs"
   },

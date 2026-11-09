@@ -15,7 +15,7 @@ import TextSearchUI from './utils/TextSearchUI.js';
 import { formatTimestamp, sanitizeToolArgs, sanitizeToolFunctionName } from './utils/formatters.js';
 import { resolveSafeConversationMutationTarget } from './utils/conversationMessageTarget.js';
 import { createConversationDeleteRecovery } from './utils/conversationDeleteRecovery.js';
-import { prepareViewImagePayload } from './utils/viewImageCompression.js';
+import { prepareViewImagePayload, prepareDraftImageAttachment } from './utils/viewImageCompression.js';
 
 import {replaceConversationEditableText} from './utils/conversationEditableText.js';
 import { createLinkedUserMessagePair } from './utils/linkedUserMessage.js';
@@ -817,14 +817,16 @@ const handleAppendMessageEvent = async (data, options = {}) => {
       appendLinkedUserMessage({ historyContent: overText, uiContent: [{ type: "text", text: overText }], timestamp: nowTime });
     }
   } else if (data.type === "img" && data.payload) {
+    const imageAttachment = await prepareDraftImageAttachment({ uid: fileList.value.length + 1, name: '截图.png', size: 0, type: 'image/png', url: String(data.payload) });
+    if (isClosingWindow.value) return;
     if (shouldRespectDirectSendConfig && !directSendConfig.image) {
-      fileList.value.push({ uid: fileList.value.length + 1, name: "截图.png", size: 0, type: "image/png", url: String(data.payload) });
+      fileList.value.push(imageAttachment);
       if (normalizedUserText) {
         prompt.value = normalizedUserText;
       }
       shouldAutoSend = false;
     } else {
-      const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
+      const imageContent = [{ type: "image_url", image_url: { url: imageAttachment.url } }];
       appendLinkedUserMessage({ historyContent: imageContent, uiContent: imageContent, timestamp: nowTime });
       if (normalizedUserText) {
         prompt.value = normalizedUserText;
@@ -5800,6 +5802,7 @@ const onAvatarClick = async (role, event) => {
 };
 
 const handleSubmit = () => {
+  if (pendingDraftAttachments.value > 0) { showDismissibleMessage.info('图片或附件正在处理，请稍后发送'); return; }
   if (!ensureLocalConversationWriteAccess(true)) return;
 
   if (compacting.value) {
@@ -5822,13 +5825,19 @@ const handleCancel = () => {
 };
 const handleClearHistory = () => clearHistory();
 const handleRemoveFile = (index) => fileList.value.splice(index, 1);
+const pendingDraftAttachments = ref(0);
 const handleUpload = async ({ fileList: newFiles }) => {
-  for (const file of newFiles) {
-    try {
-      await file2fileList(file, fileList.value.length + 1);
-    } catch {
-      // 单文件失败时已在前置校验阶段提示，这里不中断剩余文件继续处理
+  pendingDraftAttachments.value++;
+  try {
+    for (const file of newFiles) {
+      try {
+        await file2fileList(file, fileList.value.length + 1);
+      } catch (error) {
+        showDismissibleMessage.error(`处理文件 ${file.name} 失败: ${error.message}`);
+      }
     }
+  } finally {
+    pendingDraftAttachments.value--;
   }
   chatInputRef.value?.focus({ cursor: 'end' });
 };
@@ -6809,15 +6818,17 @@ onMounted(async () => {
           }
         }
       } else if (data.type === "img" && data.payload) {
+        const imageAttachment = await prepareDraftImageAttachment({ uid: 1, name: '截图.png', size: 0, type: 'image/png', url: String(data.payload) });
+        if (isClosingWindow.value) return;
         if (directSendConfig.image) {
-          const imageContent = [{ type: "image_url", image_url: { url: String(data.payload) } }];
+          const imageContent = [{ type: "image_url", image_url: { url: imageAttachment.url } }];
           appendLinkedUserMessage({ historyContent: imageContent, uiContent: imageContent });
           if (normalizedUserText) {
             prompt.value = normalizedUserText;
           }
           shouldDirectSend = true;
         } else {
-          fileList.value.push({ uid: 1, name: "截图.png", size: 0, type: "image/png", url: String(data.payload) });
+          fileList.value.push(imageAttachment);
           if (normalizedUserText) {
             prompt.value = normalizedUserText;
           }
@@ -9820,15 +9831,14 @@ const file2fileList = async (file, idx) => {
 
   const mimeType = file.type || 'application/octet-stream';
   const appendDraftFile = async (fileUrl) => {
-    await validateDraftFileBeforeAppend({ name: file.name, url: fileUrl });
-    fileList.value.push({
-      uid: idx,
-      name: file.name,
-      size: file.size,
-      type: mimeType,
-      url: fileUrl,
-      path: file.path || ''
+    const draftFiles = fileList.value;
+    const attachment = await prepareDraftImageAttachment({
+      uid: idx, name: file.name, size: file.size, type: mimeType, url: fileUrl, path: file.path || ''
     });
+    await validateDraftFileBeforeAppend({ name: attachment.name, url: attachment.url });
+    if (isClosingWindow.value || fileList.value !== draftFiles) return;
+    fileList.value.push(attachment);
+    if (attachment.animationFlattened) showDismissibleMessage.info('图片已压缩为静态预览，动画不包含在发送内容中');
   };
 
   const normalizedBase64 =

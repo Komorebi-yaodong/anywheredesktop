@@ -46,6 +46,9 @@ AI Anywhere Desktop 是一个深度定制化的桌面 AI 智能体工作站。�
 
 通过 MCP，Anywhere Desktop 可以把文件、Shell、Python、联网搜索、任务调度等能力真正接到模型手上，让 AI 从“会聊”变成“会做事”。
 
+* `view_image` 支持本地图片和 HTTP(S) 图片地址（包括不带扩展名的下载链接），远程读取沿用应用网络代理。输入框粘贴/添加的图片与工具返回的图片统一在发送前单轮压缩，保留原尺寸与透明度，仅采用更小的编码；模型请求与会话历史使用同一份优化结果，不修改原文件。
+* `execute_bash_command` 不再在命令结果前附加启动目录 `[CWD: ...]`，避免与命令实际切换后的目录混淆；需要确认目录时可显式输出 `Get-Location`。
+
 ![MCP 管理界面](https://raw.githubusercontent.com/Komorebi-yaodong/anywhere_doc/main/image/MCP%E7%AE%A1%E7%90%86%E7%95%8C%E9%9D%A2.png)
 
 ### 记忆笔记本（Memory MCP）

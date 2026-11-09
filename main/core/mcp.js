@@ -646,6 +646,10 @@ export async function initializeMcpClient(activeServerConfigs = {}, cachedToolsM
 
 return {
     openaiFormattedTools: buildOpenaiFormattedTools(sessionKey),
+    // Identify the built-in by origin, not its alias (an external tool may share its name).
+    builtinAgentListToolName: [...runtime.fullToolInfoMap.entries()].find(([, info]) =>
+      info.isBuiltin && info.serverConfig?.id === 'builtin_superagent'
+      && info.rawName === 'list_agents' && info.enabled !== false && info.schema)?.[0] || '',
     successfulServerIds: [...runtime.currentlyConnectedServerIds],
     failedServerIds
   }

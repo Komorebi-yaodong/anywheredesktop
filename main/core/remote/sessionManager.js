@@ -1627,6 +1627,9 @@ export function createRemoteSessionManager({
 
   function handleRendererEvent({ windowRef, payload } = {}) {
     const data = object(payload)
+    // Remote is optional. A stopped gateway is not an executor conflict: local scheduled
+    // turns must still run without enabling a listener or taking Mobile control.
+    if (data.event === 'conversation.execution.started' && !enabled) return {ok: false, error: 'remote_session_manager_disabled'}
     const session = data.event === 'conversation.execution.started' ? existingSession(data.conversationId) : sessions.get(data.conversationId)
     if (!session || session.windowRef !== windowRef) return { ok: false, error: 'remote_renderer_event_window_mismatch' }
     if (data.event === 'conversation.control.status') {
@@ -1635,7 +1638,7 @@ export function createRemoteSessionManager({
       return {ok: true, mobileControlled: session.mobileControlled, controlEpoch: session.controlEpoch}
     }
     if (data.event === 'conversation.execution.started') {
-      if (!enabled || windowItem(windowRef)?.readOnly || windowItem(windowRef)?.leasePending || session.activeRequestId || session.closing || !/^desktop-turn-[a-f0-9-]{36}$/.test(data.requestId || '') || session.mobileControlled && data.payload?.admittedBuffer !== true) return {ok: false, error: 'remote_conversation_busy'}
+      if (windowItem(windowRef)?.readOnly || windowItem(windowRef)?.leasePending || session.activeRequestId || session.closing || !/^desktop-turn-[a-f0-9-]{36}$/.test(data.requestId || '') || session.mobileControlled && data.payload?.admittedBuffer !== true) return {ok: false, error: 'remote_conversation_busy'}
       pruneRequests()
       const record = {deviceId: 'desktop', requestId: data.requestId, conversationId: data.conversationId, windowRef,
         event: 'assistant.started', eventSequence: 0, terminal: false, text: '', reasoning: '', truncated: false, updatedAtMs: Date.now(), observers: new Set(session.mobileControlled && session.mobileDeviceId ? [session.mobileDeviceId] : [])}

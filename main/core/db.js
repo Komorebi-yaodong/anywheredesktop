@@ -3,7 +3,8 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { app } from 'electron'
 import { Low } from 'lowdb'
-import { JSONFile } from 'lowdb/node'
+import { writeDurableFile, withFileTransaction } from './durableFiles.js'
+import { prepareConfigurationDatabase } from './databaseBackups.js'
 import { safeClone } from '../dataConverter.js'
 
 const DB_FILE_NAME = 'anywhere-desktop.db.json'
@@ -43,7 +44,22 @@ async function ensureDb() {
     await fs.mkdir(userDataPath, { recursive: true })
 
     const dbFilePath = path.join(userDataPath, DB_FILE_NAME)
-    const adapter = new JSONFile(dbFilePath)
+    await prepareConfigurationDatabase(userDataPath)
+    let writeTail = Promise.resolve()
+    const adapter = {
+      async read() {
+        try { return JSON.parse(await fs.readFile(dbFilePath, 'utf8')) }
+        catch (error) { if (error?.code === 'ENOENT') return null; throw error }
+      },
+      write(data) {
+        // Capture one immutable snapshot at invocation; never serialize later mutable state.
+        const bytes = JSON.stringify(data, null, 2)
+        const operation = writeTail.catch(() => {}).then(() => withFileTransaction(dbFilePath,
+          () => writeDurableFile(dbFilePath, bytes, value => JSON.parse(value.toString('utf8')))))
+        writeTail = operation
+        return operation
+      }
+    }
     const db = new Low(adapter, safeClone(DEFAULT_DATA))
 
     await db.read()
@@ -60,7 +76,12 @@ async function ensureDb() {
     return db
   })()
 
-  return dbPromise
+  try { return await dbPromise }
+  catch (error) { dbPromise = null; throw error }
+}
+
+export async function initializeDatabase() {
+  await ensureDb()
 }
 
 function toDocSnapshot(doc) {

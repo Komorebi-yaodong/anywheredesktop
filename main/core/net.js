@@ -131,6 +131,7 @@ function createTimeoutContext(init = {}) {
     signal: controller.signal,
     timeoutMs,
     isTimedOut: () => timedOut,
+    headersReceived: () => clearTimeout(timeoutId),
     cleanup: () => {
       clearTimeout(timeoutId)
       if (upstreamSignal) {
@@ -166,22 +167,66 @@ export async function fetchWithProxy(input, init = {}) {
   }
 
   try {
-    if (net && typeof net.fetch === 'function') {
-      return await net.fetch(input, requestInit)
+    const transport = net && typeof net.fetch === 'function' ? net.fetch.bind(net)
+      : typeof fetch === 'function' ? fetch : null
+    if (!transport) throw new Error('fetch_unavailable_in_current_context')
+    const response = await transport(input, requestInit)
+    // Header timeout is not a model-generation deadline. Preserve upstream cancellation until
+    // response-body completion/cancel, rather than disconnecting it immediately after headers.
+    timeoutContext.headersReceived()
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      timeoutContext.cleanup()
+      return response
     }
-
-    if (typeof fetch === 'function') {
-      return await fetch(input, requestInit)
+    const reader = response.body.getReader()
+    let ended = false
+    let streamController
+    const finish = () => {
+      if (ended) return
+      ended = true
+      timeoutContext.signal.removeEventListener('abort', onAbort)
+      timeoutContext.cleanup()
+      try { reader.releaseLock() } catch { /* a pending read releases after abort */ }
     }
-
-    throw new Error('fetch_unavailable_in_current_context')
+    const cancelReader = () => {
+      try { Promise.resolve(reader.cancel()).catch(() => {}).finally(() => { try { reader.releaseLock() } catch { /* pending reader */ } }) }
+      catch { /* cancellation must retain its original outcome */ }
+    }
+    const onAbort = () => {
+      if (ended) return
+      const error = Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })
+      streamController?.error(error)
+      cancelReader()
+      finish()
+    }
+    const body = new ReadableStream({
+      start(controller) { streamController = controller },
+      async pull(controller) {
+        if (ended) return
+        try {
+          const item = await reader.read()
+          if (ended) return
+          if (item.done) { controller.close(); finish() }
+          else controller.enqueue(item.value)
+        } catch (error) { if (!ended) { controller.error(error); finish() } }
+      },
+      cancel() { cancelReader(); finish() }
+    })
+    timeoutContext.signal.addEventListener('abort', onAbort, { once: true })
+    if (timeoutContext.signal.aborted) onAbort()
+    const wrapped = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
+    // Preserve response metadata while native body methods operate on the cancellable stream.
+    return new Proxy(wrapped, {
+      get(target, key) {
+        if (['url', 'redirected', 'type'].includes(key)) return response[key]
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      }
+    })
   } catch (error) {
-    if (timeoutContext.isTimedOut()) {
-      throw new Error(`web_request_timeout_${timeoutContext.timeoutMs}ms`)
-    }
-    throw error
-  } finally {
     timeoutContext.cleanup()
+    if (timeoutContext.isTimedOut()) throw new Error(`web_request_timeout_${timeoutContext.timeoutMs}ms`)
+    throw error
   }
 }
 

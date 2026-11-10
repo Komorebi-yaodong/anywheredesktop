@@ -17,7 +17,7 @@
 
 
 import path from 'node:path'
-import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow, safeStorage } from 'electron'
+import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow, safeStorage, dialog } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
 import {
@@ -84,9 +84,11 @@ import { getQuickAssistantWeight, recordQuickAssistantUsage } from './core/quick
 
 import { applyNetworkProxyConfig, installRequestHeaderBridge } from './core/net.js'
 import { startTaskScheduler } from './core/task_scheduler.js'
+import { createDatabaseBackupScheduler, takeDatabaseRecoveryNotice } from './core/databaseBackups.js'
 
 let appTray = null
 let appQuitStarted = false
+let configurationBackups = null
 
 let remoteShutdownPromise = null
 let remoteShutdownCompleted = false
@@ -749,6 +751,7 @@ async function triggerPromptShortcut(promptKey = '') {
 function beginAppQuit() {
   if (appQuitStarted) return remoteShutdownPromise
   appQuitStarted = true
+  configurationBackups?.stop()
   remoteShutdownPromise = remoteGateway.stop().then(() => {
     remoteShutdownCompleted = true
     markAppQuitting(true)
@@ -891,7 +894,17 @@ async function syncDesktopRuntimeFromConfig() {
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return
   electronApp.setAppUserModelId('com.komorebi.anywhere.desktop')
+
+  // Recover before any scheduler/config consumer can initialize or rewrite the database.
+  try { await dbApi.initializeDatabase() }
+  catch (error) {
+    console.error('[startup] configuration unavailable:', error?.code || 'configuration_read_failed')
+    dialog.showErrorBox('无法读取配置', '配置文件损坏或无法访问，且未能安全恢复。原文件未重置，请检查本地备份、磁盘空间和访问权限。')
+    app.exit(1)
+    return
+  }
 
   installRequestHeaderBridge()
 
@@ -971,14 +984,25 @@ app.whenReady().then(async () => {
   })
 
   systemApi.startClipboardWatcher()
-  startTaskScheduler({ dataApi, openWindow })
 
   const initialRuntime = await syncDesktopRuntimeFromConfig()
+  configurationBackups = createDatabaseBackupScheduler({ userDataPath: app.getPath('userData') })
+  configurationBackups.start()
+  powerMonitor.on('resume', () => {
+    void configurationBackups.check().catch(error => console.warn('[config-backup] resume failed:', error?.code || 'backup_failed'))
+  })
+  startTaskScheduler({ dataApi, openWindow })
   await remoteGateway.configure(initialRuntime?.config || {}).catch((error) => {
     console.error('remote-gateway:startup-failed', error?.message || error)
   })
   ensureTray()
   await openWindow('main')
+  const recovered = takeDatabaseRecoveryNotice()
+  if (recovered) {
+    void dialog.showMessageBox({ type: 'info', title: '配置已恢复',
+      message: `已从 ${recovered.backupDate} 的本地备份恢复配置。`,
+      detail: '损坏原件已保留（如有）。备份之后的配置变更可能需要重新设置。', buttons: ['知道了'] })
+  }
   setTimeout(() => {
     preheatScreenshotWindow()
   }, 800)
@@ -991,6 +1015,11 @@ app.whenReady().then(async () => {
     beginAppQuit()
     app.quit()
   })
+}).catch(error => {
+  console.error('[startup] failed:', error?.code || 'startup_failed')
+  dialog.showErrorBox('启动失败', '程序初始化未完成。请检查配置、磁盘权限及网络代理设置；本地数据未重置。')
+  configurationBackups?.stop()
+  app.exit(1)
 })
 
 app.on('before-quit', (event) => {

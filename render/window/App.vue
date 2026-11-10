@@ -4082,13 +4082,16 @@ const flushAppendBuffer = async () => {
   // A buffered turn may begin only after the previous turn has fully released ownership.
   // isMcpLoading is deliberately declared before this function.
   if (desktopTakeoverPending.value || isClosingWindow.value || !ensureConversationWriteAccess(false)) return;
+  if (!pendingAppendBuffer.value.length) return;
   if (isFlushingAppendBuffer || loading.value || isPreparingSend.value || compacting.value || isMcpLoading.value || activeAssistantTurnMeta || activeLocalExecution.value || scheduledTaskQueueSaving || currentTaskConfig.value || controlTransferPending.value || activeRemoteCommand.value || remoteCommandExecutionPromise) return;
   isFlushingAppendBuffer = true;
   let startedTurn = false;
+  let attemptedTask = null;
   try {
     if (pendingAppendBuffer.value[0]?.kind === 'scheduled-task') {
       if (!conversationTaskReady.value) return;
-      startedTurn = await startQueuedConversationTask(pendingAppendBuffer.value[0]);
+      attemptedTask = pendingAppendBuffer.value[0];
+      startedTurn = await startQueuedConversationTask(attemptedTask);
       return;
     }
     const appendedAny = await drainBufferIntoHistory();
@@ -4099,11 +4102,11 @@ const flushAppendBuffer = async () => {
   } finally {
     isFlushingAppendBuffer = false;
     // The turn finalizer cannot drain while this lock is held. Resume later arrivals now.
-    if (startedTurn && pendingAppendBuffer.value.length) nextTick(() => { flushAppendBuffer(); });
+    if ((startedTurn || attemptedTask && !pendingAppendBuffer.value.includes(attemptedTask)) && pendingAppendBuffer.value.length) nextTick(() => { flushAppendBuffer(); });
   }
 };
 
-watch([isMcpLoading, compacting, isPreparingSend, controlTransferPending, desktopTakeoverPending, activeRemoteCommand, activeLocalExecution], (now, prev) => {
+watch([conversationLeasePending, loading, currentTaskConfig, isMcpLoading, compacting, isPreparingSend, controlTransferPending, desktopTakeoverPending, activeRemoteCommand, activeLocalExecution], (now, prev) => {
   if (!isFlushingAppendBuffer && prev.some((busy, index) => busy && !now[index])) {
     nextTick(() => { flushAppendBuffer(); });
   }
@@ -7632,6 +7635,7 @@ const normalizeWindowProjects = (data) => {
     : {};
   return {
     version: Number(data?.version) || 2,
+    ...(typeof data?._localRevision === 'string' ? { _localRevision: data._localRevision } : {}),
     conversations,
     projects: projects
       .filter((p) => p && typeof p === 'object')
@@ -7768,7 +7772,7 @@ const reassignLocalProject = async ({ projectId, projectName, addFilename, remov
       p.id === projectId ? { ...p, files: [...p.files, addFilename] } : p
     );
   }
-  await window.api.writeLocalProjects(localPath, { version: data.version || 1, projects });
+  await window.api.writeLocalProjects(localPath, { ...data, version: data.version || 1, projects });
 };
 
 const assignCloudProject = async ({ projectId, projectName, basename }) => {
@@ -10411,6 +10415,8 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
     activeLocalExecution.value = turnRemoteCommand;
     const reserved = await emitRemoteRendererEventAndWait('conversation.execution.started', turnRemoteCommand, {admittedBuffer: true}).catch(() => null);
     turnRemoteCommand.__registered = reserved?.ok === true;
+    // Disabled/unavailable Remote tracking is optional, never a reason to strand a local task.
+    // A real busy executor or Mobile ownership still vetoes admission and preserves the queue.
     if (!turnRemoteCommand.__registered && (mobileControlActive.value || reserved?.error === 'remote_conversation_busy')) {
       activeLocalExecution.value = null;
       loading.value = false;
@@ -10446,6 +10452,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
     assistantMessageId: null,
     cancellationRecorded: false,
     cancelledByUser: false,
+    taskConfig: currentTaskConfig.value,
     settlementPromise: turnSettlementPromise,
     resolveSettlement: resolveTurnSettlement
   };
@@ -10465,6 +10472,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
     }
   };
 
+  try {
   const preparingAssistantMessageId = messageIdCounter.value++;
   const assistantStorageId = createConversationStorageId();
   chat_show.value.push({
@@ -10485,9 +10493,9 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
   let hasReusedPreparingBubble = false;
   let cancelPendingStreamingDisplay = null;
 
-  // Yield a DOM tick and paint frame before token estimation / compaction work.
+  // Yield for UI updates, but never gate a scheduled/background request on a paint frame.
   await nextTick();
-  await nextAnimationFrame();
+  await new Promise(resolve => setTimeout(resolve, 0));
   if (isAtBottom.value) {
     isSticky.value = true;
     scrollToBottom('auto');
@@ -10721,10 +10729,17 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
 
       let responseMessage;
 
+      chat_show.value[currentAssistantChatShowIndex].status = 'requesting';
       if (useStream) {
         // --- 流式处理 ---
         const stream = createNetworkRetryingStream(
-          () => window.api.createChatCompletion(requestParams),
+          async () => {
+            const bubble = chat_show.value[currentAssistantChatShowIndex];
+            if (bubble && !isTurnAborted()) bubble.status = 'requesting';
+            const response = await window.api.createChatCompletion(requestParams);
+            if (bubble && !isTurnAborted()) bubble.status = 'waiting-output';
+            return response;
+          },
           {
             maxRetries: MAX_AUTOMATIC_NETWORK_RETRIES,
             signal: requestSignal,
@@ -10792,7 +10807,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
         };
 
         for await (const part of stream) {
-          if (chat_show.value[currentAssistantChatShowIndex]?.status === 'retrying' && hasMeaningfulAssistantStreamOutput(part)) {
+          if (['retrying', 'requesting', 'waiting-output'].includes(chat_show.value[currentAssistantChatShowIndex]?.status) && hasMeaningfulAssistantStreamOutput(part)) {
             chat_show.value[currentAssistantChatShowIndex].status = '';
             delete chat_show.value[currentAssistantChatShowIndex].retryMessage;
           }
@@ -11419,16 +11434,17 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
       await nextTick();
       focusChatInputIfSafe({ cursor: 'end' });
 
-      if (currentTaskConfig.value) {
+      const finishingTask = turnMeta.taskConfig;
+      if (finishingTask) {
         let savedFileName = '未保存';
         let savedConversationId = '';
         try {
-          if ((currentTaskConfig.value.autoSave || currentTaskConfig.value.conversationId) && currentConfig.value.webdav?.localChatPath) {
+          if ((finishingTask.autoSave || finishingTask.conversationId) && currentConfig.value.webdav?.localChatPath) {
             const timeStr = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[\/ :]/g, '-').replace(/,/g, '');
-            if (!currentTaskConfig.value.conversationId) defaultConversationName.value = `定时任务-${currentTaskConfig.value.name}-${timeStr}`;
+            if (!finishingTask.conversationId) defaultConversationName.value = `定时任务-${finishingTask.name}-${timeStr}`;
             const dirPath = currentConfig.value.webdav.localChatPath;
             const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(dirPath));
-            const taskProjectId = typeof currentTaskConfig.value.autoSaveProjectId === 'string' ? currentTaskConfig.value.autoSaveProjectId : '';
+            const taskProjectId = typeof finishingTask.autoSaveProjectId === 'string' ? finishingTask.autoSaveProjectId : '';
             const projectName = localProjects.projects.find((p) => p.id === taskProjectId)?.name || '';
             if (!currentConversationStorage.value?.conversationId) {
               const created = await window.api.createConversation({
@@ -11453,7 +11469,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
             savedFileName = defaultConversationName.value;
             savedConversationId = currentConversationStorage.value?.conversationId || '';
           }
-          await window.api.addTaskHistory(currentTaskConfig.value.id, {
+          await window.api.addTaskHistory(finishingTask.id, {
             time: Date.now(),
             status: 'success',
             file: savedFileName,
@@ -11461,18 +11477,19 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
           });
 
           // 自动关闭窗口
-          if (currentTaskConfig.value.autoClose && !pendingAppendBuffer.value.length && !scheduledTaskQueueSaving && !mobileControlActive.value && !controlTransferPending.value) {
+          if (finishingTask.autoClose && !pendingAppendBuffer.value.length && !scheduledTaskQueueSaving && !mobileControlActive.value && !controlTransferPending.value) {
             window.api.windowControl('close-window');
           }
         } catch (taskErr) {
           console.error("Task Finalize Error:", taskErr);
-          await window.api.addTaskHistory(currentTaskConfig.value.id, {
+          await window.api.addTaskHistory(finishingTask.id, {
             time: Date.now(),
             status: 'error',
             file: '报错'
-          });
+          }).catch(() => {});
+        } finally {
+          if (currentTaskConfig.value === finishingTask) currentTaskConfig.value = null;
         }
-        currentTaskConfig.value = null; // 清空标记，避免后续手动问答也触发
       } else {
         scheduleAutoSave({ reason: 'assistant-turn-finalized', immediate: true }); // 普通对话的自动保存
         if (stillOwnsTurn) {
@@ -11497,21 +11514,25 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
         turnRemoteCommand.__remoteTerminalPayload = {code: 'remote_assistant_finalize_failed'};
       }
       console.error('[conversation] assistant finalization failed:', error);
-    } finally {
-      // Focus/autosave/auto-compaction finalizers can fail after HTTP/tool work
-      // has settled. They must never strand the writer in loading forever.
-      try {
-        if (signalController.value === requestAbortController) signalController.value = null;
-        await settleLocalExecution(turnRemoteCommand);
-        if (activeAssistantTurnMeta === turnMeta) {
-          activeAssistantTurnMeta = null;
-          loading.value = false;
-          syncAutoCloseOnBlurListener();
-          if (!turnRemoteCommand || turnRemoteCommand.__local) await flushAppendBuffer();
-        }
-      } finally { turnMeta.resolveSettlement?.(); if (turnRemoteCommand?.__local) nextTick(() => {flushAppendBuffer();}); }
     }
   }
+  } finally {
+    // This guard also handles failures before the inner network/tool try block is entered.
+    try {
+      if (activeAssistantTurnMeta === turnMeta || activeLocalExecution.value === turnRemoteCommand) await settleLocalExecution(turnRemoteCommand);
+    } finally {
+      if (currentTaskConfig.value === turnMeta.taskConfig) currentTaskConfig.value = null;
+      if (signalController.value === requestAbortController) signalController.value = null;
+      if (activeAssistantTurnMeta === turnMeta) {
+        activeAssistantTurnMeta = null;
+        loading.value = false;
+        syncAutoCloseOnBlurListener();
+      }
+      turnMeta.resolveSettlement?.();
+      nextTick(() => { flushAppendBuffer(); });
+    }
+  }
+
 };
 
 const cancelAskAI = () => {

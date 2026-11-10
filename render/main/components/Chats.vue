@@ -1035,6 +1035,7 @@ const normalizeProjectsResult = (result) => {
         : {};
     return {
         version: Number(result?.version) || 2,
+        ...(typeof result?._localRevision === 'string' ? { _localRevision: result._localRevision } : {}),
         conversations,
         projects: projects
             .filter((p) => p && typeof p === 'object')
@@ -1059,7 +1060,7 @@ async function fetchLocalProjects() {
         initializeLocalProjectsCollapsed(localProjects.value);
     } catch (error) {
         console.warn('[chats] 读取本地项目失败:', error);
-        localProjects.value = { version: 1, projects: [] };
+        ElMessage.warning('读取项目目录失败，已保留当前列表');
     }
 }
 
@@ -1079,7 +1080,8 @@ async function fetchCloudProjects() {
 
 async function persistLocalProjects() {
     if (!localChatPath.value) return;
-    await window.api.writeLocalProjects(localChatPath.value, localProjects.value);
+    const saved = await window.api.writeLocalProjects(localChatPath.value, localProjects.value);
+    localProjects.value = normalizeProjectsResult(saved.data);
 }
 
 async function persistCloudProjects() {
@@ -1282,6 +1284,7 @@ async function confirmDeleteProjectWithChats() {
                 );
             }
         }
+        if (activeView.value === 'local') await fetchLocalProjects();
         const projects = (activeProjectsData.value.projects || []).filter((p) => p.id !== id);
         setActiveProjectsData({ version: activeProjectsData.value.version || 1, projects });
         await persistActiveProjects();
@@ -1522,8 +1525,8 @@ const syncFileAssignmentAcross = async (basename, direction) => {
                 projectId: proj?.id || '',
                 projectName: proj?.name || ''
             });
-            await window.api.writeLocalProjects(localChatPath.value, merged);
-            localProjects.value = normalizeProjectsResult(merged);
+            const saved = await window.api.writeLocalProjects(localChatPath.value, merged);
+        localProjects.value = normalizeProjectsResult(saved.data);
         }
     } catch (error) {
         console.warn('[projects] 同步单文件项目归属失败:', error);
@@ -1611,8 +1614,8 @@ async function syncProjectToLocal(projectId) {
         }
         const localData = normalizeProjectsResult(await window.api.readLocalProjects(localChatPath.value));
         const merged = mergeProjectAssignmentLocal(localData, { id: group.id, name: group.name, files: basenames });
-        await window.api.writeLocalProjects(localChatPath.value, merged);
-        localProjects.value = normalizeProjectsResult(merged);
+        const saved = await window.api.writeLocalProjects(localChatPath.value, merged);
+        localProjects.value = normalizeProjectsResult(saved.data);
         ElMessage.success(t('chats.projects.syncProjectSuccess'));
         await refreshData();
     } catch (error) {
@@ -1855,8 +1858,8 @@ const downloadDatabaseConversation = async (file) => {
             ? { ...project, conversationIds: [...project.conversationIds, descriptor.conversationId] }
             : project);
         const nextLocalData = { ...localData, projects };
-        await window.api.writeLocalProjects(localChatPath.value, nextLocalData);
-        localProjects.value = normalizeProjectsResult(nextLocalData);
+        const saved = await window.api.writeLocalProjects(localChatPath.value, nextLocalData);
+        localProjects.value = normalizeProjectsResult(saved.data);
     }
     return { completedFiles: [descriptor.dbFile] };
 };
@@ -2353,8 +2356,8 @@ async function syncProjectsBulk(basenames, direction) {
                 const proj = findProjectOfBasename(cloudProjects.value, bn);
                 localData = mergeFileAssignmentLocal(localData, { basename: bn, projectId: proj?.id || '', projectName: proj?.name || '' });
             }
-            await window.api.writeLocalProjects(localChatPath.value, localData);
-            localProjects.value = normalizeProjectsResult(localData);
+            const saved = await window.api.writeLocalProjects(localChatPath.value, localData);
+            localProjects.value = normalizeProjectsResult(saved.data);
         }
     } catch (error) {
         console.warn('[projects] 批量同步项目归属失败:', error);

@@ -872,7 +872,9 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
       preload: resolvePreloadFile(config.preload),
       sandbox: false,
       contextIsolation: false,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Chat executors must continue draining scheduled work when minimized/occluded.
+      backgroundThrottling: type !== 'window'
     },
     ...config.options
   })

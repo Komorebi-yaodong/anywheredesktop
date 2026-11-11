@@ -16,6 +16,7 @@ import { formatTimestamp, sanitizeToolArgs, sanitizeToolFunctionName } from './u
 import { resolveSafeConversationMutationTarget } from './utils/conversationMessageTarget.js';
 import { createConversationDeleteRecovery } from './utils/conversationDeleteRecovery.js';
 import { prepareViewImagePayload, prepareDraftImageAttachment } from './utils/viewImageCompression.js';
+import { useModelLogo } from './utils/useModelLogo.js';
 
 import {replaceConversationEditableText} from './utils/conversationEditableText.js';
 import { createLinkedUserMessagePair } from './utils/linkedUserMessage.js';
@@ -683,50 +684,9 @@ const modelList = ref([]);
 const modelMap = ref({});
 const model = ref("");
 
-const currentModelLogo = ref('');
-let modelLogoResolveToken = 0;
+const { currentModelLogo, modelLogoRequestId, handleModelLogoError } = useModelLogo(model);
 
-
-const getCurrentModelNameForLogo = (modelValue = model.value) => {
-  const parts = String(modelValue || '').split('|');
-  return (parts[1] || parts[0] || '').trim();
-};
-
-const resolveCurrentModelLogo = async (modelValue = model.value) => {
-  const modelName = getCurrentModelNameForLogo(modelValue);
-  const requestToken = ++modelLogoResolveToken;
-
-  if (!modelName) {
-    currentModelLogo.value = '';
-    return;
-  }
-
-  try {
-    const response = await fetch(`https://llm-model.141277.xyz/v1/resolve?model=${encodeURIComponent(modelName)}`);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const payload = await response.json();
-    const logo = typeof payload?.resolved?.logo === 'string' ? payload.resolved.logo.trim() : '';
-    const shouldUseLogo = /^https?:\/\//i.test(logo);
-
-    if (requestToken === modelLogoResolveToken) {
-      currentModelLogo.value = shouldUseLogo ? logo : '';
-    }
-  } catch (error) {
-    if (requestToken === modelLogoResolveToken) {
-      currentModelLogo.value = '';
-    }
-  }
-};
-
-const handleModelLogoError = () => {
-  currentModelLogo.value = '';
-};
-
-watch(model, (nextModel) => {
-  resolveCurrentModelLogo(nextModel);
+watch(model, () => {
   // 换模型不改历史，但需确保 role=tool 仍在 history 中
   rehydrateHistoryToolsIfNeeded();
   loadCompactConfigForCurrentModel({ forceRefresh: false }).catch((error) => {
@@ -12122,7 +12082,7 @@ const scrollToMessageByIndex = async (index) => {
         :os="currentOS" @save-window-size="handleSaveWindowSize" @save-session="handleSaveSession"
         @toggle-pin="handleTogglePin" @toggle-always-on-top="handleToggleAlwaysOnTop" @minimize="handleMinimize"
         @maximize="handleMaximize" @close="handleCloseWindow" />
-      <ChatHeader :modelMap="modelMap" :model="model" :model-logo="currentModelLogo" :is-mcp-loading="isMcpLoading" :systemPrompt="currentSystemPrompt"
+      <ChatHeader :modelMap="modelMap" :model="model" :model-logo="currentModelLogo" :model-logo-request-id="modelLogoRequestId" :is-mcp-loading="isMcpLoading" :systemPrompt="currentSystemPrompt"
         :has-task-tool="hasTaskMcpTool" :task-panel-visible="taskPanelVisible" :task-status="taskOverallStatus"
         @open-model-dialog="handleOpenModelDialog" @show-system-prompt="handleShowSystemPrompt"
         @model-logo-error="handleModelLogoError"

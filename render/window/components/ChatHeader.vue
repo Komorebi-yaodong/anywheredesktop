@@ -7,6 +7,7 @@ const props = defineProps({
   modelMap: Object,
   model: String,
   modelLogo: String,
+  modelLogoRequestId: Number,
   isMcpLoading: Boolean,
   systemPrompt: String,
   hasTaskTool: Boolean,
@@ -20,6 +21,16 @@ const emit = defineEmits([
   'toggle-task-panel',
   'model-logo-error'
 ]);
+
+const handleLogoError = (event) => {
+  const image = event.currentTarget;
+  if (!image) return;
+  emit('model-logo-error', {
+    requestId: Number(image.dataset.logoRequestId),
+    url: image.getAttribute('src') || ''
+  });
+};
+
 
 // 1. 字符串转颜色函数 (HSL 模式)
 const stringToColor = (str) => {
@@ -57,10 +68,13 @@ const logoColor = computed(() => {
           <div class="model-logo-container" :style="{ color: isMcpLoading || !modelLogo ? (isMcpLoading ? '#F59E0B' : logoColor) : undefined }">
             <img
               v-if="modelLogo && !isMcpLoading"
+              :key="`${modelLogoRequestId}:${modelLogo}`"
               class="model-logo model-logo-image"
               :src="modelLogo"
+              :data-logo-request-id="modelLogoRequestId"
+              referrerpolicy="no-referrer"
               alt="Model logo"
-              @error="emit('model-logo-error')"
+              @error="handleLogoError"
             >
             <svg v-else class="model-logo" width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
               <g clip-path="url(#clip0_11482_204655)">

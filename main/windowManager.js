@@ -1012,6 +1012,44 @@ const conversationTaskDelivery = createConversationTaskDelivery({send: async (wi
 }})
 export const completeConversationTask = (windowId, result) => conversationTaskDelivery.complete(windowId, result)
 
+export function findLocalConversationWindow(dirPath, conversationId) {
+  if (!dirPath || !normalizeConversationMetadataId(conversationId)) return ''
+  for (const [windowId, location] of conversationDirectoryStore) {
+    const win = multiStore.get(windowId)
+    if (location.conversationId === conversationId && location.dirPath
+      && path.resolve(location.dirPath) === path.resolve(dirPath) && win && !win.isDestroyed()) return windowId
+  }
+  return ''
+}
+
+export async function openSavedConversationWindow({dirPath, conversationId, signal} = {}) {
+  if (!dirPath || !normalizeConversationMetadataId(conversationId)) throw new Error('conversation_target_invalid')
+  if (signal?.aborted) throw new Error('conversation_open_cancelled')
+  let windowId = findLocalConversationWindow(dirPath, conversationId)
+  if (!windowId) {
+    const { readLocalProjects } = await import('./core/projects.js')
+    const descriptor = (await readLocalProjects(dirPath, {readOnly: true})).conversations?.[conversationId]
+    if (!descriptor || descriptor.conversationId !== conversationId || descriptor.storageMode === 'cloud') throw new Error('conversation_not_found')
+    const api = await import('./core/conversationStore.js')
+    const opened = await api.openConversation({dirPath, reference: conversationId, activeOnly: true, pageSize: 200})
+    if (opened?.sessionData?.conversationStorage?.conversationId !== conversationId || opened?.descriptor?.conversationId !== conversationId) throw new Error('conversation_target_mismatch')
+    if (signal?.aborted) throw new Error('conversation_open_cancelled')
+    const result = await openWindow('window', {type: 'conversation', preserveExistingVisibility: true,
+      code: opened.sessionData?.CODE || '__DEFAULT__', conversation: {...opened, dirPath, storageMode: 'local'}})
+    windowId = result?.id
+  }
+  const deadline = Date.now() + 30000
+  while (windowId) {
+    const win = getWindowByRef(windowId)
+    if (!win || win.isDestroyed()) break
+    if (signal?.aborted) throw new Error('conversation_open_cancelled')
+    if (windowMetadataStore.get(windowId)?.rendererReady === true) return windowId
+    if (Date.now() >= deadline) break
+    await new Promise(resolve => setTimeout(resolve, 30))
+  }
+  throw new Error('conversation_window_not_ready')
+}
+
 export async function runTaskInConversation({dirPath, conversationId, taskConfig, payload}) {
   const api = await import('./core/conversationStore.js')
   const opened = await api.openConversation({dirPath, reference: conversationId, activeOnly: true, pageSize: 200})

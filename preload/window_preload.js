@@ -494,6 +494,7 @@ const api = {
   listWebdavDirectory: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:listDirectory', input),
   readWebdavBackupBinary: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:readBackupBinary', input),
   deleteWebdavDirectoryContents: (input = {}) => electronAPI.ipcRenderer.invoke('webdav:deleteDirectoryContents', input),
+  listConversationReferences: (dirPath = '') => invokeOrThrow('conversation:listReferences', dirPath),
   listLocalConversations: (dirPath = '') => invokeOrThrow('conversation:listLocal', dirPath),
   migrateJsonConversation: (input = {}) => invokeOrThrow('conversation:migrateJson', toPlainPayload(input)),
   forkConversation: (input = {}) => invokeOrThrow('conversation:fork', toPlainPayload(input)),

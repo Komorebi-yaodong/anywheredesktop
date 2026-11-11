@@ -14,7 +14,8 @@ import { app } from 'electron'
 import { fetchWebResource } from './webFetch.js'
 import * as MarkitdownModule from 'markitdown-js'
 import { encode as encodeTokens, decode as decodeTokens } from 'gpt-tokenizer'
-import { openWindow, getWindowByRef, listWindows } from '../windowManager.js'
+import { normalizeSummonTarget } from './conversationReferences.js'
+import { openSavedConversationWindow, openWindow, getWindowByRef, listWindows } from '../windowManager.js'
 import { dispatchWindowEvent } from '../eventBus.js'
 import { MEMORY_TOOLS, createMemoryHandlers, memorySummaryDescription } from './memory.js'
 
@@ -1318,17 +1319,18 @@ IMPORTANT:
         },
         {
             name: "summon_agent",
-            description: "Summon a specific ai agent (from list_agents) in a NEW window with a BLANK history, and send an initial task. Returns a 'window_id' immediately.\n\nThe target agent will start generating a response in the background. You can do other things or immediately call 'read_agent_chats' to wait for its result. \n\n Use 'summon_agent' ONLY when you explicitly need a brand-new, isolated conversation. \n\n If the agent invocation is temporary, please ensure that the summoned agent window is closed once it is no longer needed after the temporary conversation is completed.",
+            description: "Open an existing saved LOCAL conversation by conversation_id, or summon a NEW blank agent with agent_name + text. Choose exactly one mode.\n\nExisting conversation: pass ONLY conversation_id explicitly disclosed by the user (or already known from the current conversation). Do not guess IDs or enumerate other saved conversations. Reuses its open window, or loads it without sending any message, changing settings, or clearing history/drafts. Returns window_id after initialization; then use read_agent_chats / continue_agent_chats. No text, agent_name, file_paths, enable_tools or model_route in this mode. A missing target is an error, never a new blank conversation.\n\nNew agent: requires agent_name and text; sends the initial task in a new blank window. Close only temporary NEW agent windows when finished; do not automatically close a user's existing conversation.",
             inputSchema: {
                 type: "object",
                 properties: {
-                    agent_name: { type: "string", description: "The exact name of the agent to summon." },
-                    text: { type: "string", description: "The first message or task description to send to this agent." },
+                    agent_name: { type: "string", description: "New blank conversation only: exact agent name; mutually exclusive with conversation_id." },
+                    conversation_id: { type: "string", description: "Existing saved local conversation ID explicitly provided by the user. Pass this field alone; no initial message is sent. Returns its window_id." },
+                    text: { type: "string", description: "Required for a NEW agent only. Omit entirely when opening by conversation_id." },
                     file_paths: { type: "array", items: { type: "string" }, description: "Optional. Local absolute file paths to attach. Use this field ONLY when you already know the real absolute local paths (for example, paths explicitly provided by the user or returned by a tool). Never invent, guess, or infer paths from images/files visible in the current chat. If the user uploaded an image but no actual local path is available, DO NOT generate a path and DO NOT include this field." },
                     enable_tools: { type: "boolean", description: "Optional. If true, the summoned agent will be granted access to all built-in MCP tools (like file system, shell, web search, etc.), thereby expanding its local control capabilities." },
                     model_route: { type: "string", enum: ["superior", "general", "fast"], description: "Optional. Only applies when agent_name is '__DEFAULT__'. Choose which default assistant route to use for this summoned agent window." }
                 },
-                required: ["agent_name", "text"]
+                required: []
             }
         },
         {
@@ -1338,7 +1340,7 @@ IMPORTANT:
         },
         {
             name: "read_agent_chats",
-            description: "Read chat history. \nSMART BLOCKING: If you request the LATEST message (e.g. index=-1) and the agent is currently generating (Busy), this tool will BLOCK and WAIT until the generation is finished, then return the complete response. You don't need to poll repeatedly.\n\nINDEX RULES:\n- 0: System Prompt（if exists）.\n- 1: First user message.\n- -1: Latest message.\n\nUSAGE:\n1. Call WITHOUT 'message_index' to get the chat outline.\n2. Call WITH 'message_index=-1' to get the latest reply (will auto-wait if busy). AI Agent may return multiple messages (e.g. `message_index` may be `-2`, `-3`, etc.). which can include tool calls or other intermediate process information, so make sure to retrieve the specific message you actually need.",
+            description: "Read chat history from an open window, including an existing conversation opened by summon_agent(conversation_id). Use the returned window_id, not the conversation_id. \nSMART BLOCKING: If you request the LATEST message (e.g. index=-1) and the agent is currently generating (Busy), this tool will BLOCK and WAIT until the generation is finished, then return the complete response. You don't need to poll repeatedly.\n\nINDEX RULES:\n- 0: System Prompt（if exists）.\n- 1: First user message.\n- -1: Latest message.\n\nUSAGE:\n1. Call WITHOUT 'message_index' to get the chat outline.\n2. Call WITH 'message_index=-1' to get the latest reply (will auto-wait if busy). AI Agent may return multiple messages (e.g. `message_index` may be `-2`, `-3`, etc.). which can include tool calls or other intermediate process information, so make sure to retrieve the specific message you actually need.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -1352,7 +1354,7 @@ IMPORTANT:
         },
         {
             name: "continue_agent_chats",
-            description: "Send follow-up messages to an ALREADY OPEN agent window. \n\nUse this tool to REUSE an existing agent's context instead of creating a new window. Returns immediately. If the target is busy, the message is queued until its current response completes; otherwise it starts responding to this message in background. You can do other things or immediately call 'read_agent_chats' with index=-1 to wait for its result.",
+            description: "Send follow-up messages to an ALREADY OPEN agent window, including a saved conversation opened by summon_agent(conversation_id). Use its returned window_id. \n\nUse this tool to REUSE an existing agent's context instead of creating a new window. Returns immediately. Agent messages are accepted into the target buffer even when Mobile/Remote controls it. They join the next safe model request (after complete tool results), or start a turn when idle; they never take control or run a concurrent turn. Successful admission is not model completion, so do not resend. You can do other things or immediately call 'read_agent_chats' with index=-1 to wait for its result.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -1365,7 +1367,7 @@ IMPORTANT:
         },
         {
             name: "close_agent_window",
-            description: "Close an active agent window using its 'window_id' (retrieved via 'list_agent_chats'). The system will automatically generate a name and save the chat history before closing. **HIGH PRIVILEGE OPERATION**: Please use this function with caution, ensuring that the window's task is complete before closing the Agent window. Additionally, if an Agent is invoked for temporary tasks, please ensure it is closed promptly upon completion to avoid opening excessive redundant windows.",
+            description: "Close an active agent window using its 'window_id' (retrieved via 'list_agent_chats'). The system will automatically generate a name and save the chat history before closing. **HIGH PRIVILEGE OPERATION**: Please use this function with caution, ensuring that the window's task is complete before closing the Agent window. Do not automatically close a user's pre-existing saved conversation merely because you opened it by conversation_id. Additionally, if an Agent is invoked for temporary tasks, please ensure it is closed promptly upon completion to avoid opening excessive redundant windows.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -3470,6 +3472,16 @@ ${agentStr}`;
     },
 
     summon_agent: async (args, context, signal) => {
+        let target;
+        try { target = normalizeSummonTarget(args); } catch (error) { return `Error: ${error.message}`; }
+        if (target.conversationId) {
+            try {
+                const {config} = await getConfig();
+                if (!config?.webdav?.localChatPath) return 'Error: conversation_local_storage_required';
+                const windowId = await openSavedConversationWindow({dirPath: config.webdav.localChatPath, conversationId: target.conversationId, signal});
+                return `Existing conversation opened. Window ID: ${windowId}. No message was sent. Use read_agent_chats or continue_agent_chats with this window_id.`;
+            } catch (error) { return `Error opening conversation: ${error.message}`; }
+        }
         const { agent_name, text, file_paths, enable_tools, model_route } = args || {};
         const configData = await getConfig();
         const windowConfig = JSON.parse(JSON.stringify(configData.config || {}));
@@ -4094,7 +4106,7 @@ async function getBuiltinTools(serverId, options = {}) {
 
             const summonTool = tools.find((tool) => tool.name === 'summon_agent');
             if (summonTool) {
-                summonTool.description += `\n\n[VALID TARGET NAMES]: ${fullListStr}`;
+                summonTool.description += `\n\n[VALID agent_name VALUES FOR NEW WINDOWS ONLY]: ${fullListStr}`;
             }
         } catch {
             // 注入失败不影响基础功能

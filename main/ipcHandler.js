@@ -1,4 +1,5 @@
 import {completeConversationTask} from './windowManager.js'
+import { listConversationReferences } from './core/conversationReferences.js'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { app, BrowserWindow, ipcMain } from 'electron'
@@ -1404,6 +1405,8 @@ handleInvoke('webdav:listBackups', async (_event, input = {}) => {
   handleInvoke('webdav:deleteBackups', async (_event, input = {}) => {
     return webdavApi.deleteBackups(input)
   })
+
+  handleInvoke('conversation:listReferences', async (_event, dirPath = '') => listConversationReferences(dirPath))
 
   handleInvoke('conversation:listLocal', async (_event, dirPath = '') => {
     return conversationApi.listLocalConversations(dirPath)

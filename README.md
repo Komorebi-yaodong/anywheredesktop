@@ -293,6 +293,13 @@ Anywhere Desktop 是一个持续进化的开源项目，欢迎交流、反馈与
 
 ---
 
+## 链接
+
+- [**Linux Do** **真诚、友善、团结、专业**，共建你我引以为荣之社区。](https://linux.do)
+- [**QQ官方机器人**转为MCP，接入本地Harness~](https://github.com/Komorebi-zyd/qq_bot_bridge)
+
+---
+
 ## 开源协议
 
 本项目采用 **GNU Affero General Public License v3.0（AGPL-3.0-or-later）**。

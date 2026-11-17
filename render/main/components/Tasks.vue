@@ -4,6 +4,8 @@ import { Plus, Delete, Document, Edit, Search, InfoFilled, Refresh, Clock, Setti
 import { useI18n } from 'vue-i18n';
 import { ElCheckbox, ElMessage, ElMessageBox } from 'element-plus';
 
+import { getDailyTimes, getMonthlySchedules, normalizeTaskSchedulePatch, taskCalendarSummary } from '../../../shared/taskSchedule.js';
+
 const { t, locale } = useI18n();
 const currentConfig = inject('config');
 const activeTaskId = ref(null);
@@ -226,6 +228,32 @@ const selectedTask = computed(() => {
     }
     return null;
 });
+
+const dailyTriggerTimes = computed(() => getDailyTimes(selectedTask.value || {}));
+const monthlyTriggerSlots = computed(() => getMonthlySchedules(selectedTask.value || {}));
+async function saveCalendarSchedule(key, value) {
+    const taskId = activeTaskId.value;
+    if (!taskId) return;
+    let patch;
+    try { patch = normalizeTaskSchedulePatch(selectedTask.value || {}, {[key]: value}); }
+    catch (error) { ElMessage.warning(error.message); return; }
+    Object.assign(currentConfig.value.tasks[taskId], patch);
+    await atomicSave(config => { if (config.tasks[taskId]) Object.assign(config.tasks[taskId], patch); });
+}
+const changeDailyTime = (index, time) => saveCalendarSchedule('dailyTimes', dailyTriggerTimes.value.map((value, idx) => idx === index ? time : value).filter(Boolean));
+const removeDailyTime = (index) => saveCalendarSchedule('dailyTimes', dailyTriggerTimes.value.filter((_, idx) => idx !== index));
+const addDailyTime = () => {
+    const times = dailyTriggerTimes.value;
+    const available = Array.from({length: 1440}, (_, index) => `${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}`).find(time => !times.includes(time) && time >= '09:00') || '00:00';
+    return saveCalendarSchedule('dailyTimes', [...times, available]);
+};
+const changeMonthlySlot = (index, patch) => saveCalendarSchedule('monthlySchedules', monthlyTriggerSlots.value.map((slot, idx) => idx === index ? {...slot, ...patch} : slot));
+const removeMonthlySlot = (index) => saveCalendarSchedule('monthlySchedules', monthlyTriggerSlots.value.filter((_, idx) => idx !== index));
+const addMonthlySlot = () => {
+    const slots = monthlyTriggerSlots.value;
+    const day = Array.from({length: 31}, (_, index) => index + 1).find(value => !slots.some(slot => slot.day === value && slot.time === '09:00')) || 1;
+    return saveCalendarSchedule('monthlySchedules', [...slots, {day, time: '09:00'}]);
+};
 
 let taskSaveQueue = Promise.resolve();
 
@@ -646,6 +674,7 @@ async function openTaskChat(logFile, conversationId = '') {
                                     <div class="task-card-body">
                                         <el-row :gutter="20">
                                             <el-col :span="24" style="margin-bottom: 15px;">
+                                                <div v-if="taskCalendarSummary(selectedTask)" style="margin-bottom:8px;color:var(--text-secondary)">{{ taskCalendarSummary(selectedTask) }}</div>
                                                 <el-radio-group v-model="selectedTask.triggerType"
                                                     class="trigger-type-group"
                                                     @change="(val) => saveTaskSetting('triggerType', val)">
@@ -724,12 +753,15 @@ async function openTaskChat(logFile, conversationId = '') {
                                             </template>
 
                                             <template v-if="selectedTask.triggerType === 'daily'">
-                                                <el-col :span="12">
-                                                    <el-form-item :label="t('tasks.dailyTimeLabel')">
-                                                        <el-time-picker v-model="selectedTask.dailyTime" format="HH:mm"
-                                                            value-format="HH:mm"
-                                                            @change="(val) => saveTaskSetting('dailyTime', val)"
-                                                            style="width: 100%;" />
+                                                <el-col :span="24">
+                                                    <el-form-item label="每日触发时间">
+                                                        <div style="width:100%;display:flex;flex-direction:column;gap:8px">
+                                                            <div v-for="(time, idx) in dailyTriggerTimes" :key="idx" style="display:flex;gap:8px;align-items:center">
+                                                                <el-time-picker :model-value="time" format="HH:mm" value-format="HH:mm" :clearable="false" @change="value => changeDailyTime(idx, value)" />
+                                                                <el-button :icon="Delete" link type="danger" @click="removeDailyTime(idx)" aria-label="删除触发时间" />
+                                                            </div>
+                                                            <el-button :icon="Plus" plain @click="addDailyTime">添加时间</el-button>
+                                                        </div>
                                                     </el-form-item>
                                                 </el-col>
                                             </template>
@@ -770,23 +802,19 @@ async function openTaskChat(logFile, conversationId = '') {
                                             </template>
 
                                             <template v-if="selectedTask.triggerType === 'monthly'">
-                                                <el-col :span="12">
-                                                    <el-form-item :label="t('tasks.monthlyDayLabel')">
-                                                        <el-select :model-value="selectedTask.monthlyDays || []"
-                                                            multiple clearable placeholder="请选择触发日期 (可多选)"
-                                                            @change="(val) => { selectedTask.monthlyDays = val; saveTaskSetting('monthlyDays', val) }"
-                                                            style="width: 100%;">
-                                                            <el-option v-for="day in 31" :key="day" :label="`${day}日`"
-                                                                :value="day" />
-                                                        </el-select>
-                                                    </el-form-item>
-                                                </el-col>
-                                                <el-col :span="12">
-                                                    <el-form-item :label="t('tasks.monthlyTimeLabel')">
-                                                        <el-time-picker v-model="selectedTask.monthlyTime"
-                                                            format="HH:mm" value-format="HH:mm"
-                                                            @change="(val) => saveTaskSetting('monthlyTime', val)"
-                                                            style="width: 100%;" />
+                                                <el-col :span="24">
+                                                    <el-form-item label="每月触发时间">
+                                                        <div style="width:100%;display:flex;flex-direction:column;gap:8px">
+                                                            <div v-for="(slot, idx) in monthlyTriggerSlots" :key="idx" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                                                                <el-select :model-value="slot.day" style="width:100px" @change="day => changeMonthlySlot(idx, {day})">
+                                                                    <el-option v-for="day in 31" :key="day" :label="`${day}日`" :value="day" />
+                                                                </el-select>
+                                                                <el-time-picker :model-value="slot.time" format="HH:mm" value-format="HH:mm" :clearable="false" @change="time => changeMonthlySlot(idx, {time})" />
+                                                                <el-button :icon="Delete" link type="danger" @click="removeMonthlySlot(idx)" aria-label="删除触发时间" />
+                                                            </div>
+                                                            <el-button :icon="Plus" plain @click="addMonthlySlot">添加日期与时间</el-button>
+                                                            <span style="font-size:12px;color:var(--text-secondary)">每项独立触发，当月不存在的日期自动跳过。</span>
+                                                        </div>
                                                     </el-form-item>
                                                 </el-col>
                                             </template>

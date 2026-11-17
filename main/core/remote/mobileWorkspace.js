@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import {updateConfigurationRevisions, updateWorkspaceRevision, readWorkspaceRevisions, workspaceRevisionsReady, workspaceRevisionPaths} from './workspaceRevisions.js'
 import crypto from 'node:crypto'
 import { normalizeDisplayName, normalizeIdentifier, remoteError, stableStringify } from './protocol.js'
 
@@ -480,8 +483,11 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     return avatar
   }
 
+  let currentReadRevision = '';
   function current() {
-    if (!currentRead) {
+    const stamp = readWorkspaceRevisions().revision
+    if (!currentRead || currentReadRevision !== stamp) {
+      currentReadRevision = stamp
       const pending = readCurrent().finally(() => {if (currentRead === pending) currentRead = null})
       currentRead = pending
     }
@@ -615,7 +621,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       next.prompts = { ...prompts, [code]: { ...existing, ...patch } }
       const saved = await updateConfig({ config: next })
       if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
-      const persisted = object((await getConfig())?.config)
+      const persisted = object(saved.config || (await getConfig())?.config)
       const result = object(persisted.prompts)[code]
       return { ok: true, assistant: assistantDetail(code, result, projects, object(persisted.providers)) }
     })
@@ -662,22 +668,32 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
     }
   }
 
-  // Per-process keyed token prevents offline guessing of low-entropy secret changes.
-  const settingsRevisionKey = crypto.randomBytes(32)
-  // Opaque, read-only invalidation token; never sends configuration or credentials.
+  // Cheap metadata probes detect external project/Skill edits without parsing bodies.
+  let revisionFlight = null
   async function settingsRevision({params = {}} = {}) {
     parameters(params, [])
-    const result = await getConfig()
-    const config = object(result?.config)
-    const skillRoot = text(config.skillPath, 32768)
-    const skills = await listSkillsForToggle(skillRoot)
-    const keys = ['prompts', 'providers', 'providerFolders', 'providerOrder', 'tags', 'tasks', 'mcpServers', 'skillPath', 'voiceList', 'defaultTaskModel', 'defaultSuperiorModel', 'defaultFastModel', 'language', 'themeMode']
-    const relevant = Object.fromEntries(keys.map(key => [key, config[key] ?? null]))
-    relevant.profile = object(config.desktop).profile || null
-    const projects = config.webdav?.localChatPath ? await readLocalProjects(config.webdav.localChatPath) : null
-    return {ok: true, revision: crypto.createHmac('sha256', settingsRevisionKey).update(stableStringify({relevant, skills, projects})).digest('base64url')}
+    if (revisionFlight) return revisionFlight
+    const job = (async () => {
+      if (!workspaceRevisionsReady()) updateConfigurationRevisions(object((await getConfig())?.config))
+      const roots = workspaceRevisionPaths()
+      const stamp = async file => {
+        try {const stat = await fs.stat(file); return [stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino]}
+        catch (error) {if (error?.code === 'ENOENT') return null; throw error}
+      }
+      if (roots.projectRoot) updateWorkspaceRevision('projects', await stamp(path.join(roots.projectRoot, 'projects.yaml')))
+      if (roots.skillRoot) {
+        let children
+        try {children = await fs.readdir(roots.skillRoot, {withFileTypes: true})}
+        catch (error) {if (error?.code !== 'ENOENT') throw error; children = []}
+        const files = await Promise.all(children.filter(item => item.isDirectory() && !item.isSymbolicLink()).map(async item => [item.name, await stamp(path.join(roots.skillRoot, item.name, 'SKILL.md'))]))
+        files.sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+        updateWorkspaceRevision('skillsFiles', files)
+      }
+      return readWorkspaceRevisions()
+    })()
+    revisionFlight = job
+    try {return await job} finally {if (revisionFlight === job) revisionFlight = null}
   }
-
 
   async function providerCatalog({ params = {} } = {}) {
     parameters(params, [])
@@ -749,7 +765,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       const saved = await updateConfig({ config: next })
       if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
       if (operation === 'delete') return { ok: true, operation, id }
-      const persisted = object((await getConfig())?.config)
+      const persisted = object(saved.config || (await getConfig())?.config)
       return { ok: true, operation, provider: providerDto(id, object(persisted.providers)[id], providerFolderSource(persisted.providerFolders)) }
     })
     mutationTail = record.promise.catch(() => {})
@@ -1045,12 +1061,12 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       const saved = await updateConfig({ config: next })
       if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
       if (operation === 'delete') return { ok: true, operation, code }
-      const persisted = object((await getConfig())?.config)
+      const persisted = object(saved.config || (await getConfig())?.config)
       const persistedTags = normalizeTags(persisted.tags)
       return {
         ok: true,
         operation,
-        agent: await agentView(code, object(persisted.prompts)[code], projects, persistedTags, object(persisted.providers))
+        agent: await agentDetail(code, object(persisted.prompts)[code], projects, persistedTags, object(persisted.providers))
       }
     })
     mutationTail = record.promise.catch(() => {})
@@ -1089,7 +1105,7 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       next.defaultFastModel = nextRoutes.fast
       const saved = await updateConfig({ config: next })
       if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
-      const persisted = object((await getConfig())?.config)
+      const persisted = object(saved.config || (await getConfig())?.config)
       return { ok: true, routes: agentRoutes(persisted), routesRevision: agentRoutesRevision(persisted) }
     })
     mutationTail = record.promise.catch(() => {})
@@ -1307,7 +1323,8 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       } else if (section === 'skills') {
         if (typeof toggleSkill !== 'function') throw remoteError('remote_skill_toggle_unavailable')
         await toggleSkill(text(config.skillPath, 32768), target, patch.enabled === true)
-        return { ok: true, section, id: target }
+        const changed = skillToggleDto({...skill, enabled: patch.enabled === true})
+        return { ok: true, section, id: target, item: {...changed, revision: revision(changed)} }
       } else {
         const item = { ...source }
         const mapping = section === 'providers' ? { models: 'modelList', apiKey: 'api_key', enabled: 'enable' } : section === 'mcp' ? { enabled: 'isActive' } : {}
@@ -1316,7 +1333,9 @@ export function createMobileWorkspaceService({ getConfig, updateConfig, getUser,
       }
       const saved = await updateConfig({ config: next })
       if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
-      return { ok: true, section, id: target }
+      const persisted = object(saved.config || next)
+      const item = section === 'mcp' ? object(persisted.mcpServers)[target] : null
+      return { ok: true, section, id: target, ...(item ? {item: {id: target, name: text(item.name) || target, enabled: item.isActive !== false, tags: safeMcpTags(item), transport: text(item.transport || item.type, 32) || 'local', revision: revision(item)}} : {}), ...(section === 'general' ? {revision: revision(generalSource(persisted)), value: {displayName: persisted.desktop?.profile?.nickname || 'User'}} : {}) }
     })
     requests.set(key, record)
     mutationTail = record.promise.catch(() => {})

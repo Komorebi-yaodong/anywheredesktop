@@ -1,3 +1,4 @@
+import { normalizeDailyTimes, normalizeMonthlySchedules, normalizeTaskSchedulePatch, getDailyTimes, getMonthlySchedules, taskCalendarSummary } from '../../../shared/taskSchedule.js'
 import crypto from 'node:crypto'
 import { remoteError, stableStringify, normalizeIdentifier } from './protocol.js'
 
@@ -58,10 +59,12 @@ const schemas = {
     }),
     field('intervalMinutes', '间隔分钟', 'number', { min: 1, max: 525600 }),
     field('intervalStartTime', '间隔开始时间', 'time'),
-    field('dailyTime', '每日时间', 'time'),
+    field('dailyTime', '每日时间（旧版）', 'time'),
+    field('dailyTimes', '每日时间', 'times'),
     field('weeklyTime', '每周时间', 'time'),
     field('weeklyDays', '星期（0 周日到 6 周六）', 'numbers', { min: 0, max: 6 }),
-    field('monthlyTime', '每月时间', 'time'),
+    field('monthlyTime', '每月时间（旧版）', 'time'),
+    field('monthlySchedules', '每月日期与时间', 'monthly-schedules'),
     field('monthlyDays', '日期（1–31）', 'numbers', { min: 1, max: 31 }),
     field('singleDate', '单次日期', 'date'),
     field('singleTime', '单次时间', 'time'),
@@ -115,6 +118,8 @@ function validate(schema, input) {
   )
   for (const [key, value] of Object.entries(input)) {
     const spec = schema.find((item) => item.key === key)
+    if (spec.type === 'times') { result[key] = normalizeDailyTimes(value, true); continue }
+    if (spec.type === 'monthly-schedules') { result[key] = normalizeMonthlySchedules(value, true); continue }
     if (spec.type === 'boolean') {
       if (typeof value !== 'boolean') throw remoteError('remote_management_invalid')
       result[key] = value
@@ -266,6 +271,8 @@ export function createRemoteManagementService({
         items: entries.map(([id, p]) => ({
           id,
           name: p.name || id,
+          revision: rev(p),
+          ...(section === 'tasks' ? {schedule: taskCalendarSummary(p)} : {}),
           enabled:
             section === 'skills'
               ? p.enabled !== false
@@ -288,6 +295,7 @@ export function createRemoteManagementService({
       }
       if (Object.hasOwn(raw, spec.key)) value[spec.key] = structuredClone(raw[spec.key])
     }
+    if (section === 'tasks') { value.dailyTimes = getDailyTimes(raw); value.monthlySchedules = getMonthlySchedules(raw) }
     if (value.url) {
       try {
         const u = new URL(value.url)
@@ -347,6 +355,7 @@ export function createRemoteManagementService({
       .then(async () => {
         const c = await config(),
           raw = await source(c, section, target)
+        let committed = c, committedSkill = null
         if (operation === 'create' && raw) throw remoteError('remote_management_item_exists')
         if (operation !== 'create' && (!raw || rev(raw) !== params.expectedRevision))
           throw remoteError('remote_workspace_revision_conflict')
@@ -363,7 +372,7 @@ export function createRemoteManagementService({
           if (!c.skillPath) throw remoteError('remote_skill_root_not_configured')
           if (operation === 'delete') await skills.remove(c.skillPath, target)
           else
-            await skills.save(c.skillPath, target, {
+            await skills.save(c.skillPath, target, committedSkill = {
               name: target,
               description: '',
               enabled: true,
@@ -418,7 +427,7 @@ export function createRemoteManagementService({
             next[key] = { ...obj(c[key]) }
             if (operation === 'delete') delete next[key][target]
             else {
-              const merged = { ...defaults, ...raw, ...patch }
+              const merged = { ...defaults, ...raw, ...(section === 'tasks' ? normalizeTaskSchedulePatch(raw || defaults, patch) : patch) }
               if (section === 'providers' && patch.api_key === '')
                 merged.api_key = raw?.api_key || ''
               if (section === 'tasks') {
@@ -434,16 +443,15 @@ export function createRemoteManagementService({
               }
               if (section === 'tasks' && merged.enabled) {
                 const timeKey = {
-                  daily: 'dailyTime',
                   weekly: 'weeklyTime',
-                  monthly: 'monthlyTime',
                   single: 'singleTime'
                 }[merged.triggerType]
                 if (timeKey && !/^([01]\d|2[0-3]):[0-5]\d$/.test(merged[timeKey] || ''))
                   throw remoteError('remote_management_invalid')
                 if (
                   (merged.triggerType === 'weekly' && !merged.weeklyDays?.length) ||
-                  (merged.triggerType === 'monthly' && !merged.monthlyDays?.length) ||
+                  (merged.triggerType === 'monthly' && !getMonthlySchedules(merged).length) ||
+                  (merged.triggerType === 'daily' && !getDailyTimes(merged).length) ||
                   (merged.triggerType === 'single' && !merged.singleDate)
                 )
                   throw remoteError('remote_management_invalid')
@@ -466,14 +474,26 @@ export function createRemoteManagementService({
                   : [...new Set([...(c.providerOrder || []), target])]
           }
           try {
-            if ((await updateConfig({ config: next }))?.success !== true)
-              throw remoteError('remote_workspace_save_failed')
+            const saved = await updateConfig({config: next})
+            if (saved?.success !== true) throw remoteError('remote_workspace_save_failed')
+            committed = saved.config || next
           } catch {
             await updateConfig({ config: c }).catch(() => {})
             throw remoteError('remote_workspace_save_failed')
           }
         }
-        return { ok: true, section, id: target, operation }
+        if (operation === 'delete') return {ok: true, section, id: target, operation}
+        const result = section === 'skills' ? committedSkill : section === 'general' ? general(committed) : committed[sections[section]][target]
+        const value = Object.fromEntries(schemas[section].filter(spec => !['secret', 'pairs'].includes(spec.type) && Object.hasOwn(result, spec.key)).map(spec => [spec.key, structuredClone(result[spec.key])]))
+        if (section === 'tasks') {value.dailyTimes = getDailyTimes(result); value.monthlySchedules = getMonthlySchedules(result)}
+        if (value.url) {try {const url = new URL(value.url); url.username = ''; url.password = ''; url.search = ''; url.hash = ''; value.url = url.toString()} catch {value.url = ''}}
+        const localMcp = section === 'mcp' && (!result.transport || result.transport === 'stdio' || result.type === 'stdio' || result.builtin)
+        const effective = localMcp ? schemas[section].filter(spec => ['name', 'isActive'].includes(spec.key)) : schemas[section]
+        if (localMcp) for (const key of Object.keys(value)) if (!effective.some(spec => spec.key === key)) delete value[key]
+        return {ok: true, section, id: target, operation,
+          item: {id: target, name: result.name || target, enabled: (result.enable ?? result.isActive ?? result.enabled) !== false, revision: rev(result), ...(section === 'tasks' ? {schedule: taskCalendarSummary(result)} : {})},
+          detail: {ok: true, section, id: target, revision: rev(result), schema: effective, value, localOnly: localMcp, hasSecrets: Boolean(result.api_key || Object.keys(result.headers || {}).length)}}
+
       })
     tail = record.promise.catch(() => {})
     requests.set(key, record)

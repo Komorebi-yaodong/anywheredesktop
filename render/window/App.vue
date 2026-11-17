@@ -2751,7 +2751,7 @@ const remoteToolSnapshot = (toolCalls = []) => (Array.isArray(toolCalls) ? toolC
   })
   .filter(Boolean);
 
-const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = '', reasoning = '', status = '', segmentId = '', toolCalls = []) => {
+const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = '', reasoning = '', status = '', segmentId = '', toolCalls = [], uiMessageId = '') => {
   if (!command || command !== activeRemoteCommand.value && command !== activeAssistantTurnMeta?.remoteCommand) return;
   const safeSegmentId = String(segmentId || 'assistant');
   if (command.__remoteSegmentId !== safeSegmentId) {
@@ -2771,7 +2771,7 @@ const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = ''
     while (offset < safeValue.length) {
       const nextOffset = Math.min(safeValue.length, offset + 12 * 1024);
       emitRemoteRendererEvent('assistant.delta', command, {
-        [key]: safeValue.slice(offset, nextOffset), segmentId: safeSegmentId,
+        [key]: safeValue.slice(offset, nextOffset), [key === 'textDelta' ? 'textOffset' : 'reasoningOffset']: offset, segmentId: safeSegmentId, uiMessageId,
         status: typeof status === 'string' ? status.slice(0, 80) : '',
         ...(toolChanged && !emittedToolSnapshot ? { toolCalls: safeTools } : {})
       });
@@ -2784,7 +2784,7 @@ const emitRemoteAssistantDelta = (command = activeRemoteCommand.value, text = ''
   emitChunks(reasoning, 'reasoningDelta', '__remoteReasoningOffset');
   if (toolChanged && !emittedToolSnapshot) {
     emitRemoteRendererEvent('assistant.delta', command, {
-      textDelta: '', reasoningDelta: '', segmentId: safeSegmentId,
+      textDelta: '', reasoningDelta: '', segmentId: safeSegmentId, uiMessageId,
       status: typeof status === 'string' ? status.slice(0, 80) : '', toolCalls: safeTools
     });
   }
@@ -3976,6 +3976,56 @@ const getAppendPayloadPreview = (data) => {
   return text ? text.slice(0, 40) : '追问';
 };
 
+// Consume a durable scheduled input without replacing this turn's task/configuration.
+let scheduledQueueMutationTail = Promise.resolve();
+const acquireScheduledQueueMutation = async () => {
+  const previous = scheduledQueueMutationTail;
+  let release;
+  scheduledQueueMutationTail = new Promise(resolve => {release = resolve;});
+  await previous.catch(() => {});
+  return release;
+};
+const consumeScheduledInputAtRequestBoundary = async (item, turnMeta, canContinue) => {
+  if (!turnMeta || item.taskConfig?.conversationId !== currentConversationStorage.value?.conversationId) return false;
+  const release = await acquireScheduledQueueMutation();
+  try {
+  const index = pendingAppendBuffer.value.indexOf(item);
+  if (index < 0 || !canContinue()) return false;
+  const requestId = item.requestId;
+  appendLinkedUserMessage({historyContent: item.text, uiContent: [{type: 'text', text: item.text}], timestamp: new Date().toISOString(),
+    historyExtras: {scheduledTaskRequestId: requestId}, uiExtras: {scheduledTaskRequestId: requestId}});
+  pendingAppendBuffer.value.splice(index, 1);
+  let saved = false;
+  try {
+    saved = await executeAutoSaveRequest({reason: 'scheduled-task-request-boundary', force: true, stateOnly: false, version: ++sessionMutationVersion}) === true;
+    if (!saved || !canContinue()) throw new Error('scheduled_task_boundary_save_failed');
+    (turnMeta.bufferedScheduledTasks ||= []).push({requestId, taskConfig: {...item.taskConfig}});
+    return true;
+  } catch {
+    fullHistory.value = fullHistory.value.filter(message => message.scheduledTaskRequestId !== requestId);
+    chat_show.value = chat_show.value.filter(message => message.scheduledTaskRequestId !== requestId);
+    if (!pendingAppendBuffer.value.includes(item)) pendingAppendBuffer.value.splice(Math.min(index, pendingAppendBuffer.value.length), 0, item);
+    scheduleAutoSave({reason: 'scheduled-task-boundary-rollback', immediate: true, force: true});
+    if (!saved) showDismissibleMessage.error('定时指令保存失败，已保留在缓冲区。');
+    return false;
+  }
+  } finally {release();}
+};
+
+const settleBufferedScheduledTasks = async (turnMeta) => {
+  const items = turnMeta.bufferedScheduledTasks || [];
+  if (!items.length || turnMeta.bufferedScheduledTasksSettled) return;
+  turnMeta.bufferedScheduledTasksSettled = true;
+  let saved = false;
+  try {saved = await executeAutoSaveRequest({reason: 'buffered-scheduled-tasks-finalized', force: true, version: ++sessionMutationVersion}) === true;} catch { /* report error below */ }
+  const status = saved && !turnMeta.controller?.signal?.aborted && !turnMeta.cancelledByUser && !turnMeta.failed ? 'success' : 'error';
+  for (const item of items) {
+    await window.api.addTaskHistory(item.taskConfig.id, {time: Date.now(), status, requestId: item.requestId,
+      file: saved ? (defaultConversationName.value || '已保存会话') : '报错', conversationId: currentConversationStorage.value?.conversationId || ''}).catch(error => console.error('[tasks] buffered task history failed:', error));
+  }
+  // Buffered tasks share an existing turn: their autoClose must never close the user's work.
+};
+
 const drainBufferIntoHistory = async ({ toolBoundaryTurn = null, admittedStart = false } = {}) => {
   const canDrain = () => !isClosingWindow.value && ensureConversationWriteAccess(false)
     && !compacting.value && !isMcpLoading.value
@@ -3983,20 +4033,26 @@ const drainBufferIntoHistory = async ({ toolBoundaryTurn = null, admittedStart =
       ? activeAssistantTurnMeta === toolBoundaryTurn && !toolBoundaryTurn.controller?.signal?.aborted
       : (!loading.value || admittedStart) && !activeAssistantTurnMeta && !controlTransferPending.value && !desktopTakeoverPending.value);
   if (!canDrain() || pendingAppendBuffer.value.length === 0) return false;
-  // Tasks are independent turns, never merged into another task or a tool continuation.
-  if (scheduledTaskQueueSaving) return false;
-  const taskIndex = pendingAppendBuffer.value.findIndex(item => item.kind === 'scheduled-task');
-  const items = pendingAppendBuffer.value.splice(0, taskIndex < 0 ? pendingAppendBuffer.value.length : taskIndex);
+  // Admission must finish before consumption; never race a state-only queue snapshot.
+  while (scheduledTaskQueueSaving && canDrain()) await new Promise(resolve => setTimeout(resolve, 15));
+  if (!canDrain()) return false;
+  const taskIndex = toolBoundaryTurn ? -1 : pendingAppendBuffer.value.findIndex(item => item.kind === 'scheduled-task');
+  const items = pendingAppendBuffer.value.slice(0, taskIndex < 0 ? pendingAppendBuffer.value.length : taskIndex);
   // 还原用户在缓冲期间可能输入但尚未发送的内容
   const savedPrompt = prompt.value;
   const savedFiles = Array.isArray(fileList.value) ? fileList.value.slice() : [];
   let appendedAny = false;
-  let consumed = 0;
   let draftSwapped = false;
+  let stagedItem = null, stagedIndex = -1;
   try {
     for (const item of items) {
       if (!canDrain()) break;
-      if (item.kind === 'agent') {
+      if (!pendingAppendBuffer.value.includes(item)) continue;
+      if (item.kind !== 'scheduled-task') {stagedItem = item; stagedIndex = pendingAppendBuffer.value.indexOf(item); pendingAppendBuffer.value.splice(stagedIndex, 1);}
+      if (item.kind === 'scheduled-task') {
+        if (!await consumeScheduledInputAtRequestBoundary(item, toolBoundaryTurn, canDrain)) break;
+        appendedAny = true;
+      } else if (item.kind === 'agent') {
         isPreparingSend.value = true;
         try {
           const { contentList } = await buildAgentToolContentList(item);
@@ -4022,13 +4078,15 @@ const drainBufferIntoHistory = async ({ toolBoundaryTurn = null, admittedStart =
         await handleAppendMessageEvent(item.data, { deferSend: true });
         appendedAny = true;
       }
-      consumed++;
+      const index = pendingAppendBuffer.value.indexOf(item);
+      if (index >= 0) pendingAppendBuffer.value.splice(index, 1);
+      stagedItem = null;
     }
   } catch (error) {
     showDismissibleMessage.error(`Buffered message was not sent: ${error?.message || 'Message preparation failed.'}`);
   } finally {
-    // Keep failed/unconsumed messages ahead of arrivals received during attachment parsing.
-    pendingAppendBuffer.value.unshift(...items.slice(consumed));
+    if (stagedItem && !pendingAppendBuffer.value.includes(stagedItem)) pendingAppendBuffer.value.splice(Math.max(0, stagedIndex), 0, stagedItem);
+    // Failed/unconsumed entries keep their FIFO position.
     if (draftSwapped) {
       prompt.value = savedPrompt;
       fileList.value = savedFiles;
@@ -8211,6 +8269,8 @@ const startQueuedConversationTask = async (item) => {
     historyExtras: {scheduledTaskRequestId: item.requestId}, uiExtras: {scheduledTaskRequestId: item.requestId}});
   let started = false;
   const admit = async () => {
+    const release = await acquireScheduledQueueMutation();
+    try {
     const index = pendingAppendBuffer.value.indexOf(item);
     if (index < 0) return false;
     pendingAppendBuffer.value.splice(index, 1);
@@ -8222,6 +8282,7 @@ const startQueuedConversationTask = async (item) => {
     }
     started = true;
     return true;
+    } finally {release();}
   };
   try {
     await askAI(true, null, true, admit);
@@ -8242,6 +8303,7 @@ const handleConversationTask = async (input = {}) => {
   if (!input.requestId || !(input.expiresAt > Date.now())) {await reply(false, 'task_expired'); return;}
   let item = null;
   scheduledTaskQueueSaving++;
+  const release = await acquireScheduledQueueMutation();
   syncAutoCloseOnBlurListener();
   try {
     while (!conversationTaskReady.value && Date.now() < input.expiresAt && !isClosingWindow.value) await new Promise(resolve => setTimeout(resolve, 30));
@@ -8278,6 +8340,7 @@ Scheduled task triggered! Execute autonomously and provide correct feedback.`;
     }
     await reply(false, error?.message || 'task_conversation_failed');
   } finally {
+    release();
     scheduledTaskQueueSaving--;
     syncAutoCloseOnBlurListener();
     if (!scheduledTaskQueueSaving) nextTick(() => {flushAppendBuffer();});
@@ -10394,7 +10457,9 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
   if (turnRemoteCommand) {
     turnRemoteCommand.__remoteStarted = true;
     turnRemoteCommand.__remoteTerminalEvent = 'assistant.completed';
-    emitRemoteRendererEvent('assistant.started', turnRemoteCommand, { startedAt: new Date().toISOString() });
+    const submittedUser = [...chat_show.value].reverse().find(message => message.role === 'user');
+    if (submittedUser) submittedUser.uiStorageId ||= createConversationStorageId();
+    emitRemoteRendererEvent('assistant.started', turnRemoteCommand, { startedAt: new Date().toISOString(), userUiMessageId: submittedUser?.uiStorageId || '' });
   }
   const turnId = activeAssistantTurnId.value + 1;
   activeAssistantTurnId.value = turnId;
@@ -10523,6 +10588,8 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
         await requestApplyMcpTools(false, 'before-next-model-iteration');
         throwIfTurnAborted();
       }
+      if (await drainBufferIntoHistory({toolBoundaryTurn: turnMeta})) firstRequestMessages = null;
+      throwIfTurnAborted();
       const iterationReasoningEffort = tempReasoningEffort.value;
       const iterationVoice = selectedVoice.value;
       const iterationSkillIds = [...sessionSkillIds.value];
@@ -10653,6 +10720,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
         requestParams.audio = { voice: iterationVoice.split('-')[0].trim(), format: "wav" };
       }
 
+      if (pendingAppendBuffer.value.length && await drainBufferIntoHistory({toolBoundaryTurn: turnMeta})) {firstRequestMessages = null; continue;}
       throwIfTurnAborted();
       const preparingIndex = hasReusedPreparingBubble
         ? -1
@@ -10744,7 +10812,8 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
             aggregatedReasoningContent,
             streamingBubble.status || '',
             streamingBubble.storageId || String(streamingBubble.id || ''),
-            streamingBubble.tool_calls || []
+            streamingBubble.tool_calls || [],
+            (streamingBubble.uiStorageId ||= createConversationStorageId())
           );
           syncStickyScrollAfterRender();
           scheduleLoadingAutoSave('assistant-stream');
@@ -11049,7 +11118,8 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
         typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
         currentBubble.status || '',
         currentBubble.storageId || String(currentBubble.id || ''),
-        currentBubble.tool_calls || []
+        currentBubble.tool_calls || [],
+        (currentBubble.uiStorageId ||= createConversationStorageId())
       );
 
 
@@ -11068,7 +11138,8 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
           typeof currentBubble.reasoning_content === 'string' ? currentBubble.reasoning_content : '',
           currentBubble.status || '',
           currentBubble.storageId || String(currentBubble.id || ''),
-          currentBubble.tool_calls || []
+          currentBubble.tool_calls || [],
+        (currentBubble.uiStorageId ||= createConversationStorageId())
         );
         emitToolSnapshot();
 
@@ -11318,6 +11389,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
       }
     }
   } catch (error) {
+    turnMeta.failed = true;
     // A queued frame must never overwrite the cancellation/error terminal state.
     cancelPendingStreamingDisplay?.();
     cancelPendingStreamingDisplay = null;
@@ -11435,7 +11507,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
           });
 
           // 自动关闭窗口
-          if (finishingTask.autoClose && !pendingAppendBuffer.value.length && !scheduledTaskQueueSaving && !mobileControlActive.value && !controlTransferPending.value) {
+          if (finishingTask.autoClose && !turnMeta.bufferedScheduledTasks?.length && !pendingAppendBuffer.value.length && !scheduledTaskQueueSaving && !mobileControlActive.value && !controlTransferPending.value) {
             window.api.windowControl('close-window');
           }
         } catch (taskErr) {
@@ -11475,6 +11547,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
     }
   }
   } finally {
+    try {await settleBufferedScheduledTasks(turnMeta);} catch (error) {console.error('[tasks] buffered settlement failed:', error);}
     // This guard also handles failures before the inner network/tool try block is entered.
     try {
       if (activeAssistantTurnMeta === turnMeta || activeLocalExecution.value === turnRemoteCommand) await settleLocalExecution(turnRemoteCommand);

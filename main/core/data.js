@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { app } from 'electron'
+import {updateConfigurationRevisions, touchWorkspaceSkills, workspaceRevisionsReady, updateWorkspaceRevision} from './remote/workspaceRevisions.js'
 
 import { safeClone } from '../dataConverter.js'
 import { fetchWithProxy, normalizeNetworkProxyConfig } from './net.js'
@@ -61,6 +62,7 @@ async function notifyConfigUpdated(configOverride = null) {
     const nextConfig = configOverride && typeof configOverride === 'object'
       ? deepClone(configOverride)
       : (await getConfig()).config
+    updateConfigurationRevisions(nextConfig)
     emitWindowChannel('window:configUpdated', nextConfig)
     emitWindowChannel('config-updated', nextConfig)
   } catch (error) {
@@ -1060,8 +1062,11 @@ async function readDocData(docId, fallback) {
   return deepClone(docData)
 }
 
+const confirmedDocumentWrites = new Map()
 async function writeDocData(docId, data) {
   const existing = await dbGet(docId)
+  // Configuration saves usually affect one document, not every split document.
+  if (existing?.ok && confirmedDocumentWrites.get(docId) === existing.doc?._rev && JSON.stringify(existing.doc?.data) === JSON.stringify(data)) return {ok: true, skipped: true, doc: existing.doc}
   const nextDoc = {
     _id: docId,
     data: deepClone(data)
@@ -1071,7 +1076,9 @@ async function writeDocData(docId, data) {
     nextDoc._rev = existing.doc._rev
   }
 
-  return dbPut(nextDoc)
+  const result = await dbPut(nextDoc)
+  if (result?.ok) confirmedDocumentWrites.set(docId, result.rev)
+  return result
 }
 
 function parseKeyPath(keyPath) {
@@ -1260,6 +1267,7 @@ export async function getConfig() {
     })
   }
 
+  if (!workspaceRevisionsReady()) updateConfigurationRevisions(checkedConfig)
   return {
     config: deepClone(checkedConfig)
   }
@@ -1573,6 +1581,7 @@ export async function saveMcpToolCache(serverId, tools = [], options = {}) {
 
 
 export function notifySkillsUpdated() {
+  touchWorkspaceSkills()
   emitWindowChannel('window:skillsUpdated')
   emitWindowChannel('skills-updated')
 }
@@ -1665,35 +1674,50 @@ export async function removeTaskAppliedDevice(taskId = '', device = {}) {
 }
 
 
+export async function recordTaskSchedulerRuns(updates = []) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const existing = await dbGet(TASKS_DOC_ID).then(result => result?.ok ? result.doc : null)
+    if (!existing) return {success: true, skipped: true}
+    const tasks = JSON.parse(JSON.stringify(existing.data || {}))
+    for (const [id, update] of updates) {
+      const task = tasks[id]
+      if (!task || typeof task !== 'object') continue
+      task.lastRunTime = update.lastRunTime
+      task.lastRunSlotKey = update.lastRunSlotKey
+      if (update.single && task.triggerType === 'single' && task.singleDate === update.singleDate && task.singleTime === update.singleTime) setCurrentTaskDeviceEnabled(task, false)
+    }
+    reconcileTaskDeviceStates(tasks)
+    const stored = serializeTasksForSharedStorage(tasks)
+    if (JSON.stringify(existing.data) === JSON.stringify(stored)) return {success: true, skipped: true}
+    const result = await dbPut({...existing, data: stored})
+    if (result?.ok) {
+      updateWorkspaceRevision('tasks', [stored])
+      await notifyConfigUpdated()
+      return {success: true}
+    }
+    if (result?.name !== 'conflict' && result?.error !== 'conflict') throw new Error('task_scheduler_receipt_save_failed')
+  }
+  throw new Error('task_scheduler_receipt_conflict')
+}
+
 export async function addTaskHistory(taskId, logEntry) {
-  if (typeof taskId !== 'string' || !taskId.trim()) {
-    return {
-      success: false,
-      message: 'taskId is required'
+  if (typeof taskId !== 'string' || !taskId.trim()) throw new Error('task_id_required')
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const existing = await dbGet(TASKS_DOC_ID).then(result => result?.ok ? result.doc : null)
+    const tasks = JSON.parse(JSON.stringify(existing?.data || {}))
+    const task = tasks[taskId]
+    if (!task || typeof task !== 'object') throw new Error('task_not_found')
+    const history = Array.isArray(task.history) ? task.history : []
+    if (logEntry?.requestId && history.some(entry => entry.requestId === logEntry.requestId)) return {success: true, duplicate: true}
+    task.history = [JSON.parse(JSON.stringify(logEntry)), ...history].slice(0, 50)
+    const result = await dbPut({...existing, data: tasks})
+    if (result?.ok) {
+      updateWorkspaceRevision('tasks', [tasks])
+      return {success: true, historyCount: task.history.length}
     }
+    if (result?.name !== 'conflict' && result?.error !== 'conflict') throw new Error('task_history_save_failed')
   }
-
-  const normalizedTaskId = taskId.trim()
-  const tasksDoc = await readDocData(TASKS_DOC_ID, {})
-  const task = tasksDoc[normalizedTaskId]
-
-  if (!task || typeof task !== 'object') {
-    return {
-      success: false,
-      message: `Task '${normalizedTaskId}' not found`
-    }
-  }
-
-  const history = Array.isArray(task.history) ? [...task.history] : []
-  history.unshift(safeClone(logEntry))
-  task.history = history.slice(0, 50)
-  tasksDoc[normalizedTaskId] = task
-  await writeDocData(TASKS_DOC_ID, tasksDoc)
-
-  return {
-    success: true,
-    historyCount: task.history.length
-  }
+  throw new Error('task_history_conflict')
 }
 
 export async function getCachedBackgroundImage(url = '') {

@@ -1,3 +1,4 @@
+import { applyMcpTaskSchedule, getDailyTimes, getMonthlySchedules } from '../../shared/taskSchedule.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -1405,9 +1406,11 @@ IMPORTANT:
                     agent_name: { type: "string", description: "Optional. Name of the Quick Prompt to use. Defaults to '__DEFAULT__'." },
                     schedule_type: {
                         type: "string", enum: ["interval", "daily", "weekly", "monthly", "single"],
-                        description: "Type of schedule. 'interval'(every X mins), 'daily'(fixed time), 'weekly'(fixed days in week), 'monthly'(fixed dates in month)."
+                        description: "Type of schedule. 'interval'(every X mins), 'daily'(one or more times), 'weekly'(fixed days in week), 'monthly'(fixed dates in month)."
                     },
-                    time_param: { type: "string", description: "For 'interval': number of minutes. For others: HH:mm format." },
+                    daily_times: { type: "array", items: { type: "string" }, description: "Daily schedule: multiple HH:mm times, e.g. ['09:00','14:00','18:00']. Replaces dailyTime. Omit time_param when supplied." },
+                    monthly_schedules: { type: "array", items: { type: "object", properties: { day: {type: "integer", minimum: 1, maximum: 31}, time: {type: "string"} }, required: ["day", "time"], additionalProperties: false }, description: "Monthly schedule: explicit day/time pairs, e.g. [{day:1,time:'09:00'},{day:2,time:'13:00'}]. No cross product. Omit monthly_days/time_param. Nonexistent dates are skipped; Desktop local timezone." },
+                    time_param: { type: "string", description: "For interval: minutes; weekly/single: HH:mm. Legacy daily/monthly: HH:mm. Omit when daily_times/monthly_schedules is supplied." },
                     interval_time_ranges: {
                         type: "array",
                         items: { type: "string" },
@@ -1439,7 +1442,7 @@ IMPORTANT:
                         description: "Optional. Array of Skill names to enable for this task. Defaults to empty. You should only assign skills that are relevant to the task."
                     }
                 },
-                required: ["name", "instruction", "schedule_type", "time_param"]
+                required: ["name", "instruction", "schedule_type"]
             }
         },
         {
@@ -1454,6 +1457,8 @@ IMPORTANT:
                     conversation_id: { type: "string", description: "Optional existing local conversation ID. Mutually exclusive with agent_name; requires local conversation storage." },
                     agent_name: { type: "string" },
                     schedule_type: { type: "string", enum: ["interval", "daily", "weekly", "monthly", "single"] },
+                    daily_times: { type: "array", items: { type: "string" }, description: "Daily schedule: multiple HH:mm times, e.g. ['09:00','14:00','18:00']. Replaces dailyTime. Omit time_param when supplied." },
+                    monthly_schedules: { type: "array", items: { type: "object", properties: { day: {type: "integer", minimum: 1, maximum: 31}, time: {type: "string"} }, required: ["day", "time"], additionalProperties: false }, description: "Monthly schedule: explicit day/time pairs, e.g. [{day:1,time:'09:00'},{day:2,time:'13:00'}]. No cross product. Omit monthly_days/time_param. Nonexistent dates are skipped; Desktop local timezone." },
                     time_param: { type: "string" },
                     single_date: { type: "string", description: "Format: YYYY-MM-DD" },
                     interval_time_ranges: { type: "array", items: { type: "string" } },
@@ -3708,12 +3713,11 @@ ${agentStr}`;
                     details += `- Active Ranges: All Day (24h)\n`;
                 }
             } else if (task.triggerType === 'daily') {
-                details += `- Daily Time: ${task.dailyTime}\n`;
+                details += `- Daily Times: ${getDailyTimes(task).join(", ")}\n`;
             } else if (task.triggerType === 'weekly') {
                 details += `- Weekly Time: ${task.weeklyTime} on days [${task.weeklyDays.join(',')}]\n`;
             } else if (task.triggerType === 'monthly') {
-                const mDays = Array.isArray(task.monthlyDays) ? task.monthlyDays : [];
-                details += `- Monthly Time: ${task.monthlyTime} on dates [${mDays.join(',')}]\n`;
+                details += `- Monthly Schedule: ${getMonthlySchedules(task).map(item => `${item.day} at ${item.time}`).join(', ')}\n`;
             } else if (task.triggerType === 'single') {
                 details += `- Single Run: ${task.singleDate} at ${task.singleTime}\n`;
             }
@@ -3732,7 +3736,7 @@ ${agentStr}`;
         return "Current Tasks (Summary):\n" + taskList.join('\n') + "\n\n(Tip: Use 'task_name_or_id' argument to see full details of a specific task)";
     },
 
-    create_task: async ({ name, instruction, agent_name, conversation_id, schedule_type, time_param, enabled = true, single_date, interval_time_ranges, weekly_days, monthly_days, extra_mcp, extra_skills, }) => {
+    create_task: async ({ name, instruction, agent_name, conversation_id, schedule_type, time_param, daily_times, monthly_schedules, enabled = true, single_date, interval_time_ranges, weekly_days, monthly_days, extra_mcp, extra_skills, }) => {
         const unlock = await acquireLock('config_tasks');
         try {
                         const configData = await getConfig();
@@ -3771,7 +3775,7 @@ ${agentStr}`;
                 dailyTime: '12:00', weeklyDays: [1, 2, 3, 4, 5], weeklyTime: '12:00', monthlyDays: [1], monthlyTime: '12:00',
                 extraMcp: [], extraSkills: [], autoSave: true, autoClose: false, history: [],
                 lastRunTime: enabled ? Date.now() : 0,
-                singleDate: single_date || new Date().toISOString().split('T')[0],
+                singleDate: single_date || new Date().toLocaleDateString('sv-SE'),
                 singleTime: '12:00',
             };
             setCurrentTaskDeviceEnabled(newTask, enabled === true);
@@ -3792,41 +3796,9 @@ ${agentStr}`;
                 newTask.extraSkills = extra_skills;
             }
 
-            if (schedule_type === 'daily' || schedule_type === 'weekly' || schedule_type === 'monthly' || schedule_type === 'single') {
-                if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time_param)) {
-                    if (schedule_type === 'daily') newTask.dailyTime = time_param;
-                    if (schedule_type === 'weekly') newTask.weeklyTime = time_param;
-                    if (schedule_type === 'monthly') newTask.monthlyTime = time_param;
-                    if (schedule_type === 'single') newTask.singleTime = time_param;
-                } else return "Error: Invalid time format. Use HH:mm.";
-
-                if (schedule_type === 'weekly') {
-                    if (Array.isArray(weekly_days)) newTask.weeklyDays = weekly_days;
-                    else return "Error: weekly_days array is required for weekly schedule.";
-                }
-                if (schedule_type === 'monthly') {
-                    if (Array.isArray(monthly_days)) newTask.monthlyDays = monthly_days;
-                    else return "Error: monthly_days array is required for monthly schedule.";
-                }
-                if (schedule_type === 'single') {
-                    if (single_date) {
-                        if (/^\d{4}-\d{2}-\d{2}$/.test(single_date)) {
-                            newTask.singleDate = single_date;
-                        } else {
-                            return "Error: single_date must be YYYY-MM-DD.";
-                        }
-                    } else {
-                        const nowD = new Date();
-                        newTask.singleDate = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}-${String(nowD.getDate()).padStart(2, '0')}`;
-                    }
-                }
-            } else if (schedule_type === 'interval') {
-                const minutes = parseInt(time_param);
-                if (!isNaN(minutes) && minutes > 0) newTask.intervalMinutes = minutes;
-                else return "Error: Invalid interval minutes.";
-            } else {
-                return "Error: Unknown schedule_type.";
-            }
+            try {
+                Object.assign(newTask, applyMcpTaskSchedule(newTask, {schedule_type, time_param, daily_times, monthly_schedules, weekly_days, monthly_days, single_date}, true));
+            } catch (error) { return `Error: ${error.message}`; }
 
             tasks[taskId] = newTask;
             configData.config.tasks = tasks;
@@ -3838,7 +3810,7 @@ ${agentStr}`;
         }
     },
 
-    edit_task: async ({ task_name_or_id, new_name, instruction, agent_name, conversation_id, schedule_type, time_param, single_date, interval_time_ranges, weekly_days, monthly_days, extra_mcp, extra_skills }) => {
+    edit_task: async ({ task_name_or_id, new_name, instruction, agent_name, conversation_id, schedule_type, time_param, daily_times, monthly_schedules, single_date, interval_time_ranges, weekly_days, monthly_days, extra_mcp, extra_skills }) => {
         const unlock = await acquireLock('config_tasks');
         try {
                         const configData = await getConfig();
@@ -3895,48 +3867,12 @@ ${agentStr}`;
                 else return "Error: extra_skills must be an array of strings.";
             }
 
-            let timeChanged = false;
-            if (schedule_type) { task.triggerType = schedule_type; timeChanged = true; }
-            const currentType = schedule_type || task.triggerType;
-
+            const timeChanged = [schedule_type, time_param, daily_times, monthly_schedules, weekly_days, monthly_days, single_date, interval_time_ranges].some(value => value !== undefined);
+            try {
+                Object.assign(task, applyMcpTaskSchedule(task, {schedule_type, time_param, daily_times, monthly_schedules, weekly_days, monthly_days, single_date}));
+            } catch (error) { return `Error: ${error.message}`; }
             if (interval_time_ranges !== undefined) {
-                if (Array.isArray(interval_time_ranges)) {
-                    task.intervalTimeRanges = interval_time_ranges.map(r => r.split('-')).filter(r => r.length === 2);
-                } else {
-                    task.intervalTimeRanges = [];
-                }
-            }
-
-            if (time_param) {
-                if (currentType === 'daily' || currentType === 'weekly' || currentType === 'monthly' || currentType === 'single') {
-                    if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time_param)) {
-                        if (currentType === 'daily') task.dailyTime = time_param;
-                        if (currentType === 'weekly') task.weeklyTime = time_param;
-                        if (currentType === 'monthly') task.monthlyTime = time_param;
-                        if (currentType === 'single') task.singleTime = time_param;
-                        timeChanged = true;
-                    }
-                    else return "Error: Invalid time format. Use HH:mm.";
-                } else if (currentType === 'interval') {
-                    const minutes = parseInt(time_param);
-                    if (!isNaN(minutes) && minutes > 0) { task.intervalMinutes = minutes; timeChanged = true; }
-                    else return "Error: Invalid interval minutes.";
-                }
-            }
-
-            if (weekly_days !== undefined) {
-                if (Array.isArray(weekly_days)) { task.weeklyDays = weekly_days; timeChanged = true; }
-                else return "Error: weekly_days must be an array.";
-            }
-
-            if (monthly_days !== undefined) {
-                if (Array.isArray(monthly_days)) { task.monthlyDays = monthly_days; timeChanged = true; }
-                else return "Error: monthly_days must be an array.";
-            }
-
-            if (single_date !== undefined) {
-                if (/^\d{4}-\d{2}-\d{2}$/.test(single_date)) { task.singleDate = single_date; timeChanged = true; }
-                else return "Error: single_date must be YYYY-MM-DD.";
+                task.intervalTimeRanges = Array.isArray(interval_time_ranges) ? interval_time_ranges.map(range => range.split('-')).filter(range => range.length === 2) : [];
             }
 
             if (timeChanged && task.enabled) {

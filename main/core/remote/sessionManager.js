@@ -240,16 +240,19 @@ function sanitizeEvent(event, payload) {
   if (event === 'assistant.delta') return {
     textDelta: text(source.textDelta, 16 * 1024),
     reasoningDelta: text(source.reasoningDelta, 16 * 1024),
-    // Renderer uses the canonical Assistant storage ID only. It lets Mobile
-    // reconcile a persisted tool-call bubble with its current live segment.
+    // Canonical segment identity is progress metadata only; Mobile updates rows
+    // exclusively by the explicit, stable uiMessageId below.
     segmentId: text(source.segmentId, 160),
+    uiMessageId: text(source.uiMessageId, 160),
+    ...(Number.isSafeInteger(source.textOffset) && source.textOffset >= 0 ? {textOffset: source.textOffset} : {}),
+    ...(Number.isSafeInteger(source.reasoningOffset) && source.reasoningOffset >= 0 ? {reasoningOffset: source.reasoningOffset} : {}),
     status: text(source.status, 80),
     ...(Object.hasOwn(source, 'toolCalls') ? { toolCalls: sanitizeLiveToolCalls(source.toolCalls) } : {})
   }
   if (event === 'assistant.failed' || event === 'conversation.operation.failed') return {
     code: /^remote_[a-z0-9_]+$/.test(source.code) ? source.code : 'remote_operation_failed'
   }
-  if (event === 'assistant.started') return { startedAt: text(source.startedAt, 80) }
+  if (event === 'assistant.started') return { startedAt: text(source.startedAt, 80), userUiMessageId: text(source.userUiMessageId, 160) }
   if (event === 'conversation.choice.required') return {
     toolCallId: text(source.toolCallId, 160),
     questions: sanitizeChoiceQuestions(source.questions)

@@ -1,3 +1,4 @@
+import { isCalendarTaskDue } from '../../shared/taskSchedule.js'
 import { runTaskById } from './task_runner.js'
 
 import { reconcileTaskDeviceState, setCurrentTaskDeviceEnabled } from './task_devices.js'
@@ -96,10 +97,7 @@ function getDueRunSlotKey(taskId, task, now, nowDate) {
     return shouldTrigger && isWithinIntervalRanges(task, nowDate) ? slotKey : null
   }
 
-  if (task.triggerType === 'daily' && task.dailyTime) {
-    const parsed = parseTimeToParts(task.dailyTime)
-    return parsed && currentH === parsed.hours && currentM === parsed.minutes ? slotKey : null
-  }
+  if (task.triggerType === 'daily') return isCalendarTaskDue(task, nowDate) ? slotKey : null
 
   if (task.triggerType === 'weekly' && task.weeklyTime && Array.isArray(task.weeklyDays)) {
     const parsed = parseTimeToParts(task.weeklyTime)
@@ -109,14 +107,7 @@ function getDueRunSlotKey(taskId, task, now, nowDate) {
       : null
   }
 
-  if (task.triggerType === 'monthly' && task.monthlyTime) {
-    const parsed = parseTimeToParts(task.monthlyTime)
-    const currentMonthDay = nowDate.getDate()
-    const validDays = Array.isArray(task.monthlyDays) ? task.monthlyDays : []
-    return parsed && validDays.includes(currentMonthDay) && currentH === parsed.hours && currentM === parsed.minutes
-      ? slotKey
-      : null
-  }
+  if (task.triggerType === 'monthly') return isCalendarTaskDue(task, nowDate) ? slotKey : null
 
   if (task.triggerType === 'single' && task.singleDate && task.singleTime) {
     const parsed = parseTimeToParts(task.singleTime)
@@ -138,6 +129,7 @@ async function checkTasks({ dataApi, openWindow } = {}) {
     const config = configResult?.config && typeof configResult.config === 'object' ? configResult.config : {}
     const tasks = config?.tasks && typeof config.tasks === 'object' ? config.tasks : {}
     let needsUpdate = false
+    const receiptUpdates = new Map()
 
     for (const taskId of Object.keys(tasks)) {
       const now = Date.now()
@@ -155,10 +147,11 @@ async function checkTasks({ dataApi, openWindow } = {}) {
         if (!runResult?.success) {
           // A delivered command with a lost receipt is unknown, never safe to replay.
           if (runResult?.reason === 'task_receipt_timeout') {
-            task.lastRunTime = Date.now()
+            task.lastRunTime = now
             task.lastRunSlotKey = slotKey
             processedRunSlots.set(slotKey, task.lastRunTime)
             if (task.triggerType === 'single') setCurrentTaskDeviceEnabled(task, false)
+            receiptUpdates.set(taskId, {lastRunTime: task.lastRunTime, lastRunSlotKey: slotKey, single: task.triggerType === 'single', singleDate: task.singleDate, singleTime: task.singleTime})
             needsUpdate = true
           }
           console.warn(`[Task Scheduler] task ${taskId} due but window did not open:`, runResult)
@@ -166,11 +159,12 @@ async function checkTasks({ dataApi, openWindow } = {}) {
         }
 
         const completedAt = Date.now()
-        task.lastRunTime = completedAt
+        task.lastRunTime = now
         task.lastRunSlotKey = slotKey
         if (task.triggerType === 'single') {
           setCurrentTaskDeviceEnabled(task, false)
         }
+        receiptUpdates.set(taskId, {lastRunTime: now, lastRunSlotKey: slotKey, single: task.triggerType === 'single', singleDate: task.singleDate, singleTime: task.singleTime})
         processedRunSlots.set(slotKey, completedAt)
         needsUpdate = true
       } catch (error) {
@@ -179,7 +173,7 @@ async function checkTasks({ dataApi, openWindow } = {}) {
     }
 
     if (needsUpdate) {
-      await dataApi.updateConfigWithoutFeatures({ config })
+      await dataApi.recordTaskSchedulerRuns([...receiptUpdates])
     }
   } catch (error) {
     console.error('[Task Scheduler] check failed:', error)
@@ -206,7 +200,7 @@ export function startTaskScheduler({ dataApi, openWindow } = {}) {
     }
   }
 
-  if (typeof dataApi.updateConfigWithoutFeatures !== 'function' || typeof openWindow !== 'function') {
+  if (typeof dataApi.recordTaskSchedulerRuns !== 'function' || typeof openWindow !== 'function') {
     return {
       ok: false,
       started: false,

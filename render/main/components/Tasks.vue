@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n';
 import { ElCheckbox, ElMessage, ElMessageBox } from 'element-plus';
 
 import { getDailyTimes, getMonthlySchedules, normalizeTaskSchedulePatch, taskCalendarSummary } from '../../../shared/taskSchedule.js';
+import TaskTimePicker from './TaskTimePicker.vue';
 
 const { t, locale } = useI18n();
 const currentConfig = inject('config');
@@ -757,7 +758,7 @@ async function openTaskChat(logFile, conversationId = '') {
                                                     <el-form-item label="每日触发时间">
                                                         <div style="width:100%;display:flex;flex-direction:column;gap:8px">
                                                             <div v-for="(time, idx) in dailyTriggerTimes" :key="idx" style="display:flex;gap:8px;align-items:center">
-                                                                <el-time-picker :model-value="time" format="HH:mm" value-format="HH:mm" :clearable="false" @change="value => changeDailyTime(idx, value)" />
+                                                                <TaskTimePicker :key="`${activeTaskId}:daily:${idx}`" :model-value="time" @change="value => changeDailyTime(idx, value)" />
                                                                 <el-button :icon="Delete" link type="danger" @click="removeDailyTime(idx)" aria-label="删除触发时间" />
                                                             </div>
                                                             <el-button :icon="Plus" plain @click="addDailyTime">添加时间</el-button>
@@ -809,7 +810,7 @@ async function openTaskChat(logFile, conversationId = '') {
                                                                 <el-select :model-value="slot.day" style="width:100px" @change="day => changeMonthlySlot(idx, {day})">
                                                                     <el-option v-for="day in 31" :key="day" :label="`${day}日`" :value="day" />
                                                                 </el-select>
-                                                                <el-time-picker :model-value="slot.time" format="HH:mm" value-format="HH:mm" :clearable="false" @change="time => changeMonthlySlot(idx, {time})" />
+                                                                <TaskTimePicker :key="`${activeTaskId}:monthly:${idx}`" :model-value="slot.time" @change="time => changeMonthlySlot(idx, {time})" />
                                                                 <el-button :icon="Delete" link type="danger" @click="removeMonthlySlot(idx)" aria-label="删除触发时间" />
                                                             </div>
                                                             <el-button :icon="Plus" plain @click="addMonthlySlot">添加日期与时间</el-button>

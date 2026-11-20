@@ -73,6 +73,7 @@ const schemas = {
     field('extraSkills', '额外 Skill', 'skills'),
     field('autoSaveProjectId', '保存项目', 'project'),
     field('autoSave', '自动保存', 'boolean'),
+    field('showWindow', '在 Desktop 显示新会话窗口', 'boolean'),
     field('autoClose', '完成后关闭', 'boolean')
   ],
   general: [
@@ -295,7 +296,11 @@ export function createRemoteManagementService({
       }
       if (Object.hasOwn(raw, spec.key)) value[spec.key] = structuredClone(raw[spec.key])
     }
-    if (section === 'tasks') { value.dailyTimes = getDailyTimes(raw); value.monthlySchedules = getMonthlySchedules(raw) }
+    if (section === 'tasks') {
+      value.dailyTimes = getDailyTimes(raw)
+      value.monthlySchedules = getMonthlySchedules(raw)
+      value.showWindow = raw.showWindow !== false
+    }
     if (value.url) {
       try {
         const u = new URL(value.url)

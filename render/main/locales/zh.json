@@ -340,7 +340,7 @@
     "overrideSkillsPlaceholder": "选择执行此任务需要的技能",
     "backgroundOptionsLabel": "后台执行选项",
     "autoSaveLabel": "自动保存对话记录",
-    "autoSaveTooltip": "开启后，将在后台自动将记录保存为：【任务名】-【时间】.json",
+    "autoSaveTooltip": "启用本地存储时，任务完成后将新会话保存到所选项目（或不分组）。",
     "autoSaveProjectLabel": "保存到",
     "autoSaveProjectPlaceholder": "未分组",
     "autoSaveProjectUngrouped": "未分组",

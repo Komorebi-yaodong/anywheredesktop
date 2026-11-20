@@ -7366,6 +7366,8 @@ const isNamedLocalConversationAvailable = () => Boolean(
 const shouldPersistCurrentSessionAutomatically = () => {
 
   if (remoteConversationDeleted.value) return false;
+  // A new Agent task uses its own save setting/project in the finalizer, not the prompt's autosave.
+  if (currentTaskConfig.value && !currentTaskConfig.value.conversationId && !currentConversationStorage.value?.conversationId) return false;
   return basic_msg.value?.type === 'summon' || isCurrentPromptAutoSaveEnabled() || isNamedLocalConversationAvailable();
 };
 
@@ -7966,7 +7968,9 @@ const autoSaveSession = async (force = false, { skipProjectAssignment = false, v
   }
 
   const promptConfig = currentConfig.value?.prompts?.[CODE.value] || {};
-  const autoSaveProjectId = typeof promptConfig.autoSaveProjectId === 'string' ? promptConfig.autoSaveProjectId : '';
+  const taskConfig = currentTaskConfig.value;
+  const configuredProjectId = taskConfig && !taskConfig.conversationId ? taskConfig.autoSaveProjectId : promptConfig.autoSaveProjectId;
+  const autoSaveProjectId = !skipProjectAssignment && typeof configuredProjectId === 'string' ? configuredProjectId : '';
 
   // 2. 获取当前智能体的配置
   const shouldAutoSave = shouldPersistCurrentSessionAutomatically();
@@ -8000,7 +8004,7 @@ const autoSaveSession = async (force = false, { skipProjectAssignment = false, v
         dirPath,
         title: defaultConversationName.value,
         sessionData,
-        projectId: skipProjectAssignment ? '' : autoSaveProjectId,
+        projectId: autoSaveProjectId,
         projectName
       });
       storage = {
@@ -8158,6 +8162,34 @@ const executeAutoSaveRequest = async (request = {}) => {
     if (autoSaveExecutionPromise === idlePromise) autoSaveExecutionPromise = null;
   });
   return await completionPromise;
+};
+
+const persistScheduledTaskConversation = async (task) => {
+  const storage = currentConversationStorage.value;
+  if (task.conversationId) {
+    // An existing target must never be replaced by a new conversation or moved to another project.
+    if (storage?.conversationId !== task.conversationId) throw new Error('task_save_failed');
+  } else {
+    if (task.autoSave !== true || !(storage?.dirPath || currentConfig.value.webdav?.localChatPath)) {
+      return { savedFileName: '未保存', savedConversationId: '' };
+    }
+    if (!storage?.conversationId && !defaultConversationName.value) {
+      const timeStr = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[\/ :]/g, '-').replace(/,/g, '');
+      defaultConversationName.value = `定时任务-${task.name}-${timeStr}`;
+    }
+  }
+
+  const saved = await executeAutoSaveRequest({
+    reason: 'scheduled-task-finalized',
+    force: true,
+    skipProjectAssignment: Boolean(task.conversationId),
+    version: ++sessionMutationVersion
+  });
+  if (!saved) throw new Error('task_save_failed');
+  return {
+    savedFileName: defaultConversationName.value,
+    savedConversationId: currentConversationStorage.value?.conversationId || ''
+  };
 };
 
 const scheduleAutoSave = ({ reason = 'generic', immediate = false, force = false, delay = 0, stateOnly = false } = {}) => {
@@ -10612,7 +10644,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
     return;
   }
 
-  const shouldTriggerAutoNaming = !defaultConversationName.value && chat_show.value.filter(isUserAuthoredMessage).length === 1;
+  const shouldTriggerAutoNaming = !currentTaskConfig.value && !defaultConversationName.value && chat_show.value.filter(isUserAuthoredMessage).length === 1;
   if (shouldTriggerAutoNaming) {
     triggerAutoNamingForFirstUserMessage({ force: false, requestSignal }).catch((error) => {
       if (!isAbortError(error)) {
@@ -11529,39 +11561,8 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
 
       const finishingTask = turnMeta.taskConfig;
       if (finishingTask) {
-        let savedFileName = '未保存';
-        let savedConversationId = '';
         try {
-          if ((finishingTask.autoSave || finishingTask.conversationId) && currentConfig.value.webdav?.localChatPath) {
-            const timeStr = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[\/ :]/g, '-').replace(/,/g, '');
-            if (!finishingTask.conversationId) defaultConversationName.value = `定时任务-${finishingTask.name}-${timeStr}`;
-            const dirPath = currentConfig.value.webdav.localChatPath;
-            const localProjects = normalizeWindowProjects(await window.api.readLocalProjects(dirPath));
-            const taskProjectId = typeof finishingTask.autoSaveProjectId === 'string' ? finishingTask.autoSaveProjectId : '';
-            const projectName = localProjects.projects.find((p) => p.id === taskProjectId)?.name || '';
-            if (!currentConversationStorage.value?.conversationId) {
-              const created = await window.api.createConversation({
-                dirPath,
-                title: defaultConversationName.value,
-                sessionData: getSessionDataAsObject(),
-                projectId: taskProjectId,
-                projectName
-              });
-              currentConversationStorage.value = {
-                format: 'sqlite',
-                conversationId: created.descriptor.conversationId,
-                dbFile: created.descriptor.dbFile,
-                title: created.descriptor.title,
-                revision: Number(created.descriptor.revision) || 0,
-                dirPath,
-                storageMode: 'local'
-              };
-            } else {
-              if (!await executeAutoSaveRequest({ reason: 'scheduled-task-finalized', force: true, version: ++sessionMutationVersion })) throw new Error('task_save_failed');
-            }
-            savedFileName = defaultConversationName.value;
-            savedConversationId = currentConversationStorage.value?.conversationId || '';
-          }
+          const { savedFileName, savedConversationId } = await persistScheduledTaskConversation(finishingTask);
           await window.api.addTaskHistory(finishingTask.id, {
             time: Date.now(),
             status: 'success',

@@ -943,33 +943,35 @@ async function openTaskChat(logFile, conversationId = '') {
                                             <el-col :span="24" style="margin-top: 5px;">
                                                 <el-form-item :label="t('tasks.backgroundOptionsLabel')">
                                                     <div class="toggle-group task-toggle-group">
-                                                        <div class="task-toggle-row">
-                                                            <el-checkbox v-model="selectedTask.autoSave"
-                                                                @change="(val) => saveTaskSetting('autoSave', val)">
-                                                                {{ t('tasks.autoSaveLabel') }}
-                                                                <el-tooltip :content="t('tasks.autoSaveTooltip')"
-                                                                    placement="top">
-                                                                    <el-icon
-                                                                        style="margin-left: 4px; vertical-align: middle;">
-                                                                        <InfoFilled />
-                                                                    </el-icon>
-                                                                </el-tooltip>
-                                                            </el-checkbox>
-                                                        </div>
-                                                        <div v-if="selectedTask.autoSave" class="task-project-row">
-                                                            <span class="task-project-label">{{ t('tasks.autoSaveProjectLabel', '保存到') }}</span>
-                                                            <el-select
-                                                                :model-value="selectedTask.autoSaveProjectId || ''"
-                                                                @change="(val) => saveTaskSetting('autoSaveProjectId', val || '')"
-                                                                @visible-change="(visible) => { if (visible) void refreshLocalProjectOptions(); }"
-                                                                clearable
-                                                                :placeholder="t('tasks.autoSaveProjectPlaceholder', '未分组')"
-                                                                class="task-project-select">
-                                                                <el-option :label="t('tasks.autoSaveProjectUngrouped', '未分组')" value="" />
-                                                                <el-option v-for="project in localProjectOptions" :key="project.value"
-                                                                    :label="project.label" :value="project.value" />
-                                                            </el-select>
-                                                        </div>
+                                                        <template v-if="taskTargetType === 'agent'">
+                                                            <div class="task-toggle-row">
+                                                                <el-checkbox v-model="selectedTask.autoSave"
+                                                                    @change="(val) => saveTaskSetting('autoSave', val)">
+                                                                    {{ t('tasks.autoSaveLabel') }}
+                                                                    <el-tooltip :content="t('tasks.autoSaveTooltip')"
+                                                                        placement="top">
+                                                                        <el-icon
+                                                                            style="margin-left: 4px; vertical-align: middle;">
+                                                                            <InfoFilled />
+                                                                        </el-icon>
+                                                                    </el-tooltip>
+                                                                </el-checkbox>
+                                                            </div>
+                                                            <div v-if="selectedTask.autoSave" class="task-project-row">
+                                                                <span class="task-project-label">{{ t('tasks.autoSaveProjectLabel', '保存到') }}</span>
+                                                                <el-select
+                                                                    :model-value="selectedTask.autoSaveProjectId || ''"
+                                                                    @change="(val) => saveTaskSetting('autoSaveProjectId', val || '')"
+                                                                    @visible-change="(visible) => { if (visible) void refreshLocalProjectOptions(); }"
+                                                                    clearable
+                                                                    :placeholder="t('tasks.autoSaveProjectPlaceholder', '未分组')"
+                                                                    class="task-project-select">
+                                                                    <el-option :label="t('tasks.autoSaveProjectUngrouped', '未分组')" value="" />
+                                                                    <el-option v-for="project in localProjectOptions" :key="project.value"
+                                                                        :label="project.label" :value="project.value" />
+                                                                </el-select>
+                                                            </div>
+                                                        </template>
                                                         <div class="task-toggle-row">
                                                             <el-checkbox v-model="selectedTask.autoClose"
                                                                 @change="(val) => saveTaskSetting('autoClose', val)"

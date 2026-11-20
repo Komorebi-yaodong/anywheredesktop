@@ -340,7 +340,7 @@
     "overrideSkillsPlaceholder": "Select skills required for this task",
     "backgroundOptionsLabel": "Background Options",
     "autoSaveLabel": "Auto-save Chat",
-    "autoSaveTooltip": "When enabled, records will be automatically saved as: [TaskName]-[Time].json in the background",
+    "autoSaveTooltip": "With local storage enabled, save the new conversation to the selected project (or keep it ungrouped) after the task runs.",
     "autoSaveProjectLabel": "Save to",
     "autoSaveProjectPlaceholder": "Ungrouped",
     "autoSaveProjectUngrouped": "Ungrouped",

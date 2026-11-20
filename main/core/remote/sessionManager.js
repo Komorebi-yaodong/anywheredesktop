@@ -4,6 +4,7 @@ import {AsyncLocalStorage} from 'node:async_hooks'
 import { normalizeIdentifier, remoteError } from './protocol.js'
 import { getQuickAssistantWeight } from '../quickAssistantUsage.js'
 import { sanitizeRemoteToolCalls } from '../conversationStore.js'
+import { isConversationHidden } from '../conversationVisibility.js'
 
 const REQUEST_TTL_MS = 30 * 60 * 1000
 const MAX_REQUESTS = 256
@@ -708,7 +709,7 @@ export function createRemoteSessionManager({
 
 
       const hasDesktopObserver = candidates.some((candidate) =>
-        candidate.id !== writer.id && candidate.remoteHidden !== true
+        candidate.id !== writer.id && !isConversationHidden(candidate)
       )
       result.push({
         conversationId: item.conversationId,
@@ -718,7 +719,7 @@ export function createRemoteSessionManager({
         busy: writer.busy === true || writer.generating === true || writer.compacting === true,
         mobileControlled: session?.mobileControlled === true,
         controlledByThisDevice: session?.mobileControlled === true && (!session.mobileDeviceId || session.mobileDeviceId === safeDeviceId),
-        hidden: writer.remoteHidden === true,
+        hidden: isConversationHidden(writer),
         hasDesktopObserver
       })
     }
@@ -781,7 +782,7 @@ export function createRemoteSessionManager({
     session.controlTransfer = receipt
     try {
       // Reveal before commitment: a reveal failure must not report a completed handoff.
-      if (!mobile && item.remoteHidden === true) {
+      if (!mobile && isConversationHidden(item)) {
         if (!revealRemoteConversationWindow(session.windowRef)?.ok) throw remoteError('remote_window_reveal_failed')
         session.hidden = false
       }
@@ -889,7 +890,7 @@ export function createRemoteSessionManager({
       const item = session && windowItem(session.windowRef)
       if (!item || !session.mobileControlled || (selectedDevice && session.mobileDeviceId !== selectedDevice)) continue
       result.push({conversationId, deviceId: session.mobileDeviceId || '', windowId: session.windowRef,
-        title: text(item.conversationTitle || item.title, 240) || '未命名会话', hidden: item.remoteHidden === true,
+        title: text(item.conversationTitle || item.title, 240) || '未命名会话', hidden: isConversationHidden(item),
         busy: Boolean(session.activeRequestId || item.busy || item.generating || item.compacting)})
     }
     return {ok: true, sessions: result}
@@ -1005,6 +1006,7 @@ export function createRemoteSessionManager({
         session.mobileDeviceId = safeDeviceId
       session.controlEpoch = crypto.randomUUID()
         record.conversationId = conversationId
+        onControlChanged()
         const result = { ok: true, conversationId, windowId: windowRef, hidden: session.hidden, created: true,
           promptCode, title: text(item.conversationTitle, 240) || `${promptCode} - 新会话` }
         // Mobile routes use the exact same Desktop-owned seven-day weight as
@@ -1911,6 +1913,9 @@ export function createRemoteSessionManager({
     cancelCompact,
     cancel, release, openForMobile, takeover, handoff, closeConversation, openedSessions, reconcileDeletedSessions, observeOnDesktop, controlledSessions, takeoverOnDesktop, showOnDesktop, getRequest, handleRendererEvent, handleWindowClosed,
     revokeDevice, closeAll,
+    // Read-only local projection. Do not infer control from renderer visibility
+    // or create session records merely because the tray menu is refreshed.
+    mobileControlledWindowIds: () => new Set([...sessions.values()].filter(session => session.mobileControlled).map(session => session.windowRef)),
     resume: () => { enabled = true },
     authorizeDevice: (deviceId) => { revokedDevices.delete(deviceId) },
     getSession: (conversationId) => { const session = existingSession(conversationId); return session ? { ...session, readOnly: windowItem(session.windowRef)?.readOnly === true } : null }

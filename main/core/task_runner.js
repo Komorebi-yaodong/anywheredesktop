@@ -85,6 +85,8 @@ export async function runTaskById({ taskId = '', dataApi, openWindow, runConvers
   const openPayload = {
     code: promptKey,
     type: 'task',
+    desktopHidden: task.showWindow === false,
+    displayName: task.name || normalizedTaskId,
     payload: typeof task.description === 'string' ? task.description : '',
     taskConfig: {
       id: normalizedTaskId,

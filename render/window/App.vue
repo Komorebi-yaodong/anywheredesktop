@@ -6,7 +6,7 @@ import { DocumentCopy, QuestionFilled, Download, Search, Tools, CaretRight, Coll
 import TitleBar from './components/TitleBar.vue';
 import ChatHeader from './components/ChatHeader.vue';
 const ChatMessage = defineAsyncComponent(() => import('./components/ChatMessage.vue'));
-import ChatInput from './components/ChatInput.vue';
+const ChatInput = defineAsyncComponent(() => import('./components/ChatInput.vue'));
 import TaskPanel from './components/TaskPanel.vue';
 import ModelSelectionDialog from './components/ModelSelectionDialog.vue';
 import defaultAiAvatarUrl from '../../resources/icon.png?asset';
@@ -683,8 +683,10 @@ const autoCloseOnBlur = ref(false);
 const modelList = ref([]);
 const modelMap = ref({});
 const model = ref("");
-
-const { currentModelLogo, modelLogoRequestId, handleModelLogoError } = useModelLogo(model);
+// Boot the executor immediately, but wait for Main's visibility before mounting any chat UI.
+const conversationUiHidden = ref(true);
+const visibleLogoModel = computed(() => conversationUiHidden.value ? '' : model.value);
+const { currentModelLogo, modelLogoRequestId, handleModelLogoError } = useModelLogo(visibleLogoModel);
 
 watch(model, () => {
   // 换模型不改历史，但需确保 role=tool 仍在 history 中
@@ -3756,7 +3758,12 @@ const loadBackground = async (newUrl) => {
     if (buffer) {
       const blob = new Blob([buffer]);
       const newBlobUrl = URL.createObjectURL(blob);
-      await preloadImage(newBlobUrl);
+      try {
+        await preloadImage(newBlobUrl);
+      } catch (error) {
+        URL.revokeObjectURL(newBlobUrl);
+        throw error;
+      }
       if (token !== backgroundLoadToken) {
         URL.revokeObjectURL(newBlobUrl);
         return;
@@ -3778,7 +3785,12 @@ const loadBackground = async (newUrl) => {
     if (refreshedBuffer) {
       const blob = new Blob([refreshedBuffer]);
       const newBlobUrl = URL.createObjectURL(blob);
-      await preloadImage(newBlobUrl);
+      try {
+        await preloadImage(newBlobUrl);
+      } catch (error) {
+        URL.revokeObjectURL(newBlobUrl);
+        throw error;
+      }
       if (token !== backgroundLoadToken) {
         URL.revokeObjectURL(newBlobUrl);
         return;
@@ -3804,8 +3816,8 @@ const loadBackground = async (newUrl) => {
   }
 };
 
-watch(promptBackgroundImage, async (newUrl) => {
-  await loadBackground(newUrl);
+watch([promptBackgroundImage, conversationUiHidden], async ([newUrl, hidden]) => {
+  await loadBackground(hidden ? '' : newUrl);
 }, { immediate: true });
 
 const inputLayout = computed(() => currentConfig.value.inputLayout || 'horizontal');
@@ -4578,7 +4590,7 @@ const closeSubAgentDetailFromInput = () => {
 const openSubAgentDetailFromInput = async (subagentId) => {
   selectedSubAgentDetailId.value = subagentId;
   await loadSubAgentDetail(subagentId);
-  if (subAgentDetailPollTimer) return;
+  if (subAgentDetailPollTimer || conversationUiHidden.value || selectedSubAgentDetailId.value !== subagentId) return;
   subAgentDetailPollTimer = window.setInterval(() => {
     const task = subAgentTasks.value.find((item) => item.subagent_id === selectedSubAgentDetailId.value);
     if (!selectedSubAgentDetailId.value) return;
@@ -5644,7 +5656,10 @@ const handleChangeModel = (chosenModel) => {
   rehydrateHistoryToolsIfNeeded();
   chatInputRef.value?.focus({ cursor: 'end' });
 };
-const handleAutoCloseOnBlur = () => closePage(false);
+let hidingConversationUi = false;
+const handleAutoCloseOnBlur = () => {
+  if (!conversationUiHidden.value && !hidingConversationUi) return closePage(false);
+};
 const syncAutoCloseOnBlurListener = () => {
   window.removeEventListener('blur', handleAutoCloseOnBlur);
   if (autoCloseOnBlur.value && !loading.value && !currentTaskConfig.value && !pendingAppendBuffer.value.length && !scheduledTaskQueueSaving) {
@@ -5752,6 +5767,7 @@ const ensureStickyResizeObserver = () => {
 
 const updateStickyResizeObserver = async () => {
   await nextTick();
+  if (conversationUiHidden.value || !chatContainerRef.value?.$el) return;
   const observer = ensureStickyResizeObserver();
   if (!observer) return;
 
@@ -5782,11 +5798,30 @@ const cleanupStickyResizeObserver = () => {
 };
 
 const syncStickyScrollAfterRender = () => {
-  if (!isSticky.value) return;
+  if (conversationUiHidden.value || !isSticky.value) return;
   nextTick(() => {
     updateStickyResizeObserver();
     scheduleStickyScrollFrames();
   });
+};
+
+const hideConversationToTray = async () => {
+  if (conversationUiHidden.value || hidingConversationUi || !isWindowBootstrapped.value || isClosingWindow.value) return;
+  const editorOpen = changeModel_page.value || systemPromptDialogVisible.value || isMcpDialogVisible.value || isSkillDialogVisible.value || document.querySelector('.editing-wrapper');
+  const confirmationOpen = [...document.querySelectorAll('.el-message-box')].some(box => box.getClientRects().length);
+  if (isFilePickerOpen.value || chatInputRef.value?.isRecording || editorOpen || confirmationOpen) {
+    showDismissibleMessage.info('请先完成当前编辑、录音或确认，再隐藏会话。');
+    return;
+  }
+  hidingConversationUi = true;
+  try {
+    const result = await window.api.hideConversationToTray();
+    if (!result?.ok) showDismissibleMessage.warning('暂时无法隐藏会话，请稍后重试。');
+  } catch {
+    showDismissibleMessage.warning('暂时无法隐藏会话，请稍后重试。');
+  } finally {
+    hidingConversationUi = false;
+  }
 };
 
 const handleSaveSession = () => handleSaveAction();
@@ -6452,9 +6487,9 @@ watch(fileList, () => {
 watch(zoomLevel, (newZoom) => {
   if (window.api && typeof window.api.setZoomFactor === 'function') window.api.setZoomFactor(newZoom);
 });
-watch(chat_show, async () => {
-  // 代码块复制按钮已下沉到 ChatMessage 本地注入，避免每次 deep watch 全页扫描 pre.hljs
-  await updateStickyResizeObserver();
+watch(() => conversationUiHidden.value ? null : chat_show.value, async (messages) => {
+  // Don't traverse the reactive transcript for a layout observer when there is no UI.
+  if (messages) await updateStickyResizeObserver();
 }, { deep: true, flush: 'post' });
 watch(() => currentConfig.value?.isDarkMode, (isDark) => {
   if (isDark) {
@@ -6468,6 +6503,23 @@ watch(() => currentConfig.value?.isDarkMode, (isDark) => {
   }
 }, { immediate: true });
 
+watch(conversationUiHidden, async (hidden) => {
+  if (hidden) {
+    cleanupStickyResizeObserver();
+    textSearchInstance?.destroy();
+    textSearchInstance = null;
+    closeSubAgentDetailFromInput();
+    imageViewerVisible.value = false;
+    imageViewerSrcList.value = [];
+    return;
+  }
+  await nextTick();
+  if (conversationUiHidden.value || isClosingWindow.value) return;
+  textSearchInstance ??= new TextSearchUI({scope: '.chat-main', theme: currentConfig.value?.isDarkMode ? 'dark' : 'light'});
+  await updateStickyResizeObserver();
+  if (!conversationUiHidden.value) scrollToBottomImmediately();
+});
+
 onMounted(async () => {
   if (isInit.value) return;
   isInit.value = true;
@@ -6476,18 +6528,11 @@ onMounted(async () => {
 
 
 
-  await updateStickyResizeObserver();
-
   if (window.api && window.api.onAlwaysOnTopChanged) {
     window.api.onAlwaysOnTopChanged((newState) => {
       isAlwaysOnTop.value = newState;
     });
   }
-
-  textSearchInstance = new TextSearchUI({
-    scope: '.chat-main',
-    theme: currentConfig.value?.isDarkMode ? 'dark' : 'light'
-  });
 
   // 暴露给后台MCP调用的 Agent API
 
@@ -6657,6 +6702,9 @@ onMounted(async () => {
   };
 
   const initializeWindow = async (data = null) => {
+    remoteHiddenWriter.value = data?.remoteHidden === true;
+    mobileControlActive.value = data?.mobileControlled === true || data?.remoteHidden === true;
+    conversationUiHidden.value = data?.desktopHidden === true || data?.remoteHidden === true;
     try {
       const configData = await window.api.getConfig();
       currentConfig.value = configData.config;
@@ -6727,8 +6775,6 @@ onMounted(async () => {
     }
 
     if (data) {
-      remoteHiddenWriter.value = data.remoteHidden === true;
-      mobileControlActive.value = data.remoteHidden === true;
       basic_msg.value = { code: data.code, type: data.type, payload: data.payload };
       if (data.conversation?.descriptor && data.conversation?.sessionData) {
         const descriptor = data.conversation.descriptor;
@@ -6973,6 +7019,17 @@ onMounted(async () => {
     // 优先接桌面端事件总线，同时保留原插件 preload 回退
   if (window.api && typeof window.api.onWindowEvent === 'function') {
     window.api.onWindowEvent(async (envelope) => {
+      if (envelope?.sourceId === 'window-manager') {
+        if (envelope.event === 'window:conversation-visibility') {
+          conversationUiHidden.value = envelope.payload?.hidden === true;
+          if (!conversationUiHidden.value) remoteHiddenWriter.value = false;
+          return;
+        }
+        if (envelope.event === 'window:tray-hide-request') {
+          await hideConversationToTray();
+          return;
+        }
+      }
       if (envelope?.event === 'task:conversation-run' && envelope.sourceId === 'task-runner') {
         await handleConversationTask(envelope.payload); return;
       }
@@ -10788,6 +10845,7 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
         let aggregatedUsage = null;
         let lastUpdateTime = Date.now();
         let streamingDisplayRafId = null;
+        let streamingDisplayTimer = null;
 
         const responsesItemIdToIndexMap = new Map();
 
@@ -10822,15 +10880,20 @@ const askAI = async (forceSend = false, remoteCommand = null, admittedBuffer = f
         // Receive every chunk immediately, but merge expensive Vue/Markdown/layout work into one frame.
         const cancelScheduledStreamingDisplay = () => {
           if (streamingDisplayRafId !== null) cancelAnimationFrame(streamingDisplayRafId);
+          if (streamingDisplayTimer !== null) clearTimeout(streamingDisplayTimer);
           streamingDisplayRafId = null;
+          streamingDisplayTimer = null;
         };
         cancelPendingStreamingDisplay = cancelScheduledStreamingDisplay;
         const scheduleStreamingDisplay = () => {
-          if (streamingDisplayRafId !== null) return;
-          streamingDisplayRafId = requestAnimationFrame(() => {
-            streamingDisplayRafId = null;
+          if (streamingDisplayTimer !== null) return;
+          const flush = () => {
+            cancelScheduledStreamingDisplay();
             flushStreamingDisplay();
-          });
+          };
+          // Progress, Mobile deltas and autosave must not depend on a paint.
+          streamingDisplayTimer = setTimeout(flush, 64);
+          if (!conversationUiHidden.value) streamingDisplayRafId = requestAnimationFrame(flush);
         };
 
         for await (const part of stream) {
@@ -12139,6 +12202,7 @@ const scrollToMessageByIndex = async (index) => {
 </script>
 
 <template>
+  <template v-if="!conversationUiHidden">
   <main>
     <div v-if="backgroundLoadState === 'ready' && windowBackgroundImage" class="window-bg-base"></div>
     <div class="window-bg-layer" :class="{ 'is-visible': backgroundLoadState === 'ready' && !!windowBackgroundImage }" :style="{
@@ -12152,7 +12216,7 @@ const scrollToMessageByIndex = async (index) => {
         :isAlwaysOnTop="isAlwaysOnTop" :autoCloseOnBlur="autoCloseOnBlur" :isDarkMode="currentConfig.isDarkMode"
         :os="currentOS" @save-window-size="handleSaveWindowSize" @save-session="handleSaveSession"
         @toggle-pin="handleTogglePin" @toggle-always-on-top="handleToggleAlwaysOnTop" @minimize="handleMinimize"
-        @maximize="handleMaximize" @close="handleCloseWindow" />
+        @maximize="handleMaximize" @close="handleCloseWindow" @hide-to-tray="hideConversationToTray" />
       <ChatHeader :modelMap="modelMap" :model="model" :model-logo="currentModelLogo" :model-logo-request-id="modelLogoRequestId" :is-mcp-loading="isMcpLoading" :systemPrompt="currentSystemPrompt"
         :has-task-tool="hasTaskMcpTool" :task-panel-visible="taskPanelVisible" :task-status="taskOverallStatus"
         @open-model-dialog="handleOpenModelDialog" @show-system-prompt="handleShowSystemPrompt"
@@ -12535,6 +12599,7 @@ const scrollToMessageByIndex = async (index) => {
       </div>
     </template>
   </el-dialog>
+  </template>
 </template>
 
 <style>

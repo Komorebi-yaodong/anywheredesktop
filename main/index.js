@@ -20,6 +20,7 @@ import path from 'node:path'
 import { app, Menu, Tray, nativeTheme, nativeImage, powerMonitor, BrowserWindow, safeStorage, dialog } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipcHandler.js'
+import { isConversationHidden, trayConversationEntries } from './core/conversationVisibility.js'
 import {
   openWindow,
   showMainWindow,
@@ -31,6 +32,7 @@ import {
   waitForWindowReady,
   minimizeWindow,
   maximizeOrRestoreWindow,
+  hideConversationWindow,
   closeWindow,
   toggleAlwaysOnTop,
   handleFastInputWindowEvent,
@@ -49,6 +51,8 @@ import {
 import { dispatchWindowEvent } from './eventBus.js'
 import { syncDesktopShortcuts, clearDesktopShortcuts } from './shortcutManager.js'
 import icon from '../resources/icon.png?asset'
+import trayDesktopIconPath from '../resources/tray-controller-desktop.png?asset'
+import trayMobileIconPath from '../resources/tray-controller-mobile.png?asset'
 
 import * as systemApi from './core/system.js'
 import * as dbApi from './core/db.js'
@@ -87,6 +91,8 @@ import { startTaskScheduler } from './core/task_scheduler.js'
 import { createDatabaseBackupScheduler, takeDatabaseRecoveryNotice } from './core/databaseBackups.js'
 
 let appTray = null
+let trayConversationSignature = ''
+let trayConversationIcons = null
 let appQuitStarted = false
 let configurationBackups = null
 
@@ -208,6 +214,7 @@ const remoteGateway = createRemoteGateway({
 })
 
 function notifyRemoteControlChanged(broadcast = true) {
+  refreshTrayMenu()
   for (const item of listWindows()) {
     const win = getWindowByRef(item.id)
     if (!win || win.isDestroyed()) continue
@@ -273,7 +280,7 @@ setWindowMetadataNotifier((change = {}) => {
       mobileControlled: item.mobileControlled === true,
       leasePending: item.leasePending === true,
       rendererReady: item.rendererReady === true,
-      hidden: item.remoteHidden === true
+      hidden: isConversationHidden(item)
     }))
   remoteGateway.broadcastEvent('conversation.windows.changed', {
     reason: typeof change.reason === 'string' ? change.reason : 'updated',
@@ -600,7 +607,7 @@ async function triggerAppendFollowUpShortcut() {
       return { ok: true, action: 'hide', type: 'quick' }
     }
 
-    const windows = (listWindows('window') || []).filter((item) => item && item.type === 'window' && item.id)
+    const windows = (listWindows('window') || []).filter((item) => item?.type === 'window' && item.id && !isConversationHidden(item))
     if (windows.length === 0) {
       return { ok: false, reason: 'no_window_targets' }
     }
@@ -766,7 +773,34 @@ function beginAppQuit() {
   return remoteShutdownPromise
 }
 
-function buildTrayMenu() {
+function getTrayConversationEntries() {
+  return trayConversationEntries(listWindows('window'), remoteSessionManager.mobileControlledWindowIds())
+}
+
+function getTrayConversationIcons() {
+  if (!trayConversationIcons) {
+    const desktop = nativeImage.createFromPath(trayDesktopIconPath)
+    const mobile = nativeImage.createFromPath(trayMobileIconPath)
+    if (process.platform === 'darwin') {
+      desktop.setTemplateImage(true)
+      mobile.setTemplateImage(true)
+    }
+    trayConversationIcons = {desktop, mobile}
+  }
+  return trayConversationIcons
+}
+
+function refreshTrayMenu() {
+  if (!appTray || appTray.isDestroyed()) return
+  const entries = getTrayConversationEntries()
+  const signature = JSON.stringify(entries)
+  if (signature === trayConversationSignature) return
+  appTray.setContextMenu(buildTrayMenu(entries))
+  trayConversationSignature = signature
+}
+
+function buildTrayMenu(entries) {
+  const controllerIcons = getTrayConversationIcons()
   return Menu.buildFromTemplate([
     {
       label: '显示主界面',
@@ -780,6 +814,18 @@ function buildTrayMenu() {
         triggerQuickSummon()
       }
     },
+    ...(entries.length ? [
+      {type: 'separator'},
+      ...entries.map(({windowRef, title, mobile}) => ({
+        label: title,
+        icon: mobile ? controllerIcons.mobile : controllerIcons.desktop,
+        toolTip: mobile ? '由手机控制' : '由电脑控制',
+        click: () => {
+          const current = listWindows('window').find(item => item.id === windowRef)
+          if (isConversationHidden(current)) revealRemoteConversationWindow(windowRef)
+        }
+      }))
+    ] : []),
     { type: 'separator' },
     {
       label: '退出 Anywhere Desktop',
@@ -811,7 +857,8 @@ function ensureTray() {
   if (appTray) return appTray
   appTray = new Tray(createTrayIcon())
   appTray.setToolTip('AI Anywhere Desktop')
-  appTray.setContextMenu(buildTrayMenu())
+  trayConversationSignature = ''
+  refreshTrayMenu()
   if (process.platform !== 'darwin') {
     appTray.on('click', () => {
       showMainWindow()
@@ -969,6 +1016,7 @@ app.whenReady().then(async () => {
 
     minimizeWindow,
     maximizeOrRestoreWindow,
+    hideConversationWindow,
     closeWindow,
     toggleAlwaysOnTop,
     handleFastInputWindowEvent,

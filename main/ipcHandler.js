@@ -87,6 +87,10 @@ function getLiveSignalKey(senderId, token = '') {
 }
 
 
+const MAIN_ONLY_WINDOW_EVENTS = new Set([
+  'remote:command', 'conversation:metadata-command', 'window:conversation-visibility', 'window:tray-hide-request'
+])
+
 function handleInvoke(channel, handler, options = {}) {
   ipcMain.handle(channel, async (event, ...args) => {
     const senderRef = (() => {
@@ -140,6 +144,7 @@ export function registerIpcHandlers({
 
   minimizeWindow,
   maximizeOrRestoreWindow,
+  hideConversationWindow,
   closeWindow,
   toggleAlwaysOnTop,
   handleFastInputWindowEvent,
@@ -210,7 +215,7 @@ export function registerIpcHandlers({
   })
 
   handleInvoke('window:event:emit', async (event, input = {}) => {
-    if (input?.event === 'remote:command' || input?.event === 'conversation:metadata-command') {
+    if (MAIN_ONLY_WINDOW_EVENTS.has(input?.event)) {
       return { ok: false, error: 'remote_command_channel_reserved' }
     }
 
@@ -268,15 +273,21 @@ export function registerIpcHandlers({
     const target = typeof input?.target === 'string' ? input.target.trim() : ''
     const payload = input?.payload && typeof input.payload === 'object' ? input.payload : null
     const eventName = typeof input?.event === 'string' && input.event ? input.event : 'quick:append-payload'
+    if (MAIN_ONLY_WINDOW_EVENTS.has(eventName)) return {ok: false, error: 'remote_command_channel_reserved'}
 
     return appendPayloadToWindow(target, payload, {
-      sourceId: typeof input?.sourceId === 'string' && input.sourceId ? input.sourceId : sourceId,
+      sourceId,
       event: eventName
     })
   })
 
 
 
+
+  handleInvoke('window:hideConversation', (event) => {
+    const windowRef = getWindowRefByWebContentsId(event.sender.id)
+    return hideConversationWindow(windowRef)
+  })
 
   handleInvoke('window:minimize', async (event, input = {}) => {
     const fallbackRef = getWindowRefByWebContentsId(event.sender.id)

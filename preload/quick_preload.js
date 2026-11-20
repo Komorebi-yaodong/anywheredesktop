@@ -37,7 +37,7 @@ async function listAppendTargets() {
   const result = await electronAPI.ipcRenderer.invoke('window:list', 'window')
   const windows = Array.isArray(result?.windows) ? result.windows : []
   return windows
-    .filter((item) => item && item.type === 'window' && typeof item.id === 'string' && item.id)
+    .filter((item) => item?.type === 'window' && typeof item.id === 'string' && item.id && !item.desktopHidden && !item.remoteHidden)
     .map((item) => ({
       id: item.id,
       type: item.type,

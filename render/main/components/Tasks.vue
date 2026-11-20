@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, reactive, onMounted, onActivated, onDeactivated, computed, inject, h } from 'vue'
-import { Plus, Delete, Document, Edit, Search, InfoFilled, Refresh, Clock, Setting as SettingIcon, List, VideoPlay } from '@element-plus/icons-vue';
+import { Plus, Delete, Document, Edit, Search, InfoFilled, Refresh, Clock, Setting as SettingIcon, List, VideoPlay, View as EyeOpen, Hide as EyeClosed } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { ElCheckbox, ElMessage, ElMessageBox } from 'element-plus';
 
@@ -346,6 +346,7 @@ function handleAddTask() {
             autoSave: true,
             autoSaveProjectId: '',
             autoClose: false,
+            showWindow: true,
             enabled: false,
             history: []
         };
@@ -657,6 +658,12 @@ async function openTaskChat(logFile, conversationId = '') {
                                         </el-icon>
                                     </el-tooltip>
 
+                                    <el-tooltip :content="t(selectedTask.showWindow === false ? 'tasks.windowHidden' : 'tasks.windowShown')" placement="top">
+                                        <el-button text circle :type="selectedTask.showWindow !== false ? 'primary' : 'default'"
+                                            :aria-label="t('tasks.showWindowLabel')" :aria-pressed="selectedTask.showWindow !== false"
+                                            :icon="selectedTask.showWindow === false ? EyeClosed : EyeOpen"
+                                            @click="saveTaskSetting('showWindow', selectedTask.showWindow === false).catch(() => refreshTaskConfigSilently().catch(() => {}))" />
+                                    </el-tooltip>
                                     <span class="control-label">{{ t('tasks.enableTaskLabel') }}</span>
                                     <el-switch :model-value="selectedTask.enabled"
                                         @change="handleTaskEnabledChange" size="large" />

@@ -8,6 +8,7 @@ import icon from '../resources/icon.png?asset'
 import { getConfig, defaultConfig, saveSetting } from './core/data.js'
 import { startFastInputSession, getFastInputRecommendedBounds, cancelFastInputSession } from './core/fastInput.js'
 import { WINDOW_EVENT_CHANNEL } from './eventBus.js'
+import { isConversationHidden, isConversationTrayDrop, visibleConversationPosition } from './core/conversationVisibility.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -514,6 +515,7 @@ function buildWindowMetadata(windowRef = '', payload = null, fullConfig = {}, pr
     readOnly: false,
     leasePending: Boolean(conversationDescriptor?.conversationId),
     remoteHidden: payload?.remoteHidden === true,
+    desktopHidden: payload?.desktopHidden === true,
     mobileControlled: false,
     rendererReady: false
   }
@@ -754,7 +756,8 @@ function resolveDialogWindowConfig(baseConfig, fullConfig = {}, payload = null) 
   const promptCode = resolvePromptCode(payload)
   const promptConfig = resolvePromptConfig(fullConfig, payload, promptCode)
   const remoteHidden = payload?.remoteHidden === true
-  const placement = remoteHidden
+  const hidden = isConversationHidden(payload)
+  const placement = hidden
     ? calculateDialogWindowBounds(fullConfig, payload, promptCode, promptConfig)
     : avoidDialogWindowOverlap(calculateDialogWindowBounds(fullConfig, payload, promptCode, promptConfig))
   const isDarkMode = resolveEffectiveDarkMode(fullConfig)
@@ -784,10 +787,10 @@ function resolveDialogWindowConfig(baseConfig, fullConfig = {}, payload = null) 
         hasShadow: true,
         backgroundColor,
         alwaysOnTop,
-        ...(remoteHidden
+        ...(hidden
           ? {
               skipTaskbar: true,
-              alwaysOnTop: false,
+              alwaysOnTop: remoteHidden ? false : alwaysOnTop,
               focusable: false
             }
           : {})
@@ -829,6 +832,8 @@ async function buildWindowInitMessage(payload = {}, senderId = '', fullConfig = 
         : null,
     senderId,
     remoteHidden: payload?.remoteHidden === true,
+    desktopHidden: payload?.desktopHidden === true,
+    mobileControlled: payload?.remoteHidden === true,
     remoteCreate: payload?.remoteCreate === true,
     isAlwaysOnTop: payload?.isAlwaysOnTop ?? promptConfig?.isAlwaysOnTop ?? true
   }
@@ -866,6 +871,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
     width: config.width,
     height: config.height,
     show: false,
+    ...(type === 'window' && isConversationHidden(initMessage) ? {paintWhenInitiallyHidden: false} : {}),
     autoHideMenuBar: true,
     icon,
     webPreferences: {
@@ -885,7 +891,9 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   win.__readyToShow = false
   win.__preloadOnly = Boolean(initMessage?.preloadOnly)
   win.__remoteHidden = Boolean(initMessage?.remoteHidden)
-  if (win.__remoteHidden) win.webContents.setBackgroundThrottling(false)
+  win.__desktopHidden = Boolean(initMessage?.desktopHidden)
+  if (win.__remoteHidden || win.__desktopHidden) win.webContents.setBackgroundThrottling(false)
+  if (type === 'window') attachTrayDrop(win, windowRef)
 
   win.on('ready-to-show', () => {
     win.__readyToShow = true
@@ -895,7 +903,7 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
       // ignore suppress blur mark failure during ready-to-show
     }
 
-    if (win.__preloadOnly === true || win.__remoteHidden === true) {
+    if (win.__preloadOnly === true || win.__remoteHidden === true || win.__desktopHidden === true) {
       return
     }
 
@@ -994,7 +1002,12 @@ win.webContents.once('did-finish-load', () => {
       win.webContents.send(WINDOW_INIT_CHANNEL, {
         senderId: windowRef || null,
         windowType: type,
-        ...(initMessage && typeof initMessage === 'object' ? initMessage : {})
+        ...(initMessage && typeof initMessage === 'object' ? initMessage : {}),
+        ...(type === 'window' ? {
+          desktopHidden: win.__desktopHidden,
+          remoteHidden: win.__remoteHidden,
+          isAlwaysOnTop: win.isAlwaysOnTop()
+        } : {})
       })
     } catch {
       // ignore init signal send errors during teardown
@@ -1053,7 +1066,9 @@ export async function openSavedConversationWindow({dirPath, conversationId, sign
 export async function runTaskInConversation({dirPath, conversationId, taskConfig, payload}) {
   const api = await import('./core/conversationStore.js')
   const opened = await api.openConversation({dirPath, reference: conversationId, activeOnly: true, pageSize: 200})
-  const result = await openWindow('window', {type: 'conversation', preserveExistingVisibility: true, code: opened.sessionData?.CODE || '__DEFAULT__', conversation: {...opened, dirPath}})
+  const result = await openWindow('window', {type: 'conversation', preserveExistingVisibility: true,
+    desktopHidden: taskConfig?.showWindow === false,
+    code: opened.sessionData?.CODE || '__DEFAULT__', conversation: {...opened, dirPath}})
   if (!result?.ok || !await waitForWindowReady(result.id, 30000)) return {ok: false, reason: 'task_window_not_ready'}
   const readyDeadline = Date.now() + 30000
   while (windowMetadataStore.get(result.id)?.rendererReady !== true) {
@@ -1266,7 +1281,7 @@ const dynamicBaseConfig =
         || path.resolve(location.dirPath) !== path.resolve(conversationDir)) continue
       const existing = multiStore.get(existingId)
       if (!existing || existing.isDestroyed()) continue
-      if (openPayload?.remoteHidden !== true && openPayload?.preserveExistingVisibility !== true) revealRemoteConversationWindow(existingId)
+      if (!isConversationHidden(openPayload) && openPayload?.preserveExistingVisibility !== true) revealRemoteConversationWindow(existingId)
       return { ok: true, type: targetType, id: existingId, reused: true }
     }
   }
@@ -1435,7 +1450,8 @@ export async function appendPayloadToWindow(windowRef = '', payload = null, opti
     return { ok: false, error: 'payload_required', windowRef: resolved.windowRef }
   }
 
-  activateWindow(resolved.win)
+  // Hidden sessions can still receive programmatic input without surfacing.
+  if (!isConversationHidden(windowMetadataStore.get(resolved.windowRef))) activateWindow(resolved.win)
 
   const isReady = await waitForWindowReady(resolved.windowRef, 2500)
   if (!isReady || resolved.win.isDestroyed()) {
@@ -1494,24 +1510,94 @@ export async function dispatchRemoteCommandToWindow(windowRef = '', command = {}
   }
 }
 
+function sendConversationVisibility(win, windowRef, event, payload) {
+  win.webContents.send(WINDOW_EVENT_CHANNEL, {
+    sourceId: 'window-manager', target: windowRef, event, payload, timestamp: Date.now()
+  })
+}
+
+function attachTrayDrop(win, windowRef) {
+  if (process.platform !== 'win32' && process.platform !== 'darwin') return
+  let movedByUser = false
+  let settleTimer = null
+  function checkDrop() {
+    if (!movedByUser) return
+    movedByUser = false
+    if (appQuitting || win.isDestroyed() || !win.isVisible() || win.isMinimized() || win.isFullScreen() || win.isMaximized()) return
+    const pointer = screen.getCursorScreenPoint()
+    if (isConversationTrayDrop(process.platform, pointer, win.getBounds(), screen.getDisplayNearestPoint(pointer))) {
+      try {
+        // Ask the same renderer to check local recording/editing state first.
+        sendConversationVisibility(win, windowRef, 'window:tray-hide-request', null)
+      } catch { /* The window may have closed during the move. */ }
+    }
+  }
+  win.on('will-move', () => { movedByUser = true })
+  win.on('moved', () => {
+    if (!movedByUser) return
+    if (process.platform === 'win32') checkDrop()
+    else {
+      // On macOS `moved` is an alias of `move`; coalesce the motion stream.
+      clearTimeout(settleTimer)
+      settleTimer = setTimeout(checkDrop, 220)
+    }
+  })
+  win.once('closed', () => clearTimeout(settleTimer))
+}
+
+export function hideConversationWindow(windowRef = '') {
+  const resolved = resolveActionWindow(windowRef)
+  if (!resolved.ok) return {ok: false, error: resolved.error}
+  const {win} = resolved
+  const metadata = windowMetadataStore.get(resolved.windowRef)
+  if (!metadata || appQuitting) return {ok: false, error: 'conversation_window_required'}
+  if (isConversationHidden(metadata)) return {ok: true}
+  if (!win.isVisible() || win.isMinimized()) return {ok: false, error: 'conversation_window_not_visible'}
+  try {
+    win.hide()
+    win.setSkipTaskbar?.(true)
+    win.__desktopHidden = true
+    windowMetadataStore.set(resolved.windowRef, {...metadata, desktopHidden: true})
+    sendConversationVisibility(win, resolved.windowRef, 'window:conversation-visibility', {hidden: true})
+    notifyWindowMetadataChanged('hidden', resolved.windowRef)
+    return {ok: true}
+  } catch {
+    win.__desktopHidden = false
+    windowMetadataStore.set(resolved.windowRef, metadata)
+    if (!win.isDestroyed()) {
+      try {win.setSkipTaskbar?.(false); activateWindow(win)} catch { /* native teardown */ }
+    }
+    return {ok: false, error: 'conversation_window_hide_failed'}
+  }
+}
+
 export function revealRemoteConversationWindow(windowRef = '') {
   const resolved = resolveActionWindow(windowRef)
   if (!resolved.ok) return { ok: false, error: resolved.error, windowRef: resolved.windowRef }
   try {
-    resolved.win.__remoteHidden = false
-
-    resolved.win.webContents.send(WINDOW_EVENT_CHANNEL, {
-      sourceId: 'remote-session-manager', target: resolved.windowRef, event: 'remote:command',
-      payload: { type: 'remote.revealed', conversationId: windowMetadataStore.get(resolved.windowRef)?.conversationId || '' },
-      timestamp: Date.now()
-    })
-
-    resolved.win.setSkipTaskbar?.(false)
-    resolved.win.setFocusable?.(true)
-    activateWindow(resolved.win)
+    const {win} = resolved
     const metadata = windowMetadataStore.get(resolved.windowRef)
+    if (isConversationHidden(metadata) && (process.platform === 'win32' || process.platform === 'darwin') && !win.isFullScreen() && !win.isMaximized()) {
+      const bounds = win.getBounds()
+      const position = visibleConversationPosition(bounds, screen.getDisplayMatching(bounds).workArea)
+      if (position.x !== bounds.x || position.y !== bounds.y) win.setPosition(position.x, position.y)
+    }
+    win.setSkipTaskbar?.(false)
+    win.setFocusable?.(true)
+    win.__remoteHidden = false
+    win.__desktopHidden = false
+    if (metadata?.remoteHidden) {
+      win.webContents.send(WINDOW_EVENT_CHANNEL, {
+        sourceId: 'remote-session-manager', target: resolved.windowRef, event: 'remote:command',
+        payload: {type: 'remote.revealed', conversationId: metadata.conversationId || ''}, timestamp: Date.now()
+      })
+    }
+    if (isConversationHidden(metadata)) {
+      sendConversationVisibility(win, resolved.windowRef, 'window:conversation-visibility', {hidden: false})
+    }
+    activateWindow(win)
     if (metadata) {
-      windowMetadataStore.set(resolved.windowRef, { ...metadata, remoteHidden: false })
+      windowMetadataStore.set(resolved.windowRef, { ...metadata, remoteHidden: false, desktopHidden: false })
       notifyWindowMetadataChanged('revealed', resolved.windowRef)
     }
     return { ok: true, windowRef: resolved.windowRef, visible: resolved.win.isVisible() }

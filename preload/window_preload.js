@@ -541,6 +541,7 @@ const api = {
   mergeFileCloudProjects: (input = {}, assignment = {}) =>
     invokeOrThrow('projects:mergeFileCloud', input, toPlainPayload(assignment)),
   handleCodeClick,
+  hideConversationToTray: () => electronAPI.ipcRenderer.invoke('window:hideConversation'),
   minimizeWindow: (windowRef = '') => electronAPI.ipcRenderer.invoke('window:minimize', { windowRef }),
   maximizeOrRestoreWindow: (windowRef = '') => electronAPI.ipcRenderer.invoke('window:maximizeOrRestore', { windowRef }),
   closeWindow: (windowRef = '') => {

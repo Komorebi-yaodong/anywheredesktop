@@ -896,7 +896,7 @@ const getDisplayTypeName = (type) => {
     return type;
 };
 
-defineExpose({ focus, senderRef });
+defineExpose({ focus, senderRef, isRecording });
 
 </script>
 

@@ -8,7 +8,7 @@ import icon from '../resources/icon.png?asset'
 import { getConfig, defaultConfig, saveSetting } from './core/data.js'
 import { startFastInputSession, getFastInputRecommendedBounds, cancelFastInputSession } from './core/fastInput.js'
 import { WINDOW_EVENT_CHANNEL } from './eventBus.js'
-import { isConversationHidden, isConversationTrayDrop, visibleConversationPosition } from './core/conversationVisibility.js'
+import { isConversationHidden, visibleConversationPosition } from './core/conversationVisibility.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -893,7 +893,6 @@ function createBrowserWindow(type, config, titleSuffix = '', windowRef = '', ini
   win.__remoteHidden = Boolean(initMessage?.remoteHidden)
   win.__desktopHidden = Boolean(initMessage?.desktopHidden)
   if (win.__remoteHidden || win.__desktopHidden) win.webContents.setBackgroundThrottling(false)
-  if (type === 'window') attachTrayDrop(win, windowRef)
 
   win.on('ready-to-show', () => {
     win.__readyToShow = true
@@ -1514,35 +1513,6 @@ function sendConversationVisibility(win, windowRef, event, payload) {
   win.webContents.send(WINDOW_EVENT_CHANNEL, {
     sourceId: 'window-manager', target: windowRef, event, payload, timestamp: Date.now()
   })
-}
-
-function attachTrayDrop(win, windowRef) {
-  if (process.platform !== 'win32' && process.platform !== 'darwin') return
-  let movedByUser = false
-  let settleTimer = null
-  function checkDrop() {
-    if (!movedByUser) return
-    movedByUser = false
-    if (appQuitting || win.isDestroyed() || !win.isVisible() || win.isMinimized() || win.isFullScreen() || win.isMaximized()) return
-    const pointer = screen.getCursorScreenPoint()
-    if (isConversationTrayDrop(process.platform, pointer, win.getBounds(), screen.getDisplayNearestPoint(pointer))) {
-      try {
-        // Ask the same renderer to check local recording/editing state first.
-        sendConversationVisibility(win, windowRef, 'window:tray-hide-request', null)
-      } catch { /* The window may have closed during the move. */ }
-    }
-  }
-  win.on('will-move', () => { movedByUser = true })
-  win.on('moved', () => {
-    if (!movedByUser) return
-    if (process.platform === 'win32') checkDrop()
-    else {
-      // On macOS `moved` is an alias of `move`; coalesce the motion stream.
-      clearTimeout(settleTimer)
-      settleTimer = setTimeout(checkDrop, 220)
-    }
-  })
-  win.once('closed', () => clearTimeout(settleTimer))
 }
 
 export function hideConversationWindow(windowRef = '') {

@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises'
 import vm from 'node:vm'
 import {
   isConversationHidden,
-  isConversationTrayDrop,
   trayConversationEntries,
   visibleConversationPosition
 } from '../main/core/conversationVisibility.js'
@@ -11,23 +10,9 @@ import { runTaskById } from '../main/core/task_runner.js'
 import { createRemoteSessionManager } from '../main/core/remote/sessionManager.js'
 import { getCurrentTaskDevice } from '../main/core/task_devices.js'
 
-const display = {
-  bounds: { x: -1920, y: -100, width: 1920, height: 1080 },
-  workArea: { x: -1920, y: -75, width: 1920, height: 1015 }
-}
-const nearBottom = { x: -600, y: 240, width: 600, height: 700 }
-const nearTop = { ...nearBottom, y: -75 }
-const middle = { ...nearBottom, x: -1610, y: 150 }
-assert(isConversationTrayDrop('win32', { x: -590, y: 252 }, nearBottom, display))
-assert(!isConversationTrayDrop('win32', { x: -590, y: -64 }, nearTop, display))
-assert(isConversationTrayDrop('darwin', { x: -590, y: -64 }, nearTop, display))
-assert(!isConversationTrayDrop('darwin', { x: -590, y: 252 }, nearBottom, display))
-assert(isConversationTrayDrop('win32', { x: -12, y: 956 }, middle, display))
-assert(isConversationTrayDrop('darwin', { x: -12, y: -85 }, middle, display))
-assert(!isConversationTrayDrop('win32', { x: -900, y: 100 }, middle, display))
-assert(!isConversationTrayDrop('win32', { x: 400, y: 252 }, nearBottom, display))
-assert(!isConversationTrayDrop('linux', { x: -12, y: -85 }, nearTop, display))
-assert.deepEqual(visibleConversationPosition({ ...nearBottom, x: -20, y: 920 }, display.workArea), {
+const workArea = { x: -1920, y: -75, width: 1920, height: 1015 }
+// Restoration still clamps off-screen windows to the display work area.
+assert.deepEqual(visibleConversationPosition({ x: -20, y: 920, width: 600, height: 700 }, workArea), {
   x: -600,
   y: 240
 })
@@ -196,5 +181,5 @@ displaySchedule.scheduleStreamingDisplay()
 displaySchedule.cancelPendingStreamingDisplay()
 assert.equal(timers.size + frames.size, 0)
 console.log(
-  'PASS hidden conversations: platform corners, tray owners, task default, Mobile gates and background streaming'
+  'PASS hidden conversations: restore placement, tray owners, task default, Mobile gates and background streaming'
 )

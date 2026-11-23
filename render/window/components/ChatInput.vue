@@ -1,7 +1,7 @@
 <script setup>
 import { ref, h, onMounted, onBeforeUnmount, nextTick, watch, computed } from 'vue';
 import { ElFooter, ElRow, ElCol, ElText, ElDivider, ElButton, ElInput, ElMessage, ElMessageBox, ElTag, ElTooltip, ElScrollbar, ElIcon, ElImage, ElDialog, ElSwitch, ElSelect, ElOption, ElInputNumber, ElForm, ElFormItem } from 'element-plus';
-import { Close, Check, Document, Delete, Collection, Picture, ChatLineRound, Fold, RefreshRight, InfoFilled, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
+import { Close, Check, Document, DocumentCopy, Delete, Collection, Picture, ChatLineRound, Fold, RefreshRight, InfoFilled, ArrowDown, ArrowRight } from '@element-plus/icons-vue';
 
 import { formatConversationReference, localConversationId } from '../../../shared/conversationReference.js';
 import { useConversationQuickSelect } from '../utils/useConversationQuickSelect.js';
@@ -1350,11 +1350,12 @@ defineExpose({ focus, senderRef, isRecording });
     <el-dialog v-model="compactDialogVisible" width="min(620px, 94vw)"
         class="compact-config-dialog glass-dialog" append-to-body destroy-on-close :close-on-click-modal="true"
         :show-close="true" align-center>
-        <template #header>
-            <div class="compact-dialog-header">
-                <div class="compact-dialog-title">当前会话</div>
-                <el-tooltip v-if="currentLocalConversationId" content="点击复制会话ID引用" placement="top">
-                    <el-button link type="primary" class="conversation-id-copy" @click="copyCurrentConversationId">会话ID</el-button>
+        <template #header="{ titleId }">
+            <div class="compact-dialog-title-row">
+                <span :id="titleId" class="compact-dialog-title">当前会话</span>
+                <el-tooltip v-if="currentLocalConversationId" content="复制会话 ID 引用" placement="top">
+                    <el-button link :icon="DocumentCopy" class="conversation-id-copy" aria-label="复制会话 ID"
+                        @click="copyCurrentConversationId" />
                 </el-tooltip>
             </div>
         </template>
@@ -1628,6 +1629,22 @@ html.dark .compact-dialog-scroll::-webkit-scrollbar-thumb {
     font-size: 16px;
     font-weight: 700;
     color: var(--el-text-color-primary);
+}
+
+.conversation-id-copy.el-button {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    flex-shrink: 0;
+    font-size: 16px;
+    color: var(--el-text-color-secondary);
+    border-radius: var(--el-border-radius-base);
+}
+
+.conversation-id-copy.el-button:hover,
+.conversation-id-copy.el-button:focus-visible {
+    color: var(--el-color-primary);
+    background-color: var(--el-fill-color-light);
 }
 
 .compact-info-icon {

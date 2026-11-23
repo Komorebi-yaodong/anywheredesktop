@@ -7019,16 +7019,10 @@ onMounted(async () => {
     // 优先接桌面端事件总线，同时保留原插件 preload 回退
   if (window.api && typeof window.api.onWindowEvent === 'function') {
     window.api.onWindowEvent(async (envelope) => {
-      if (envelope?.sourceId === 'window-manager') {
-        if (envelope.event === 'window:conversation-visibility') {
-          conversationUiHidden.value = envelope.payload?.hidden === true;
-          if (!conversationUiHidden.value) remoteHiddenWriter.value = false;
-          return;
-        }
-        if (envelope.event === 'window:tray-hide-request') {
-          await hideConversationToTray();
-          return;
-        }
+      if (envelope?.sourceId === 'window-manager' && envelope.event === 'window:conversation-visibility') {
+        conversationUiHidden.value = envelope.payload?.hidden === true;
+        if (!conversationUiHidden.value) remoteHiddenWriter.value = false;
+        return;
       }
       if (envelope?.event === 'task:conversation-run' && envelope.sourceId === 'task-runner') {
         await handleConversationTask(envelope.payload); return;

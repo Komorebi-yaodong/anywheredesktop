@@ -88,7 +88,7 @@ function getLiveSignalKey(senderId, token = '') {
 
 
 const MAIN_ONLY_WINDOW_EVENTS = new Set([
-  'remote:command', 'conversation:metadata-command', 'window:conversation-visibility', 'window:tray-hide-request'
+  'remote:command', 'conversation:metadata-command', 'window:conversation-visibility'
 ])
 
 function handleInvoke(channel, handler, options = {}) {

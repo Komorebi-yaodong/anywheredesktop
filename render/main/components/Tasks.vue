@@ -124,8 +124,40 @@ const availableMcpServers = computed(() => {
         .sort((a, b) => a.label.localeCompare(b.label));
 });
 
-// 获取所有技能
 const availableSkills = ref([]);
+const skillOptionsLoading = ref(false);
+let taskPageActive = false;
+let skillOptionsPath = '';
+let skillOptionsRequest = null;
+
+const refreshTaskSkillOptions = async () => {
+    const skillPath = currentConfig.value?.skillPath || '';
+    if (skillPath !== skillOptionsPath) {
+        skillOptionsPath = skillPath;
+        availableSkills.value = [];
+        skillOptionsRequest = null;
+        skillOptionsLoading.value = false;
+    }
+    if (!skillPath || skillOptionsRequest?.path === skillPath) return;
+
+    const request = { path: skillPath };
+    skillOptionsRequest = request;
+    skillOptionsLoading.value = true;
+    try {
+        const skills = await window.api.listSkills(skillPath);
+        if (skillOptionsRequest !== request || currentConfig.value?.skillPath !== skillPath) return;
+        availableSkills.value = (Array.isArray(skills) ? skills : [])
+            .filter(skill => typeof skill?.name === 'string' && skill.name.trim())
+            .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (error) {
+        if (skillOptionsRequest === request) console.warn('[tasks] failed to refresh Skill options:', error);
+    } finally {
+        if (skillOptionsRequest === request) {
+            skillOptionsRequest = null;
+            skillOptionsLoading.value = false;
+        }
+    }
+};
 
 const taskConversationOptions = ref([]);
 const refreshTaskConversationOptions = async () => {
@@ -177,15 +209,12 @@ onMounted(async () => {
     await refreshLocalProjectOptions();
     await refreshTaskConversationOptions();
 
-    if (currentConfig.value.skillPath) {
-        try {
-            const skills = await window.api.listSkills(currentConfig.value.skillPath);
-            availableSkills.value = skills.sort((a, b) => a.name.localeCompare(b.name));
-        } catch (e) { console.error(e); }
-    }
 });
 
 onActivated(async () => {
+    taskPageActive = true;
+    // KeepAlive does not mount this page again after adding a Skill.
+    void refreshTaskSkillOptions();
     window.addEventListener('keydown', handleGlobalKeyDown);
     await refreshLocalProjectOptions();
     await refreshTaskConversationOptions();
@@ -196,7 +225,14 @@ watch(() => currentConfig.value?.webdav?.localChatPath, () => {
     void refreshTaskConversationOptions();
 });
 
+watch(() => currentConfig.value?.skillPath, () => {
+    if (taskPageActive) void refreshTaskSkillOptions();
+});
+
 onDeactivated(() => {
+    taskPageActive = false;
+    skillOptionsRequest = null;
+    skillOptionsLoading.value = false;
     window.removeEventListener('keydown', handleGlobalKeyDown);
 });
 
@@ -931,7 +967,8 @@ async function openTaskChat(logFile, conversationId = '') {
                                             <el-col :span="12">
                                                 <el-form-item :label="t('tasks.overrideSkillsLabel')">
                                                     <el-select v-model="selectedTask.extraSkills" multiple filterable
-                                                        clearable :reserve-keyword="false"
+                                                        clearable :reserve-keyword="false" :loading="skillOptionsLoading"
+                                                        @visible-change="visible => visible && refreshTaskSkillOptions()"
                                                         @change="(val) => saveTaskSetting('extraSkills', val)"
                                                         style="width: 100%;"
                                                         :placeholder="t('tasks.overrideSkillsPlaceholder')">
